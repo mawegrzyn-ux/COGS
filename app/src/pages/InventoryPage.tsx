@@ -87,7 +87,7 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'ingredients' && <ComingSoon label="Ingredients" />}
+        {tab === 'ingredients' && <IngredientsTab />}
         {tab === 'quotes'      && <ComingSoon label="Price Quotes" />}
         {tab === 'vendors'     && <VendorsTab onCountChange={setVendorCount} />}
       </div>
@@ -436,6 +436,398 @@ function VendorCard({ vendor, onEdit, onDelete }: {
         </button>
       </div>
     </div>
+  )
+}
+
+// ── Ingredients Tab ───────────────────────────────────────────────────────────
+
+interface Ingredient {
+  id:                              number
+  name:                            string
+  category:                        string | null
+  base_unit_id:                    number | null
+  base_unit_name:                  string | null
+  base_unit_abbr:                  string | null
+  default_prep_unit:               string | null
+  default_prep_to_base_conversion: string
+  notes:                           string | null
+  waste_pct:                       string
+  quote_count:                     string
+  active_quote_count:              string
+}
+
+interface Unit {
+  id:           number
+  name:         string
+  abbreviation: string
+  type:         string
+}
+
+function IngredientsTab() {
+  const api = useApi()
+
+  const [ingredients,   setIngredients]   = useState<Ingredient[]>([])
+  const [units,         setUnits]         = useState<Unit[]>([])
+  const [categories,    setCategories]    = useState<string[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [search,        setSearch]        = useState('')
+  const [filterCat,     setFilterCat]     = useState('')
+  const [modal,         setModal]         = useState<Ingredient | 'new' | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Ingredient | null>(null)
+  const [toast,         setToast]         = useState<ToastState | null>(null)
+
+  const blankForm = {
+    name:                            '',
+    category:                        '',
+    base_unit_id:                    '',
+    default_prep_unit:               '',
+    default_prep_to_base_conversion: '1',
+    waste_pct:                       '0',
+    notes:                           '',
+  }
+  const [form,   setForm]   = useState(blankForm)
+  const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
+  const [saving, setSaving] = useState(false)
+
+  // ── Load ────────────────────────────────────────────────────────────────────
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [ings, us, cats] = await Promise.all([
+        api.get('/ingredients'),
+        api.get('/units'),
+        api.get('/categories?type=ingredient'),
+      ])
+      setIngredients(ings || [])
+      setUnits(us || [])
+      // Derive unique category names from ingredient categories
+      const catNames = [...new Set(
+        (ings || []).map((i: Ingredient) => i.category).filter(Boolean)
+      )].sort() as string[]
+      setCategories(catNames)
+    } catch {
+      showToast('Failed to load ingredients', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') =>
+    setToast({ message, type })
+
+  const filtered = useMemo(() =>
+    ingredients.filter(i => {
+      const matchSearch = !search || i.name.toLowerCase().includes(search.toLowerCase())
+      const matchCat    = !filterCat || i.category === filterCat
+      return matchSearch && matchCat
+    }), [ingredients, search, filterCat]
+  )
+
+  const baseUnit = (ing: Ingredient) =>
+    ing.base_unit_abbr ? ing.base_unit_abbr : '—'
+
+  const convHint = () => {
+    const unit = units.find(u => u.id === Number(form.base_unit_id))
+    const prep = form.default_prep_unit || unit?.abbreviation || 'unit'
+    const base = unit?.abbreviation || 'base unit'
+    return `1 ${prep} = ${form.default_prep_to_base_conversion || '1'} ${base}`
+  }
+
+  function openAdd() {
+    setModal('new')
+    setForm(blankForm)
+    setErrors({})
+  }
+
+  function openEdit(i: Ingredient) {
+    setModal(i)
+    setForm({
+      name:                            i.name,
+      category:                        i.category || '',
+      base_unit_id:                    i.base_unit_id ? String(i.base_unit_id) : '',
+      default_prep_unit:               i.default_prep_unit || '',
+      default_prep_to_base_conversion: i.default_prep_to_base_conversion || '1',
+      waste_pct:                       i.waste_pct || '0',
+      notes:                           i.notes || '',
+    })
+    setErrors({})
+  }
+
+  function validate() {
+    const e: Partial<typeof blankForm> = {}
+    if (!form.name.trim())    e.name         = 'Required'
+    if (!form.base_unit_id)   e.base_unit_id = 'Required'
+    setErrors(e)
+    return Object.keys(e).length === 0
+  }
+
+  async function handleSave() {
+    if (!validate()) return
+    setSaving(true)
+    try {
+      const payload = {
+        name:                            form.name.trim(),
+        category:                        form.category.trim() || null,
+        base_unit_id:                    Number(form.base_unit_id),
+        default_prep_unit:               form.default_prep_unit.trim() || null,
+        default_prep_to_base_conversion: Number(form.default_prep_to_base_conversion) || 1,
+        waste_pct:                       Number(form.waste_pct) || 0,
+        notes:                           form.notes.trim() || null,
+      }
+      if (modal === 'new') {
+        await api.post('/ingredients', payload)
+        showToast('Ingredient added')
+      } else if (modal != null) {
+        await api.put(`/ingredients/${(modal as Ingredient).id}`, payload)
+        showToast('Ingredient updated')
+      }
+      setModal(null)
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Save failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirmDelete) return
+    try {
+      await api.delete(`/ingredients/${confirmDelete.id}`)
+      showToast('Ingredient deleted')
+      setConfirmDelete(null)
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Delete failed', 'error')
+      setConfirmDelete(null)
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
+  return (
+    <>
+      {/* Filter bar */}
+      <div className="flex gap-3 mb-5 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
+          <input
+            type="search"
+            placeholder="Search ingredients…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input pl-9 w-full"
+          />
+        </div>
+        <select
+          className="select"
+          value={filterCat}
+          onChange={e => setFilterCat(e.target.value)}
+        >
+          <option value="">All Categories</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
+          <PlusIcon size={14} /> Add Ingredient
+        </button>
+      </div>
+
+      {loading ? <Spinner /> : filtered.length === 0 ? (
+        <EmptyState
+          message={search || filterCat ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
+          action={!search && !filterCat
+            ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Ingredient</button>
+            : undefined
+          }
+        />
+      ) : (
+        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border text-left">
+                <th className="px-4 py-3 font-semibold text-text-2">Ingredient</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Category</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Base Unit</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Prep Unit</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Conv.</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Waste %</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Quotes</th>
+                <th className="w-20"/>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(ing => (
+                <tr key={ing.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
+                  <td className="px-4 py-3 font-semibold text-text-1">{ing.name}</td>
+                  <td className="px-4 py-3 text-text-3">{ing.category || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">{baseUnit(ing)}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">{ing.default_prep_unit || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">
+                    {Number(ing.default_prep_to_base_conversion) !== 1
+                      ? Number(ing.default_prep_to_base_conversion).toFixed(4)
+                      : '1'
+                    }
+                  </td>
+                  <td className="px-4 py-3 font-mono text-text-2">
+                    {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full
+                      ${Number(ing.active_quote_count) > 0
+                        ? 'bg-accent-dim text-accent'
+                        : 'bg-surface-2 text-text-3'
+                      }`}>
+                      {ing.active_quote_count}/{ing.quote_count}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        className="btn-ghost px-2 py-1 text-xs flex items-center gap-1"
+                        onClick={() => openEdit(ing)}
+                      >
+                        <EditIcon size={12} /> Edit
+                      </button>
+                      <button
+                        className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        onClick={() => setConfirmDelete(ing)}
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Modal */}
+      {modal !== null && (
+        <Modal
+          title={modal === 'new' ? 'Add Ingredient' : 'Edit Ingredient'}
+          onClose={() => setModal(null)}
+        >
+          <Field label="Name" required error={errors.name}>
+            <input
+              className="input w-full"
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. Chicken Breast"
+              autoFocus
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Category">
+              <input
+                className="input w-full"
+                value={form.category}
+                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                placeholder="e.g. Proteins"
+                list="category-suggestions"
+              />
+              <datalist id="category-suggestions">
+                {categories.map(c => <option key={c} value={c} />)}
+              </datalist>
+            </Field>
+
+            <Field label="Base Unit" required error={errors.base_unit_id}>
+              <select
+                className="select w-full"
+                value={form.base_unit_id}
+                onChange={e => setForm(f => ({ ...f, base_unit_id: e.target.value }))}
+              >
+                <option value="">Select unit…</option>
+                {['mass', 'volume', 'count'].map(type => (
+                  <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
+                    {units.filter(u => u.type === type).map(u => (
+                      <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
+            </Field>
+          </div>
+
+          <div className="border-t border-border pt-4 mt-2">
+            <p className="text-xs text-text-3 mb-3">
+              Default prep settings — pre-filled when added to a recipe (overridable per recipe).
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Default Prep Unit">
+                <input
+                  className="input w-full"
+                  value={form.default_prep_unit}
+                  onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))}
+                  placeholder="e.g. g, slice, cup"
+                />
+                <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
+              </Field>
+              <Field label="Conversion to Base Unit">
+                <input
+                  className="input w-full font-mono"
+                  type="number"
+                  min="0.000001"
+                  step="0.000001"
+                  value={form.default_prep_to_base_conversion}
+                  onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))}
+                />
+                <p className="text-xs text-text-3 mt-1">{convHint()}</p>
+              </Field>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Waste %">
+              <input
+                className="input w-full font-mono"
+                type="number"
+                min="0"
+                max="99"
+                step="0.5"
+                value={form.waste_pct}
+                onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))}
+                placeholder="0"
+              />
+              <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
+            </Field>
+            <Field label="Notes">
+              <input
+                className="input w-full"
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Optional…"
+              />
+            </Field>
+          </div>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Ingredient'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`Delete "${confirmDelete.name}"? This will fail if it has existing price quotes or recipe usage.`}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </>
   )
 }
 
