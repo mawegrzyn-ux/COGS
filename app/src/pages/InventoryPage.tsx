@@ -1,30 +1,52 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Vendor {
-  id:            number
-  name:          string
-  country_id:    number
-  country_name:  string
-  currency_code: string
+  id:              number
+  name:            string
+  country_id:      number
+  country_name:    string
+  currency_code:   string
   currency_symbol: string
-  contact:       string | null
-  email:         string | null
-  phone:         string | null
-  notes:         string | null
+  contact:         string | null
+  email:           string | null
+  phone:           string | null
+  notes:           string | null
 }
 
 interface Country {
-  id:            number
-  name:          string
-  currency_code: string
+  id:              number
+  name:            string
+  currency_code:   string
   currency_symbol: string
 }
 
-type Tab = 'ingredients' | 'quotes' | 'vendors'
+interface Ingredient {
+  id:                              number
+  name:                            string
+  category:                        string | null
+  base_unit_id:                    number | null
+  base_unit_name:                  string | null
+  base_unit_abbr:                  string | null
+  default_prep_unit:               string | null
+  default_prep_to_base_conversion: string
+  notes:                           string | null
+  waste_pct:                       string
+  quote_count:                     string
+  active_quote_count:              string
+}
+
+interface Unit {
+  id:           number
+  name:         string
+  abbreviation: string
+  type:         string
+}
+
+type Tab        = 'ingredients' | 'quotes' | 'vendors'
 type ToastState = { message: string; type: 'success' | 'error' }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -33,7 +55,6 @@ export default function InventoryPage() {
   const api = useApi()
   const [tab, setTab] = useState<Tab>('vendors')
 
-  // KPI counts
   const [ingredientCount, setIngredientCount] = useState<number>(0)
   const [quoteCount,      setQuoteCount]      = useState<number>(0)
   const [vendorCount,     setVendorCount]     = useState<number>(0)
@@ -61,15 +82,13 @@ export default function InventoryPage() {
         subtitle="Manage ingredients, vendor price quotes, and preferred suppliers per country."
       />
 
-      {/* KPI strip */}
       <div className="flex gap-4 px-6 py-4 border-b border-border bg-surface">
-        <KpiCard label="Ingredients"      value={ingredientCount} />
-        <KpiCard label="Active Quotes"    value={quoteCount} />
-        <KpiCard label="Vendors"          value={vendorCount} />
+        <KpiCard label="Ingredients"       value={ingredientCount} />
+        <KpiCard label="Active Quotes"     value={quoteCount} />
+        <KpiCard label="Vendors"           value={vendorCount} />
         <KpiCard label="Countries Covered" value={countryCount} />
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border">
         {(['ingredients', 'quotes', 'vendors'] as Tab[]).map(t => (
           <button
@@ -95,7 +114,7 @@ export default function InventoryPage() {
   )
 }
 
-// ── Coming Soon placeholder ───────────────────────────────────────────────────
+// ── Coming Soon ───────────────────────────────────────────────────────────────
 
 function ComingSoon({ label }: { label: string }) {
   return (
@@ -119,13 +138,10 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
   const [confirmDelete, setConfirmDelete] = useState<Vendor | null>(null)
   const [toast,         setToast]         = useState<ToastState | null>(null)
 
-  // Form state
   const blankForm = { name: '', country_id: '', contact: '', email: '', phone: '', notes: '' }
-  const [form,     setForm]     = useState(blankForm)
-  const [errors,   setErrors]   = useState<Partial<typeof blankForm>>({})
-  const [saving,   setSaving]   = useState(false)
-
-  // ── Load ──────────────────────────────────────────────────────────────────
+  const [form,   setForm]   = useState(blankForm)
+  const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
+  const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -145,8 +161,6 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
   }, [api])
 
   useEffect(() => { load() }, [load])
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
@@ -170,18 +184,18 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
     setForm({
       name:       v.name,
       country_id: String(v.country_id),
-      contact:    v.contact  || '',
-      email:      v.email    || '',
-      phone:      v.phone    || '',
-      notes:      v.notes    || '',
+      contact:    v.contact || '',
+      email:      v.email   || '',
+      phone:      v.phone   || '',
+      notes:      v.notes   || '',
     })
     setErrors({})
   }
 
   function validate() {
     const e: Partial<typeof blankForm> = {}
-    if (!form.name.trim())       e.name       = 'Required'
-    if (!form.country_id)        e.country_id = 'Required'
+    if (!form.name.trim()) e.name       = 'Required'
+    if (!form.country_id)  e.country_id = 'Required'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -193,10 +207,10 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
       const payload = {
         name:       form.name.trim(),
         country_id: Number(form.country_id),
-        contact:    form.contact.trim()  || null,
-        email:      form.email.trim()    || null,
-        phone:      form.phone.trim()    || null,
-        notes:      form.notes.trim()    || null,
+        contact:    form.contact.trim() || null,
+        email:      form.email.trim()   || null,
+        phone:      form.phone.trim()   || null,
+        notes:      form.notes.trim()   || null,
       }
       if (modal === 'new') {
         await api.post('/vendors', payload)
@@ -227,11 +241,8 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   return (
     <>
-      {/* Filter bar */}
       <div className="flex gap-3 mb-5 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
@@ -243,15 +254,9 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
             className="input pl-9 w-full"
           />
         </div>
-        <select
-          className="select"
-          value={filterCountry}
-          onChange={e => setFilterCountry(e.target.value)}
-        >
+        <select className="select" value={filterCountry} onChange={e => setFilterCountry(e.target.value)}>
           <option value="">All Countries</option>
-          {countries.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
+          {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
           <PlusIcon size={14} /> Add Vendor
@@ -269,22 +274,13 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
       ) : (
         <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map(v => (
-            <VendorCard
-              key={v.id}
-              vendor={v}
-              onEdit={() => openEdit(v)}
-              onDelete={() => setConfirmDelete(v)}
-            />
+            <VendorCard key={v.id} vendor={v} onEdit={() => openEdit(v)} onDelete={() => setConfirmDelete(v)} />
           ))}
         </div>
       )}
 
-      {/* Modal */}
       {modal !== null && (
-        <Modal
-          title={modal === 'new' ? 'Add Vendor' : 'Edit Vendor'}
-          onClose={() => setModal(null)}
-        >
+        <Modal title={modal === 'new' ? 'Add Vendor' : 'Edit Vendor'} onClose={() => setModal(null)}>
           <Field label="Vendor Name" required error={errors.name}>
             <input
               className="input w-full"
@@ -294,7 +290,6 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
               autoFocus
             />
           </Field>
-
           <Field label="Country" required error={errors.country_id}>
             <select
               className="select w-full"
@@ -303,52 +298,24 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
             >
               <option value="">Select country…</option>
               {countries.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.currency_code})
-                </option>
+                <option key={c.id} value={c.id}>{c.name} ({c.currency_code})</option>
               ))}
             </select>
           </Field>
-
           <div className="grid grid-cols-2 gap-4">
             <Field label="Contact Name">
-              <input
-                className="input w-full"
-                value={form.contact}
-                onChange={e => setForm(f => ({ ...f, contact: e.target.value }))}
-                placeholder="e.g. John Smith"
-              />
+              <input className="input w-full" value={form.contact} onChange={e => setForm(f => ({ ...f, contact: e.target.value }))} placeholder="e.g. John Smith" />
             </Field>
             <Field label="Phone">
-              <input
-                className="input w-full"
-                value={form.phone}
-                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                placeholder="e.g. +66 2 123 4567"
-              />
+              <input className="input w-full" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="e.g. +66 2 123 4567" />
             </Field>
           </div>
-
           <Field label="Email">
-            <input
-              className="input w-full"
-              type="email"
-              value={form.email}
-              onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
-              placeholder="e.g. orders@vendor.com"
-            />
+            <input className="input w-full" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="e.g. orders@vendor.com" />
           </Field>
-
           <Field label="Notes">
-            <textarea
-              className="input w-full"
-              rows={2}
-              value={form.notes}
-              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-              placeholder="Optional notes…"
-            />
+            <textarea className="input w-full" rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes…" />
           </Field>
-
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
@@ -373,16 +340,11 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
 
 // ── Vendor Card ───────────────────────────────────────────────────────────────
 
-function VendorCard({ vendor, onEdit, onDelete }: {
-  vendor:   Vendor
-  onEdit:   () => void
-  onDelete: () => void
-}) {
+function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () => void; onDelete: () => void }) {
   const initials = vendor.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
-      {/* Header */}
       <div className="flex items-start gap-3 mb-4">
         <div className="w-10 h-10 rounded-lg bg-accent-dim flex items-center justify-center text-accent font-bold text-sm shrink-0">
           {initials}
@@ -392,8 +354,6 @@ function VendorCard({ vendor, onEdit, onDelete }: {
           <div className="text-xs text-text-3 mt-0.5">{vendor.country_name} · {vendor.currency_code}</div>
         </div>
       </div>
-
-      {/* Contact details */}
       <div className="space-y-1.5 mb-4 text-sm">
         {vendor.contact && (
           <div className="flex items-center gap-2 text-text-2">
@@ -404,9 +364,7 @@ function VendorCard({ vendor, onEdit, onDelete }: {
         {vendor.email && (
           <div className="flex items-center gap-2 text-text-2">
             <MailIcon size={13} className="text-text-3 shrink-0" />
-            <a href={`mailto:${vendor.email}`} className="hover:text-accent transition-colors truncate">
-              {vendor.email}
-            </a>
+            <a href={`mailto:${vendor.email}`} className="hover:text-accent transition-colors truncate">{vendor.email}</a>
           </div>
         )}
         {vendor.phone && (
@@ -415,15 +373,11 @@ function VendorCard({ vendor, onEdit, onDelete }: {
             <span>{vendor.phone}</span>
           </div>
         )}
-        {vendor.notes && (
-          <div className="text-xs text-text-3 italic mt-2 line-clamp-2">{vendor.notes}</div>
-        )}
+        {vendor.notes && <div className="text-xs text-text-3 italic mt-2 line-clamp-2">{vendor.notes}</div>}
         {!vendor.contact && !vendor.email && !vendor.phone && (
           <p className="text-xs text-text-3 italic">No contact details added.</p>
         )}
       </div>
-
-      {/* Actions */}
       <div className="flex gap-2">
         <button className="btn-outline flex-1 py-1.5 text-sm flex items-center justify-center gap-1.5" onClick={onEdit}>
           <EditIcon size={13} /> Edit
@@ -439,30 +393,7 @@ function VendorCard({ vendor, onEdit, onDelete }: {
   )
 }
 
-
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
-
-interface Ingredient {
-  id:                              number
-  name:                            string
-  category:                        string | null
-  base_unit_id:                    number | null
-  base_unit_name:                  string | null
-  base_unit_abbr:                  string | null
-  default_prep_unit:               string | null
-  default_prep_to_base_conversion: string
-  notes:                           string | null
-  waste_pct:                       string
-  quote_count:                     string
-  active_quote_count:              string
-}
-
-interface Unit {
-  id:           number
-  name:         string
-  abbreviation: string
-  type:         string
-}
 
 function IngredientsTab() {
   const api = useApi()
@@ -489,8 +420,6 @@ function IngredientsTab() {
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
-  // ── Load ────────────────────────────────────────────────────────────────────
-
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -509,8 +438,6 @@ function IngredientsTab() {
 
   useEffect(() => { load() }, [load])
 
-  // ── Derived ──────────────────────────────────────────────────────────────────
-
   const categories = useMemo(() =>
     [...new Set(ingredients.map(i => i.category).filter(Boolean))].sort() as string[]
   , [ingredients])
@@ -522,8 +449,6 @@ function IngredientsTab() {
       return matchSearch && matchCat
     }), [ingredients, search, filterCat]
   )
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
@@ -607,11 +532,8 @@ function IngredientsTab() {
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
-
   return (
     <>
-      {/* Filter bar */}
       <div className="flex gap-3 mb-5 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
@@ -623,11 +545,7 @@ function IngredientsTab() {
             className="input pl-9 w-full"
           />
         </div>
-        <select
-          className="select"
-          value={filterCat}
-          onChange={e => setFilterCat(e.target.value)}
-        >
+        <select className="select" value={filterCat} onChange={e => setFilterCat(e.target.value)}>
           <option value="">All Categories</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
@@ -638,10 +556,7 @@ function IngredientsTab() {
 
       {loading ? <Spinner /> : filtered.length === 0 ? (
         <EmptyState
-          message={search || filterCat
-            ? 'No ingredients match your filters.'
-            : 'No ingredients yet. Add your first ingredient to get started.'
-          }
+          message={search || filterCat ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
           action={!search && !filterCat
             ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Ingredient</button>
             : undefined
@@ -672,27 +587,20 @@ function IngredientsTab() {
                   <td className="px-4 py-3 font-mono text-text-2">
                     {Number(ing.default_prep_to_base_conversion) !== 1
                       ? Number(ing.default_prep_to_base_conversion).toFixed(4)
-                      : '1'
-                    }
+                      : '1'}
                   </td>
                   <td className="px-4 py-3 font-mono text-text-2">
                     {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full
-                      ${Number(ing.active_quote_count) > 0
-                        ? 'bg-accent-dim text-accent'
-                        : 'bg-surface-2 text-text-3'
-                      }`}>
+                      ${Number(ing.active_quote_count) > 0 ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
                       {ing.active_quote_count}/{ing.quote_count}
                     </span>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 justify-end">
-                      <button
-                        className="btn-ghost px-2 py-1 text-xs flex items-center gap-1"
-                        onClick={() => openEdit(ing)}
-                      >
+                      <button className="btn-ghost px-2 py-1 text-xs flex items-center gap-1" onClick={() => openEdit(ing)}>
                         <EditIcon size={12} /> Edit
                       </button>
                       <button
@@ -710,12 +618,8 @@ function IngredientsTab() {
         </div>
       )}
 
-      {/* Modal */}
       {modal !== null && (
-        <Modal
-          title={modal === 'new' ? 'Add Ingredient' : 'Edit Ingredient'}
-          onClose={() => setModal(null)}
-        >
+        <Modal title={modal === 'new' ? 'Add Ingredient' : 'Edit Ingredient'} onClose={() => setModal(null)}>
           <Field label="Name" required error={errors.name}>
             <input
               className="input w-full"
@@ -728,18 +632,12 @@ function IngredientsTab() {
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Category">
-              <input
-                className="input w-full"
+              <CategoryCombo
                 value={form.category}
-                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                placeholder="e.g. Proteins"
-                list="category-suggestions"
+                onChange={v => setForm(f => ({ ...f, category: v }))}
+                options={categories}
               />
-              <datalist id="category-suggestions">
-                {categories.map(c => <option key={c} value={c} />)}
-              </datalist>
             </Field>
-
             <Field label="Base Unit" required error={errors.base_unit_id}>
               <select
                 className="select w-full"
@@ -792,9 +690,7 @@ function IngredientsTab() {
               <input
                 className="input w-full font-mono"
                 type="number"
-                min="0"
-                max="99"
-                step="0.5"
+                min="0" max="99" step="0.5"
                 value={form.waste_pct}
                 onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))}
                 placeholder="0"
@@ -830,6 +726,67 @@ function IngredientsTab() {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </>
+  )
+}
+
+// ── Category Combo ────────────────────────────────────────────────────────────
+
+function CategoryCombo({ value, onChange, options }: {
+  value:    string
+  onChange: (v: string) => void
+  options:  string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const filtered = options.filter(o =>
+    o.toLowerCase().includes(value.toLowerCase())
+  )
+  const showAdd = value.trim() !== '' &&
+    !options.some(o => o.toLowerCase() === value.toLowerCase().trim())
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative">
+      <input
+        className="input w-full"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        placeholder="Select or type to add new…"
+        autoComplete="off"
+      />
+      {open && (filtered.length > 0 || showAdd) && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
+          {filtered.map(o => (
+            <button
+              key={o}
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-text-1"
+              onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false) }}
+            >
+              {o}
+            </button>
+          ))}
+          {showAdd && (
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-accent font-semibold border-t border-border"
+              onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false) }}
+            >
+              + Add "{value.trim()}"
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
