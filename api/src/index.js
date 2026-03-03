@@ -9,7 +9,8 @@ const routes       = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const notFound     = require('./middleware/notFound');
 
-const app  = express();
+const app  = express()
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
 app.use(helmet());
