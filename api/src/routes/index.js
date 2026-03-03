@@ -12,6 +12,7 @@ router.use('/categories',          require('./categories'));
 router.use('/vendors',             require('./vendors'));
 router.use('/ingredients',         require('./ingredients'));
 router.use('/price-quotes',        require('./price-quotes'));
+router.use('/preferred-vendors',   require('./preferred-vendors'));
 
 // Uncomment as pages are built:
 
