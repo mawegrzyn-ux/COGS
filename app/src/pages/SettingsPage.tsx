@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 
@@ -18,9 +18,9 @@ interface PriceLevel {
 }
 
 interface AppSettings {
-  base_currency?: { code: string; symbol: string; name: string }
+  base_currency?:   { code: string; symbol: string; name: string }
   cogs_thresholds?: { excellent: number; acceptable: number }
-  target_cogs?: number
+  target_cogs?:     number
 }
 
 type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds'
@@ -47,7 +47,6 @@ export default function SettingsPage() {
         subtitle="Units, price levels and exchange rates"
       />
 
-      {/* Tabs */}
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
         {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds'] as Tab[]).map(t => (
           <button
@@ -76,19 +75,19 @@ export default function SettingsPage() {
 }
 
 // ── Units Tab ─────────────────────────────────────────────────────────────────
+
 function UnitsTab() {
   const api = useApi()
   const [units, setUnits]       = useState<Unit[]>([])
   const [loading, setLoading]   = useState(true)
-  const [modal, setModal]       = useState<Unit | null | 'new'>(null)
+  const [modal, setModal]       = useState<Unit | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Unit | null>(null)
   const [toast, setToast]       = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const load = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await api.get('/units')
-      setUnits(data)
+      setUnits(await api.get('/units'))
     } finally {
       setLoading(false)
     }
@@ -101,8 +100,8 @@ function UnitsTab() {
       if (modal === 'new') {
         await api.post('/units', values)
         setToast({ message: 'Unit added', type: 'success' })
-      } else if (modal !== null && modal !== 'new') {
-        await api.put(`/units/${modal.id}`, values)
+      } else if (modal != null) {
+        await api.put(`/units/${(modal as Unit).id}`, values)
         setToast({ message: 'Unit updated', type: 'success' })
       }
       setModal(null)
@@ -188,7 +187,7 @@ function UnitsTab() {
 
       {modal !== null && (
         <UnitModal
-          unit={modal === 'new' ? null : modal}
+          unit={modal === 'new' ? null : modal as Unit}
           onSave={handleSave}
           onClose={() => setModal(null)}
         />
@@ -208,6 +207,7 @@ function UnitsTab() {
 }
 
 // ── Unit Modal ────────────────────────────────────────────────────────────────
+
 function UnitModal({ unit, onSave, onClose }: {
   unit:    Unit | null
   onSave:  (v: Omit<Unit, 'id'>) => Promise<void>
@@ -243,7 +243,7 @@ function UnitModal({ unit, onSave, onClose }: {
         <input className="input" value={abbr} onChange={e => setAbbr(e.target.value)} placeholder="e.g. kg" />
       </Field>
       <Field label="Type" required>
-        <select className="input" value={type} onChange={e => setType(e.target.value as Unit['type'])}>
+        <select className="select" value={type} onChange={e => setType(e.target.value as Unit['type'])}>
           {UNIT_TYPES.map(t => <option key={t} value={t} className="capitalize">{t}</option>)}
         </select>
       </Field>
@@ -258,11 +258,12 @@ function UnitModal({ unit, onSave, onClose }: {
 }
 
 // ── Price Levels Tab ──────────────────────────────────────────────────────────
+
 function PriceLevelsTab() {
   const api = useApi()
   const [levels, setLevels]     = useState<PriceLevel[]>([])
   const [loading, setLoading]   = useState(true)
-  const [modal, setModal]       = useState<PriceLevel | null | 'new'>(null)
+  const [modal, setModal]       = useState<PriceLevel | 'new' | null>(null)
   const [deleting, setDeleting] = useState<PriceLevel | null>(null)
   const [toast, setToast]       = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
@@ -282,8 +283,8 @@ function PriceLevelsTab() {
       if (modal === 'new') {
         await api.post('/price-levels', values)
         setToast({ message: 'Price level added', type: 'success' })
-      } else if (modal !== null && modal !== 'new') {
-        await api.put(`/price-levels/${modal.id}`, values)
+      } else if (modal != null) {
+        await api.put(`/price-levels/${(modal as PriceLevel).id}`, values)
         setToast({ message: 'Price level updated', type: 'success' })
       }
       setModal(null)
@@ -348,7 +349,7 @@ function PriceLevelsTab() {
 
       {modal !== null && (
         <PriceLevelModal
-          level={modal === 'new' ? null : modal}
+          level={modal === 'new' ? null : modal as PriceLevel}
           onSave={handleSave}
           onClose={() => setModal(null)}
         />
@@ -368,6 +369,7 @@ function PriceLevelsTab() {
 }
 
 // ── Price Level Modal ─────────────────────────────────────────────────────────
+
 function PriceLevelModal({ level, onSave, onClose }: {
   level:   PriceLevel | null
   onSave:  (v: Omit<PriceLevel, 'id'>) => Promise<void>
@@ -404,6 +406,7 @@ function PriceLevelModal({ level, onSave, onClose }: {
 }
 
 // ── Exchange Rates Tab ────────────────────────────────────────────────────────
+
 function ExchangeRatesTab() {
   const api = useApi()
   const [syncing, setSyncing] = useState(false)
@@ -479,6 +482,7 @@ function ExchangeRatesTab() {
 }
 
 // ── System Tab (Base Currency) ────────────────────────────────────────────────
+
 function SystemTab() {
   const api = useApi()
   const [loading, setLoading] = useState(true)
@@ -556,7 +560,7 @@ function SystemTab() {
       <div className="grid grid-cols-2 gap-4">
         <Field label="Currency Code" required error={errors.code}>
           <input
-            className="input w-full uppercase"
+            className="input w-full"
             value={form.code}
             onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
             placeholder="USD"
@@ -596,12 +600,13 @@ function SystemTab() {
 }
 
 // ── COGS Thresholds Tab ───────────────────────────────────────────────────────
+
 function ThresholdsTab() {
   const api = useApi()
-  const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
-  const [toast, setToast]       = useState<{ message: string; type: 'success' | 'error' } | null>(null)
-  const [excellent,  setExcellent]  = useState(28)
+  const [loading, setLoading]     = useState(true)
+  const [saving, setSaving]       = useState(false)
+  const [toast, setToast]         = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [excellent, setExcellent]   = useState(28)
   const [acceptable, setAcceptable] = useState(35)
   const [targetCogs, setTargetCogs] = useState('')
 
@@ -650,7 +655,6 @@ function ThresholdsTab() {
 
       <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
 
-        {/* Excellent */}
         <div className="flex items-center gap-4 px-5 py-4 border-b border-border">
           <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-accent-dim text-accent w-24 justify-center shrink-0">
             Excellent
@@ -666,7 +670,6 @@ function ThresholdsTab() {
           <span className="text-sm text-text-3">%</span>
         </div>
 
-        {/* Acceptable */}
         <div className="flex items-center gap-4 px-5 py-4 border-b border-border">
           <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-yellow-50 text-yellow-700 w-24 justify-center shrink-0">
             Acceptable
@@ -682,7 +685,6 @@ function ThresholdsTab() {
           <span className="text-sm text-text-3">%</span>
         </div>
 
-        {/* Review — auto-calculated */}
         <div className="flex items-center gap-4 px-5 py-4">
           <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-red-50 text-red-600 w-24 justify-center shrink-0">
             Review
@@ -691,9 +693,9 @@ function ThresholdsTab() {
           <span className="font-mono font-bold text-text-1 w-20 text-center">{acceptable}%</span>
           <span className="text-xs text-text-3">(auto)</span>
         </div>
+
       </div>
 
-      {/* Target COGS */}
       <Field label="Target COGS % (company-wide)">
         <input
           type="number"
