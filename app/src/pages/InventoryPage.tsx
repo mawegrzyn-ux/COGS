@@ -39,6 +39,28 @@ interface Ingredient {
   active_quote_count:              string
 }
 
+interface Quote {
+  id:                  number
+  ingredient_id:       number
+  ingredient_name:     string
+  ingredient_category: string | null
+  base_unit_name:      string | null
+  base_unit_abbr:      string | null
+  vendor_id:           number
+  vendor_name:         string
+  country_id:          number
+  country_name:        string
+  currency_code:       string
+  currency_symbol:     string
+  purchase_price:      string
+  qty_in_base_units:   string
+  purchase_unit:       string | null
+  price_per_base_unit: string | null
+  is_active:           boolean
+  is_preferred:        boolean
+  vendor_product_code: string | null
+}
+
 interface Unit {
   id:           number
   name:         string
@@ -107,7 +129,7 @@ export default function InventoryPage() {
 
       <div className="flex-1 overflow-y-auto p-6">
         {tab === 'ingredients' && <IngredientsTab />}
-        {tab === 'quotes'      && <ComingSoon label="Price Quotes" />}
+        {tab === 'quotes' && <PriceQuotesTab />}
         {tab === 'vendors'     && <VendorsTab onCountChange={setVendorCount} />}
       </div>
     </div>
@@ -803,6 +825,472 @@ function CategoryCombo({ value, onChange, options }: {
     </div>
   )
 }
+
+// ── Price Quotes Tab ──────────────────────────────────────────────────────────
+
+function PriceQuotesTab() {
+  const api = useApi()
+
+  const [quotes,        setQuotes]        = useState<Quote[]>([])
+  const [ingredients,   setIngredients]   = useState<Ingredient[]>([])
+  const [vendors,       setVendors]       = useState<Vendor[]>([])
+  const [countries,     setCountries]     = useState<Country[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [search,        setSearch]        = useState('')
+  const [filterVendor,  setFilterVendor]  = useState('')
+  const [filterCountry, setFilterCountry] = useState('')
+  const [filterStatus,  setFilterStatus]  = useState('')
+  const [modal,         setModal]         = useState<Quote | 'new' | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Quote | null>(null)
+  const [toast,         setToast]         = useState<ToastState | null>(null)
+
+  const blankForm = {
+    ingredient_id:       '',
+    vendor_id:           '',
+    purchase_unit:       '',
+    purchase_price:      '',
+    qty_in_base_units:   '1',
+    is_active:           'true',
+    vendor_product_code: '',
+  }
+  const [form,   setForm]   = useState(blankForm)
+  const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
+  const [saving, setSaving] = useState(false)
+
+  // ── Load ────────────────────────────────────────────────────────────────────
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [q, ings, v, c] = await Promise.all([
+        api.get('/price-quotes'),
+        api.get('/ingredients'),
+        api.get('/vendors'),
+        api.get('/countries'),
+      ])
+      setQuotes(q || [])
+      setIngredients(ings || [])
+      setVendors(v || [])
+      setCountries(c || [])
+    } catch {
+      showToast('Failed to load price quotes', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  // ── Derived ──────────────────────────────────────────────────────────────────
+
+  const filtered = useMemo(() =>
+    quotes.filter(q => {
+      const matchSearch  = !search ||
+        q.ingredient_name.toLowerCase().includes(search.toLowerCase()) ||
+        q.vendor_name.toLowerCase().includes(search.toLowerCase())
+      const matchVendor  = !filterVendor  || String(q.vendor_id)  === filterVendor
+      const matchCountry = !filterCountry || String(q.country_id) === filterCountry
+      const matchStatus  = !filterStatus  || String(q.is_active)  === filterStatus
+      return matchSearch && matchVendor && matchCountry && matchStatus
+    }), [quotes, search, filterVendor, filterCountry, filterStatus]
+  )
+
+  // Vendor for selected vendor_id in form (for currency display)
+  const selectedVendor = useMemo(() =>
+    vendors.find(v => String(v.id) === form.vendor_id) || null
+  , [vendors, form.vendor_id])
+
+  // Selected ingredient (for base unit hint)
+  const selectedIngredient = useMemo(() =>
+    ingredients.find(i => String(i.id) === form.ingredient_id) || null
+  , [ingredients, form.ingredient_id])
+
+  // Live price per base unit preview
+  const pricePerBaseUnit = useMemo(() => {
+    const price = parseFloat(form.purchase_price)
+    const qty   = parseFloat(form.qty_in_base_units)
+    if (!price || !qty || qty === 0) return null
+    return (price / qty).toFixed(6)
+  }, [form.purchase_price, form.qty_in_base_units])
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') =>
+    setToast({ message, type })
+
+  function openAdd() {
+    setModal('new')
+    setForm(blankForm)
+    setErrors({})
+  }
+
+  function openEdit(q: Quote) {
+    setModal(q)
+    setForm({
+      ingredient_id:       String(q.ingredient_id),
+      vendor_id:           String(q.vendor_id),
+      purchase_unit:       q.purchase_unit       || '',
+      purchase_price:      q.purchase_price,
+      qty_in_base_units:   q.qty_in_base_units,
+      is_active:           String(q.is_active),
+      vendor_product_code: q.vendor_product_code || '',
+    })
+    setErrors({})
+  }
+
+  function validate() {
+    const e: Partial<typeof blankForm> = {}
+    if (!form.ingredient_id)                      e.ingredient_id     = 'Required'
+    if (!form.vendor_id)                          e.vendor_id         = 'Required'
+    if (!form.purchase_price)                     e.purchase_price    = 'Required'
+    if (!form.qty_in_base_units ||
+        Number(form.qty_in_base_units) <= 0)      e.qty_in_base_units = 'Must be > 0'
+    setErrors(e)
+    return Object.keys(e).length === 0
+  }
+
+  async function handleSave() {
+    if (!validate()) return
+    setSaving(true)
+    try {
+      const payload = {
+        ingredient_id:       Number(form.ingredient_id),
+        vendor_id:           Number(form.vendor_id),
+        purchase_unit:       form.purchase_unit.trim()       || null,
+        purchase_price:      Number(form.purchase_price),
+        qty_in_base_units:   Number(form.qty_in_base_units),
+        is_active:           form.is_active === 'true',
+        vendor_product_code: form.vendor_product_code.trim() || null,
+      }
+      if (modal === 'new') {
+        await api.post('/price-quotes', payload)
+        showToast('Quote added')
+      } else if (modal != null) {
+        await api.put(`/price-quotes/${(modal as Quote).id}`, payload)
+        showToast('Quote updated')
+      }
+      setModal(null)
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Save failed', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirmDelete) return
+    try {
+      await api.delete(`/price-quotes/${confirmDelete.id}`)
+      showToast('Quote deleted')
+      setConfirmDelete(null)
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Delete failed', 'error')
+      setConfirmDelete(null)
+    }
+  }
+
+  async function togglePreferred(q: Quote) {
+    try {
+      if (q.is_preferred) {
+        await api.delete(`/preferred-vendors/by-ingredient/${q.ingredient_id}/country/${q.country_id}`)
+        showToast('Preferred vendor cleared')
+      } else {
+        await api.post('/preferred-vendors', {
+          ingredient_id: q.ingredient_id,
+          country_id:    q.country_id,
+          vendor_id:     q.vendor_id,
+          quote_id:      q.id,
+        })
+        showToast('Set as preferred vendor')
+      }
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update preferred vendor', 'error')
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
+  return (
+    <>
+      {/* Filter bar */}
+      <div className="flex gap-3 mb-5 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
+          <input
+            type="search"
+            placeholder="Search ingredient or vendor…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input pl-9 w-full"
+          />
+        </div>
+        <select className="select" value={filterVendor} onChange={e => setFilterVendor(e.target.value)}>
+          <option value="">All Vendors</option>
+          {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+        <select className="select" value={filterCountry} onChange={e => setFilterCountry(e.target.value)}>
+          <option value="">All Countries</option>
+          {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select className="select" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+          <option value="">All Status</option>
+          <option value="true">Active</option>
+          <option value="false">Inactive</option>
+        </select>
+        <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
+          <PlusIcon size={14} /> Add Quote
+        </button>
+      </div>
+
+      {loading ? <Spinner /> : filtered.length === 0 ? (
+        <EmptyState
+          message={search || filterVendor || filterCountry || filterStatus
+            ? 'No quotes match your filters.'
+            : 'No price quotes yet. Add your first quote to get started.'
+          }
+          action={!search && !filterVendor && !filterCountry && !filterStatus
+            ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Quote</button>
+            : undefined
+          }
+        />
+      ) : (
+        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border text-left">
+                <th className="px-4 py-3 font-semibold text-text-2">Ingredient</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Vendor</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Country</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Purchase Unit</th>
+                <th className="px-4 py-3 font-semibold text-text-2 text-right">Price</th>
+                <th className="px-4 py-3 font-semibold text-text-2 text-right">Per Base Unit</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Status</th>
+                <th className="px-4 py-3 font-semibold text-text-2">Preferred</th>
+                <th className="w-24"/>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(q => (
+                <tr key={q.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-text-1">{q.ingredient_name}</div>
+                    {q.ingredient_category && (
+                      <div className="text-xs text-text-3">{q.ingredient_category}</div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-text-2">{q.vendor_name}</td>
+                  <td className="px-4 py-3 text-text-2">{q.country_name}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">{q.purchase_unit || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-text-2 text-right">
+                    {q.currency_symbol}{Number(q.purchase_price).toFixed(2)}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-right">
+                    <span className="font-bold text-accent">
+                      {q.price_per_base_unit
+                        ? `${q.currency_symbol}${Number(q.price_per_base_unit).toFixed(4)}`
+                        : '—'
+                      }
+                    </span>
+                    {q.base_unit_abbr && (
+                      <span className="text-xs text-text-3 ml-1">/{q.base_unit_abbr}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full
+                      ${q.is_active
+                        ? 'bg-accent-dim text-accent'
+                        : 'bg-surface-2 text-text-3'
+                      }`}>
+                      {q.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => togglePreferred(q)}
+                      title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
+                      className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
+                        ${q.is_preferred
+                          ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200'
+                          : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'
+                        }`}
+                    >
+                      <StarIcon size={13} filled={q.is_preferred} />
+                    </button>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        className="btn-ghost px-2 py-1 text-xs flex items-center gap-1"
+                        onClick={() => openEdit(q)}
+                      >
+                        <EditIcon size={12} /> Edit
+                      </button>
+                      <button
+                        className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        onClick={() => setConfirmDelete(q)}
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Modal */}
+      {modal !== null && (
+        <Modal
+          title={modal === 'new' ? 'Add Price Quote' : 'Edit Price Quote'}
+          onClose={() => setModal(null)}
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Ingredient" required error={errors.ingredient_id}>
+              <select
+                className="select w-full"
+                value={form.ingredient_id}
+                onChange={e => setForm(f => ({ ...f, ingredient_id: e.target.value }))}
+              >
+                <option value="">Select ingredient…</option>
+                {ingredients.map(i => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}{i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Vendor" required error={errors.vendor_id}>
+              <select
+                className="select w-full"
+                value={form.vendor_id}
+                onChange={e => setForm(f => ({ ...f, vendor_id: e.target.value }))}
+              >
+                <option value="">Select vendor…</option>
+                {vendors.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} ({v.currency_code})
+                  </option>
+                ))}
+              </select>
+              {selectedVendor && (
+                <p className="text-xs text-text-3 mt-1">
+                  Country: {selectedVendor.country_name} · Currency: {selectedVendor.currency_symbol} {selectedVendor.currency_code}
+                </p>
+              )}
+            </Field>
+          </div>
+
+          <div className="border-t border-border pt-4 mt-2">
+            <p className="text-xs text-text-3 mb-3">How you purchase this ingredient:</p>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Purchase Unit Label">
+                <input
+                  className="input w-full"
+                  value={form.purchase_unit}
+                  onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))}
+                  placeholder="e.g. Case 12×1kg, 5L drum"
+                />
+                <p className="text-xs text-text-3 mt-1">Free-text label for your reference.</p>
+              </Field>
+              <Field
+                label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol} ${selectedVendor.currency_code})` : ''}`}
+                required
+                error={errors.purchase_price}
+              >
+                <input
+                  className="input w-full font-mono"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={form.purchase_price}
+                  onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))}
+                />
+              </Field>
+            </div>
+
+            <Field
+              label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`}
+              required
+              error={errors.qty_in_base_units}
+            >
+              <input
+                className="input w-full font-mono"
+                type="number"
+                min="0.000001"
+                step="0.000001"
+                value={form.qty_in_base_units}
+                onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))}
+              />
+              <p className="text-xs text-text-3 mt-1">
+                Total base units in this purchase. e.g. a case of 12×1kg bags = 12.
+              </p>
+            </Field>
+          </div>
+
+          {/* Live preview */}
+          {pricePerBaseUnit && selectedVendor && selectedIngredient && (
+            <div className="bg-accent-dim border border-accent/20 rounded-lg px-4 py-3 text-sm">
+              <span className="font-semibold text-accent">Price per base unit: </span>
+              <span className="font-mono font-bold text-accent ml-1">
+                {selectedVendor.currency_symbol}{pricePerBaseUnit}
+              </span>
+              {selectedIngredient.base_unit_abbr && (
+                <span className="text-text-3 ml-1">/ {selectedIngredient.base_unit_abbr}</span>
+              )}
+              <span className="text-text-3 ml-3 text-xs">
+                ({selectedVendor.currency_symbol}{Number(form.purchase_price).toFixed(2)} ÷ {form.qty_in_base_units})
+              </span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Status">
+              <select
+                className="select w-full"
+                value={form.is_active}
+                onChange={e => setForm(f => ({ ...f, is_active: e.target.value }))}
+              >
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </Field>
+            <Field label="Product Code">
+              <input
+                className="input w-full font-mono"
+                value={form.vendor_product_code}
+                onChange={e => setForm(f => ({ ...f, vendor_product_code: e.target.value }))}
+                placeholder="Optional vendor SKU…"
+              />
+            </Field>
+          </div>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Quote'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`Delete this price quote for "${confirmDelete.ingredient_name}" from "${confirmDelete.vendor_name}"?`}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </>
+  )
+}
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 
 function KpiCard({ label, value }: { label: string; value: number }) {
@@ -872,6 +1360,13 @@ function PhoneIcon({ size = 16, className = '' }: { size?: number; className?: s
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}>
       <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8a19.79 19.79 0 01-3.07-8.67A2 2 0 012 .91h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+    </svg>
+  )
+}
+function StarIcon({ size = 16, filled = false }: { size?: number; filled?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
     </svg>
   )
 }
