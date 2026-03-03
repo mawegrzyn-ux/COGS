@@ -439,6 +439,7 @@ function VendorCard({ vendor, onEdit, onDelete }: {
   )
 }
 
+
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
 interface Ingredient {
@@ -468,7 +469,6 @@ function IngredientsTab() {
 
   const [ingredients,   setIngredients]   = useState<Ingredient[]>([])
   const [units,         setUnits]         = useState<Unit[]>([])
-  const [categories,    setCategories]    = useState<string[]>([])
   const [loading,       setLoading]       = useState(true)
   const [search,        setSearch]        = useState('')
   const [filterCat,     setFilterCat]     = useState('')
@@ -494,18 +494,12 @@ function IngredientsTab() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ings, us, cats] = await Promise.all([
+      const [ings, us] = await Promise.all([
         api.get('/ingredients'),
         api.get('/units'),
-        api.get('/categories?type=ingredient'),
       ])
       setIngredients(ings || [])
       setUnits(us || [])
-      // Derive unique category names from ingredient categories
-      const catNames = [...new Set(
-        (ings || []).map((i: Ingredient) => i.category).filter(Boolean)
-      )].sort() as string[]
-      setCategories(catNames)
     } catch {
       showToast('Failed to load ingredients', 'error')
     } finally {
@@ -515,10 +509,11 @@ function IngredientsTab() {
 
   useEffect(() => { load() }, [load])
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────────
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') =>
-    setToast({ message, type })
+  const categories = useMemo(() =>
+    [...new Set(ingredients.map(i => i.category).filter(Boolean))].sort() as string[]
+  , [ingredients])
 
   const filtered = useMemo(() =>
     ingredients.filter(i => {
@@ -528,8 +523,12 @@ function IngredientsTab() {
     }), [ingredients, search, filterCat]
   )
 
-  const baseUnit = (ing: Ingredient) =>
-    ing.base_unit_abbr ? ing.base_unit_abbr : '—'
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') =>
+    setToast({ message, type })
+
+  const baseUnit = (ing: Ingredient) => ing.base_unit_abbr ?? '—'
 
   const convHint = () => {
     const unit = units.find(u => u.id === Number(form.base_unit_id))
@@ -560,8 +559,8 @@ function IngredientsTab() {
 
   function validate() {
     const e: Partial<typeof blankForm> = {}
-    if (!form.name.trim())    e.name         = 'Required'
-    if (!form.base_unit_id)   e.base_unit_id = 'Required'
+    if (!form.name.trim())  e.name         = 'Required'
+    if (!form.base_unit_id) e.base_unit_id = 'Required'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -639,7 +638,10 @@ function IngredientsTab() {
 
       {loading ? <Spinner /> : filtered.length === 0 ? (
         <EmptyState
-          message={search || filterCat ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
+          message={search || filterCat
+            ? 'No ingredients match your filters.'
+            : 'No ingredients yet. Add your first ingredient to get started.'
+          }
           action={!search && !filterCat
             ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Ingredient</button>
             : undefined
