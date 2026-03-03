@@ -83,7 +83,7 @@ function UnitsTab() {
       if (modal === 'new') {
         await api.post('/units', values)
         setToast({ message: 'Unit added', type: 'success' })
-      } else if (modal && modal !== 'new') {
+      } else if (modal !== null && modal !== 'new') {
         await api.put(`/units/${modal.id}`, values)
         setToast({ message: 'Unit updated', type: 'success' })
       }
@@ -265,7 +265,7 @@ function PriceLevelsTab() {
       if (modal === 'new') {
         await api.post('/price-levels', values)
         setToast({ message: 'Price level added', type: 'success' })
-      } else if (modal && modal !== 'new') {
+      } else if (modal !== null && modal !== 'new') {
         await api.put(`/price-levels/${modal.id}`, values)
         setToast({ message: 'Price level updated', type: 'success' })
       }

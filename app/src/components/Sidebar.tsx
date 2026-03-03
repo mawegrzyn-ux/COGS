@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import Logo from './Logo'
 
@@ -20,7 +20,6 @@ export default function Sidebar() {
     try { return localStorage.getItem(STORAGE_KEY) === 'true' } catch { return false }
   })
   const { logout, user } = useAuth0()
-  const location = useLocation()
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, String(collapsed)) } catch {}
