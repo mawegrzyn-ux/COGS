@@ -816,7 +816,79 @@ function CategoryCombo({ value, onChange, options }: {
     </div>
   )
 }
+// ── Search Combo (generic) ────────────────────────────────────────────────────
 
+function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
+  value:       string
+  onChange:    (v: string) => void
+  options:     { id: string; label: string }[]
+  placeholder?: string
+}) {
+  const [open,   setOpen]   = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Sync display text when value changes externally (e.g. openEdit)
+  const selectedLabel = options.find(o => o.id === value)?.label || ''
+  const [display, setDisplay] = useState(selectedLabel)
+
+  useEffect(() => {
+    setDisplay(options.find(o => o.id === value)?.label || '')
+  }, [value, options])
+
+  const filtered = useMemo(() =>
+    options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+  , [options, search])
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        // If user typed something invalid, reset display to current selection
+        setDisplay(options.find(o => o.id === value)?.label || '')
+        setSearch('')
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [value, options])
+
+  return (
+    <div ref={ref} className="relative">
+      <input
+        className="input w-full"
+        value={open ? search : display}
+        onChange={e => { setSearch(e.target.value); setOpen(true) }}
+        onFocus={() => { setOpen(true); setSearch('') }}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-56 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-text-3">No results</div>
+          ) : filtered.map(o => (
+            <button
+              key={o.id}
+              type="button"
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors
+                ${o.id === value ? 'text-accent font-semibold' : 'text-text-1'}`}
+              onMouseDown={e => {
+                e.preventDefault()
+                onChange(o.id)
+                setDisplay(o.label)
+                setSearch('')
+                setOpen(false)
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
 function PriceQuotesTab() {
@@ -1141,39 +1213,35 @@ function PriceQuotesTab() {
           onClose={() => setModal(null)}
         >
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Ingredient" required error={errors.ingredient_id}>
-              <select
-                className="select w-full"
-                value={form.ingredient_id}
-                onChange={e => setForm(f => ({ ...f, ingredient_id: e.target.value }))}
-              >
-                <option value="">Select ingredient…</option>
-                {ingredients.map(i => (
-                  <option key={i.id} value={i.id}>
-                    {i.name}{i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Vendor" required error={errors.vendor_id}>
-              <select
-                className="select w-full"
-                value={form.vendor_id}
-                onChange={e => setForm(f => ({ ...f, vendor_id: e.target.value }))}
-              >
-                <option value="">Select vendor…</option>
-                {vendors.map(v => (
-                  <option key={v.id} value={v.id}>
-                    {v.name} ({v.currency_code})
-                  </option>
-                ))}
-              </select>
-              {selectedVendor && (
-                <p className="text-xs text-text-3 mt-1">
-                  Country: {selectedVendor.country_name} · Currency: {selectedVendor.currency_symbol} {selectedVendor.currency_code}
-                </p>
-              )}
-            </Field>
+           
+               <Field label="Ingredient" required error={errors.ingredient_id}>
+                <SearchCombo
+                  value={form.ingredient_id}
+                  onChange={v => setForm(f => ({ ...f, ingredient_id: v }))}
+                  options={ingredients.map(i => ({
+                    id:    String(i.id),
+                    label: `${i.name}${i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}`,
+                  }))}
+                  placeholder="Search ingredients…"
+                />
+              </Field>
+           
+              <Field label="Vendor" required error={errors.vendor_id}>
+                <SearchCombo
+                  value={form.vendor_id}
+                  onChange={v => setForm(f => ({ ...f, vendor_id: v }))}
+                  options={vendors.map(v => ({
+                    id:    String(v.id),
+                    label: `${v.name} (${v.currency_code})`,
+                  }))}
+                  placeholder="Search vendors…"
+                />
+                {selectedVendor && (
+                  <p className="text-xs text-text-3 mt-1">
+                    Country: {selectedVendor.country_name} · Currency: {selectedVendor.currency_symbol} {selectedVendor.currency_code}
+                  </p>
+                )}
+              </Field>
           </div>
 
           <div className="border-t border-border pt-4 mt-2">
