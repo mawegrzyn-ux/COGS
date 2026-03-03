@@ -1,18 +1,34 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 
+// ── Helper: auto-create category in mcogs_categories if it doesn't exist ──────
+
+async function ensureCategory(name, type = 'ingredient') {
+  if (!name) return;
+  const { rows } = await pool.query(
+    `SELECT id FROM mcogs_categories WHERE name = $1 AND type = $2 LIMIT 1`,
+    [name.trim(), type]
+  );
+  if (!rows.length) {
+    await pool.query(
+      `INSERT INTO mcogs_categories (name, type, group_name) VALUES ($1, $2, 'Unassigned')`,
+      [name.trim(), type]
+    );
+  }
+}
+
 // GET /ingredients?category=
 router.get('/', async (req, res) => {
   try {
     const { category } = req.query;
     let query = `
       SELECT i.*,
-             u.name        as base_unit_name,
+             u.name         as base_unit_name,
              u.abbreviation as base_unit_abbr,
              COUNT(DISTINCT pq.id) as quote_count,
              COUNT(DISTINCT CASE WHEN pq.is_active THEN pq.id END) as active_quote_count
       FROM mcogs_ingredients i
-      LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
+      LEFT JOIN mcogs_units u        ON u.id = i.base_unit_id
       LEFT JOIN mcogs_price_quotes pq ON pq.ingredient_id = i.id
     `;
     const vals = [];
@@ -31,7 +47,7 @@ router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT i.*,
-             u.name        as base_unit_name,
+             u.name         as base_unit_name,
              u.abbreviation as base_unit_abbr
       FROM mcogs_ingredients i
       LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
@@ -50,19 +66,20 @@ router.post('/', async (req, res) => {
   const { name, category, base_unit_id, default_prep_unit, default_prep_to_base_conversion, notes, image_url, waste_pct } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    await ensureCategory(category, 'ingredient');
     const { rows } = await pool.query(`
       INSERT INTO mcogs_ingredients
         (name, category, base_unit_id, default_prep_unit, default_prep_to_base_conversion, notes, image_url, waste_pct)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
     `, [
       name.trim(),
-      category?.trim()  || null,
-      base_unit_id      || null,
-      default_prep_unit?.trim() || null,
-      default_prep_to_base_conversion || 1,
-      notes?.trim()     || null,
-      image_url?.trim() || null,
-      waste_pct         || 0,
+      category?.trim()                 || null,
+      base_unit_id                     || null,
+      default_prep_unit?.trim()        || null,
+      default_prep_to_base_conversion  || 1,
+      notes?.trim()                    || null,
+      image_url?.trim()                || null,
+      waste_pct                        || 0,
     ]);
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -76,6 +93,7 @@ router.put('/:id', async (req, res) => {
   const { name, category, base_unit_id, default_prep_unit, default_prep_to_base_conversion, notes, image_url, waste_pct } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    await ensureCategory(category, 'ingredient');
     const { rows } = await pool.query(`
       UPDATE mcogs_ingredients
       SET name=$1, category=$2, base_unit_id=$3, default_prep_unit=$4,
@@ -83,13 +101,13 @@ router.put('/:id', async (req, res) => {
       WHERE id=$9 RETURNING *
     `, [
       name.trim(),
-      category?.trim()  || null,
-      base_unit_id      || null,
-      default_prep_unit?.trim() || null,
-      default_prep_to_base_conversion || 1,
-      notes?.trim()     || null,
-      image_url?.trim() || null,
-      waste_pct         || 0,
+      category?.trim()                 || null,
+      base_unit_id                     || null,
+      default_prep_unit?.trim()        || null,
+      default_prep_to_base_conversion  || 1,
+      notes?.trim()                    || null,
+      image_url?.trim()                || null,
+      waste_pct                        || 0,
       req.params.id,
     ]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
