@@ -409,9 +409,16 @@ function PriceLevelModal({ level, onSave, onClose }: {
 
 function ExchangeRatesTab() {
   const api = useApi()
-  const [syncing, setSyncing] = useState(false)
-  const [result, setResult]   = useState<{ synced_at: string; updated: { currency_code: string; rate: number }[] } | null>(null)
-  const [error, setError]     = useState('')
+  const [syncing, setSyncing]       = useState(false)
+  const [result, setResult]         = useState<{ synced_at: string; base: string; updated: { currency_code: string; rate: number }[] } | null>(null)
+  const [error, setError]           = useState('')
+  const [baseCurrency, setBaseCurrency] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.get('/settings')
+      .then((s: any) => setBaseCurrency(s?.base_currency?.code || 'USD'))
+      .catch(() => setBaseCurrency('USD'))
+  }, [api])
 
   const handleSync = async () => {
     setSyncing(true)
@@ -430,15 +437,25 @@ function ExchangeRatesTab() {
   return (
     <div className="max-w-xl">
       <p className="text-sm text-text-3 mb-6">
-        Fetch the latest exchange rates from the Frankfurter API (base: EUR).
-        Rates are stored on each country and used for cross-country COGS calculations.
+        Fetch the latest exchange rates from the Frankfurter API.
+        Rates are calculated relative to your base currency
+        {baseCurrency
+          ? <> (<span className="font-mono font-bold text-text-1">{baseCurrency}</span>)</>
+          : ''
+        }.
+        Stored on each country and used for cross-country COGS calculations.
       </p>
 
       <div className="bg-surface rounded-lg border border-border p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="font-bold text-text-1">Frankfurter API</h3>
-            <p className="text-xs text-text-3 mt-0.5">api.frankfurter.app — free, no key required</p>
+            <p className="text-xs text-text-3 mt-0.5">
+              api.frankfurter.app — free, no key required
+              {baseCurrency && (
+                <span className="ml-2 font-mono text-accent font-semibold">base: {baseCurrency}</span>
+              )}
+            </p>
           </div>
           <button
             onClick={handleSync}
@@ -462,6 +479,9 @@ function ExchangeRatesTab() {
           <div className="mt-4">
             <p className="text-xs text-text-3 mb-3">
               Synced at {new Date(result.synced_at).toLocaleString()} — {result.updated.length} countries updated
+              {result.base && (
+                <span className="ml-2 font-mono text-accent font-semibold">(base: {result.base})</span>
+              )}
             </p>
             <div className="grid grid-cols-3 gap-2">
               {result.updated.map(r => (
@@ -480,7 +500,6 @@ function ExchangeRatesTab() {
     </div>
   )
 }
-
 // ── System Tab (Base Currency) ────────────────────────────────────────────────
 
 function SystemTab() {
