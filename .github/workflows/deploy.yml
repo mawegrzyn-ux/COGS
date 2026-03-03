@@ -3,7 +3,7 @@ name: Deploy to Lightsail
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -14,15 +14,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to server via SSH
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Build React frontend
+        working-directory: app
+        env:
+          VITE_AUTH0_DOMAIN:    ${{ secrets.VITE_AUTH0_DOMAIN }}
+          VITE_AUTH0_CLIENT_ID: ${{ secrets.VITE_AUTH0_CLIENT_ID }}
+          VITE_AUTH0_AUDIENCE:  ''
+          VITE_API_URL:         http://${{ secrets.LIGHTSAIL_HOST }}/api
+        run: npm run build
+
+      - name: Copy frontend build to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USER }}
+          key:      ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          source:   "app/dist/*"
+          target:   "/var/www/menu-cogs/frontend"
+          strip_components: 2
+
+      - name: Deploy API and reload server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host:        ${{ secrets.LIGHTSAIL_HOST }}
           username:    ${{ secrets.LIGHTSAIL_USER }}
           key:         ${{ secrets.LIGHTSAIL_SSH_KEY }}
           port:        22
-          script:      bash /var/www/menu-cogs/deploy.sh
-          script_stop: true    # fail the action if deploy.sh exits non-zero
+          script_stop: true
+          script: |
+            cd /var/www/menu-cogs
+            git pull origin main
+            cd api && npm install --production --silent
+            pm2 restart menu-cogs-api
+            sudo nginx -s reload
 
       - name: Health check
         run: |
