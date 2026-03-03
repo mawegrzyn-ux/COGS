@@ -1,6 +1,7 @@
 const router = require('express').Router();
 
 router.use('/health',              require('./health'));
+router.use('/settings',            require('./settings'));
 router.use('/units',               require('./units'));
 router.use('/price-levels',        require('./price-levels'));
 router.use('/sync-exchange-rates', require('./sync-exchange-rates'));
