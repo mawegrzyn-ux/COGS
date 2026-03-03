@@ -8,9 +8,10 @@ router.use('/sync-exchange-rates', require('./sync-exchange-rates'));
 router.use('/countries',           require('./countries'));
 router.use('/tax-rates',           require('./tax-rates'));
 router.use('/country-level-tax',   require('./country-level-tax'));
+router.use('/categories',          require('./categories'));
 
 // Uncomment as pages are built:
-// router.use('/categories',        require('./categories'));
+
 // router.use('/vendors',           require('./vendors'));
 // router.use('/ingredients',       require('./ingredients'));
 // router.use('/price-quotes',      require('./price-quotes'));
