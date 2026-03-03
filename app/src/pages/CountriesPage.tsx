@@ -83,7 +83,7 @@ export default function CountriesPage() {
       setTaxRates(t    || [])
       setPriceLevels(pl || [])
       setLevelTax(clt  || [])
-      setBaseCurrency((settings as any)?.base_currency || 'USD')
+      setBaseCurrency((settings as any)?.base_currency?.code || 'USD')
     } catch {
       showToast('Failed to load data', 'error')
     } finally {
