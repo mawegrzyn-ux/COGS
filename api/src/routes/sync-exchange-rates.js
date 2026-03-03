@@ -2,7 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const https  = require('https');
 
-function fetchRates(base = 'EUR') {
+function fetchRates(base = 'USD') {
   return new Promise((resolve, reject) => {
     const url = `https://api.frankfurter.app/latest?base=${base}`;
     https.get(url, (res) => {
@@ -19,11 +19,19 @@ function fetchRates(base = 'EUR') {
 // POST /api/sync-exchange-rates
 router.post('/', async (req, res, next) => {
   try {
-    // Fetch latest rates from Frankfurter (base EUR)
-    const ratesData = await fetchRates('EUR');
-    const rates = { EUR: 1, ...ratesData.rates };
+    // Read base currency from settings
+    let baseCurrency = 'USD';
+    try {
+      const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+      baseCurrency = rows[0]?.data?.base_currency?.code || 'USD';
+    } catch {
+      // settings table may not exist yet — fall back to USD
+    }
 
-    // Get all countries
+    const ratesData = await fetchRates(baseCurrency);
+    // Include the base currency itself at rate 1
+    const rates = { [baseCurrency]: 1, ...ratesData.rates };
+
     const { rows: countries } = await pool.query(
       `SELECT id, currency_code FROM mcogs_countries`
     );
@@ -53,7 +61,7 @@ router.post('/', async (req, res, next) => {
 
     res.json({
       synced_at: new Date().toISOString(),
-      base:      'EUR',
+      base:      baseCurrency,
       updated:   results,
     });
   } catch (err) { next(err); }
