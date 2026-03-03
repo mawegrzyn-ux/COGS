@@ -394,12 +394,12 @@ function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () =
 }
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
-
 function IngredientsTab() {
   const api = useApi()
 
   const [ingredients,   setIngredients]   = useState<Ingredient[]>([])
   const [units,         setUnits]         = useState<Unit[]>([])
+  const [dbCategories,  setDbCategories]  = useState<string[]>([])
   const [loading,       setLoading]       = useState(true)
   const [search,        setSearch]        = useState('')
   const [filterCat,     setFilterCat]     = useState('')
@@ -420,15 +420,19 @@ function IngredientsTab() {
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
+  // ── Load ────────────────────────────────────────────────────────────────────
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ings, us] = await Promise.all([
+      const [ings, us, cats] = await Promise.all([
         api.get('/ingredients'),
         api.get('/units'),
+        api.get('/categories?type=ingredient'),
       ])
       setIngredients(ings || [])
       setUnits(us || [])
+      setDbCategories((cats || []).map((c: any) => c.name).sort())
     } catch {
       showToast('Failed to load ingredients', 'error')
     } finally {
@@ -438,9 +442,15 @@ function IngredientsTab() {
 
   useEffect(() => { load() }, [load])
 
+  // ── Derived ──────────────────────────────────────────────────────────────────
+
+  // Merge DB categories + any already on ingredients (catches legacy data)
   const categories = useMemo(() =>
-    [...new Set(ingredients.map(i => i.category).filter(Boolean))].sort() as string[]
-  , [ingredients])
+    [...new Set([
+      ...dbCategories,
+      ...ingredients.map(i => i.category).filter(Boolean) as string[],
+    ])].sort()
+  , [dbCategories, ingredients])
 
   const filtered = useMemo(() =>
     ingredients.filter(i => {
@@ -449,6 +459,8 @@ function IngredientsTab() {
       return matchSearch && matchCat
     }), [ingredients, search, filterCat]
   )
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
@@ -531,6 +543,8 @@ function IngredientsTab() {
       setConfirmDelete(null)
     }
   }
+
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -789,7 +803,6 @@ function CategoryCombo({ value, onChange, options }: {
     </div>
   )
 }
-
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 
 function KpiCard({ label, value }: { label: string; value: number }) {
