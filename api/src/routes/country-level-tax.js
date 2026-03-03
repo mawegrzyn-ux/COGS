@@ -1,5 +1,5 @@
 const router  = require('express').Router();
-const { pool } = require('../db');
+const pool = require('../db/pool');
 
 // GET /country-level-tax
 router.get('/', async (req, res) => {
