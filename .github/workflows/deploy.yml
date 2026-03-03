@@ -61,7 +61,7 @@ jobs:
         run: |
           sleep 5
           curl --fail --silent --max-time 10 \
-            http://${{ secrets.LIGHTSAIL_HOST }}/api/health \
+            https://${{ secrets.LIGHTSAIL_HOST }}/api/health \
             | grep '"status":"ok"' \
             && echo "✔ Health check passed" \
             || (echo "✘ Health check failed" && exit 1)
