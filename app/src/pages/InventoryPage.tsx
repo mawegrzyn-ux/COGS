@@ -136,15 +136,6 @@ export default function InventoryPage() {
   )
 }
 
-// ── Coming Soon ───────────────────────────────────────────────────────────────
-
-function ComingSoon({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-center h-48 text-text-3 text-sm">
-      {label} tab coming soon…
-    </div>
-  )
-}
 
 // ── Vendors Tab ───────────────────────────────────────────────────────────────
 
