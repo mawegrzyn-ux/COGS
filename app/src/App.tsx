@@ -5,6 +5,7 @@ import AppLayout     from './components/AppLayout'
 import DashboardPage from './pages/DashboardPage'
 import SettingsPage  from './pages/SettingsPage'
 import LoadingScreen from './components/LoadingScreen'
+import CountriesPage from './pages/CountriesPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -31,13 +32,14 @@ export default function App() {
           <Route index             element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard"  element={<DashboardPage />} />
           <Route path="settings"   element={<SettingsPage />} />
+          <Route path="countries" element={<CountriesPage />} />
 
           {/* Pages to be built — placeholder redirects for now */}
           <Route path="inventory"  element={<Navigate to="/dashboard" replace />} />
           <Route path="recipes"    element={<Navigate to="/dashboard" replace />} />
           <Route path="menus"      element={<Navigate to="/dashboard" replace />} />
-          <Route path="countries"  element={<Navigate to="/dashboard" replace />} />
           <Route path="categories" element={<Navigate to="/dashboard" replace />} />
+       
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
