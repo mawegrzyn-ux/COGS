@@ -10,11 +10,10 @@ router.use('/tax-rates',           require('./tax-rates'));
 router.use('/country-level-tax',   require('./country-level-tax'));
 router.use('/categories',          require('./categories'));
 router.use('/vendors',             require('./vendors'));
+router.use('/ingredients',       require('./ingredients'));
 
 // Uncomment as pages are built:
 
-
-// router.use('/ingredients',       require('./ingredients'));
 // router.use('/price-quotes',      require('./price-quotes'));
 // router.use('/recipes',           require('./recipes'));
 // router.use('/menus',             require('./menus'));
