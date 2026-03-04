@@ -1,7 +1,27 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-import { flagForCurrency } from '../lib/flags'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+
+// ── Flag emoji helper ─────────────────────────────────────────────────────────
+const CURRENCY_TO_ISO: Record<string, string> = {
+  USD:'US', EUR:'EU', GBP:'GB', JPY:'JP', CNY:'CN', AUD:'AU', CAD:'CA',
+  CHF:'CH', HKD:'HK', SGD:'SG', PLN:'PL', CZK:'CZ', HUF:'HU', RON:'RO',
+  BGN:'BG', DKK:'DK', SEK:'SE', NOK:'NO', TRY:'TR', UAH:'UA', RUB:'RU',
+  AED:'AE', SAR:'SA', QAR:'QA', KWD:'KW', ILS:'IL', EGP:'EG', MAD:'MA',
+  ZAR:'ZA', NGN:'NG', KES:'KE', GHS:'GH', INR:'IN', PKR:'PK', THB:'TH',
+  VND:'VN', IDR:'ID', MYR:'MY', PHP:'PH', KRW:'KR', TWD:'TW', BDT:'BD',
+  BRL:'BR', MXN:'MX', ARS:'AR', CLP:'CL', COP:'CO', PEN:'PE', NZD:'NZ',
+  ISK:'IS', HRK:'HR', RSD:'RS', GEL:'GE', AMD:'AM', AZN:'AZ', KZT:'KZ',
+  UZS:'UZ', TJS:'TJ', AFN:'AF', IRR:'IR', IQD:'IQ', JOD:'JO', LBP:'LB',
+  LYD:'LY', TND:'TN', DZD:'DZ', ETB:'ET', TZS:'TZ', UGX:'UG',
+}
+function flagForCurrency(code: string): string {
+  if (!code) return '🌐'
+  const iso = CURRENCY_TO_ISO[code.toUpperCase()]
+  if (!iso) return '🌐'
+  if (iso === 'EU') return '🇪🇺'
+  return [...iso].map(c => String.fromCodePoint(0x1F1E6 - 65 + c.charCodeAt(0))).join('')
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -89,7 +109,9 @@ export default function CountriesPage() {
       setTaxRates(t   || [])
       setPriceLevels(pl || [])
       setLevelTax(clt || [])
-      setBaseCurrency((settings as any)?.base_currency || 'USD')
+      const bc = (settings as any)?.base_currency
+      // Settings API stores base_currency as either a string or {code, name, symbol}
+      setBaseCurrency(typeof bc === 'object' && bc !== null ? (bc.code || 'USD') : (bc || 'USD'))
     } catch {
       showToast('Failed to load data', 'error')
     } finally {
