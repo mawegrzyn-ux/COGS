@@ -1,5 +1,5 @@
 const router  = require('express').Router();
-const { pool } = require('../db');
+const pool = require('../db/pool');
 
 // ── GET /recipes  (list with item count) ──────────────────────────────────────
 router.get('/', async (req, res) => {
