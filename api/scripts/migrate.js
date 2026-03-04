@@ -185,7 +185,10 @@ const migrations = [
     item_type     VARCHAR(20) NOT NULL CHECK (item_type IN ('recipe', 'ingredient')),
     recipe_id     INTEGER REFERENCES mcogs_recipes(id) ON DELETE CASCADE,
     ingredient_id INTEGER REFERENCES mcogs_ingredients(id) ON DELETE CASCADE,
-    display_name  VARCHAR(200),
+    display_name  VARCHAR(200) NOT NULL DEFAULT '',
+    qty           NUMERIC(10,4) NOT NULL DEFAULT 1,
+    sell_price    NUMERIC(10,4) NOT NULL DEFAULT 0,
+    tax_rate_id   INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL,
     sort_order    INTEGER NOT NULL DEFAULT 0,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -224,6 +227,14 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_recipes_category         ON mcogs_recipes(category)`,
   `CREATE INDEX IF NOT EXISTS idx_country_tax_country      ON mcogs_country_tax_rates(country_id)`,
   `CREATE INDEX IF NOT EXISTS idx_pref_vendor_ingredient   ON mcogs_ingredient_preferred_vendor(ingredient_id)`,
+
+  // ── Column migrations (safe to run on existing installs) ──────────────────
+  // Adds columns introduced after initial schema — ALTER TABLE IF NOT EXISTS is idempotent
+  `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS qty         NUMERIC(10,4) NOT NULL DEFAULT 1`,
+  `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS sell_price  NUMERIC(10,4) NOT NULL DEFAULT 0`,
+  `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL`,
+  `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET NOT NULL`,
+  `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET DEFAULT ''`,
 ];
 
 async function migrate() {
