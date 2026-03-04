@@ -48,12 +48,6 @@ interface RecipeDetail extends Recipe {
 const fmt = (n: number, dp = 4) => n.toFixed(dp)
 const fmtCost = (n: number) => n < 0.01 ? n.toFixed(4) : n.toFixed(2)
 
-function cogsColor(pct: number) {
-  if (pct <= 28) return 'text-emerald-600'
-  if (pct <= 35) return 'text-amber-500'
-  return 'text-red-500'
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RecipesPage() {
@@ -509,7 +503,6 @@ export default function RecipesPage() {
 
       {confirmDelete && (
         <ConfirmDialog
-          title={confirmDelete.type === 'recipe' ? 'Delete Recipe' : 'Remove Ingredient'}
           message={confirmDelete.type === 'recipe'
             ? 'This will permanently delete the recipe and all its ingredients.'
             : 'Remove this ingredient from the recipe?'}
@@ -522,7 +515,7 @@ export default function RecipesPage() {
         />
       )}
 
-      {toast && <Toast message={toast.msg} type={toast.type} />}
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   )
 }
