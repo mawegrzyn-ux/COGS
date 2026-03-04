@@ -176,7 +176,9 @@ function ComboCell<T extends Record<string, any>>({
 }: ComboCellProps<T>) {
   const [open,   setOpen]   = useState(false)
   const [search, setSearch] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
+  const [dropPos, setDropPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dropRef  = useRef<HTMLDivElement>(null)
 
   const opts    = typeof col.options === 'function' ? col.options(draft as unknown as T) : (col.options ?? [])
   const current = opts.find(o => o.value === String((draft as any)[col.key] ?? ''))
@@ -188,24 +190,48 @@ function ComboCell<T extends Record<string, any>>({
     ? col.placeholder(draft as unknown as Partial<T>)
     : (col.placeholder ?? '')
 
+  function openDrop() {
+    if (!inputRef.current) return
+    const r = inputRef.current.getBoundingClientRect()
+    setDropPos({ top: r.bottom + window.scrollY, left: r.left + window.scrollX, width: Math.max(r.width, 200) })
+    setOpen(true)
+    setSearch('')
+  }
+
   useEffect(() => {
+    if (!open) return
     function h(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false); setSearch('')
-      }
+      if (
+        inputRef.current && !inputRef.current.contains(e.target as Node) &&
+        dropRef.current  && !dropRef.current.contains(e.target as Node)
+      ) { setOpen(false); setSearch('') }
     }
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
-  }, [])
+  }, [open])
+
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!open) return
+    function reposition() {
+      if (!inputRef.current) return
+      const r = inputRef.current.getBoundingClientRect()
+      setDropPos({ top: r.bottom + window.scrollY, left: r.left + window.scrollX, width: Math.max(r.width, 200) })
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition) }
+  }, [open])
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <input
+        ref={inputRef}
         {...{ [`data-${gridId}-row`]: draft._key, [`data-${gridId}-field`]: String(col.key) }}
         className="dg-cell-input"
         value={open ? search : (current?.label ?? '')}
-        onChange={e => { setSearch(e.target.value); setOpen(true) }}
-        onFocus={() => { setOpen(true); setSearch('') }}
+        onChange={e => { setSearch(e.target.value); if (!open) openDrop(); }}
+        onFocus={() => openDrop()}
         onBlur={() => {
           setTimeout(() => { setOpen(false); setSearch('') }, 150)
           onBlur(draft)
@@ -224,10 +250,17 @@ function ComboCell<T extends Record<string, any>>({
         placeholder={ph}
         autoComplete="off"
       />
-      {open && (
+      {open && dropPos && (
         <div
-          className="absolute z-50 top-full left-0 min-w-[200px] max-h-56 overflow-y-auto mt-0.5 bg-surface border border-border rounded-lg shadow-lg"
-          style={{ zIndex: 9999 }}
+          ref={dropRef}
+          className="max-h-56 overflow-y-auto bg-surface border border-border rounded-lg shadow-lg"
+          style={{
+            position: 'fixed',
+            top:      dropPos.top,
+            left:     dropPos.left,
+            width:    dropPos.width,
+            zIndex:   99999,
+          }}
         >
           {filtered.length === 0
             ? <div className="px-3 py-2 text-sm text-text-3">No results</div>
