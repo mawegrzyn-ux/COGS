@@ -302,7 +302,7 @@ router.get('/report/price-levels', async (req, res) => {
     if (!country) return res.status(404).json({ error: { message: 'Country not found' } });
 
     const { rows: levels } = await pool.query(
-      `SELECT * FROM mcogs_price_levels ORDER BY sort_order, name`
+      `SELECT * FROM mcogs_price_levels ORDER BY name`
     );
 
     // All menu items in this country's menus
@@ -458,7 +458,7 @@ router.get('/report/menu-prices', async (req, res) => {
       quoteLookup,
     ] = await Promise.all([
       pool.query(`SELECT * FROM mcogs_countries ORDER BY name`),
-      pool.query(`SELECT * FROM mcogs_price_levels ORDER BY sort_order, name`),
+      pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`),
       pool.query(`
         SELECT DISTINCT r.id, r.name AS recipe_name, r.category, r.yield_qty
         FROM   mcogs_recipes r
@@ -611,7 +611,7 @@ function formatCountry(c) {
   return { id: c.id, name: c.name, symbol: c.currency_symbol, code: c.currency_code, rate: Number(c.exchange_rate) };
 }
 function formatLevel(l) {
-  return { id: l.id, name: l.name, sort_order: l.sort_order };
+  return { id: l.id, name: l.name, sort_order: 0 };
 }
 
 module.exports = router;
