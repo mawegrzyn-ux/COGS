@@ -1,9 +1,9 @@
 /**
  * DataGrid — reusable spreadsheet-style editable grid
  *
- * FIX: All cell sub-components are defined OUTSIDE DataGrid so React never
- * unmounts/remounts them on parent re-renders (which caused focus loss on
- * every keystroke when they were nested functions inside DataGrid).
+ * CRITICAL: Every component used in JSX must be defined at MODULE level.
+ * Components defined inside another component get a new identity on every
+ * render, causing React to unmount/remount them — destroying input focus.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
@@ -69,7 +69,7 @@ export interface DataGridProps<T extends Record<string, any>> {
   className?:     string
 }
 
-// ── Cell prop interfaces ──────────────────────────────────────────────────────
+// ── Shared cell prop types ────────────────────────────────────────────────────
 
 interface CellProps<T extends Record<string, any>> {
   draft:     DraftRow<T>
@@ -86,7 +86,9 @@ interface ComboCellProps<T extends Record<string, any>> extends CellProps<T> {
 
 // ── TextCell ──────────────────────────────────────────────────────────────────
 
-function TextCell<T extends Record<string, any>>({ draft, col, gridId, onChange, onBlur, onKeyDown }: CellProps<T>) {
+function TextCell<T extends Record<string, any>>({
+  draft, col, gridId, onChange, onBlur, onKeyDown,
+}: CellProps<T>) {
   const ph = typeof col.placeholder === 'function'
     ? col.placeholder(draft as unknown as Partial<T>)
     : (col.placeholder ?? '')
@@ -108,7 +110,9 @@ function TextCell<T extends Record<string, any>>({ draft, col, gridId, onChange,
 
 // ── NumberCell ────────────────────────────────────────────────────────────────
 
-function NumberCell<T extends Record<string, any>>({ draft, col, gridId, onChange, onBlur, onKeyDown }: CellProps<T>) {
+function NumberCell<T extends Record<string, any>>({
+  draft, col, gridId, onChange, onBlur, onKeyDown,
+}: CellProps<T>) {
   const ph = typeof col.placeholder === 'function'
     ? col.placeholder(draft as unknown as Partial<T>)
     : (col.placeholder ?? '')
@@ -121,9 +125,7 @@ function NumberCell<T extends Record<string, any>>({ draft, col, gridId, onChang
       onChange={e => onChange(draft._key, col.key as string, e.target.value)}
       onBlur={() => onBlur(draft)}
       onKeyDown={e => onKeyDown(e, draft, col)}
-      min={col.min}
-      max={col.max}
-      step={col.step ?? 'any'}
+      min={col.min} max={col.max} step={col.step ?? 'any'}
       placeholder={ph}
     />
   )
@@ -131,8 +133,12 @@ function NumberCell<T extends Record<string, any>>({ draft, col, gridId, onChang
 
 // ── SelectCell ────────────────────────────────────────────────────────────────
 
-function SelectCell<T extends Record<string, any>>({ draft, col, gridId, onChange, onBlur, onKeyDown }: CellProps<T>) {
-  const opts   = typeof col.options === 'function' ? col.options(draft as unknown as T) : (col.options ?? [])
+function SelectCell<T extends Record<string, any>>({
+  draft, col, gridId, onChange, onBlur, onKeyDown,
+}: CellProps<T>) {
+  const opts = typeof col.options === 'function'
+    ? col.options(draft as unknown as T)
+    : (col.options ?? [])
   const groups = opts.reduce<Record<string, GridOption[]>>((acc, o) => {
     const g = o.group ?? '__none__'
     if (!acc[g]) acc[g] = []
@@ -200,7 +206,10 @@ function ComboCell<T extends Record<string, any>>({
         value={open ? search : (current?.label ?? '')}
         onChange={e => { setSearch(e.target.value); setOpen(true) }}
         onFocus={() => { setOpen(true); setSearch('') }}
-        onBlur={() => { setTimeout(() => { setOpen(false); setSearch('') }, 150); onBlur(draft) }}
+        onBlur={() => {
+          setTimeout(() => { setOpen(false); setSearch('') }, 150)
+          onBlur(draft)
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter' && open && filtered.length > 0) {
             e.preventDefault()
@@ -216,7 +225,10 @@ function ComboCell<T extends Record<string, any>>({
         autoComplete="off"
       />
       {open && (
-        <div className="absolute z-50 top-full left-0 min-w-[200px] max-h-56 overflow-y-auto mt-0.5 bg-surface border border-border rounded-lg shadow-lg" style={{ zIndex: 9999 }}>
+        <div
+          className="absolute z-50 top-full left-0 min-w-[200px] max-h-56 overflow-y-auto mt-0.5 bg-surface border border-border rounded-lg shadow-lg"
+          style={{ zIndex: 9999 }}
+        >
           {filtered.length === 0
             ? <div className="px-3 py-2 text-sm text-text-3">No results</div>
             : filtered.map(o => (
@@ -229,7 +241,8 @@ function ComboCell<T extends Record<string, any>>({
                   setOpen(false); setSearch('')
                 }}
               >
-                {o.label}{o.sub && <span className="text-text-3 ml-1.5 text-xs">({o.sub})</span>}
+                {o.label}
+                {o.sub && <span className="text-text-3 ml-1.5 text-xs">({o.sub})</span>}
               </button>
             ))
           }
@@ -241,12 +254,204 @@ function ComboCell<T extends Record<string, any>>({
 
 // ── DerivedCell ───────────────────────────────────────────────────────────────
 
-function DerivedCell<T extends Record<string, any>>({ draft, col }: { draft: DraftRow<T>; col: GridColumn<T> }) {
+function DerivedCell<T extends Record<string, any>>({
+  draft, col,
+}: { draft: DraftRow<T>; col: GridColumn<T> }) {
   const value = col.derive ? col.derive(draft as unknown as Partial<T>) : '—'
   return (
-    <span className={`px-3 py-2 block text-sm${col.mono ? ' font-mono' : ''}${col.align === 'right' ? ' text-right' : ''}`}>
+    <span className={[
+      'px-3 py-2 block text-sm',
+      col.mono ? 'font-mono' : '',
+      col.align === 'right' ? 'text-right' : '',
+    ].filter(Boolean).join(' ')}>
       {value}
     </span>
+  )
+}
+
+// ── HeaderCell ────────────────────────────────────────────────────────────────
+
+interface HeaderCellProps<T extends Record<string, any>> {
+  col:         GridColumn<T>
+  sortField:   string | null
+  sortDir:     'asc' | 'desc'
+  openFilter:  string | null
+  filters:     Record<string, string>
+  onSort:      (colKey: string) => void
+  onFilter:    (colKey: string, value: string) => void
+  onOpenFilter:(colKey: string | null) => void
+}
+
+function HeaderCell<T extends Record<string, any>>({
+  col, sortField, sortDir, openFilter, filters,
+  onSort, onFilter, onOpenFilter,
+}: HeaderCellProps<T>) {
+  const colKey    = String(col.key)
+  const isSorted  = sortField === colKey
+  const canSort   = col.sortable !== false && col.type !== 'derived'
+  const canFilter = col.filterable === true && (col.filterOptions?.length ?? 0) > 0
+  const activeVal = filters[colKey]
+  const filterRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (openFilter !== colKey) return
+    function h(e: MouseEvent) {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node))
+        onOpenFilter(null)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [openFilter, colKey, onOpenFilter])
+
+  return (
+    <th
+      className={[
+        'px-0 py-0 text-xs font-semibold uppercase tracking-wide text-text-2 whitespace-nowrap select-none',
+        col.align === 'right' ? 'text-right' : 'text-left',
+      ].join(' ')}
+      style={col.minWidth ? { minWidth: col.minWidth } : undefined}
+    >
+      <div className={`flex items-center gap-0.5 px-3 py-2.5 ${col.align === 'right' ? 'justify-end' : ''}`}>
+        <button
+          type="button" tabIndex={-1}
+          className={[
+            'flex items-center gap-1.5 transition-colors min-w-0',
+            canSort ? 'hover:text-text-1 cursor-pointer' : 'cursor-default',
+            isSorted ? 'text-accent' : '',
+          ].join(' ')}
+          onClick={() => canSort && onSort(colKey)}
+        >
+          <span className="truncate">{col.header}</span>
+          {canSort && (
+            <span className="flex flex-col gap-[2px] shrink-0">
+              <SortArrow up active={isSorted && sortDir === 'asc'} />
+              <SortArrow up={false} active={isSorted && sortDir === 'desc'} />
+            </span>
+          )}
+        </button>
+
+        {canFilter && (
+          <div ref={filterRef} className="relative shrink-0">
+            <button
+              type="button" tabIndex={-1}
+              onClick={() => onOpenFilter(openFilter === colKey ? null : colKey)}
+              className={[
+                'w-5 h-5 flex items-center justify-center rounded transition-colors ml-0.5',
+                activeVal ? 'text-accent bg-accent-dim' : 'text-text-3 hover:text-text-1 hover:bg-surface-2',
+              ].join(' ')}
+              title={activeVal
+                ? `Filtered: ${col.filterOptions?.find(o => o.value === activeVal)?.label ?? activeVal}`
+                : 'Filter column'
+              }
+            >
+              <FilterIcon size={11} filled={!!activeVal} />
+            </button>
+
+            {openFilter === colKey && (
+              <div
+                className="absolute z-50 top-full left-0 mt-1 min-w-[160px] bg-surface border border-border rounded-lg shadow-xl overflow-hidden"
+                style={{ zIndex: 9999 }}
+              >
+                <div className="px-3 py-1.5 border-b border-border text-xs text-text-3 font-semibold uppercase tracking-wide">
+                  {col.header}
+                </div>
+                <button type="button"
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${!activeVal ? 'text-accent font-semibold' : 'text-text-2'}`}
+                  onMouseDown={e => { e.preventDefault(); onFilter(colKey, '') }}
+                >All</button>
+                {col.filterOptions!.map(opt => (
+                  <button key={opt.value} type="button"
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${activeVal === opt.value ? 'text-accent font-semibold' : 'text-text-1'}`}
+                    onMouseDown={e => { e.preventDefault(); onFilter(colKey, opt.value) }}
+                  >{opt.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </th>
+  )
+}
+
+// ── GridRow ───────────────────────────────────────────────────────────────────
+
+interface GridRowProps<T extends Record<string, any>> {
+  draft:          DraftRow<T>
+  visibleCols:    GridColumn<T>[]
+  gridId:         string
+  showActions:    boolean
+  onEdit?:        (row: T) => void
+  onDelete?:      (row: T) => void
+  renderActions?: (row: T) => React.ReactNode
+  onChange:       (rowKey: string, field: string, value: any) => void
+  onBlur:         (draft: DraftRow<T>) => void
+  onKeyDown:      (e: React.KeyboardEvent, draft: DraftRow<T>, col: GridColumn<T>) => void
+  focusNext:      (rowKey: string, colKey: string, reverse?: boolean) => void
+}
+
+function GridRow<T extends Record<string, any>>({
+  draft, visibleCols, gridId, showActions,
+  onEdit, onDelete, renderActions,
+  onChange, onBlur, onKeyDown, focusNext,
+}: GridRowProps<T>) {
+  const isGhost = draft._key === ''
+  const orig    = draft._orig
+
+  const rowClass = [
+    'border-b border-border last:border-0 transition-colors group',
+    draft._saveState === 'saving' ? 'opacity-50 pointer-events-none' : '',
+    draft._saveState === 'saved'  ? 'dg-row-saved' : '',
+    draft._saveState === 'error'  ? 'dg-row-error' : '',
+    isGhost ? 'opacity-40 hover:opacity-100 transition-opacity' : 'hover:bg-surface-2/50',
+  ].filter(Boolean).join(' ')
+
+  const cellHandlers = { gridId, onChange, onBlur, onKeyDown }
+
+  function renderCell(col: GridColumn<T>) {
+    if (!col.editable || col.type === 'derived') return <DerivedCell<T> draft={draft} col={col} />
+    if (col.type === 'text')   return <TextCell<T>   {...cellHandlers} draft={draft} col={col} />
+    if (col.type === 'number') return <NumberCell<T> {...cellHandlers} draft={draft} col={col} />
+    if (col.type === 'select') return <SelectCell<T> {...cellHandlers} draft={draft} col={col} />
+    if (col.type === 'combo')  return <ComboCell<T>  {...cellHandlers} draft={draft} col={col} focusNext={focusNext} />
+    return null
+  }
+
+  return (
+    <tr className={rowClass}>
+      {visibleCols.map(col => (
+        <td
+          key={String(col.key)}
+          className={['p-0 relative overflow-visible', col.align === 'right' ? 'text-right' : '', col.className ?? ''].filter(Boolean).join(' ')}
+          style={col.minWidth ? { minWidth: col.minWidth } : undefined}
+        >
+          {renderCell(col)}
+        </td>
+      ))}
+      {showActions && (
+        <td className="px-2 py-1">
+          {isGhost ? (
+            <span className="text-xs text-text-3 whitespace-nowrap">↵ new row</span>
+          ) : orig ? (
+            <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+              {onEdit   && (
+                <button
+                  className="w-7 h-7 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                  title="Edit" onClick={() => onEdit(orig)}
+                ><EditIcon size={12}/></button>
+              )}
+              {onDelete && (
+                <button
+                  className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                  title="Delete" onClick={() => onDelete(orig)}
+                ><TrashIcon size={12}/></button>
+              )}
+              {renderActions?.(orig)}
+            </div>
+          ) : null}
+        </td>
+      )}
+    </tr>
   )
 }
 
@@ -259,22 +464,30 @@ export function DataGrid<T extends Record<string, any>>({
   showActions = true, gridId = 'grid', className = '',
 }: DataGridProps<T>) {
 
-  // ── Sort & filter ───────────────────────────────────────────────────────────
+  // ── Sort & filter state ─────────────────────────────────────────────────────
 
   const [sortField,  setSortField]  = useState<string | null>(null)
   const [sortDir,    setSortDir]    = useState<'asc' | 'desc'>('asc')
   const [filters,    setFilters]    = useState<Record<string, string>>({})
   const [openFilter, setOpenFilter] = useState<string | null>(null)
 
-  function toggleSort(colKey: string) {
-    if (sortField === colKey) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortField(colKey); setSortDir('asc') }
-  }
-  function applyFilter(colKey: string, value: string) {
-    setFilters(f => value ? { ...f, [colKey]: value } : Object.fromEntries(Object.entries(f).filter(([k]) => k !== colKey)))
+  const handleSort = useCallback((colKey: string) => {
+    setSortField(f => {
+      if (f === colKey) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return f }
+      setSortDir('asc'); return colKey
+    })
+  }, [])
+
+  const handleFilter = useCallback((colKey: string, value: string) => {
+    setFilters(f =>
+      value
+        ? { ...f, [colKey]: value }
+        : Object.fromEntries(Object.entries(f).filter(([k]) => k !== colKey))
+    )
     setOpenFilter(null)
-  }
-  function clearAllFilters() { setFilters({}); setOpenFilter(null) }
+  }, [])
+
+  const clearAllFilters = useCallback(() => { setFilters({}); setOpenFilter(null) }, [])
 
   const processedRows = useMemo(() => {
     let result = [...rows]
@@ -315,8 +528,6 @@ export function DataGrid<T extends Record<string, any>>({
   }, [keyField, makeGhost])
 
   const [drafts, setDrafts] = useState<DraftRow<T>[]>(() => buildDrafts(processedRows))
-
-  // Keep a stable ref so handlers always see current drafts
   const draftsRef = useRef(drafts)
   draftsRef.current = drafts
 
@@ -324,15 +535,16 @@ export function DataGrid<T extends Record<string, any>>({
     setDrafts(prev => {
       const ghost      = prev.find(d => d._key === '')
       const next       = buildDrafts(processedRows)
-      const ghostDirty = ghost && columnsRef.current.some(c => c.editable && String((ghost as any)[c.key] ?? '') !== '')
+      const ghostDirty = ghost && columnsRef.current.some(
+        c => c.editable && String((ghost as any)[c.key] ?? '') !== ''
+      )
       if (ghostDirty) next[next.length - 1] = ghost!
       return next
     })
   }, [processedRows, buildDrafts])
 
-  // ── Stable updaters ─────────────────────────────────────────────────────────
+  // ── Stable handlers (never recreated, so cells never re-mount) ──────────────
 
-  // handleChange is stable — cells call this on every keystroke
   const handleChange = useCallback((rowKey: string, field: string, value: any) => {
     setDrafts(ds => ds.map(d => d._key === rowKey ? ({ ...d, [field]: value } as DraftRow<T>) : d))
   }, [])
@@ -341,7 +553,7 @@ export function DataGrid<T extends Record<string, any>>({
     setDrafts(ds => ds.map(d => d._key === key ? ({ ...d, ...patch } as DraftRow<T>) : d))
   }, [])
 
-  // ── Cell focus ──────────────────────────────────────────────────────────────
+  // ── Focus helpers ───────────────────────────────────────────────────────────
 
   const focusCell = useCallback((rowKey: string, colKey: string) => {
     const el = document.querySelector<HTMLElement>(
@@ -350,22 +562,18 @@ export function DataGrid<T extends Record<string, any>>({
     if (el) { el.focus(); (el as HTMLInputElement).select?.() }
   }, [gridId])
 
-  const allCellEls = useCallback(() =>
-    Array.from(document.querySelectorAll<HTMLElement>(
+  const focusNext = useCallback((rowKey: string, colKey: string, reverse = false) => {
+    const all = Array.from(document.querySelectorAll<HTMLElement>(
       `[data-${gridId}] [data-${gridId}-row][data-${gridId}-field]`
     )).map(el => ({
       rowKey: el.getAttribute(`data-${gridId}-row`)!,
       colKey: el.getAttribute(`data-${gridId}-field`)!,
       el,
     }))
-  , [gridId])
-
-  const focusNext = useCallback((rowKey: string, colKey: string, reverse = false) => {
-    const all  = allCellEls()
     const idx  = all.findIndex(c => c.rowKey === rowKey && c.colKey === colKey)
     const next = all[reverse ? idx - 1 : idx + 1]
     if (next) { next.el.focus(); (next.el as HTMLInputElement).select?.() }
-  }, [allCellEls])
+  }, [gridId])
 
   // ── Save ────────────────────────────────────────────────────────────────────
 
@@ -375,7 +583,6 @@ export function DataGrid<T extends Record<string, any>>({
       if (col.editable) rec[col.key as string] = (draft as any)[col.key]
     })
     const payload = rec as unknown as Partial<T>
-
     updDraft(draft._key, { _saveState: 'saving' })
     const isNew = draft._key === ''
 
@@ -398,7 +605,9 @@ export function DataGrid<T extends Record<string, any>>({
       }
 
       setTimeout(() => {
-        setDrafts(ds => ds.map(d => d._key === newKey && d._saveState === 'saved' ? { ...d, _saveState: 'idle' } : d))
+        setDrafts(ds => ds.map(d =>
+          d._key === newKey && d._saveState === 'saved' ? { ...d, _saveState: 'idle' } : d
+        ))
       }, 700)
 
       onSaved?.(saved, isNew)
@@ -468,127 +677,19 @@ export function DataGrid<T extends Record<string, any>>({
     }, 150)
   }, [saveRow, gridId])
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
-  const visibleCols       = columns.filter(c => c.visible !== false)
+  const visibleCols       = useMemo(() => columns.filter(c => c.visible !== false), [columns])
   const activeFilterCount = Object.keys(filters).length
-  const cellHandlers      = { gridId, onChange: handleChange, onBlur: handleBlur, onKeyDown: handleKeyDown }
 
-  function renderCell(draft: DraftRow<T>, col: GridColumn<T>) {
-    if (!col.editable || col.type === 'derived') return <DerivedCell<T> draft={draft} col={col} />
-    if (col.type === 'text')   return <TextCell<T>   {...cellHandlers} draft={draft} col={col} />
-    if (col.type === 'number') return <NumberCell<T> {...cellHandlers} draft={draft} col={col} />
-    if (col.type === 'select') return <SelectCell<T> {...cellHandlers} draft={draft} col={col} />
-    if (col.type === 'combo')  return <ComboCell<T>  {...cellHandlers} draft={draft} col={col} focusNext={focusNext} />
-    return null
-  }
-
-  function HeaderCell({ col }: { col: GridColumn<T> }) {
-    const colKey    = String(col.key)
-    const isSorted  = sortField === colKey
-    const canSort   = col.sortable !== false && col.type !== 'derived'
-    const canFilter = col.filterable === true && (col.filterOptions?.length ?? 0) > 0
-    const activeVal = filters[colKey]
-    const filterRef = useRef<HTMLDivElement>(null)
-
-    useEffect(() => {
-      if (openFilter !== colKey) return
-      function h(e: MouseEvent) {
-        if (filterRef.current && !filterRef.current.contains(e.target as Node)) setOpenFilter(null)
-      }
-      document.addEventListener('mousedown', h)
-      return () => document.removeEventListener('mousedown', h)
-    }, [openFilter, colKey])
-
-    return (
-      <th
-        className={`px-0 py-0 text-xs font-semibold uppercase tracking-wide text-text-2 whitespace-nowrap select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
-        style={col.minWidth ? { minWidth: col.minWidth } : undefined}
-      >
-        <div className={`flex items-center gap-0.5 px-3 py-2.5 ${col.align === 'right' ? 'justify-end' : ''}`}>
-          <button type="button" tabIndex={-1}
-            className={`flex items-center gap-1.5 transition-colors min-w-0 ${canSort ? 'hover:text-text-1 cursor-pointer' : 'cursor-default'} ${isSorted ? 'text-accent' : ''}`}
-            onClick={() => canSort && toggleSort(colKey)}
-          >
-            <span className="truncate">{col.header}</span>
-            {canSort && (
-              <span className="flex flex-col gap-[2px] shrink-0">
-                <SortArrow up active={isSorted && sortDir === 'asc'} />
-                <SortArrow up={false} active={isSorted && sortDir === 'desc'} />
-              </span>
-            )}
-          </button>
-          {canFilter && (
-            <div ref={filterRef} className="relative shrink-0">
-              <button type="button" tabIndex={-1}
-                onClick={() => setOpenFilter(openFilter === colKey ? null : colKey)}
-                className={`w-5 h-5 flex items-center justify-center rounded transition-colors ml-0.5 ${activeVal ? 'text-accent bg-accent-dim' : 'text-text-3 hover:text-text-1 hover:bg-surface-2'}`}
-                title={activeVal ? `Filtered: ${col.filterOptions?.find(o => o.value === activeVal)?.label ?? activeVal}` : 'Filter column'}
-              >
-                <FilterIcon size={11} filled={!!activeVal} />
-              </button>
-              {openFilter === colKey && (
-                <div className="absolute z-50 top-full left-0 mt-1 min-w-[160px] bg-surface border border-border rounded-lg shadow-xl overflow-hidden" style={{ zIndex: 9999 }}>
-                  <div className="px-3 py-1.5 border-b border-border text-xs text-text-3 font-semibold uppercase tracking-wide">{col.header}</div>
-                  <button type="button" className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${!activeVal ? 'text-accent font-semibold' : 'text-text-2'}`} onMouseDown={e => { e.preventDefault(); applyFilter(colKey, '') }}>All</button>
-                  {col.filterOptions!.map(opt => (
-                    <button key={opt.value} type="button"
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${activeVal === opt.value ? 'text-accent font-semibold' : 'text-text-1'}`}
-                      onMouseDown={e => { e.preventDefault(); applyFilter(colKey, opt.value) }}
-                    >{opt.label}</button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </th>
-    )
-  }
-
-  function GridRow({ draft }: { draft: DraftRow<T> }) {
-    const isGhost = draft._key === ''
-    const orig    = draft._orig
-    const rowClass = [
-      'border-b border-border last:border-0 transition-colors group',
-      draft._saveState === 'saving' ? 'opacity-50 pointer-events-none' : '',
-      draft._saveState === 'saved'  ? 'dg-row-saved' : '',
-      draft._saveState === 'error'  ? 'dg-row-error' : '',
-      isGhost ? 'opacity-40 hover:opacity-100 transition-opacity' : 'hover:bg-surface-2/50',
-    ].filter(Boolean).join(' ')
-
-    return (
-      <tr className={rowClass}>
-        {visibleCols.map(col => (
-          <td key={String(col.key)}
-            className={['p-0 relative overflow-visible', col.align === 'right' ? 'text-right' : '', col.className ?? ''].filter(Boolean).join(' ')}
-            style={col.minWidth ? { minWidth: col.minWidth } : undefined}
-          >
-            {renderCell(draft, col)}
-          </td>
-        ))}
-        {showActions && (
-          <td className="px-2 py-1">
-            {isGhost ? (
-              <span className="text-xs text-text-3 whitespace-nowrap">↵ new row</span>
-            ) : orig ? (
-              <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                {onEdit   && <button className="w-7 h-7 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors" title="Edit"   onClick={() => onEdit(orig)}><EditIcon  size={12}/></button>}
-                {onDelete && <button className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete" onClick={() => onDelete(orig)}><TrashIcon size={12}/></button>}
-                {renderActions?.(orig)}
-              </div>
-            ) : null}
-          </td>
-        )}
-      </tr>
-    )
-  }
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div
       {...{ [`data-${gridId}`]: '' }}
       className={`bg-surface border border-border rounded-xl overflow-visible ${className}`}
     >
+      {/* Hint bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface-2 rounded-t-xl text-xs text-text-3 flex-wrap">
         <span className="font-semibold text-text-2">{hint ?? 'Spreadsheet mode'}</span>
         <span><Kbd>Tab</Kbd> next cell</span>
@@ -598,23 +699,52 @@ export function DataGrid<T extends Record<string, any>>({
           <span className="flex items-center gap-1.5 text-accent font-semibold">
             <FilterIcon size={10} filled />
             {activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''} active ·{' '}
-            <button type="button" className="underline hover:no-underline text-text-3 hover:text-text-1 font-normal" onClick={clearAllFilters}>clear all</button>
+            <button type="button"
+              className="underline hover:no-underline text-text-3 hover:text-text-1 font-normal"
+              onClick={clearAllFilters}
+            >clear all</button>
           </span>
         )}
         {hintRight && <span className="ml-auto opacity-60">{hintRight}</span>}
       </div>
 
+      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-surface-2 border-b border-border">
-              {visibleCols.map(col => <HeaderCell key={String(col.key)} col={col} />)}
+              {visibleCols.map(col => (
+                <HeaderCell<T>
+                  key={String(col.key)}
+                  col={col}
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  openFilter={openFilter}
+                  filters={filters}
+                  onSort={handleSort}
+                  onFilter={handleFilter}
+                  onOpenFilter={setOpenFilter}
+                />
+              ))}
               {showActions && <th className="w-20" />}
             </tr>
           </thead>
           <tbody>
             {drafts.map((draft, i) => (
-              <GridRow key={draft._key || `ghost-${i}`} draft={draft} />
+              <GridRow<T>
+                key={draft._key || `ghost-${i}`}
+                draft={draft}
+                visibleCols={visibleCols}
+                gridId={gridId}
+                showActions={showActions}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                renderActions={renderActions}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                onKeyDown={handleKeyDown}
+                focusNext={focusNext}
+              />
             ))}
           </tbody>
         </table>
@@ -649,7 +779,10 @@ export function GridToggleButton({
   return (
     <button onClick={onToggle}
       className={`flex items-center gap-2 px-3 py-2 text-sm font-semibold rounded-lg border transition-colors
-        ${active ? 'bg-accent text-white border-accent' : 'border-border text-text-2 hover:border-accent hover:text-accent'}`}
+        ${active
+          ? 'bg-accent text-white border-accent'
+          : 'border-border text-text-2 hover:border-accent hover:text-accent'
+        }`}
     >
       <GridIcon size={14} />{label}
     </button>
@@ -660,7 +793,9 @@ export function GridToggleButton({
 
 function SortArrow({ up, active }: { up: boolean; active: boolean }) {
   return (
-    <svg width="7" height="4" viewBox="0 0 7 4" fill="currentColor" className={`transition-opacity ${active ? 'opacity-100 text-accent' : 'opacity-30'}`}>
+    <svg width="7" height="4" viewBox="0 0 7 4" fill="currentColor"
+      className={`transition-opacity ${active ? 'opacity-100 text-accent' : 'opacity-30'}`}
+    >
       {up ? <path d="M3.5 0L7 4H0z"/> : <path d="M3.5 4L0 0h7z"/>}
     </svg>
   )
