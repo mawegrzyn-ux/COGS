@@ -517,6 +517,19 @@ router.get('/report/menu-prices', async (req, res) => {
     ).catch(() => ({ rows: [null] }));
     const baseCurrency = settings?.value ? JSON.parse(settings.value) : { code: 'USD', symbol: '$', name: 'US Dollar' };
 
+    // Pre-load all tax rates referenced by menu items (avoids await inside map)
+    const allTaxRateIds = [...new Set([
+      ...menuItemRows.map(r => r.tax_rate_id),
+      ...Object.values(levelPriceMap).map(lp => lp.tax_rate_id),
+    ].filter(Boolean))];
+    const taxById = {};
+    if (allTaxRateIds.length) {
+      const { rows: taxRows } = await pool.query(
+        `SELECT id, rate FROM mcogs_tax_rates WHERE id = ANY($1::int[])`, [allTaxRateIds]
+      );
+      for (const t of taxRows) taxById[t.id] = Number(t.rate);
+    }
+
     // Build report
     const report = recipes.map(recipe => {
       const recipeId = recipe.id;
@@ -539,26 +552,19 @@ router.get('/report/menu-prices', async (req, res) => {
         }
 
         const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup);
-        const cppLocal = cost;  // already per-portion
+        const cppLocal = cost;
         const defaultRate = defaultTaxMap[cid] || 0;
 
         const grosses = [], nets = [];
         for (const mi of itemsInCountry) {
-          let gross    = Number(mi.sell_price || 0);
+          let gross     = Number(mi.sell_price || 0);
           let taxRateId = mi.tax_rate_id;
           if (priceLevelId) {
             const lp = levelPriceMap[mi.menu_item_id];
             if (lp) { gross = Number(lp.sell_price); if (lp.tax_rate_id) taxRateId = lp.tax_rate_id; }
           }
-          // Resolve tax rate
-          let rate = defaultRate;
-          if (taxRateId) {
-            const { rows: [tr] } = await pool.query(
-              `SELECT rate FROM mcogs_tax_rates WHERE id = $1`, [taxRateId]
-            ).catch(() => ({ rows: [null] }));
-            if (tr) rate = Number(tr.rate);
-          }
-          const net = rate > 0 ? gross / (1 + rate) : gross;
+          const rate = taxRateId && taxById[taxRateId] !== undefined ? taxById[taxRateId] : defaultRate;
+          const net  = rate > 0 ? gross / (1 + rate) : gross;
           grosses.push(gross);
           nets.push(net);
         }
