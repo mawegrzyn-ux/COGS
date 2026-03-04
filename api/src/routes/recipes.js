@@ -82,10 +82,9 @@ router.get('/:id', async (req, res) => {
 
     // Also fetch ANY active quote (not just preferred) for coverage detection
     const { rows: anyQuotes } = await pool.query(`
-      SELECT DISTINCT ingredient_id, pv.country_id
+      SELECT DISTINCT pq.ingredient_id, v.country_id
       FROM   mcogs_price_quotes pq
       JOIN   mcogs_vendors v ON v.id = pq.vendor_id
-      JOIN   mcogs_countries pv ON pv.id = v.country_id
       WHERE  pq.is_active = true
     `);
     const anyQuoteLookup = {};
