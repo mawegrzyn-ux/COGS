@@ -582,6 +582,8 @@ export function DataGrid<T extends Record<string, any>>({
     columnsRef.current.forEach(col => {
       if (col.editable) rec[col.key as string] = (draft as any)[col.key]
     })
+    // Always include the keyField so the API receives the row id
+    rec[keyField as string] = (draft as any)[keyField]
     const payload = rec as unknown as Partial<T>
     updDraft(draft._key, { _saveState: 'saving' })
     const isNew = draft._key === ''
@@ -633,12 +635,14 @@ export function DataGrid<T extends Record<string, any>>({
 
     if (e.key === 'Tab') {
       e.preventDefault()
+      // Always get the freshest draft from ref before saving
+      const freshDraft = draftsRef.current.find(d => d._key === draft._key) ?? draft
       if (isLast && !e.shiftKey) {
-        const ok = await saveRow(draft)
+        const ok = await saveRow(freshDraft)
         if (isGhost && ok) setTimeout(() => focusCell('', String(editCols[0].key)), 50)
         else focusNext(draft._key, String(col.key), false)
       } else if (isFirst && e.shiftKey && !isGhost) {
-        saveRow(draft); focusNext(draft._key, String(col.key), true)
+        saveRow(freshDraft); focusNext(draft._key, String(col.key), true)
       } else {
         focusNext(draft._key, String(col.key), e.shiftKey)
       }
@@ -646,7 +650,8 @@ export function DataGrid<T extends Record<string, any>>({
 
     if (e.key === 'Enter') {
       e.preventDefault()
-      await saveRow(draft)
+      const freshDraft = draftsRef.current.find(d => d._key === draft._key) ?? draft
+      await saveRow(freshDraft)
       const cur  = draftsRef.current
       const idx  = cur.findIndex(d => d._key === draft._key)
       const next = cur[idx + 1]
@@ -668,12 +673,15 @@ export function DataGrid<T extends Record<string, any>>({
 
   const handleBlur = useCallback((draft: DraftRow<T>) => {
     if (draft._key === '') return
+    const rowKey = draft._key
     setTimeout(() => {
       const grid    = document.querySelector(`[data-${gridId}]`)
       const focused = document.activeElement
       if (!grid || !focused || !grid.contains(focused)) return
-      if ((focused as HTMLElement).getAttribute(`data-${gridId}-row`) === draft._key) return
-      saveRow(draft)
+      if ((focused as HTMLElement).getAttribute(`data-${gridId}-row`) === rowKey) return
+      // Look up CURRENT draft from ref — the closure 'draft' is stale
+      const current = draftsRef.current.find(d => d._key === rowKey)
+      if (current) saveRow(current)
     }, 150)
   }, [saveRow, gridId])
 
