@@ -57,78 +57,90 @@ router.get('/:id', async (req, res) => {
       FROM   mcogs_countries c ORDER BY c.name ASC
     `);
 
+    // Single query: preferred quote wins; fallback to cheapest active quote in country
+    // is_preferred = true  → preferred vendor set
+    // is_preferred = false → best available fallback, flagged for display
     const { rows: quotes } = await pool.query(`
-      SELECT pv.ingredient_id,
-             pv.country_id,
-             pv.vendor_id,
-             pv.quote_id,
-             pq.purchase_price,
-             pq.qty_in_base_units,
-             pq.purchase_unit
-      FROM   mcogs_ingredient_preferred_vendor pv
-      JOIN   mcogs_price_quotes pq ON pq.id = pv.quote_id
-      WHERE  pq.is_active = true
+      WITH preferred AS (
+        SELECT pv.ingredient_id,
+               pv.country_id,
+               pq.purchase_price,
+               pq.qty_in_base_units,
+               pq.purchase_unit,
+               true AS is_preferred
+        FROM   mcogs_ingredient_preferred_vendor pv
+        JOIN   mcogs_price_quotes pq ON pq.id = pv.quote_id
+        WHERE  pq.is_active = true
+      ),
+      fallback AS (
+        SELECT DISTINCT ON (pq.ingredient_id, v.country_id)
+               pq.ingredient_id,
+               v.country_id,
+               pq.purchase_price,
+               pq.qty_in_base_units,
+               pq.purchase_unit,
+               false AS is_preferred
+        FROM   mcogs_price_quotes pq
+        JOIN   mcogs_vendors v ON v.id = pq.vendor_id
+        WHERE  pq.is_active = true
+        ORDER  BY pq.ingredient_id, v.country_id,
+                  (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
+      )
+      SELECT * FROM preferred
+      UNION ALL
+      SELECT f.* FROM fallback f
+      WHERE NOT EXISTS (
+        SELECT 1 FROM preferred p
+        WHERE p.ingredient_id = f.ingredient_id AND p.country_id = f.country_id
+      )
     `);
 
-    // Build quote lookup: ingredient_id -> country_id -> {price_per_base_unit}
+    // Build quote lookup: ingredient_id -> country_id -> { price_per_base_unit, is_preferred }
     const quoteLookup = {};
     for (const q of quotes) {
       if (!quoteLookup[q.ingredient_id]) quoteLookup[q.ingredient_id] = {};
       quoteLookup[q.ingredient_id][q.country_id] = {
         price_per_base_unit: q.qty_in_base_units > 0 ? Number(q.purchase_price) / Number(q.qty_in_base_units) : 0,
         purchase_unit:       q.purchase_unit,
+        is_preferred:        q.is_preferred,
       };
-    }
-
-    // Also fetch ANY active quote (not just preferred) for coverage detection
-    const { rows: anyQuotes } = await pool.query(`
-      SELECT DISTINCT pq.ingredient_id, v.country_id
-      FROM   mcogs_price_quotes pq
-      JOIN   mcogs_vendors v ON v.id = pq.vendor_id
-      WHERE  pq.is_active = true
-    `);
-    const anyQuoteLookup = {};
-    for (const q of anyQuotes) {
-      if (!anyQuoteLookup[q.ingredient_id]) anyQuoteLookup[q.ingredient_id] = new Set();
-      anyQuoteLookup[q.ingredient_id].add(q.country_id);
     }
 
     // Calculate COGS per country
     const cogs_by_country = countries.map(country => {
-      let total_base = 0;
+      let total_base     = 0;
       let preferredCount = 0;
-      let anyQuoteCount  = 0;
+      let quotedCount    = 0;
       const ingItems = items.filter(i => i.item_type === 'ingredient');
       const lines = items.map(item => {
-        if (item.item_type !== 'ingredient') return { ...item, cost: null };
+        if (item.item_type !== 'ingredient') return { ...item, cost: null, quote_is_preferred: null };
         const q = quoteLookup[item.ingredient_id]?.[country.id];
-        const hasAny = anyQuoteLookup[item.ingredient_id]?.has(country.id) ?? false;
-        if (q) preferredCount++;
-        if (q || hasAny) anyQuoteCount++;
-        if (!q) return { ...item, cost: null };
+        if (!q) return { ...item, cost: null, quote_is_preferred: null };
+        if (q.is_preferred) preferredCount++;
+        quotedCount++;
         const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion);
         const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
         const cost       = base_qty * waste_mult * q.price_per_base_unit;
         total_base += cost;
-        return { ...item, cost: Math.round(cost * 10000) / 10000 };
+        return { ...item, cost: Math.round(cost * 10000) / 10000, quote_is_preferred: q.is_preferred };
       });
       const total = ingItems.length;
       let coverage;
-      if (total === 0)                          coverage = 'fully_preferred';
-      else if (preferredCount === total)        coverage = 'fully_preferred';
-      else if (anyQuoteCount  === total)        coverage = 'fully_quoted';
-      else if (anyQuoteCount  > 0)              coverage = 'partially_quoted';
-      else                                      coverage = 'not_quoted';
+      if (total === 0)                         coverage = 'fully_preferred';
+      else if (preferredCount === total)       coverage = 'fully_preferred';
+      else if (quotedCount    === total)       coverage = 'fully_quoted';
+      else if (quotedCount    > 0)             coverage = 'partially_quoted';
+      else                                     coverage = 'not_quoted';
       const local_rate = Number(country.exchange_rate);
       return {
-        country_id:      country.id,
-        country_name:    country.name,
-        currency_code:   country.currency_code,
-        currency_symbol: country.currency_symbol,
-        exchange_rate:   local_rate,
-        total_cost_base: Math.round(total_base * 10000) / 10000,
-        total_cost_local:Math.round(total_base * local_rate * 10000) / 10000,
-        cost_per_portion:Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
+        country_id:       country.id,
+        country_name:     country.name,
+        currency_code:    country.currency_code,
+        currency_symbol:  country.currency_symbol,
+        exchange_rate:    local_rate,
+        total_cost_base:  Math.round(total_base * 10000) / 10000,
+        total_cost_local: Math.round(total_base * local_rate * 10000) / 10000,
+        cost_per_portion: Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
         coverage,
         lines,
       };

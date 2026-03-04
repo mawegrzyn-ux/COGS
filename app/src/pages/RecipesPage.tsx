@@ -23,6 +23,7 @@ interface RecipeItem {
   sub_recipe_yield_qty?:  number
   waste_pct?:             number
   cost?:                  number | null
+  quote_is_preferred?:    boolean | null
 }
 
 interface CogsByCountry {
@@ -477,8 +478,13 @@ export default function RecipesPage() {
                             {activeCogs && (
                               <td className="px-4 py-2.5 text-right font-mono">
                                 {localCost != null
-                                  ? <span className="text-text-1">{activeCogs.currency_symbol}{fmtCost(localCost)}</span>
-                                  : <span className="text-amber-400 text-xs">no quote</span>
+                                  ? <div className="flex flex-col items-end">
+                                      <span className="text-text-1">{activeCogs.currency_symbol}{fmtCost(localCost)}</span>
+                                      {cogLine?.quote_is_preferred === false && (
+                                        <span className="text-[10px] text-amber-400 leading-none mt-0.5">best available</span>
+                                      )}
+                                    </div>
+                                  : <span className="text-red-400 text-xs">no quote</span>
                                 }
                               </td>
                             )}
