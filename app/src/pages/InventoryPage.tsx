@@ -542,7 +542,7 @@ function IngredientsTab() {
             if (!payload.name) throw new Error('Name is required')
             return isNew
               ? api.post('/ingredients', payload)
-              : api.put(`/ingredients/${(draft as Ingredient).id}`, payload)
+              : api.put(`/ingredients/${payload.id}`, payload)
           }}
           onSaved={(saved, isNew) => {
             if (isNew) setIngredients(prev => [...prev, saved])
@@ -934,7 +934,7 @@ function PriceQuotesTab() {
             }
             return isNew
               ? api.post('/price-quotes', payload)
-              : api.put(`/price-quotes/${(draft as Quote).id}`, payload)
+              : api.put(`/price-quotes/${payload.id}`, payload)
           }}
           onSaved={(saved, isNew) => {
             if (isNew) setQuotes(prev => [...prev, saved])
