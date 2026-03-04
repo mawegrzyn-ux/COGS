@@ -546,7 +546,10 @@ function IngredientsTab() {
           }}
           onSaved={(saved, isNew) => {
             if (isNew) setIngredients(prev => [...prev, saved])
-            else       setIngredients(prev => prev.map(i => i.id === saved.id ? saved : i))
+            else       setIngredients(prev => prev.map(i =>
+              // Merge so joined fields (quote_count, active_quote_count, base_unit_abbr etc.) are preserved
+              i.id === saved.id ? { ...i, ...saved } : i
+            ))
             showToast(isNew ? 'Ingredient added' : 'Ingredient saved')
           }}
           onEdit={openEdit}
