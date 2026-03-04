@@ -402,30 +402,34 @@ function IngredientsTab() {
     )
     const catOptions: GridOption[] = categories.map(c => ({ value: c, label: c }))
 
+    const unitFilterOptions: GridOption[] = unitOptions.map(u => ({ value: u.value, label: u.label }))
+
     return [
       {
         key: 'name', header: 'Ingredient', type: 'text', editable: true,
-        minWidth: 160, placeholder: 'New ingredient…',
+        minWidth: 160, placeholder: 'New ingredient…', sortable: true,
       },
       {
         key: 'category', header: 'Category', type: 'combo', editable: true,
         options: catOptions, minWidth: 130, placeholder: 'Select or add…',
+        filterable: true, filterOptions: catOptions, sortable: true,
       },
       {
         key: 'base_unit_id', header: 'Base Unit', type: 'select', editable: true,
         options: unitOptions, minWidth: 100,
+        filterable: true, filterOptions: unitFilterOptions, sortable: true,
       },
       {
         key: 'default_prep_unit', header: 'Prep Unit', type: 'text', editable: true,
-        minWidth: 90, placeholder: 'e.g. g, cup…', mono: true,
+        minWidth: 90, placeholder: 'e.g. g, cup…', mono: true, sortable: true,
       },
       {
         key: 'default_prep_to_base_conversion', header: 'Conv.', type: 'number', editable: true,
-        minWidth: 80, min: 0.000001, step: 0.000001, mono: true,
+        minWidth: 80, min: 0.000001, step: 0.000001, mono: true, sortable: true,
       },
       {
         key: 'waste_pct', header: 'Waste %', type: 'number', editable: true,
-        minWidth: 80, min: 0, max: 99, step: 0.5, mono: true,
+        minWidth: 80, min: 0, max: 99, step: 0.5, mono: true, sortable: true,
       },
       {
         key: 'active_quote_count', header: 'Quotes', type: 'derived', editable: false,
@@ -524,7 +528,7 @@ function IngredientsTab() {
         <DataGrid<Ingredient>
           gridId="ingredients"
           columns={ingColumns}
-          rows={sorted.length > 0 ? sorted : ingredients}
+          rows={searchFiltered}
           keyField="id"
           onSave={async (draft, isNew) => {
             const payload = {
@@ -761,26 +765,33 @@ function PriceQuotesTab() {
       sub:   `${v.country_name} · ${v.currency_code}`,
     }))
 
+    const statusOptions: GridOption[] = [
+      { value: 'true',  label: 'Active'   },
+      { value: 'false', label: 'Inactive' },
+    ]
+
     return [
       {
         key: 'ingredient_id', header: 'Ingredient', type: 'combo', editable: true,
         options: ingOptions, minWidth: 160, placeholder: 'Search ingredient…',
+        filterable: true, filterOptions: ingOptions, sortable: true,
       },
       {
         key: 'vendor_id', header: 'Vendor', type: 'combo', editable: true,
         options: venOptions, minWidth: 170, placeholder: 'Search vendor…',
+        filterable: true, filterOptions: vendors.map(v => ({ value: String(v.id), label: v.name })), sortable: true,
       },
       {
         key: 'purchase_unit', header: 'Purchase Unit', type: 'text', editable: true,
-        minWidth: 130, placeholder: 'e.g. Case 12×1kg',
+        minWidth: 130, placeholder: 'e.g. Case 12×1kg', sortable: true,
       },
       {
         key: 'qty_in_base_units', header: 'Base Qty', type: 'number', editable: true,
-        minWidth: 85, min: 0.000001, step: 0.000001, mono: true,
+        minWidth: 85, min: 0.000001, step: 0.000001, mono: true, sortable: true,
       },
       {
         key: 'purchase_price', header: 'Price', type: 'number', editable: true,
-        minWidth: 90, min: 0, step: 0.01, mono: true,
+        minWidth: 90, min: 0, step: 0.01, mono: true, sortable: true,
         placeholder: (row) => {
           const v = vendors.find(v => String(v.id) === String((row as any).vendor_id))
           return v ? `0.00 ${v.currency_code}` : '0.00'
@@ -801,11 +812,8 @@ function PriceQuotesTab() {
       },
       {
         key: 'is_active', header: 'Status', type: 'select', editable: true,
-        minWidth: 90,
-        options: [
-          { value: 'true',  label: 'Active' },
-          { value: 'false', label: 'Inactive' },
-        ],
+        minWidth: 90, options: statusOptions,
+        filterable: true, filterOptions: statusOptions, sortable: true,
       },
       {
         key: 'is_preferred', header: 'Preferred', type: 'derived', editable: false,
@@ -911,7 +919,7 @@ function PriceQuotesTab() {
         <DataGrid<Quote>
           gridId="quotes"
           columns={quoteColumns}
-          rows={sorted.length > 0 ? sorted : quotes}
+          rows={searchFiltered}
           keyField="id"
           onSave={async (draft, isNew) => {
             if (!draft.ingredient_id || !draft.vendor_id || !draft.purchase_price)
