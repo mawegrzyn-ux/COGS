@@ -13,10 +13,9 @@ router.use('/vendors',             require('./vendors'));
 router.use('/ingredients',         require('./ingredients'));
 router.use('/price-quotes',        require('./price-quotes'));
 router.use('/preferred-vendors',   require('./preferred-vendors'));
-
+router.use('/recipes',             require('./recipes'));
 // Uncomment as pages are built:
 
-// router.use('/recipes',           require('./recipes'));
 // router.use('/menus',             require('./menus'));
 // router.use('/cogs',              require('./cogs'));
 
