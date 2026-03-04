@@ -69,11 +69,10 @@ export interface GridColumn<T extends Record<string, any>> {
 export type GridSaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 /** Internal draft row — keyed row data + save state */
-interface DraftRow<T> {
+type DraftRow<T> = T & {
   _key:       string          // '' for ghost rows
   _saveState: GridSaveState
   _orig?:     T               // original data for Esc revert
-  [field: string]: any
 }
 
 export interface DataGridProps<T extends Record<string, any>> {
@@ -160,13 +159,13 @@ export function DataGrid<T extends Record<string, any>>({
   useEffect(() => { setDrafts(buildDrafts(rows)) }, [rows, buildDrafts])
 
   function makeGhost(): DraftRow<T> {
-    const base: DraftRow<T> = { _key: '', _saveState: 'idle' }
-    columns.forEach(col => { if (col.editable) (base as any)[col.key] = '' })
-    return base
+    const base: Record<string, any> = { _key: '', _saveState: 'idle' }
+    columns.forEach(col => { if (col.editable) base[col.key as string] = '' })
+    return base as unknown as DraftRow<T>
   }
 
-  function updDraft(key: string, patch: Partial<DraftRow<T>>) {
-    setDrafts(ds => ds.map(d => d._key === key ? { ...d, ...patch } : d))
+  function updDraft(key: string, patch: Record<string, any>) {
+    setDrafts(ds => ds.map(d => d._key === key ? ({ ...d, ...patch } as DraftRow<T>) : d))
   }
 
   // ── Editable columns (in tab order) ────────────────────────────────────────
@@ -180,10 +179,11 @@ export function DataGrid<T extends Record<string, any>>({
 
   async function saveRow(draft: DraftRow<T>): Promise<boolean> {
     // Extract only editable field values for the payload
-    const payload: Partial<T> = {}
+    const payloadRec: Record<string, any> = {}
     columns.forEach(col => {
-      if (col.editable) (payload as any)[col.key] = (draft as any)[col.key]
+      if (col.editable) payloadRec[col.key as string] = (draft as any)[col.key]
     })
+    const payload = payloadRec as unknown as Partial<T>
 
     updDraft(draft._key, { _saveState: 'saving' })
     const isNew = draft._key === ''
@@ -196,14 +196,14 @@ export function DataGrid<T extends Record<string, any>>({
         setDrafts(ds => {
           const updated = ds.map(d =>
             d._key === ''
-              ? { ...saved, _key: newKey, _saveState: 'saved' as GridSaveState, _orig: saved }
+              ? ({ ...saved, _key: newKey, _saveState: 'saved' as GridSaveState, _orig: saved } as unknown as DraftRow<T>)
               : d
           )
           updated.push(makeGhost())
           return updated
         })
       } else {
-        updDraft(draft._key, { ...saved, _saveState: 'saved', _orig: saved })
+        updDraft(draft._key, { ...(saved as unknown as Partial<DraftRow<T>>), _saveState: 'saved', _orig: saved })
       }
 
       setTimeout(() => {
@@ -301,10 +301,7 @@ export function DataGrid<T extends Record<string, any>>({
       if (isGhost) {
         setDrafts(ds => ds.map(d => d._key === '' ? makeGhost() : d))
       } else if (draft._orig) {
-        updDraft(draft._key, {
-          ...draft._orig,
-          _saveState: 'idle',
-        })
+        updDraft(draft._key, { ...(draft._orig as Record<string, any>), _saveState: 'idle' })
       }
       ;(e.target as HTMLElement).blur()
     }
@@ -332,7 +329,7 @@ export function DataGrid<T extends Record<string, any>>({
       [attrField]: String(col.key),
     }
     const ph = typeof col.placeholder === 'function'
-      ? col.placeholder(draft as Partial<T>)
+      ? col.placeholder(draft as unknown as Partial<T>)
       : col.placeholder ?? ''
 
     return (
@@ -357,7 +354,7 @@ export function DataGrid<T extends Record<string, any>>({
       [attrField]: String(col.key),
     }
     const ph = typeof col.placeholder === 'function'
-      ? col.placeholder(draft as Partial<T>)
+      ? col.placeholder(draft as unknown as Partial<T>)
       : col.placeholder ?? ''
 
     return (
@@ -378,7 +375,7 @@ export function DataGrid<T extends Record<string, any>>({
   }
 
   function SelectCell({ draft, col }: { draft: DraftRow<T>; col: GridColumn<T> }) {
-    const opts = typeof col.options === 'function' ? col.options(draft as T) : (col.options ?? [])
+    const opts = typeof col.options === 'function' ? col.options(draft as unknown as T) : (col.options ?? [])
     const attrs = {
       [attrKey]:   draft._key,
       [attrField]: String(col.key),
@@ -422,7 +419,7 @@ export function DataGrid<T extends Record<string, any>>({
     const [search, setSearch] = useState('')
     const ref = useRef<HTMLDivElement>(null)
 
-    const opts = typeof col.options === 'function' ? col.options(draft as T) : (col.options ?? [])
+    const opts = typeof col.options === 'function' ? col.options(draft as unknown as T) : (col.options ?? [])
     const current = opts.find(o => o.value === String((draft as any)[col.key] ?? ''))
     const display = current?.label ?? ''
 
@@ -447,7 +444,7 @@ export function DataGrid<T extends Record<string, any>>({
       [attrField]: String(col.key),
     }
     const ph = typeof col.placeholder === 'function'
-      ? col.placeholder(draft as Partial<T>)
+      ? col.placeholder(draft as unknown as Partial<T>)
       : col.placeholder ?? 'Search…'
 
     return (
@@ -511,7 +508,7 @@ export function DataGrid<T extends Record<string, any>>({
   }
 
   function DerivedCell({ draft, col }: { draft: DraftRow<T>; col: GridColumn<T> }) {
-    const value = col.derive ? col.derive(draft as Partial<T>) : '—'
+    const value = col.derive ? col.derive(draft as unknown as Partial<T>) : '—'
     return (
       <span className={`px-3 py-2 block text-sm${col.mono ? ' font-mono' : ''}${col.align === 'right' ? ' text-right' : ''}`}>
         {value}
@@ -532,7 +529,7 @@ export function DataGrid<T extends Record<string, any>>({
 
   function GridRow({ draft }: { draft: DraftRow<T> }) {
     const isGhost = draft._key === ''
-    const orig    = draft._orig as T | undefined
+    const orig    = draft._orig
 
     const rowClass = [
       'border-b border-border last:border-0 transition-colors group',
