@@ -56,7 +56,9 @@ export default function RecipesPage() {
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
   const [units,        setUnits]        = useState<Unit[]>([])
+  const [apiCategories,setApiCategories]= useState<string[]>([])
   const [loading,      setLoading]      = useState(true)
+  const [panelWidth,   setPanelWidth]   = useState(288) // px, default w-72
   const [selected,     setSelected]     = useState<RecipeDetail | null>(null)
   const [loadingDetail,setLoadingDetail]= useState(false)
   const [selectedCountryId, setSelectedCountryId] = useState<number | ''>('')
@@ -82,14 +84,16 @@ export default function RecipesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [r, i, u] = await Promise.all([
+      const [r, i, u, cats] = await Promise.all([
         api.get('/recipes'),
         api.get('/ingredients'),
         api.get('/units'),
+        api.get('/categories?type=recipe'),
       ])
       setRecipes(r || [])
       setIngredients(i || [])
       setUnits(u || [])
+      setApiCategories((cats || []).map((c: { name: string }) => c.name).sort())
     } finally {
       setLoading(false)
     }
@@ -111,7 +115,10 @@ export default function RecipesPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const categories = useMemo(() => [...new Set(recipes.map(r => r.category).filter(Boolean) as string[])].sort(), [recipes])
+  const categories = useMemo(() => {
+    const fromRecipes = recipes.map(r => r.category).filter(Boolean) as string[]
+    return [...new Set([...apiCategories, ...fromRecipes])].sort()
+  }, [recipes, apiCategories])
 
   const filtered = useMemo(() => {
     let r = [...recipes]
@@ -245,7 +252,7 @@ export default function RecipesPage() {
       <div className="flex flex-1 overflow-hidden">
 
         {/* ── Left: recipe list ── */}
-        <div className="w-72 shrink-0 flex flex-col border-r border-border bg-surface overflow-hidden">
+        <div className="flex flex-col border-r border-border bg-surface overflow-hidden" style={{ width: panelWidth, minWidth: 200, maxWidth: 520, flexShrink: 0 }}>
           {/* Search + filter */}
           <div className="p-3 border-b border-border flex flex-col gap-2">
             <div className="relative">
@@ -307,6 +314,26 @@ export default function RecipesPage() {
             )}
           </div>
         </div>
+
+        {/* ── Drag handle */}
+        <div
+          className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize shrink-0 transition-all duration-100 active:bg-accent"
+          onMouseDown={e => {
+            e.preventDefault()
+            const startX = e.clientX
+            const startW = panelWidth
+            const onMove = (ev: MouseEvent) => {
+              const next = Math.max(200, Math.min(520, startW + ev.clientX - startX))
+              setPanelWidth(next)
+            }
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+            }
+            window.addEventListener('mousemove', onMove)
+            window.addEventListener('mouseup', onUp)
+          }}
+        />
 
         {/* ── Right: recipe detail ── */}
         <div className="flex-1 overflow-y-auto bg-surface-2">
