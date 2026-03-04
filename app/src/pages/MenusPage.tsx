@@ -317,13 +317,6 @@ export default function MenusPage() {
     return taxRates.find(t => t.country_id === countryId && t.is_default) ?? null
   }
 
-  function buildTaxOptions(countryId: number, levelId: number | '', selectedId: number | '') {
-    const rates = taxRates.filter(t => t.country_id === countryId)
-    const defRate = getDefaultTaxForCountryLevel(countryId, levelId)
-    const defLabel = defRate ? `Default: ${defRate.name} (${(defRate.rate * 100).toFixed(0)}%)` : 'Country default'
-    return { rates, defRate, defLabel }
-  }
-
   // ── Menu CRUD ─────────────────────────────────────────────────────────────
 
   async function saveMenu(name: string, country_id: number, description: string) {
@@ -688,7 +681,6 @@ export default function MenusPage() {
           selectedLevel={priceSelectedLevel}
           grossNet={priceGrossNet}
           selCountries={priceSelCountries}
-          allCountries={priceReportCountries}
           search={priceSearch}
           cat={priceCat}
           cats={priceReportCats}
@@ -784,7 +776,6 @@ export default function MenusPage() {
       {menuItemModal !== null && selectedMenu && selectedCountry && (
         <MenuItemFormModal
           isEdit={menuItemModal !== 'new'}
-          menu={selectedMenu}
           country={selectedCountry}
           priceLevels={priceLevels}
           taxRates={taxRates}
@@ -828,7 +819,6 @@ export default function MenusPage() {
       {/* Confirm delete */}
       {confirmDelete && (
         <ConfirmDialog
-          title={confirmDelete.type === 'menu' ? 'Delete Menu' : 'Remove Item'}
           message={confirmDelete.type === 'menu'
             ? 'Delete this menu and all its items? This cannot be undone.'
             : 'Remove this item from the menu?'}
@@ -1036,9 +1026,10 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                     <td className="px-3 py-2.5 text-right text-xs font-semibold">{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
                     <td className="px-3 py-2.5">
                       {hasPrice ? (
-                        <Badge variant={cls === 'green' ? 'green' : cls === 'yellow' ? 'yellow' : 'red'}>
-                          {cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
-                        </Badge>
+                        <Badge
+                          label={cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
+                          variant="neutral"
+                        />
                       ) : dash}
                     </td>
                     <td className="px-3 py-2.5">
@@ -1101,7 +1092,7 @@ function MenuFormModal({ menu, countries, onSave, onClose }: {
 // ── Menu Item Form Modal ──────────────────────────────────────────────────────
 
 interface MenuItemFormProps {
-  isEdit: boolean; menu: Menu; country: Country
+  isEdit: boolean; country: Country
   priceLevels: PriceLevel[]; taxRates: TaxRate[]; countryLevelTax: CountryLevelTax[]
   recipes: Recipe[]; ingredients: Ingredient[]
   miType: 'recipe' | 'ingredient'; miRecipeId: number | ''; miIngId: number | ''
@@ -1114,7 +1105,7 @@ interface MenuItemFormProps {
   onSave(): void; onClose(): void
 }
 
-function MenuItemFormModal({ isEdit, menu, country, priceLevels, taxRates, countryLevelTax, recipes, ingredients,
+function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLevelTax, recipes, ingredients,
   miType, miRecipeId, miIngId, miDisplayName, miQty, miLevelInputs,
   onTypeChange, onRecipeChange, onIngChange, onDisplayName, onQty, onLevelInput, onSave, onClose }: MenuItemFormProps) {
 
@@ -1235,7 +1226,7 @@ function MenuItemFormModal({ isEdit, menu, country, priceLevels, taxRates, count
 interface PriceReportProps {
   data: PriceReportData | null; loading: boolean
   priceLevels: PriceLevel[]; selectedLevel: number | ''; grossNet: 'gross' | 'net'
-  selCountries: Record<number, boolean>; allCountries: PriceReportCountry[]
+  selCountries: Record<number, boolean>
   search: string; cat: string; cats: string[]; filtered: PriceReportRecipe[]
   groupBy: boolean
   onLevelChange(v: number | ''): void; onGrossNetChange(v: 'gross' | 'net'): void
@@ -1245,7 +1236,7 @@ interface PriceReportProps {
   onGroupBy(): void; onExport(): void
 }
 
-function PriceReport({ data, loading, priceLevels, selectedLevel, grossNet, selCountries, allCountries,
+function PriceReport({ data, loading, priceLevels, selectedLevel, grossNet, selCountries,
   search, cat, cats, filtered, groupBy, onLevelChange, onGrossNetChange, onToggleCountry,
   onAllCountries, onNoneCountries, onSearch, onCat, onGroupBy, onExport }: PriceReportProps) {
 
