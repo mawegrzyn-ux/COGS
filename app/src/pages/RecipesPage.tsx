@@ -45,8 +45,8 @@ interface RecipeDetail extends Recipe {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const fmt = (n: number, dp = 4) => n.toFixed(dp)
-const fmtCost = (n: number) => n < 0.01 ? n.toFixed(4) : n.toFixed(2)
+const fmt = (n: number | string | null | undefined, dp = 4) => Number(n ?? 0).toFixed(dp)
+const fmtCost = (n: number | string | null | undefined) => { const v = Number(n ?? 0); return v < 0.01 ? v.toFixed(4) : v.toFixed(2) }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -659,7 +659,32 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
     prep_to_base_conversion: String(item?.prep_to_base_conversion ?? '1'),
   })
 
+  // Combo search state
+  const [ingSearch,     setIngSearch]     = useState(() => {
+    if (item?.ingredient_id) {
+      return ingredients.find(i => i.id === item.ingredient_id)?.name ?? ''
+    }
+    return ''
+  })
+  const [ingOpen,       setIngOpen]       = useState(false)
+  const [recipeSearch,  setRecipeSearch]  = useState(() => {
+    if (item?.recipe_item_id) {
+      return recipes.find(r => r.id === item.recipe_item_id)?.name ?? ''
+    }
+    return ''
+  })
+  const [recipeOpen,    setRecipeOpen]    = useState(false)
+
+  const filteredIngs = ingredients.filter(i =>
+    i.name.toLowerCase().includes(ingSearch.toLowerCase()) ||
+    (i.category || '').toLowerCase().includes(ingSearch.toLowerCase())
+  )
+  const filteredRecipes = recipes.filter(r =>
+    r.name.toLowerCase().includes(recipeSearch.toLowerCase())
+  )
+
   const selIngredient = ingredients.find(i => String(i.id) === form.ingredient_id)
+  const selRecipe     = recipes.find(r => String(r.id) === form.recipe_item_id)
 
   // Auto-fill prep_unit and conversion from ingredient defaults
   useEffect(() => {
@@ -677,6 +702,8 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
   const baseEquiv = selIngredient
     ? Number(form.prep_qty) * Number(form.prep_to_base_conversion)
     : null
+
+  const baseUnit = selIngredient?.base_unit_abbr || ''
 
   return (
     <Modal title={item ? 'Edit Ingredient' : 'Add Ingredient'} onClose={onClose}>
@@ -697,12 +724,39 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
         {form.item_type === 'ingredient' ? (
           <>
             <Field label="Ingredient" required>
-              <select className="input" value={form.ingredient_id} onChange={set('ingredient_id')} autoFocus={!item}>
-                <option value="">Select ingredient…</option>
-                {ingredients.map(i => <option key={i.id} value={i.id}>{i.name}{i.category ? ` (${i.category})` : ''}</option>)}
-              </select>
-              {selIngredient?.base_unit_abbr && (
-                <p className="text-xs text-text-3 mt-1">Base unit: <span className="font-mono">{selIngredient.base_unit_abbr}</span></p>
+              <div className="relative">
+                <input
+                  className="input w-full"
+                  placeholder="Search ingredients…"
+                  value={ingSearch}
+                  autoFocus={!item}
+                  onChange={e => { setIngSearch(e.target.value); setIngOpen(true); setForm(f => ({ ...f, ingredient_id: '' })) }}
+                  onFocus={() => setIngOpen(true)}
+                  onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                />
+                {ingOpen && filteredIngs.length > 0 && (
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-modal max-h-52 overflow-y-auto">
+                    {filteredIngs.map(i => (
+                      <button key={i.id} type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 flex items-center justify-between gap-2"
+                        onMouseDown={() => {
+                          setForm(f => ({ ...f, ingredient_id: String(i.id) }))
+                          setIngSearch(i.name)
+                          setIngOpen(false)
+                        }}
+                      >
+                        <span className="font-semibold text-text-1">{i.name}</span>
+                        <span className="text-xs text-text-3 shrink-0">{i.category || ''}{i.base_unit_abbr ? ` · ${i.base_unit_abbr}` : ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {selIngredient && (
+                <p className="text-xs text-text-3 mt-1">
+                  Base unit: <span className="font-mono font-semibold text-text-2">{selIngredient.base_unit_abbr || '—'}</span>
+                  {selIngredient.category && <span className="ml-2">· {selIngredient.category}</span>}
+                </p>
               )}
             </Field>
 
@@ -711,21 +765,26 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
                 <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
               </Field>
               <Field label="Prep Unit">
-                <input className="input" value={form.prep_unit} onChange={set('prep_unit')} placeholder={selIngredient?.base_unit_abbr || 'e.g. g'} />
+                <input className="input" value={form.prep_unit} onChange={set('prep_unit')} placeholder={baseUnit || 'e.g. g'} />
               </Field>
             </div>
 
-            <Field label="Prep → Base Conversion" required>
+            <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`} required>
               <input className="input font-mono" type="number" min="0.000001" step="0.000001" value={form.prep_to_base_conversion} onChange={set('prep_to_base_conversion')} />
-              <p className="text-xs text-text-3 mt-1">How many base units = 1 prep unit</p>
+              <p className="text-xs text-text-3 mt-1">
+                {form.prep_unit && baseUnit
+                  ? <>1 <span className="font-mono">{form.prep_unit}</span> = <span className="font-mono">{form.prep_to_base_conversion}</span> <span className="font-mono">{baseUnit}</span></>
+                  : 'How many base units equal 1 prep unit'
+                }
+              </p>
             </Field>
 
             {baseEquiv !== null && selIngredient && (
               <div className="bg-accent-dim border border-accent/20 rounded-lg px-4 py-3 text-sm">
-                <span className="font-semibold text-accent">Base equivalent: </span>
-                <span className="font-mono text-text-1">{fmt(baseEquiv, 4)} {selIngredient.base_unit_abbr}</span>
+                <span className="font-semibold text-accent">= </span>
+                <span className="font-mono text-text-1 font-bold">{fmt(baseEquiv, 4)} {baseUnit}</span>
                 {Number(selIngredient.waste_pct) > 0 && (
-                  <span className="text-text-3 ml-2">(+{selIngredient.waste_pct}% waste → {fmt(baseEquiv * (1 + Number(selIngredient.waste_pct)/100), 4)} {selIngredient.base_unit_abbr})</span>
+                  <span className="text-text-3 ml-2">(+{selIngredient.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + Number(selIngredient.waste_pct)/100), 4)} {baseUnit}</span>)</span>
                 )}
               </div>
             )}
@@ -733,10 +792,40 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
         ) : (
           <>
             <Field label="Sub-recipe" required>
-              <select className="input" value={form.recipe_item_id} onChange={set('recipe_item_id')} autoFocus>
-                <option value="">Select recipe…</option>
-                {recipes.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
+              <div className="relative">
+                <input
+                  className="input w-full"
+                  placeholder="Search recipes…"
+                  value={recipeSearch}
+                  autoFocus
+                  onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true); setForm(f => ({ ...f, recipe_item_id: '' })) }}
+                  onFocus={() => setRecipeOpen(true)}
+                  onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
+                />
+                {recipeOpen && filteredRecipes.length > 0 && (
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-modal max-h-52 overflow-y-auto">
+                    {filteredRecipes.map(r => (
+                      <button key={r.id} type="button"
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 flex items-center justify-between gap-2"
+                        onMouseDown={() => {
+                          setForm(f => ({ ...f, recipe_item_id: String(r.id) }))
+                          setRecipeSearch(r.name)
+                          setRecipeOpen(false)
+                        }}
+                      >
+                        <span className="font-semibold text-text-1">{r.name}</span>
+                        <span className="text-xs text-text-3 shrink-0">{r.category || ''}{r.yield_unit_abbr ? ` · ${r.yield_qty} ${r.yield_unit_abbr}` : ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {selRecipe && (
+                <p className="text-xs text-text-3 mt-1">
+                  Yield: <span className="font-mono">{selRecipe.yield_qty}</span>{selRecipe.yield_unit_abbr ? ` ${selRecipe.yield_unit_abbr}` : ''}
+                  {selRecipe.category && <span className="ml-2">· {selRecipe.category}</span>}
+                </p>
+              )}
             </Field>
             <Field label="Portions used" required>
               <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
