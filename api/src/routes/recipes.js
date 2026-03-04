@@ -80,20 +80,46 @@ router.get('/:id', async (req, res) => {
       };
     }
 
+    // Also fetch ANY active quote (not just preferred) for coverage detection
+    const { rows: anyQuotes } = await pool.query(`
+      SELECT DISTINCT ingredient_id, pv.country_id
+      FROM   mcogs_price_quotes pq
+      JOIN   mcogs_vendors v ON v.id = pq.vendor_id
+      JOIN   mcogs_countries pv ON pv.id = v.country_id
+      WHERE  pq.is_active = true
+    `);
+    const anyQuoteLookup = {};
+    for (const q of anyQuotes) {
+      if (!anyQuoteLookup[q.ingredient_id]) anyQuoteLookup[q.ingredient_id] = new Set();
+      anyQuoteLookup[q.ingredient_id].add(q.country_id);
+    }
+
     // Calculate COGS per country
     const cogs_by_country = countries.map(country => {
       let total_base = 0;
-      let has_all_quotes = true;
+      let preferredCount = 0;
+      let anyQuoteCount  = 0;
+      const ingItems = items.filter(i => i.item_type === 'ingredient');
       const lines = items.map(item => {
         if (item.item_type !== 'ingredient') return { ...item, cost: null };
         const q = quoteLookup[item.ingredient_id]?.[country.id];
-        if (!q) { has_all_quotes = false; return { ...item, cost: null }; }
+        const hasAny = anyQuoteLookup[item.ingredient_id]?.has(country.id) ?? false;
+        if (q) preferredCount++;
+        if (q || hasAny) anyQuoteCount++;
+        if (!q) return { ...item, cost: null };
         const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion);
         const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
         const cost       = base_qty * waste_mult * q.price_per_base_unit;
         total_base += cost;
         return { ...item, cost: Math.round(cost * 10000) / 10000 };
       });
+      const total = ingItems.length;
+      let coverage;
+      if (total === 0)                          coverage = 'fully_preferred';
+      else if (preferredCount === total)        coverage = 'fully_preferred';
+      else if (anyQuoteCount  === total)        coverage = 'fully_quoted';
+      else if (anyQuoteCount  > 0)              coverage = 'partially_quoted';
+      else                                      coverage = 'not_quoted';
       const local_rate = Number(country.exchange_rate);
       return {
         country_id:      country.id,
@@ -104,7 +130,7 @@ router.get('/:id', async (req, res) => {
         total_cost_base: Math.round(total_base * 10000) / 10000,
         total_cost_local:Math.round(total_base * local_rate * 10000) / 10000,
         cost_per_portion:Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
-        has_all_quotes,
+        coverage,
         lines,
       };
     });

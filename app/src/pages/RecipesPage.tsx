@@ -34,7 +34,7 @@ interface CogsByCountry {
   total_cost_base:  number
   total_cost_local: number
   cost_per_portion: number
-  has_all_quotes:   boolean
+  coverage: 'fully_preferred' | 'fully_quoted' | 'partially_quoted' | 'not_quoted'
   lines:            RecipeItem[]
 }
 
@@ -406,11 +406,23 @@ export default function RecipesPage() {
                       />
                       <div className="bg-surface-2 rounded-lg p-3">
                         <div className="text-xs text-text-3 mb-1">Quote Coverage</div>
-                        <div className={`text-lg font-bold font-mono ${activeCogs.has_all_quotes ? 'text-emerald-600' : 'text-amber-500'}`}>
-                          {activeCogs.has_all_quotes ? '✓ Full' : '⚠ Partial'}
-                        </div>
-                        {!activeCogs.has_all_quotes && (
-                          <div className="text-xs text-amber-500 mt-0.5">Missing preferred vendor for some ingredients</div>
+                        {(() => {
+                          const c = activeCogs.coverage
+                          const cfg = {
+                            fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
+                            fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
+                            partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
+                            not_quoted:       { icon: '✕', label: 'Not Quoted',        cls: 'text-red-500',    sub: 'No price quotes found for this country',          subCls: 'text-red-400'     },
+                          }[c] ?? { icon: '?', label: c, cls: 'text-text-3', sub: '', subCls: '' }
+                          return (
+                            <>
+                              <div className={`text-lg font-bold font-mono ${cfg.cls}`}>{cfg.icon} {cfg.label}</div>
+                              {cfg.sub && <div className={`text-xs mt-0.5 ${cfg.subCls}`}>{cfg.sub}</div>}
+                            </>
+                          )
+                        })()}
+                        {(false) && (
+                          <div className="text-xs text-amber-500 mt-0.5">unused</div>
                         )}
                       </div>
                     </div>
