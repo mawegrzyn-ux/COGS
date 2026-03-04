@@ -8,6 +8,7 @@ import LoadingScreen from './components/LoadingScreen'
 import CountriesPage from './pages/CountriesPage'
 import CategoriesPage from './pages/CategoriesPage'
 import InventoryPage from './pages/InventoryPage'
+import RecipesPage from './pages/RecipesPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -37,9 +38,9 @@ export default function App() {
           <Route path="countries" element={<CountriesPage />} />
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="inventory" element={<InventoryPage />} />
+	  <Route path="recipes" element={<RecipesPage />} />
 
           {/* Pages to be built — placeholder redirects for now */}
-          <Route path="recipes"    element={<Navigate to="/dashboard" replace />} />
           <Route path="menus"      element={<Navigate to="/dashboard" replace />} />
         
        
