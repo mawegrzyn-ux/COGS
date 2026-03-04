@@ -9,6 +9,7 @@ import CountriesPage from './pages/CountriesPage'
 import CategoriesPage from './pages/CategoriesPage'
 import InventoryPage from './pages/InventoryPage'
 import RecipesPage from './pages/RecipesPage'
+import MenusPage   from './pages/MenusPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -40,8 +41,7 @@ export default function App() {
           <Route path="inventory" element={<InventoryPage />} />
 	  <Route path="recipes" element={<RecipesPage />} />
 
-          {/* Pages to be built — placeholder redirects for now */}
-          <Route path="menus"      element={<Navigate to="/dashboard" replace />} />
+          <Route path="menus"      element={<MenusPage />} />
         
        
         </Route>
