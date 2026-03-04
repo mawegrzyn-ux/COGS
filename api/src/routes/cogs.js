@@ -96,7 +96,7 @@ async function resolveItemTax(taxRateId, countryId, priceLevelId, defaultTaxMap,
   if (taxRateId) {
     if (!taxRateCache[taxRateId]) {
       const { rows: [r] } = await pool.query(
-        `SELECT rate, name FROM mcogs_tax_rates WHERE id = $1`, [taxRateId]
+        `SELECT rate, name FROM mcogs_country_tax_rates WHERE id = $1`, [taxRateId]
       );
       taxRateCache[taxRateId] = r || { rate: 0, name: 'Unknown' };
     }
@@ -107,7 +107,7 @@ async function resolveItemTax(taxRateId, countryId, priceLevelId, defaultTaxMap,
     const { rows: [clt] } = await pool.query(`
       SELECT tr.rate, tr.name
       FROM   mcogs_country_level_tax clt
-      JOIN   mcogs_tax_rates tr ON tr.id = clt.tax_rate_id
+      JOIN   mcogs_country_tax_rates tr ON tr.id = clt.tax_rate_id
       WHERE  clt.country_id = $1 AND clt.price_level_id = $2
       LIMIT 1
     `, [countryId, priceLevelId]);
@@ -178,7 +178,7 @@ router.get('/menu/:menu_id', async (req, res) => {
       loadQuoteLookup(),
       pool.query(`
         SELECT country_id, rate, name
-        FROM   mcogs_tax_rates
+        FROM   mcogs_country_tax_rates
         WHERE  is_default = true
       `),
     ]);
@@ -356,13 +356,13 @@ router.get('/report/price-levels', async (req, res) => {
     // Quote lookup, default taxes, country_level_tax
     const [quoteLookup, { rows: defaultTaxRows }, { rows: cltRows }, { rows: taxRateRows }] = await Promise.all([
       loadQuoteLookup(),
-      pool.query(`SELECT country_id, rate, name FROM mcogs_tax_rates WHERE is_default = true`),
+      pool.query(`SELECT country_id, rate, name FROM mcogs_country_tax_rates WHERE is_default = true`),
       pool.query(`
         SELECT clt.country_id, clt.price_level_id, tr.rate, tr.name
         FROM   mcogs_country_level_tax clt
-        JOIN   mcogs_tax_rates tr ON tr.id = clt.tax_rate_id
+        JOIN   mcogs_country_tax_rates tr ON tr.id = clt.tax_rate_id
       `),
-      pool.query(`SELECT id, rate, name FROM mcogs_tax_rates`),
+      pool.query(`SELECT id, rate, name FROM mcogs_country_tax_rates`),
     ]);
     const defaultTaxMap = {};
     for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = { rate: Number(r.rate), name: r.name };
@@ -465,7 +465,7 @@ router.get('/report/menu-prices', async (req, res) => {
         JOIN   mcogs_menu_items mi ON mi.recipe_id = r.id
         ORDER BY r.name
       `),
-      pool.query(`SELECT country_id, rate FROM mcogs_tax_rates WHERE is_default = true`),
+      pool.query(`SELECT country_id, rate FROM mcogs_country_tax_rates WHERE is_default = true`),
       loadQuoteLookup(),
     ]);
 
@@ -525,7 +525,7 @@ router.get('/report/menu-prices', async (req, res) => {
     const taxById = {};
     if (allTaxRateIds.length) {
       const { rows: taxRows } = await pool.query(
-        `SELECT id, rate FROM mcogs_tax_rates WHERE id = ANY($1::int[])`, [allTaxRateIds]
+        `SELECT id, rate FROM mcogs_country_tax_rates WHERE id = ANY($1::int[])`, [allTaxRateIds]
       );
       for (const t of taxRows) taxById[t.id] = Number(t.rate);
     }
