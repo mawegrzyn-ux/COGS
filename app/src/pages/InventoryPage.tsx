@@ -495,10 +495,10 @@ function IngredientsTab() {
           }
         />
       ) : (
-        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="bg-surface border border-border rounded-xl overflow-visible">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-surface-2 border-b border-border rounded-t-xl">
                 <ColumnHeader<Ingredient> label="Ingredient" field="name"                           sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Category"   field="category"                       sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValue={filters.category || ''} onFilter={v => setFilter('category', v)} />
                 <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                 sortField={sortField} sortDir={sortDir} onSort={setSort} />
@@ -912,10 +912,10 @@ function PriceQuotesTab() {
           }
         />
       ) : (
-        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="bg-surface border border-border rounded-xl overflow-visible">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-surface-2 border-b border-border rounded-t-xl">
                 <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValue={filters.vendor_id  ? String(filters.vendor_id)  : ''} onFilter={v => setFilter('vendor_id',  v)} />
                 <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValue={filters.country_id ? String(filters.country_id) : ''} onFilter={v => setFilter('country_id', v)} />
