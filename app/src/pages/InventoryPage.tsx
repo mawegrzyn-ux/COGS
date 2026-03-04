@@ -3,6 +3,8 @@ import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } from '../components/ui'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
+import { DataGrid, GridToggleButton } from '../components/DataGrid'
+import type { GridColumn, GridOption } from '../components/DataGrid'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -139,7 +141,6 @@ export default function InventoryPage() {
 }
 
 // ── Vendors Tab ───────────────────────────────────────────────────────────────
-// Vendors uses card layout so keeps its own simple filter bar — no ColumnHeader needed.
 
 function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
   const api = useApi()
@@ -304,7 +305,6 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
 
 function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () => void; onDelete: () => void }) {
   const initials = vendor.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
       <div className="flex items-start gap-3 mb-4">
@@ -317,19 +317,11 @@ function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () =
         </div>
       </div>
       <div className="space-y-1.5 mb-4 text-sm">
-        {vendor.contact && (
-          <div className="flex items-center gap-2 text-text-2"><PersonIcon size={13} className="text-text-3 shrink-0" /><span>{vendor.contact}</span></div>
-        )}
-        {vendor.email && (
-          <div className="flex items-center gap-2 text-text-2"><MailIcon size={13} className="text-text-3 shrink-0" /><a href={`mailto:${vendor.email}`} className="hover:text-accent transition-colors truncate">{vendor.email}</a></div>
-        )}
-        {vendor.phone && (
-          <div className="flex items-center gap-2 text-text-2"><PhoneIcon size={13} className="text-text-3 shrink-0" /><span>{vendor.phone}</span></div>
-        )}
-        {vendor.notes && <div className="text-xs text-text-3 italic mt-2 line-clamp-2">{vendor.notes}</div>}
-        {!vendor.contact && !vendor.email && !vendor.phone && (
-          <p className="text-xs text-text-3 italic">No contact details added.</p>
-        )}
+        {vendor.contact && <div className="flex items-center gap-2 text-text-2"><PersonIcon size={13} className="text-text-3 shrink-0" /><span>{vendor.contact}</span></div>}
+        {vendor.email   && <div className="flex items-center gap-2 text-text-2"><MailIcon   size={13} className="text-text-3 shrink-0" /><a href={`mailto:${vendor.email}`} className="hover:text-accent transition-colors truncate">{vendor.email}</a></div>}
+        {vendor.phone   && <div className="flex items-center gap-2 text-text-2"><PhoneIcon  size={13} className="text-text-3 shrink-0" /><span>{vendor.phone}</span></div>}
+        {vendor.notes   && <div className="text-xs text-text-3 italic mt-2 line-clamp-2">{vendor.notes}</div>}
+        {!vendor.contact && !vendor.email && !vendor.phone && <p className="text-xs text-text-3 italic">No contact details added.</p>}
       </div>
       <div className="flex gap-2">
         <button className="btn-outline flex-1 py-1.5 text-sm flex items-center justify-center gap-1.5" onClick={onEdit}><EditIcon size={13} /> Edit</button>
@@ -349,6 +341,7 @@ function IngredientsTab() {
   const [dbCategories, setDbCategories] = useState<string[]>([])
   const [loading,      setLoading]      = useState(true)
   const [search,       setSearch]       = useState('')
+  const [gridMode,     setGridMode]     = useState(false)
   const [modal,        setModal]        = useState<Ingredient | 'new' | null>(null)
   const [confirmDelete,setConfirmDelete]= useState<Ingredient | null>(null)
   const [toast,        setToast]        = useState<ToastState | null>(null)
@@ -361,7 +354,7 @@ function IngredientsTab() {
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -383,9 +376,8 @@ function IngredientsTab() {
 
   useEffect(() => { load() }, [load])
 
-  // ── Derived ────────────────────────────────────────────────────────────────
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
-  // Merge DB categories + any already on ingredients (catches legacy data)
   const categories = useMemo(() =>
     [...new Set([
       ...dbCategories,
@@ -393,7 +385,6 @@ function IngredientsTab() {
     ])].sort()
   , [dbCategories, ingredients])
 
-  // Text search pre-filter → then sort + column filters via hook
   const searchFiltered = useMemo(() =>
     ingredients.filter(i => !search || i.name.toLowerCase().includes(search.toLowerCase()))
   , [ingredients, search])
@@ -401,12 +392,56 @@ function IngredientsTab() {
   const { sorted, sortField, sortDir, filters, setSort, setFilter, hasActiveFilters } =
     useSortFilter<Ingredient>(searchFiltered, 'name', 'asc')
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Column definitions for DataGrid ─────────────────────────────────────────
+
+  const ingColumns = useMemo((): GridColumn<Ingredient>[] => {
+    const unitOptions: GridOption[] = ['mass', 'volume', 'count'].flatMap(type =>
+      units
+        .filter(u => u.type === type)
+        .map(u => ({ value: String(u.id), label: u.abbreviation || u.name, group: type.charAt(0).toUpperCase() + type.slice(1) }))
+    )
+    const catOptions: GridOption[] = categories.map(c => ({ value: c, label: c }))
+
+    return [
+      {
+        key: 'name', header: 'Ingredient', type: 'text', editable: true,
+        minWidth: 160, placeholder: 'New ingredient…',
+      },
+      {
+        key: 'category', header: 'Category', type: 'combo', editable: true,
+        options: catOptions, minWidth: 130, placeholder: 'Select or add…',
+      },
+      {
+        key: 'base_unit_id', header: 'Base Unit', type: 'select', editable: true,
+        options: unitOptions, minWidth: 100,
+      },
+      {
+        key: 'default_prep_unit', header: 'Prep Unit', type: 'text', editable: true,
+        minWidth: 90, placeholder: 'e.g. g, cup…', mono: true,
+      },
+      {
+        key: 'default_prep_to_base_conversion', header: 'Conv.', type: 'number', editable: true,
+        minWidth: 80, min: 0.000001, step: 0.000001, mono: true,
+      },
+      {
+        key: 'waste_pct', header: 'Waste %', type: 'number', editable: true,
+        minWidth: 80, min: 0, max: 99, step: 0.5, mono: true,
+      },
+      {
+        key: 'active_quote_count', header: 'Quotes', type: 'derived', editable: false,
+        derive: row => {
+          if (!row.quote_count) return '—'
+          return `${row.active_quote_count ?? 0}/${row.quote_count ?? 0}`
+        },
+        align: 'right',
+      },
+    ]
+  }, [units, categories])
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
-
-  const baseUnit = (ing: Ingredient) => ing.base_unit_abbr ?? '—'
 
   const convHint = () => {
     const unit = units.find(u => u.id === Number(form.base_unit_id))
@@ -466,7 +501,7 @@ function IngredientsTab() {
 
   const categoryFilterOptions = categories.map(c => ({ label: c, value: c }))
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -474,19 +509,48 @@ function IngredientsTab() {
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
-            type="search"
-            placeholder="Search ingredients…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+            type="search" placeholder="Search ingredients…"
+            value={search} onChange={e => setSearch(e.target.value)}
             className="input pl-9 w-full"
           />
         </div>
+        <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />
         <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
           <PlusIcon size={14} /> Add Ingredient
         </button>
       </div>
 
-      {loading ? <Spinner /> : sorted.length === 0 ? (
+      {loading ? <Spinner /> : gridMode ? (
+        <DataGrid<Ingredient>
+          gridId="ingredients"
+          columns={ingColumns}
+          rows={sorted.length > 0 ? sorted : ingredients}
+          keyField="id"
+          onSave={async (draft, isNew) => {
+            const payload = {
+              name:                            String(draft.name ?? '').trim(),
+              category:                        String(draft.category ?? '').trim() || null,
+              base_unit_id:                    Number(draft.base_unit_id) || null,
+              default_prep_unit:               String(draft.default_prep_unit ?? '').trim() || null,
+              default_prep_to_base_conversion: Number(draft.default_prep_to_base_conversion) || 1,
+              waste_pct:                       Number(draft.waste_pct) || 0,
+            }
+            if (!payload.name) throw new Error('Name is required')
+            return isNew
+              ? api.post('/ingredients', payload)
+              : api.put(`/ingredients/${(draft as Ingredient).id}`, payload)
+          }}
+          onSaved={(saved, isNew) => {
+            if (isNew) setIngredients(prev => [...prev, saved])
+            else       setIngredients(prev => prev.map(i => i.id === saved.id ? saved : i))
+            showToast(isNew ? 'Ingredient added' : 'Ingredient saved')
+          }}
+          onEdit={openEdit}
+          onDelete={ing => setConfirmDelete(ing)}
+          showToast={showToast}
+          hintRight="Tab from last cell saves row · Esc reverts"
+        />
+      ) : sorted.length === 0 ? (
         <EmptyState
           message={search || hasActiveFilters ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
           action={!search && !hasActiveFilters
@@ -499,13 +563,13 @@ function IngredientsTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-2 border-b border-border rounded-t-xl">
-                <ColumnHeader<Ingredient> label="Ingredient" field="name"                           sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Category"   field="category"                       sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValue={filters.category || ''} onFilter={v => setFilter('category', v)} />
-                <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                 sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Ingredient> label="Category"   field="category"                        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValue={filters.category || ''} onFilter={v => setFilter('category', v)} />
+                <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                      sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"             sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <th className="w-20" />
               </tr>
             </thead>
@@ -514,12 +578,11 @@ function IngredientsTab() {
                 <tr key={ing.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
                   <td className="px-4 py-3 font-semibold text-text-1">{ing.name}</td>
                   <td className="px-4 py-3 text-text-3">{ing.category || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2">{baseUnit(ing)}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">{ing.base_unit_abbr ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{ing.default_prep_unit || '—'}</td>
                   <td className="px-4 py-3 font-mono text-text-2">
                     {Number(ing.default_prep_to_base_conversion) !== 1
-                      ? Number(ing.default_prep_to_base_conversion).toFixed(4)
-                      : '1'}
+                      ? Number(ing.default_prep_to_base_conversion).toFixed(4) : '1'}
                   </td>
                   <td className="px-4 py-3 font-mono text-text-2">
                     {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
@@ -535,10 +598,7 @@ function IngredientsTab() {
                       <button className="btn-ghost px-2 py-1 text-xs flex items-center gap-1" onClick={() => openEdit(ing)}>
                         <EditIcon size={12} /> Edit
                       </button>
-                      <button
-                        className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                        onClick={() => setConfirmDelete(ing)}
-                      >
+                      <button className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" onClick={() => setConfirmDelete(ing)}>
                         <TrashIcon size={12} />
                       </button>
                     </div>
@@ -553,15 +613,8 @@ function IngredientsTab() {
       {modal !== null && (
         <Modal title={modal === 'new' ? 'Add Ingredient' : 'Edit Ingredient'} onClose={() => setModal(null)}>
           <Field label="Name" required error={errors.name}>
-            <input
-              className="input w-full"
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Chicken Breast"
-              autoFocus
-            />
+            <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
           </Field>
-
           <div className="grid grid-cols-2 gap-4">
             <Field label="Category">
               <CategoryCombo value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={categories} />
@@ -580,11 +633,8 @@ function IngredientsTab() {
               <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
             </Field>
           </div>
-
           <div className="border-t border-border pt-4 mt-2">
-            <p className="text-xs text-text-3 mb-3">
-              Default prep settings — pre-filled when added to a recipe (overridable per recipe).
-            </p>
+            <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe (overridable per recipe).</p>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Default Prep Unit">
                 <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
@@ -596,7 +646,6 @@ function IngredientsTab() {
               </Field>
             </div>
           </div>
-
           <div className="grid grid-cols-2 gap-4">
             <Field label="Waste %">
               <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
@@ -606,7 +655,6 @@ function IngredientsTab() {
               <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
             </Field>
           </div>
-
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
@@ -628,127 +676,21 @@ function IngredientsTab() {
   )
 }
 
-// ── Category Combo ────────────────────────────────────────────────────────────
-
-function CategoryCombo({ value, onChange, options }: {
-  value: string; onChange: (v: string) => void; options: string[]
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  const filtered = options.filter(o => o.toLowerCase().includes(value.toLowerCase()))
-  const showAdd  = value.trim() !== '' && !options.some(o => o.toLowerCase() === value.toLowerCase().trim())
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  return (
-    <div ref={ref} className="relative">
-      <input
-        className="input w-full"
-        value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true) }}
-        onFocus={() => setOpen(true)}
-        placeholder="Select or type to add new…"
-        autoComplete="off"
-      />
-      {open && (filtered.length > 0 || showAdd) && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
-          {filtered.map(o => (
-            <button key={o} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-text-1" onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false) }}>{o}</button>
-          ))}
-          {showAdd && (
-            <button type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-accent font-semibold border-t border-border" onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false) }}>
-              + Add "{value.trim()}"
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Search Combo ──────────────────────────────────────────────────────────────
-
-function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
-  value: string; onChange: (v: string) => void
-  options: { id: string; label: string }[]; placeholder?: string
-}) {
-  const [open,   setOpen]   = useState(false)
-  const [search, setSearch] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
-
-  const [display, setDisplay] = useState(options.find(o => o.id === value)?.label || '')
-
-  useEffect(() => {
-    setDisplay(options.find(o => o.id === value)?.label || '')
-  }, [value, options])
-
-  const filtered = useMemo(() =>
-    options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
-  , [options, search])
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-        setDisplay(options.find(o => o.id === value)?.label || '')
-        setSearch('')
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [value, options])
-
-  return (
-    <div ref={ref} className="relative">
-      <input
-        className="input w-full"
-        value={open ? search : display}
-        onChange={e => { setSearch(e.target.value); setOpen(true) }}
-        onFocus={() => { setOpen(true); setSearch('') }}
-        placeholder={placeholder}
-        autoComplete="off"
-      />
-      {open && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-56 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-text-3">No results</div>
-          ) : filtered.map(o => (
-            <button
-              key={o.id}
-              type="button"
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${o.id === value ? 'text-accent font-semibold' : 'text-text-1'}`}
-              onMouseDown={e => { e.preventDefault(); onChange(o.id); setDisplay(o.label); setSearch(''); setOpen(false) }}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
 function PriceQuotesTab() {
   const api = useApi()
 
-  const [quotes,       setQuotes]       = useState<Quote[]>([])
-  const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
-  const [vendors,      setVendors]      = useState<Vendor[]>([])
-  const [countries,    setCountries]    = useState<Country[]>([])
-  const [loading,      setLoading]      = useState(true)
-  const [search,       setSearch]       = useState('')
-  const [modal,        setModal]        = useState<Quote | 'new' | null>(null)
-  const [confirmDelete,setConfirmDelete]= useState<Quote | null>(null)
-  const [toast,        setToast]        = useState<ToastState | null>(null)
+  const [quotes,        setQuotes]       = useState<Quote[]>([])
+  const [ingredients,   setIngredients]  = useState<Ingredient[]>([])
+  const [vendors,       setVendors]      = useState<Vendor[]>([])
+  const [countries,     setCountries]    = useState<Country[]>([])
+  const [loading,       setLoading]      = useState(true)
+  const [search,        setSearch]       = useState('')
+  const [gridMode,      setGridMode]     = useState(false)
+  const [modal,         setModal]        = useState<Quote | 'new' | null>(null)
+  const [confirmDelete, setConfirmDelete]= useState<Quote | null>(null)
+  const [toast,         setToast]        = useState<ToastState | null>(null)
 
   const blankForm = {
     ingredient_id: '', vendor_id: '', purchase_unit: '', purchase_price: '',
@@ -758,14 +700,14 @@ function PriceQuotesTab() {
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const [q, ings, v, c] = await Promise.all([
         api.get('/price-quotes'), api.get('/ingredients'),
-        api.get('/vendors'), api.get('/countries'),
+        api.get('/vendors'),      api.get('/countries'),
       ])
       setQuotes(q || []); setIngredients(ings || [])
       setVendors(v || []); setCountries(c || [])
@@ -778,9 +720,8 @@ function PriceQuotesTab() {
 
   useEffect(() => { load() }, [load])
 
-  // ── Derived ────────────────────────────────────────────────────────────────
+  // ── Derived ─────────────────────────────────────────────────────────────────
 
-  // Text search pre-filter → then sort + column filters via hook
   const searchFiltered = useMemo(() =>
     quotes.filter(q => !search ||
       q.ingredient_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -806,7 +747,74 @@ function PriceQuotesTab() {
     return (price / qty).toFixed(6)
   }, [form.purchase_price, form.qty_in_base_units])
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Column definitions for DataGrid ─────────────────────────────────────────
+
+  const quoteColumns = useMemo((): GridColumn<Quote>[] => {
+    const ingOptions: GridOption[] = ingredients.map(i => ({
+      value: String(i.id),
+      label: i.name,
+      sub:   i.base_unit_abbr ?? undefined,
+    }))
+    const venOptions: GridOption[] = vendors.map(v => ({
+      value: String(v.id),
+      label: v.name,
+      sub:   `${v.country_name} · ${v.currency_code}`,
+    }))
+
+    return [
+      {
+        key: 'ingredient_id', header: 'Ingredient', type: 'combo', editable: true,
+        options: ingOptions, minWidth: 160, placeholder: 'Search ingredient…',
+      },
+      {
+        key: 'vendor_id', header: 'Vendor', type: 'combo', editable: true,
+        options: venOptions, minWidth: 170, placeholder: 'Search vendor…',
+      },
+      {
+        key: 'purchase_unit', header: 'Purchase Unit', type: 'text', editable: true,
+        minWidth: 130, placeholder: 'e.g. Case 12×1kg',
+      },
+      {
+        key: 'qty_in_base_units', header: 'Base Qty', type: 'number', editable: true,
+        minWidth: 85, min: 0.000001, step: 0.000001, mono: true,
+      },
+      {
+        key: 'purchase_price', header: 'Price', type: 'number', editable: true,
+        minWidth: 90, min: 0, step: 0.01, mono: true,
+        placeholder: (row) => {
+          const v = vendors.find(v => String(v.id) === String((row as any).vendor_id))
+          return v ? `0.00 ${v.currency_code}` : '0.00'
+        },
+      },
+      {
+        key: 'price_per_base_unit', header: 'Per Base Unit', type: 'derived', editable: false,
+        derive: (row) => {
+          const price = parseFloat(String((row as any).purchase_price))
+          const qty   = parseFloat(String((row as any).qty_in_base_units))
+          if (!price || !qty || qty === 0) return '—'
+          const ing = ingredients.find(i => String(i.id) === String((row as any).ingredient_id))
+          const ven = vendors.find(v => String(v.id) === String((row as any).vendor_id))
+          const ppbu = (price / qty).toFixed(4)
+          return `${ven?.currency_symbol ?? ''}${ppbu}${ing?.base_unit_abbr ? ` /${ing.base_unit_abbr}` : ''}`
+        },
+        align: 'right', mono: true,
+      },
+      {
+        key: 'is_active', header: 'Status', type: 'select', editable: true,
+        minWidth: 90,
+        options: [
+          { value: 'true',  label: 'Active' },
+          { value: 'false', label: 'Inactive' },
+        ],
+      },
+      {
+        key: 'is_preferred', header: 'Preferred', type: 'derived', editable: false,
+        derive: (row) => (row as any).is_preferred ? '★ Preferred' : '',
+      },
+    ]
+  }, [ingredients, vendors])
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
@@ -880,7 +888,7 @@ function PriceQuotesTab() {
   const countryFilterOptions = countries.map(c => ({ label: c.name, value: String(c.id) }))
   const statusFilterOptions  = [{ label: 'Active', value: 'true' }, { label: 'Inactive', value: 'false' }]
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -888,24 +896,64 @@ function PriceQuotesTab() {
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
-            type="search"
-            placeholder="Search ingredient or vendor…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+            type="search" placeholder="Search ingredient or vendor…"
+            value={search} onChange={e => setSearch(e.target.value)}
             className="input pl-9 w-full"
           />
         </div>
+        <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />
         <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
           <PlusIcon size={14} /> Add Quote
         </button>
       </div>
 
-      {loading ? <Spinner /> : sorted.length === 0 ? (
+      {loading ? <Spinner /> : gridMode ? (
+        <DataGrid<Quote>
+          gridId="quotes"
+          columns={quoteColumns}
+          rows={sorted.length > 0 ? sorted : quotes}
+          keyField="id"
+          onSave={async (draft, isNew) => {
+            if (!draft.ingredient_id || !draft.vendor_id || !draft.purchase_price)
+              throw new Error('Ingredient, vendor and price are required')
+            const payload = {
+              ingredient_id:     Number(draft.ingredient_id),
+              vendor_id:         Number(draft.vendor_id),
+              purchase_unit:     String(draft.purchase_unit ?? '').trim() || null,
+              purchase_price:    Number(draft.purchase_price),
+              qty_in_base_units: Number(draft.qty_in_base_units) || 1,
+              is_active:         String(draft.is_active) === 'true',
+            }
+            return isNew
+              ? api.post('/price-quotes', payload)
+              : api.put(`/price-quotes/${(draft as Quote).id}`, payload)
+          }}
+          onSaved={(saved, isNew) => {
+            if (isNew) setQuotes(prev => [...prev, saved])
+            else       setQuotes(prev => prev.map(q => q.id === saved.id ? saved : q))
+            showToast(isNew ? 'Quote added' : 'Quote saved')
+          }}
+          onEdit={openEdit}
+          onDelete={q => setConfirmDelete(q)}
+          renderActions={q => (
+            <button
+              onClick={() => togglePreferred(q)}
+              title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
+              className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
+                ${q.is_preferred
+                  ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200'
+                  : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'
+                }`}
+            >
+              <StarIcon size={13} filled={q.is_preferred} />
+            </button>
+          )}
+          showToast={showToast}
+          hintRight="Price / Base Unit recalculates live"
+        />
+      ) : sorted.length === 0 ? (
         <EmptyState
-          message={search || hasActiveFilters
-            ? 'No quotes match your filters.'
-            : 'No price quotes yet. Add your first quote to get started.'
-          }
+          message={search || hasActiveFilters ? 'No quotes match your filters.' : 'No price quotes yet. Add your first quote to get started.'}
           action={!search && !hasActiveFilters
             ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Quote</button>
             : undefined
@@ -937,9 +985,7 @@ function PriceQuotesTab() {
                   <td className="px-4 py-3 text-text-2">{q.vendor_name}</td>
                   <td className="px-4 py-3 text-text-2">{q.country_name}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{q.purchase_unit || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2 text-right">
-                    {q.currency_symbol}{Number(q.purchase_price).toFixed(2)}
-                  </td>
+                  <td className="px-4 py-3 font-mono text-text-2 text-right">{q.currency_symbol}{Number(q.purchase_price).toFixed(2)}</td>
                   <td className="px-4 py-3 font-mono text-right">
                     <span className="font-bold text-accent">
                       {q.price_per_base_unit ? `${q.currency_symbol}${Number(q.price_per_base_unit).toFixed(4)}` : '—'}
@@ -956,10 +1002,7 @@ function PriceQuotesTab() {
                       onClick={() => togglePreferred(q)}
                       title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
                       className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
-                        ${q.is_preferred
-                          ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200'
-                          : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'
-                        }`}
+                        ${q.is_preferred ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200' : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'}`}
                     >
                       <StarIcon size={13} filled={q.is_preferred} />
                     </button>
@@ -969,10 +1012,7 @@ function PriceQuotesTab() {
                       <button className="btn-ghost px-2 py-1 text-xs flex items-center gap-1" onClick={() => openEdit(q)}>
                         <EditIcon size={12} /> Edit
                       </button>
-                      <button
-                        className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                        onClick={() => setConfirmDelete(q)}
-                      >
+                      <button className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" onClick={() => setConfirmDelete(q)}>
                         <TrashIcon size={12} />
                       </button>
                     </div>
@@ -1003,13 +1043,10 @@ function PriceQuotesTab() {
                 placeholder="Search vendors…"
               />
               {selectedVendor && (
-                <p className="text-xs text-text-3 mt-1">
-                  Country: {selectedVendor.country_name} · Currency: {selectedVendor.currency_symbol} {selectedVendor.currency_code}
-                </p>
+                <p className="text-xs text-text-3 mt-1">Country: {selectedVendor.country_name} · Currency: {selectedVendor.currency_symbol} {selectedVendor.currency_code}</p>
               )}
             </Field>
           </div>
-
           <div className="border-t border-border pt-4 mt-2">
             <p className="text-xs text-text-3 mb-3">How you purchase this ingredient:</p>
             <div className="grid grid-cols-2 gap-4">
@@ -1017,24 +1054,15 @@ function PriceQuotesTab() {
                 <input className="input w-full" value={form.purchase_unit} onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. Case 12×1kg, 5L drum" />
                 <p className="text-xs text-text-3 mt-1">Free-text label for your reference.</p>
               </Field>
-              <Field
-                label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol} ${selectedVendor.currency_code})` : ''}`}
-                required
-                error={errors.purchase_price}
-              >
+              <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol} ${selectedVendor.currency_code})` : ''}`} required error={errors.purchase_price}>
                 <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
               </Field>
             </div>
-            <Field
-              label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`}
-              required
-              error={errors.qty_in_base_units}
-            >
+            <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
               <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
               <p className="text-xs text-text-3 mt-1">Total base units in this purchase. e.g. a case of 12×1kg bags = 12.</p>
             </Field>
           </div>
-
           {pricePerBaseUnit && selectedVendor && selectedIngredient && (
             <div className="bg-accent-dim border border-accent/20 rounded-lg px-4 py-3 text-sm">
               <span className="font-semibold text-accent">Price per base unit: </span>
@@ -1043,7 +1071,6 @@ function PriceQuotesTab() {
               <span className="text-text-3 ml-3 text-xs">({selectedVendor.currency_symbol}{Number(form.purchase_price).toFixed(2)} ÷ {form.qty_in_base_units})</span>
             </div>
           )}
-
           <div className="grid grid-cols-2 gap-4">
             <Field label="Status">
               <select className="select w-full" value={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.value }))}>
@@ -1055,7 +1082,6 @@ function PriceQuotesTab() {
               <input className="input w-full font-mono" value={form.vendor_product_code} onChange={e => setForm(f => ({ ...f, vendor_product_code: e.target.value }))} placeholder="Optional vendor SKU…" />
             </Field>
           </div>
-
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
@@ -1077,6 +1103,113 @@ function PriceQuotesTab() {
   )
 }
 
+// ── Category Combo (used in ingredient modal) ─────────────────────────────────
+
+
+function CategoryCombo({ value, onChange, options }: {
+  value: string; onChange: (v: string) => void; options: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const filtered = options.filter(o => o.toLowerCase().includes(value.toLowerCase()))
+  const showAdd  = value.trim() !== '' && !options.some(o => o.toLowerCase() === value.toLowerCase().trim())
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative">
+      <input
+        className="input w-full"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        placeholder="Select or type to add new…"
+        autoComplete="off"
+      />
+      {open && (filtered.length > 0 || showAdd) && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
+          {filtered.map(o => (
+            <button key={o} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-text-1"
+              onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false) }}>{o}</button>
+          ))}
+          {showAdd && (
+            <button type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-accent font-semibold border-t border-border"
+              onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false) }}>
+              + Add "{value.trim()}"
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Search Combo (used in quote modal) ────────────────────────────────────────
+
+function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
+  value: string; onChange: (v: string) => void
+  options: { id: string; label: string }[]; placeholder?: string
+}) {
+  const [open,    setOpen]    = useState(false)
+  const [search,  setSearch]  = useState('')
+  const [display, setDisplay] = useState(options.find(o => o.id === value)?.label || '')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setDisplay(options.find(o => o.id === value)?.label || '')
+  }, [value, options])
+
+  const filtered = useMemo(() =>
+    options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+  , [options, search])
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        setDisplay(options.find(o => o.id === value)?.label || '')
+        setSearch('')
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [value, options])
+
+  return (
+    <div ref={ref} className="relative">
+      <input
+        className="input w-full"
+        value={open ? search : display}
+        onChange={e => { setSearch(e.target.value); setOpen(true) }}
+        onFocus={() => { setOpen(true); setSearch('') }}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-56 overflow-y-auto">
+          {filtered.length === 0
+            ? <div className="px-3 py-2 text-sm text-text-3">No results</div>
+            : filtered.map(o => (
+              <button key={o.id} type="button"
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${o.id === value ? 'text-accent font-semibold' : 'text-text-1'}`}
+                onMouseDown={e => { e.preventDefault(); onChange(o.id); setDisplay(o.label); setSearch(''); setOpen(false) }}>
+                {o.label}
+              </button>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 
 function KpiCard({ label, value }: { label: string; value: number }) {
@@ -1093,31 +1226,24 @@ function KpiCard({ label, value }: { label: string; value: number }) {
 function PlusIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
 }
-
 function EditIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 }
-
 function TrashIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
 }
-
 function SearchIcon({ className = '' }: { className?: string }) {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
 }
-
 function PersonIcon({ size = 16, className = '' }: { size?: number; className?: string }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
 }
-
 function MailIcon({ size = 16, className = '' }: { size?: number; className?: string }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
 }
-
 function PhoneIcon({ size = 16, className = '' }: { size?: number; className?: string }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8a19.79 19.79 0 01-3.07-8.67A2 2 0 012 .91h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
 }
-
 function StarIcon({ size = 16, filled = false }: { size?: number; filled?: boolean }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
 }
