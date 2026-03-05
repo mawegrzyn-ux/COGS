@@ -309,9 +309,9 @@ interface HeaderCellProps<T extends Record<string, any>> {
   sortField:   string | null
   sortDir:     'asc' | 'desc'
   openFilter:  string | null
-  filters:     Record<string, string>
+  filters:     Record<string, string[]>
   onSort:      (colKey: string) => void
-  onFilter:    (colKey: string, value: string) => void
+  onFilter:    (colKey: string, values: string[]) => void
   onOpenFilter:(colKey: string | null) => void
 }
 
@@ -323,7 +323,7 @@ function HeaderCell<T extends Record<string, any>>({
   const isSorted  = sortField === colKey
   const canSort   = col.sortable !== false && col.type !== 'derived'
   const canFilter = col.filterable === true && (col.filterOptions?.length ?? 0) > 0
-  const activeVal = filters[colKey]
+  const activeVals = filters[colKey] ?? []
   const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -370,14 +370,11 @@ function HeaderCell<T extends Record<string, any>>({
               onClick={() => onOpenFilter(openFilter === colKey ? null : colKey)}
               className={[
                 'w-5 h-5 flex items-center justify-center rounded transition-colors ml-0.5',
-                activeVal ? 'text-accent bg-accent-dim' : 'text-text-3 hover:text-text-1 hover:bg-surface-2',
+                activeVals.length > 0 ? 'text-accent bg-accent-dim' : 'text-text-3 hover:text-text-1 hover:bg-surface-2',
               ].join(' ')}
-              title={activeVal
-                ? `Filtered: ${col.filterOptions?.find(o => o.value === activeVal)?.label ?? activeVal}`
-                : 'Filter column'
-              }
+              title={activeVals.length > 0 ? `${activeVals.length} filter${activeVals.length > 1 ? 's' : ''} active` : 'Filter column'}
             >
-              <FilterIcon size={11} filled={!!activeVal} />
+              <FilterIcon size={11} filled={activeVals.length > 0} />
             </button>
 
             {openFilter === colKey && (
@@ -385,19 +382,38 @@ function HeaderCell<T extends Record<string, any>>({
                 className="absolute z-50 top-full left-0 mt-1 min-w-[160px] bg-surface border border-border rounded-lg shadow-xl overflow-hidden"
                 style={{ zIndex: 9999 }}
               >
-                <div className="px-3 py-1.5 border-b border-border text-xs text-text-3 font-semibold uppercase tracking-wide">
-                  {col.header}
+                <div className="px-3 py-1.5 border-b border-border text-xs text-text-3 font-semibold uppercase tracking-wide flex items-center justify-between">
+                  <span>{col.header}</span>
+                  {activeVals.length > 0 && (
+                    <button type="button" className="text-accent text-xs font-normal hover:underline"
+                      onMouseDown={e => { e.preventDefault(); onFilter(colKey, []) }}
+                    >Clear</button>
+                  )}
                 </div>
-                <button type="button"
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${!activeVal ? 'text-accent font-semibold' : 'text-text-2'}`}
-                  onMouseDown={e => { e.preventDefault(); onFilter(colKey, '') }}
-                >All</button>
-                {col.filterOptions!.map(opt => (
-                  <button key={opt.value} type="button"
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${activeVal === opt.value ? 'text-accent font-semibold' : 'text-text-1'}`}
-                    onMouseDown={e => { e.preventDefault(); onFilter(colKey, opt.value) }}
-                  >{opt.label}</button>
-                ))}
+                {col.filterOptions!.map(opt => {
+                  const checked = activeVals.includes(opt.value)
+                  return (
+                    <button key={opt.value} type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2 ${checked ? 'text-accent' : 'text-text-1'}`}
+                      onMouseDown={e => {
+                        e.preventDefault()
+                        const next = checked ? activeVals.filter(v => v !== opt.value) : [...activeVals, opt.value]
+                        onFilter(colKey, next)
+                      }}
+                    >
+                      <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
+                        {checked && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                      </span>
+                      {opt.label}
+                    </button>
+                  )
+                })}
+                <div className="px-2 py-2 border-t border-border bg-surface-2">
+                  <button type="button"
+                    className="w-full py-1.5 text-xs font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity"
+                    onMouseDown={e => { e.preventDefault(); onOpenFilter(null) }}
+                  >{activeVals.length > 0 ? `Apply (${activeVals.length} selected)` : 'Close'}</button>
+                </div>
               </div>
             )}
           </div>
@@ -501,7 +517,7 @@ export function DataGrid<T extends Record<string, any>>({
 
   const [sortField,  setSortField]  = useState<string | null>(null)
   const [sortDir,    setSortDir]    = useState<'asc' | 'desc'>('asc')
-  const [filters,    setFilters]    = useState<Record<string, string>>({})
+  const [filters,    setFilters]    = useState<Record<string, string[]>>({})
   const [openFilter, setOpenFilter] = useState<string | null>(null)
 
   const handleSort = useCallback((colKey: string) => {
@@ -511,22 +527,21 @@ export function DataGrid<T extends Record<string, any>>({
     })
   }, [])
 
-  const handleFilter = useCallback((colKey: string, value: string) => {
+  const handleFilter = useCallback((colKey: string, values: string[]) => {
     setFilters(f =>
-      value
-        ? { ...f, [colKey]: value }
+      values.length > 0
+        ? { ...f, [colKey]: values }
         : Object.fromEntries(Object.entries(f).filter(([k]) => k !== colKey))
     )
-    setOpenFilter(null)
   }, [])
 
   const clearAllFilters = useCallback(() => { setFilters({}); setOpenFilter(null) }, [])
 
   const processedRows = useMemo(() => {
     let result = [...rows]
-    Object.entries(filters).forEach(([key, val]) => {
-      if (!val) return
-      result = result.filter(r => String(r[key] ?? '') === val)
+    Object.entries(filters).forEach(([key, vals]) => {
+      if (!vals || vals.length === 0) return
+      result = result.filter(r => vals.includes(String(r[key] ?? '')))
     })
     if (sortField) {
       result.sort((a, b) => {
@@ -721,7 +736,7 @@ export function DataGrid<T extends Record<string, any>>({
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const visibleCols       = useMemo(() => columns.filter(c => c.visible !== false), [columns])
-  const activeFilterCount = Object.keys(filters).length
+  const activeFilterCount = Object.values(filters).filter(v => v.length > 0).length
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
