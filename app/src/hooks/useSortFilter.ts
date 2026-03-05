@@ -54,5 +54,5 @@ export function useSortFilter<T>(
 
   const hasActiveFilters = Object.values(filters).some((v): v is string[] => !!v && v.length > 0)
 
-  return { sorted, sortField, sortDir, filters, getFilter, setSort, setFilter, clearFilters, hasActiveFilters }
+  return { sorted, sortField, sortDir, getFilter, setSort, setFilter, clearFilters, hasActiveFilters }
 }
