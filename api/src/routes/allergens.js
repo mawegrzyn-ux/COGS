@@ -157,7 +157,8 @@ router.get('/menu/:id', async (req, res) => {
     // All items on this menu
     const { rows: menuItems } = await pool.query(`
       SELECT mi.id, mi.display_name, mi.item_type, mi.recipe_id, mi.ingredient_id,
-             r.name AS recipe_name, ing.name AS ingredient_name
+             r.name AS recipe_name, r.category AS recipe_category,
+             ing.name AS ingredient_name, ing.category AS ingredient_category
       FROM   mcogs_menu_items mi
       LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
       LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
@@ -241,7 +242,11 @@ router.get('/menu/:id', async (req, res) => {
         allergenStatus[a.code] = found ? found.status : null;
       }
 
-      return { menu_item_id: mi.id, display_name: display, item_type: mi.item_type, allergens: allergenStatus };
+      const category = mi.item_type === 'ingredient'
+        ? (mi.ingredient_category || null)
+        : (mi.recipe_category || null);
+
+      return { menu_item_id: mi.id, display_name: display, item_type: mi.item_type, category, allergens: allergenStatus };
     });
 
     res.json({ allergens: allAllergens, items });
