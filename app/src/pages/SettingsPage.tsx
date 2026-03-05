@@ -15,6 +15,7 @@ interface PriceLevel {
   id:          number
   name:        string
   description: string | null
+  is_default:  boolean
 }
 
 interface AppSettings {
@@ -278,6 +279,16 @@ function PriceLevelsTab() {
 
   useEffect(() => { load() }, [load])
 
+  const handleSetDefault = async (level: PriceLevel) => {
+    try {
+      await api.post(`/price-levels/${level.id}/set-default`, {})
+      setToast({ message: `"${level.name}" set as default`, type: 'success' })
+      load()
+    } catch (err: any) {
+      setToast({ message: err.message, type: 'error' })
+    }
+  }
+
   const handleSave = async (values: Omit<PriceLevel, 'id'>) => {
     try {
       if (modal === 'new') {
@@ -326,14 +337,27 @@ function PriceLevelsTab() {
               <tr className="bg-surface-2 border-b border-border">
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Description</th>
+                <th className="text-center px-4 py-2.5 font-semibold text-text-2 w-24">Default</th>
                 <th className="w-20"/>
               </tr>
             </thead>
             <tbody>
               {levels.map(level => (
                 <tr key={level.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-text-1">{level.name}</td>
+                  <td className="px-4 py-3 font-semibold text-text-1">
+                    {level.name}
+                  </td>
                   <td className="px-4 py-3 text-text-3">{level.description || '—'}</td>
+                  <td className="px-4 py-3 text-center">
+                    {level.is_default
+                      ? <span title="Default level" className="text-yellow-500 text-lg">★</span>
+                      : <button
+                          onClick={() => handleSetDefault(level)}
+                          title="Set as default"
+                          className="text-gray-300 hover:text-yellow-400 text-lg transition-colors"
+                        >☆</button>
+                    }
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 justify-end">
                       <button onClick={() => setModal(level)} className="btn-ghost px-2 py-1 text-xs">Edit</button>
@@ -375,15 +399,16 @@ function PriceLevelModal({ level, onSave, onClose }: {
   onSave:  (v: Omit<PriceLevel, 'id'>) => Promise<void>
   onClose: () => void
 }) {
-  const [name, setName]     = useState(level?.name || '')
-  const [desc, setDesc]     = useState(level?.description || '')
-  const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState('')
+  const [name,       setName]      = useState(level?.name || '')
+  const [desc,       setDesc]      = useState(level?.description || '')
+  const [isDefault,  setIsDefault] = useState(level?.is_default || false)
+  const [saving,     setSaving]    = useState(false)
+  const [error,      setError]     = useState('')
 
   const handleSubmit = async () => {
     if (!name.trim()) { setError('Name is required'); return }
     setSaving(true)
-    await onSave({ name: name.trim(), description: desc.trim() || null })
+    await onSave({ name: name.trim(), description: desc.trim() || null, is_default: isDefault })
     setSaving(false)
   }
 
@@ -394,6 +419,17 @@ function PriceLevelModal({ level, onSave, onClose }: {
       </Field>
       <Field label="Description">
         <input className="input" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Optional description" />
+      </Field>
+      <Field label="Default level">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={isDefault}
+            onChange={e => setIsDefault(e.target.checked)}
+            className="w-4 h-4 accent-yellow-500"
+          />
+          <span className="text-sm text-text-2">Use as the default price level across menus</span>
+        </label>
       </Field>
       <div className="flex gap-3 justify-end pt-2">
         <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>

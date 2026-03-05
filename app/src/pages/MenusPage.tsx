@@ -5,7 +5,7 @@ import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Country     { id: number; name: string; currency_code: string; currency_symbol: string; exchange_rate: number }
-interface PriceLevel  { id: number; name: string; sort_order: number }
+interface PriceLevel  { id: number; name: string; is_default: boolean }
 interface TaxRate     { id: number; country_id: number; name: string; rate: number; is_default: boolean }
 interface CountryLevelTax { id: number; country_id: number; price_level_id: number; tax_rate_id: number }
 interface Recipe      { id: number; name: string; category: string | null }
@@ -154,6 +154,7 @@ export default function MenusPage() {
 
   // builder state
   const [selectedMenuId,  setSelectedMenuId]  = useState<number | null>(null)
+  const [levelOverridden, setLevelOverridden] = useState(false)  // true once user manually changes level
   const [activeMenuLevel, setActiveMenuLevel] = useState<number | ''>('')
   const [cogsData,        setCogsData]        = useState<CogsData | null>(null)
   const [loadingCogs,     setLoadingCogs]     = useState(false)
@@ -226,6 +227,9 @@ export default function MenusPage() {
       setCountryLevelTax(clt || [])
       setRecipes(r || [])
       setIngredients(i || [])
+      // Auto-select default price level if not already overridden by user
+      const defLevel = (pl || []).find((l: PriceLevel) => l.is_default)
+      if (defLevel && !levelOverridden) setActiveMenuLevel(defLevel.id)
     } finally {
       setLoading(false)
     }
@@ -655,7 +659,7 @@ export default function MenusPage() {
                 itemFilterStatus={itemFilterStatus}
                 itemSortCol={itemSortCol}
                 itemSortDir={itemSortDir}
-                onLevelChange={v => setActiveMenuLevel(v)}
+                onLevelChange={v => { setActiveMenuLevel(v); setLevelOverridden(true) }}
                 onFilterQ={setItemFilterQ}
                 onFilterType={setItemFilterType}
                 onFilterStatus={setItemFilterStatus}
@@ -898,7 +902,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
               value={activeMenuLevel}
               onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}
             >
-              <option value="">No level (cost only)</option>
+              <option value="">— Cost only (no prices) —</option>
               {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>

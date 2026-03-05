@@ -34,6 +34,7 @@ const migrations = [
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(100) NOT NULL,
     description TEXT,
+    is_default  BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
@@ -230,6 +231,7 @@ const migrations = [
 
   // ── Column migrations (safe to run on existing installs) ──────────────────
   // Adds columns introduced after initial schema — ALTER TABLE IF NOT EXISTS is idempotent
+  `ALTER TABLE mcogs_price_levels ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE`,
   `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS qty         NUMERIC(10,4) NOT NULL DEFAULT 1`,
   `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS sell_price  NUMERIC(10,4) NOT NULL DEFAULT 0`,
   `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL`,
