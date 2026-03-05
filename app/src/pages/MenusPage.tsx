@@ -497,7 +497,8 @@ export default function MenusPage() {
     if (isNaN(grossInDisplay) || grossInDisplay < 0) return
     // Convert from display currency (base) back to country local currency
     // display = local * exchangeRate => local = display / exchangeRate
-    const localPrice = countryExchangeRate !== 0 ? grossInDisplay / countryExchangeRate : grossInDisplay
+    // MPT always shows prices in local currency, so dispRate=1; grossInDisplay IS the local price
+    const localPrice = grossInDisplay
     const rounded = Math.round(localPrice * 10000) / 10000
     setLrSaving(prev => ({ ...prev, [key]: true }))
     try {
@@ -655,8 +656,8 @@ export default function MenusPage() {
           onSingleCurrency={setPriceSingleCurrency}
           onSearch={setPriceSearch}
           onCat={setPriceCat}
-          onSavePrice={async (menuItemId, levelId, grossDisplay, countryRate) => {
-            const localPrice = countryRate !== 0 ? grossDisplay / countryRate : grossDisplay
+          onSavePrice={async (menuItemId, levelId, grossDisplay, dispRate) => {
+            const localPrice = dispRate !== 0 ? grossDisplay / dispRate : grossDisplay
             await api.post('/menu-item-prices', { menu_item_id: menuItemId, price_level_id: levelId, sell_price: Math.round(localPrice * 10000) / 10000 })
             setPriceReportLoaded(false)
           }}
@@ -1234,7 +1235,7 @@ interface PriceLevelToolProps {
   onSingleCurrency(v: string): void
   onSearch(v: string): void
   onCat(v: string): void
-  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): Promise<void>
+  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, dispRate: number): Promise<void>
   showToast(msg: string, type?: 'error'): void
 }
 
@@ -1304,6 +1305,7 @@ function PriceLevelTool({
     country_name: string
     country_sym: string
     country_rate: number
+    disp_rate: number
     cost_local: number
     cost_display: number
     sell_gross_local: number | null
@@ -1343,6 +1345,7 @@ function PriceLevelTool({
           country_name:      c.name,
           country_sym:       currencyMode === 'own' ? c.symbol : (displaySym ?? c.symbol),
           country_rate:      c.rate,
+          disp_rate:         currencyMode === 'single' ? dispRate : 1,
           cost_local:        costLocal,
           cost_display:      costDisplay,
           sell_gross_local:  grossLocal,
@@ -1363,7 +1366,7 @@ function PriceLevelTool({
     const key = `${row.menu_item_id}_${selectedLevel}`
     setSavingKey(p => ({ ...p, [key]: true }))
     try {
-      await onSavePrice(row.menu_item_id, Number(selectedLevel), grossDisplay, row.country_rate)
+      await onSavePrice(row.menu_item_id, Number(selectedLevel), grossDisplay, row.disp_rate)
       setSavedKey(p => ({ ...p, [key]: true }))
       setTimeout(() => setSavedKey(p => ({ ...p, [key]: false })), 700)
     } catch { showToast('Failed to save price', 'error') }
@@ -1537,7 +1540,7 @@ interface MarketPriceToolProps {
   saved: Record<string, boolean>
   onCountryChange(v: number | ''): void
   onSearch(v: string): void
-  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): void
+  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, dispRate: number): void
   showToast(msg: string, type?: 'error'): void
 }
 
@@ -1549,7 +1552,7 @@ function MarketPriceTool({
   const levels     = data?.levels ?? []
   const country    = data?.country
   const sym        = country?.symbol ?? ''
-  const countryRate= country?.rate ?? 1
+  const countryRate= country?.rate ?? 1  // kept for reference; dispRate=1 since MPT always shows local currency
 
   const menuNames = useMemo(() => {
     const s = new Set((data?.items ?? []).map(i => i.menu_name))
@@ -1692,7 +1695,7 @@ function MarketPriceTool({
                                 sym={sym}
                                 saving={saving[key]}
                                 saved={saved[key]}
-                                onCommit={v => { if (v !== null) onSavePrice(row.menu_item_id, l.id, v, countryRate) }}
+                                onCommit={v => { if (v !== null) onSavePrice(row.menu_item_id, l.id, v, 1) }}
                               />
                             </div>
                           </td>,
