@@ -308,33 +308,68 @@ interface HeaderCellProps<T extends Record<string, any>> {
   col:         GridColumn<T>
   sortField:   string | null
   sortDir:     'asc' | 'desc'
-  openFilter:  string | null
   filters:     Record<string, string[]>
-  onSort:      (colKey: string) => void
+  onSort:      (colKey: string, dir?: 'asc' | 'desc') => void
   onFilter:    (colKey: string, values: string[]) => void
-  onOpenFilter:(colKey: string | null) => void
 }
 
 function HeaderCell<T extends Record<string, any>>({
-  col, sortField, sortDir, openFilter, filters,
-  onSort, onFilter, onOpenFilter,
+  col, sortField, sortDir, filters,
+  onSort, onFilter,
 }: HeaderCellProps<T>) {
-  const colKey    = String(col.key)
-  const isSorted  = sortField === colKey
-  const canSort   = col.sortable !== false && col.type !== 'derived'
-  const canFilter = col.filterable === true && (col.filterOptions?.length ?? 0) > 0
+  const colKey     = String(col.key)
+  const isSorted   = sortField === colKey
+  const canSort    = col.sortable !== false && col.type !== 'derived'
+  const canFilter  = col.filterable === true && (col.filterOptions?.length ?? 0) > 0
   const activeVals = filters[colKey] ?? []
-  const filterRef = useRef<HTMLDivElement>(null)
 
+  const [open,         setOpen]         = useState(false)
+  const [filterSearch, setFilterSearch] = useState('')
+  const [dropPos,      setDropPos]      = useState<{ top: number; left: number } | null>(null)
+  const btnRef    = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const visibleOptions = canFilter
+    ? (col.filterOptions ?? []).filter(o => o.label.toLowerCase().includes(filterSearch.toLowerCase()))
+    : []
+
+  function openDropdown() {
+    if (!btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    setDropPos({ top: r.bottom + window.scrollY + 4, left: r.left + window.scrollX })
+    setOpen(true)
+  }
+
+  // Close on outside click
   useEffect(() => {
-    if (openFilter !== colKey) return
+    if (!open) return
     function h(e: MouseEvent) {
-      if (filterRef.current && !filterRef.current.contains(e.target as Node))
-        onOpenFilter(null)
+      if (btnRef.current && !btnRef.current.closest('th')?.contains(e.target as Node)) {
+        setOpen(false); setFilterSearch('')
+      }
     }
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
-  }, [openFilter, colKey, onOpenFilter])
+  }, [open])
+
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!open) return
+    function reposition() {
+      if (!btnRef.current) return
+      const r = btnRef.current.getBoundingClientRect()
+      setDropPos({ top: r.bottom + window.scrollY + 4, left: r.left + window.scrollX })
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition) }
+  }, [open])
+
+  // Auto-focus search when dropdown opens
+  useEffect(() => {
+    if (open && canFilter) setTimeout(() => searchRef.current?.focus(), 50)
+    if (!open) setFilterSearch('')
+  }, [open])
 
   return (
     <th
@@ -345,6 +380,8 @@ function HeaderCell<T extends Record<string, any>>({
       style={col.minWidth ? { minWidth: col.minWidth } : undefined}
     >
       <div className={`flex items-center gap-0.5 px-3 py-2.5 ${col.align === 'right' ? 'justify-end' : ''}`}>
+
+        {/* Sort button */}
         <button
           type="button" tabIndex={-1}
           className={[
@@ -363,11 +400,13 @@ function HeaderCell<T extends Record<string, any>>({
           )}
         </button>
 
+        {/* Filter button */}
         {canFilter && (
-          <div ref={filterRef} className="relative shrink-0">
+          <>
             <button
+              ref={btnRef}
               type="button" tabIndex={-1}
-              onClick={() => onOpenFilter(openFilter === colKey ? null : colKey)}
+              onClick={() => open ? (setOpen(false), setFilterSearch('')) : openDropdown()}
               className={[
                 'w-5 h-5 flex items-center justify-center rounded transition-colors ml-0.5',
                 activeVals.length > 0 ? 'text-accent bg-accent-dim' : 'text-text-3 hover:text-text-1 hover:bg-surface-2',
@@ -375,48 +414,96 @@ function HeaderCell<T extends Record<string, any>>({
               title={activeVals.length > 0 ? `${activeVals.length} filter${activeVals.length > 1 ? 's' : ''} active` : 'Filter column'}
             >
               <FilterIcon size={11} filled={activeVals.length > 0} />
+              {activeVals.length > 0 && (
+                <span className="ml-0.5 px-1 rounded-full bg-accent text-white text-[9px] font-bold leading-4 min-w-[14px] text-center">
+                  {activeVals.length}
+                </span>
+              )}
             </button>
 
-            {openFilter === colKey && (
+            {/* Fixed dropdown — escapes overflow:hidden */}
+            {open && dropPos && (
               <div
-                className="absolute z-50 top-full left-0 mt-1 min-w-[160px] bg-surface border border-border rounded-lg shadow-xl overflow-hidden"
-                style={{ zIndex: 9999 }}
+                className="w-56 bg-surface border border-border rounded-lg shadow-xl overflow-hidden"
+                style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 99999 }}
               >
-                <div className="px-3 py-1.5 border-b border-border text-xs text-text-3 font-semibold uppercase tracking-wide flex items-center justify-between">
-                  <span>{col.header}</span>
+                {/* Sort section */}
+                <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-b border-border bg-surface-2">
+                  Sort
+                </div>
+                <button type="button"
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2 ${isSorted && sortDir === 'asc' ? 'text-accent font-semibold' : 'text-text-1'}`}
+                  onMouseDown={e => { e.preventDefault(); onSort(colKey, 'asc'); setOpen(false) }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="18 15 12 9 6 15"/></svg> Ascending
+                </button>
+                <button type="button"
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2 ${isSorted && sortDir === 'desc' ? 'text-accent font-semibold' : 'text-text-1'}`}
+                  onMouseDown={e => { e.preventDefault(); onSort(colKey, 'desc'); setOpen(false) }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="6 9 12 15 18 9"/></svg> Descending
+                </button>
+
+                {/* Filter section */}
+                <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-t border-b border-border bg-surface-2 flex items-center justify-between">
+                  <span>Filter</span>
                   {activeVals.length > 0 && (
-                    <button type="button" className="text-accent text-xs font-normal hover:underline"
+                    <button type="button" className="text-accent text-xs font-normal hover:underline normal-case tracking-normal"
                       onMouseDown={e => { e.preventDefault(); onFilter(colKey, []) }}
-                    >Clear</button>
+                    >Clear all</button>
                   )}
                 </div>
-                {col.filterOptions!.map(opt => {
-                  const checked = activeVals.includes(opt.value)
-                  return (
-                    <button key={opt.value} type="button"
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2 ${checked ? 'text-accent' : 'text-text-1'}`}
-                      onMouseDown={e => {
-                        e.preventDefault()
-                        const next = checked ? activeVals.filter(v => v !== opt.value) : [...activeVals, opt.value]
-                        onFilter(colKey, next)
-                      }}
-                    >
-                      <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
-                        {checked && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>}
-                      </span>
-                      {opt.label}
-                    </button>
-                  )
-                })}
+
+                {/* Search */}
+                <div className="px-2 py-2 border-b border-border">
+                  <div className="relative">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="absolute left-2 top-1/2 -translate-y-1/2 text-text-3"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                    <input
+                      ref={searchRef}
+                      type="text"
+                      value={filterSearch}
+                      onChange={e => setFilterSearch(e.target.value)}
+                      onMouseDown={e => e.stopPropagation()}
+                      placeholder="Search…"
+                      className="w-full pl-7 pr-2 py-1 text-sm bg-surface-2 border border-border rounded-md outline-none focus:border-accent transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* Multi-select options */}
+                <div className="max-h-52 overflow-y-auto">
+                  {visibleOptions.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-text-3 italic">No matches</div>
+                  ) : visibleOptions.map(opt => {
+                    const checked = activeVals.includes(opt.value)
+                    return (
+                      <button key={opt.value} type="button"
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2.5 ${checked ? 'text-accent' : 'text-text-1'}`}
+                        onMouseDown={e => {
+                          e.preventDefault()
+                          const next = checked ? activeVals.filter(v => v !== opt.value) : [...activeVals, opt.value]
+                          onFilter(colKey, next)
+                        }}
+                      >
+                        <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
+                          {checked && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                        </span>
+                        <span className="truncate">{opt.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Footer */}
                 <div className="px-2 py-2 border-t border-border bg-surface-2">
                   <button type="button"
                     className="w-full py-1.5 text-xs font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity"
-                    onMouseDown={e => { e.preventDefault(); onOpenFilter(null) }}
+                    onMouseDown={e => { e.preventDefault(); setOpen(false); setFilterSearch('') }}
                   >{activeVals.length > 0 ? `Apply (${activeVals.length} selected)` : 'Close'}</button>
                 </div>
               </div>
             )}
-          </div>
+          </>
         )}
       </div>
     </th>
@@ -518,10 +605,9 @@ export function DataGrid<T extends Record<string, any>>({
   const [sortField,  setSortField]  = useState<string | null>(null)
   const [sortDir,    setSortDir]    = useState<'asc' | 'desc'>('asc')
   const [filters,    setFilters]    = useState<Record<string, string[]>>({})
-  const [openFilter, setOpenFilter] = useState<string | null>(null)
-
-  const handleSort = useCallback((colKey: string) => {
-    setSortField(f => {
+  const handleSort = useCallback((colKey: string, dir?: 'asc' | 'desc') => {
+    if (dir) { setSortField(colKey); setSortDir(dir) }
+    else setSortField(f => {
       if (f === colKey) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return f }
       setSortDir('asc'); return colKey
     })
@@ -535,7 +621,7 @@ export function DataGrid<T extends Record<string, any>>({
     )
   }, [])
 
-  const clearAllFilters = useCallback(() => { setFilters({}); setOpenFilter(null) }, [])
+  const clearAllFilters = useCallback(() => { setFilters({}) }, [])
 
   const processedRows = useMemo(() => {
     let result = [...rows]
@@ -775,11 +861,9 @@ export function DataGrid<T extends Record<string, any>>({
                   col={col}
                   sortField={sortField}
                   sortDir={sortDir}
-                  openFilter={openFilter}
                   filters={filters}
                   onSort={handleSort}
                   onFilter={handleFilter}
-                  onOpenFilter={setOpenFilter}
                 />
               ))}
               {showActions && <th className="w-20" />}
