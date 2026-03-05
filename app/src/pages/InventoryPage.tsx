@@ -1343,7 +1343,8 @@ const ALG_LABEL: Record<string, string> = {
   contains: 'Contains', may_contain: 'May Contain', free_from: 'Free From',
 }
 
-// Sortable column header — defined at module level to prevent remount issues
+// Sortable column header — defined at module level to prevent remount issues.
+// Uses position:fixed + getBoundingClientRect to escape the overflow:auto table wrapper.
 function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, minWidth, filterOptions, filterValues, onFilter }: {
   label:         string
   field:         string
@@ -1357,17 +1358,47 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
   filterValues?:  string[]
   onFilter?:      (v: string[]) => void
 }) {
-  const [open,   setOpen]   = useState(false)
-  const [search, setSearch] = useState('')
-  const ref      = useRef<HTMLDivElement>(null)
-  const isActive = sortField === field
+  const [open,    setOpen]    = useState(false)
+  const [search,  setSearch]  = useState('')
+  const [dropPos, setDropPos] = useState<{ top: number; left: number } | null>(null)
+  const thRef      = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const isActive  = sortField === field
   const hasFilter = (filterValues?.length ?? 0) > 0
 
+  function openDropdown() {
+    if (!triggerRef.current) return
+    const r = triggerRef.current.getBoundingClientRect()
+    setDropPos({ top: r.bottom + 4, left: r.left })
+    setOpen(true)
+  }
+
+  // Close on outside click
   useEffect(() => {
     if (!open) return
-    function h(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setSearch('') } }
+    function h(e: MouseEvent) {
+      if (thRef.current && !thRef.current.contains(e.target as Node)) {
+        setOpen(false); setSearch('')
+      }
+    }
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
+  }, [open])
+
+  // Reposition when the table scrolls so the dropdown tracks the header cell
+  useEffect(() => {
+    if (!open) return
+    function reposition() {
+      if (!triggerRef.current) return
+      const r = triggerRef.current.getBoundingClientRect()
+      setDropPos({ top: r.bottom + 4, left: r.left })
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
   }, [open])
 
   const visible = filterOptions?.filter(o => o.label.toLowerCase().includes(search.toLowerCase())) ?? []
@@ -1382,7 +1413,7 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
 
   return (
     <th className={`px-3 py-3 text-left bg-surface-2 border-r border-border${sticky ? ' z-20' : ''}`} style={stickyStyle}>
-      <div ref={ref} className="relative inline-flex items-center gap-1">
+      <div ref={thRef} className="relative inline-flex items-center gap-1">
         <button
           onClick={toggleDir}
           className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-wide select-none transition-colors
@@ -1399,20 +1430,24 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
           )}
         </button>
 
-        {/* Filter dropdown trigger */}
+        {/* Filter trigger — ref gives us position for fixed dropdown */}
         {filterOptions && onFilter && (
           <button
-            onClick={() => setOpen(o => !o)}
-            className="ml-0.5 text-text-3 hover:text-accent transition-colors"
+            ref={triggerRef}
+            onClick={() => open ? (setOpen(false), setSearch('')) : openDropdown()}
+            className={`ml-0.5 transition-colors ${open || hasFilter ? 'text-accent' : 'text-text-3 hover:text-accent'}`}
             title="Filter"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
           </button>
         )}
 
-        {/* Filter dropdown */}
-        {open && filterOptions && onFilter && (
-          <div className="absolute top-full left-0 mt-1 w-52 bg-surface border border-border rounded-lg shadow-lg overflow-hidden" style={{ zIndex: 99999 }}>
+        {/* Filter dropdown — fixed positioning escapes overflow:auto table wrapper */}
+        {open && dropPos && filterOptions && onFilter && (
+          <div
+            className="w-52 bg-surface border border-border rounded-lg shadow-lg overflow-hidden"
+            style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 99999 }}
+          >
             <div className="px-2 py-2 border-b border-border flex items-center justify-between">
               <span className="text-xs font-semibold text-text-3 uppercase tracking-wide">Filter</span>
               {hasFilter && (
@@ -1427,18 +1462,21 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
               />
             </div>
             <div className="max-h-48 overflow-y-auto">
-              {visible.map(opt => {
-                const checked = filterValues!.includes(opt.value)
-                return (
-                  <button key={opt.value} className={`w-full text-left px-3 py-2 text-xs hover:bg-surface-2 flex items-center gap-2 ${checked ? 'text-accent' : 'text-text-1'}`}
-                    onMouseDown={e => { e.preventDefault(); onFilter(checked ? filterValues!.filter(v => v !== opt.value) : [...filterValues!, opt.value]) }}>
-                    <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
-                      {checked && <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12"/></svg>}
-                    </span>
-                    {opt.label}
-                  </button>
-                )
-              })}
+              {visible.length === 0
+                ? <div className="px-3 py-2 text-xs text-text-3 italic">No matches</div>
+                : visible.map(opt => {
+                    const checked = filterValues!.includes(opt.value)
+                    return (
+                      <button key={opt.value} className={`w-full text-left px-3 py-2 text-xs hover:bg-surface-2 flex items-center gap-2 ${checked ? 'text-accent' : 'text-text-1'}`}
+                        onMouseDown={e => { e.preventDefault(); onFilter(checked ? filterValues!.filter(v => v !== opt.value) : [...filterValues!, opt.value]) }}>
+                        <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
+                          {checked && <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12"/></svg>}
+                        </span>
+                        {opt.label}
+                      </button>
+                    )
+                  })
+              }
             </div>
             <div className="px-2 py-1.5 border-t border-border bg-surface-2">
               <button className="w-full py-1 text-xs font-semibold rounded bg-accent text-white hover:opacity-90"
