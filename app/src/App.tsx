@@ -1,15 +1,17 @@
 import { useAuth0 } from '@auth0/auth0-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import LoginPage     from './pages/LoginPage'
-import AppLayout     from './components/AppLayout'
-import DashboardPage from './pages/DashboardPage'
-import SettingsPage  from './pages/SettingsPage'
-import LoadingScreen from './components/LoadingScreen'
-import CountriesPage from './pages/CountriesPage'
-import CategoriesPage from './pages/CategoriesPage'
-import InventoryPage from './pages/InventoryPage'
-import RecipesPage from './pages/RecipesPage'
-import MenusPage   from './pages/MenusPage'
+import LoginPage          from './pages/LoginPage'
+import AppLayout          from './components/AppLayout'
+import DashboardPage      from './pages/DashboardPage'
+import SettingsPage       from './pages/SettingsPage'
+import LoadingScreen      from './components/LoadingScreen'
+import CountriesPage      from './pages/CountriesPage'
+import CategoriesPage     from './pages/CategoriesPage'
+import InventoryPage      from './pages/InventoryPage'
+import RecipesPage        from './pages/RecipesPage'
+import MenusPage          from './pages/MenusPage'
+import AllergenMatrixPage from './pages/AllergenMatrixPage'
+import HACCPPage          from './pages/HACCPPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -38,10 +40,11 @@ export default function App() {
           <Route path="settings"   element={<SettingsPage />} />
           <Route path="countries" element={<CountriesPage />} />
           <Route path="categories" element={<CategoriesPage />} />
-          <Route path="inventory" element={<InventoryPage />} />
-	  <Route path="recipes" element={<RecipesPage />} />
-
+          <Route path="inventory"  element={<InventoryPage />} />
+          <Route path="recipes"    element={<RecipesPage />} />
           <Route path="menus"      element={<MenusPage />} />
+          <Route path="allergens"  element={<AllergenMatrixPage />} />
+          <Route path="haccp"      element={<HACCPPage />} />
         
        
         </Route>

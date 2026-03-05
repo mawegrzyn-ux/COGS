@@ -41,6 +41,31 @@ interface Ingredient {
   waste_pct:                       string
   quote_count:                     string
   active_quote_count:              string
+  barcode:                         string | null
+  dietary_flags:                   Record<string, boolean> | null
+  energy_kcal:                     number | null
+  protein_g:                       number | null
+  carbs_g:                         number | null
+  fat_g:                           number | null
+  fibre_g:                         number | null
+  sugar_g:                         number | null
+  salt_g:                          number | null
+  nutrition_source:                string | null
+  nutrition_updated_at:            string | null
+}
+
+interface Allergen {
+  id:     number
+  code:   string
+  name:   string
+  eu_fic: boolean
+}
+
+interface IngAllergen {
+  allergen_id: number
+  code:        string
+  name:        string
+  status:      'contains' | 'may_contain' | 'free_from'
 }
 
 interface Quote {
@@ -354,6 +379,20 @@ function IngredientsTab() {
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
+  // Phase 4 — allergen & nutrition state
+  type IngModalTab = 'details' | 'allergens' | 'nutrition'
+  const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
+  const [allAllergens,   setAllAllergens]   = useState<Allergen[]>([])
+  const [ingAllergens,   setIngAllergens]   = useState<IngAllergen[]>([])
+  const [savingAllergens,setSavingAllergens]= useState(false)
+  const blankNutForm: Record<string, string> = { energy_kcal: '', protein_g: '', carbs_g: '', fat_g: '', fibre_g: '', sugar_g: '', salt_g: '' }
+  const [nutForm,      setNutForm]      = useState<Record<string, string>>(blankNutForm)
+  const [nutSearch,    setNutSearch]    = useState('')
+  const [nutResults,   setNutResults]   = useState<any[]>([])
+  const [nutLoading,   setNutLoading]   = useState(false)
+  const [savingNut,    setSavingNut]    = useState(false)
+  const [dietaryFlags, setDietaryFlags] = useState<Record<string, boolean>>({})
+
   // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -375,6 +414,10 @@ function IngredientsTab() {
   }, [api])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    api.get('/allergens').then((d: Allergen[]) => setAllAllergens(d || [])).catch(() => {})
+  }, [api])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
@@ -454,10 +497,15 @@ function IngredientsTab() {
     return `1 ${prep} = ${form.default_prep_to_base_conversion || '1'} ${base}`
   }
 
-  function openAdd() { setModal('new'); setForm(blankForm); setErrors({}) }
+  function openAdd() {
+    setModal('new'); setForm(blankForm); setErrors({})
+    setIngModalTab('details'); setIngAllergens([]); setNutForm(blankNutForm)
+    setDietaryFlags({}); setNutSearch(''); setNutResults([])
+  }
 
   function openEdit(i: Ingredient) {
     setModal(i)
+    setIngModalTab('details')
     setForm({
       name: i.name, category: i.category || '',
       base_unit_id: i.base_unit_id ? String(i.base_unit_id) : '',
@@ -465,7 +513,21 @@ function IngredientsTab() {
       default_prep_to_base_conversion: i.default_prep_to_base_conversion || '1',
       waste_pct: i.waste_pct || '0', notes: i.notes || '',
     })
+    setNutForm({
+      energy_kcal: i.energy_kcal != null ? String(i.energy_kcal) : '',
+      protein_g:   i.protein_g   != null ? String(i.protein_g)   : '',
+      carbs_g:     i.carbs_g     != null ? String(i.carbs_g)     : '',
+      fat_g:       i.fat_g       != null ? String(i.fat_g)       : '',
+      fibre_g:     i.fibre_g     != null ? String(i.fibre_g)     : '',
+      sugar_g:     i.sugar_g     != null ? String(i.sugar_g)     : '',
+      salt_g:      i.salt_g      != null ? String(i.salt_g)      : '',
+    })
+    setDietaryFlags(i.dietary_flags || {})
+    setNutSearch(''); setNutResults([])
     setErrors({})
+    api.get(`/allergens/ingredient/${i.id}`)
+      .then((d: IngAllergen[]) => setIngAllergens(d || []))
+      .catch(() => setIngAllergens([]))
   }
 
   function validate() {
@@ -501,6 +563,79 @@ function IngredientsTab() {
       await api.delete(`/ingredients/${confirmDelete.id}`)
       showToast('Ingredient deleted'); setConfirmDelete(null); load()
     } catch (err: any) { showToast(err.message || 'Delete failed', 'error'); setConfirmDelete(null) }
+  }
+
+  function cycleAllergenStatus(code: string) {
+    const order = ['contains', 'may_contain', 'free_from', null] as const
+    const current = ingAllergens.find(a => a.code === code)?.status ?? null
+    const nextIdx = (order.indexOf(current) + 1) % order.length
+    const next = order[nextIdx]
+    if (next === null) {
+      setIngAllergens(prev => prev.filter(a => a.code !== code))
+    } else {
+      setIngAllergens(prev => {
+        const existing = prev.find(a => a.code === code)
+        if (existing) return prev.map(a => a.code === code ? { ...a, status: next } : a)
+        const allergen = allAllergens.find(a => a.code === code)!
+        return [...prev, { allergen_id: allergen.id, code, name: allergen.name, status: next }]
+      })
+    }
+  }
+
+  async function saveAllergens() {
+    if (modal === 'new' || modal === null) return
+    const ing = modal as Ingredient
+    setSavingAllergens(true)
+    try {
+      await api.put(`/allergens/ingredient/${ing.id}`, {
+        allergens: ingAllergens.map(a => ({ allergen_id: a.allergen_id, status: a.status })),
+      })
+      showToast('Allergens saved')
+    } catch (err: any) { showToast(err.message || 'Failed to save allergens', 'error') }
+    finally { setSavingAllergens(false) }
+  }
+
+  async function searchNutrition() {
+    if (!nutSearch.trim()) return
+    setNutLoading(true); setNutResults([])
+    try {
+      const data = await api.get(`/nutrition/search?q=${encodeURIComponent(nutSearch.trim())}&source=usda`)
+      setNutResults(data?.results || [])
+    } catch { showToast('Search failed', 'error') }
+    finally { setNutLoading(false) }
+  }
+
+  function applyNutritionResult(result: any) {
+    setNutForm({
+      energy_kcal: result.energy_kcal != null ? String(Math.round(result.energy_kcal)) : '',
+      protein_g:   result.protein_g   != null ? String(Number(result.protein_g).toFixed(2)) : '',
+      carbs_g:     result.carbs_g     != null ? String(Number(result.carbs_g).toFixed(2)) : '',
+      fat_g:       result.fat_g       != null ? String(Number(result.fat_g).toFixed(2)) : '',
+      fibre_g:     result.fibre_g     != null ? String(Number(result.fibre_g).toFixed(2)) : '',
+      sugar_g:     result.sugar_g     != null ? String(Number(result.sugar_g).toFixed(2)) : '',
+      salt_g:      result.salt_g      != null ? String(Number(result.salt_g).toFixed(2)) : '',
+    })
+    setNutResults([]); setNutSearch('')
+  }
+
+  async function saveNutrition() {
+    if (modal === 'new' || modal === null) return
+    const ing = modal as Ingredient
+    setSavingNut(true)
+    try {
+      await api.put(`/nutrition/ingredient/${ing.id}`, {
+        energy_kcal: nutForm.energy_kcal !== '' ? Number(nutForm.energy_kcal) : null,
+        protein_g:   nutForm.protein_g   !== '' ? Number(nutForm.protein_g)   : null,
+        carbs_g:     nutForm.carbs_g     !== '' ? Number(nutForm.carbs_g)     : null,
+        fat_g:       nutForm.fat_g       !== '' ? Number(nutForm.fat_g)       : null,
+        fibre_g:     nutForm.fibre_g     !== '' ? Number(nutForm.fibre_g)     : null,
+        sugar_g:     nutForm.sugar_g     !== '' ? Number(nutForm.sugar_g)     : null,
+        salt_g:      nutForm.salt_g      !== '' ? Number(nutForm.salt_g)      : null,
+        dietary_flags: dietaryFlags,
+      })
+      showToast('Nutrition saved')
+    } catch (err: any) { showToast(err.message || 'Failed to save nutrition', 'error') }
+    finally { setSavingNut(false) }
   }
 
   const categoryFilterOptions = categories.map(c => ({ label: c, value: c }))
@@ -618,56 +753,120 @@ function IngredientsTab() {
       )}
 
       {modal !== null && (
-        <Modal title={modal === 'new' ? 'Add Ingredient' : 'Edit Ingredient'} onClose={() => setModal(null)}>
-          <Field label="Name" required error={errors.name}>
-            <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
-          </Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Category">
-              <CategoryCombo value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={categories} />
-            </Field>
-            <Field label="Base Unit" required error={errors.base_unit_id}>
-              <select className="select w-full" value={form.base_unit_id} onChange={e => setForm(f => ({ ...f, base_unit_id: e.target.value }))}>
-                <option value="">Select unit…</option>
-                {['mass', 'volume', 'count'].map(type => (
-                  <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
-                    {units.filter(u => u.type === type).map(u => (
-                      <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
-            </Field>
-          </div>
-          <div className="border-t border-border pt-4 mt-2">
-            <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe (overridable per recipe).</p>
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Default Prep Unit">
-                <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
-                <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
-              </Field>
-              <Field label="Conversion to Base Unit">
-                <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
-                <p className="text-xs text-text-3 mt-1">{convHint()}</p>
-              </Field>
+        <Modal
+          title={modal === 'new' ? 'Add Ingredient' : `Edit: ${(modal as Ingredient).name}`}
+          onClose={() => setModal(null)}
+          width="max-w-2xl"
+        >
+          {/* Tabs — only for existing ingredients */}
+          {modal !== 'new' && (
+            <div className="flex gap-1 -mt-1 mb-4 border-b border-border">
+              {(['details', 'allergens', 'nutrition'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setIngModalTab(t)}
+                  className={`px-4 py-2 text-sm font-semibold rounded-t transition-colors
+                    ${ingModalTab === t
+                      ? 'text-accent border-b-2 border-accent'
+                      : 'text-text-3 hover:text-text-1'
+                    }`}
+                >
+                  {t === 'details' ? 'Details' : t === 'allergens' ? 'Allergens' : 'Nutrition'}
+                </button>
+              ))}
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Waste %">
-              <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
-              <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
-            </Field>
-            <Field label="Notes">
-              <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
-            </Field>
-          </div>
-          <div className="flex gap-3 justify-end pt-2">
-            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
-            <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : 'Save Ingredient'}
-            </button>
-          </div>
+          )}
+
+          {/* ── Details tab ───────────────────────────────────────────────── */}
+          {(modal === 'new' || ingModalTab === 'details') && (
+            <>
+              <Field label="Name" required error={errors.name}>
+                <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
+              </Field>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Category">
+                  <CategoryCombo value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={categories} />
+                </Field>
+                <Field label="Base Unit" required error={errors.base_unit_id}>
+                  <select className="select w-full" value={form.base_unit_id} onChange={e => setForm(f => ({ ...f, base_unit_id: e.target.value }))}>
+                    <option value="">Select unit…</option>
+                    {['mass', 'volume', 'count'].map(type => (
+                      <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
+                        {units.filter(u => u.type === type).map(u => (
+                          <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
+                </Field>
+              </div>
+              <div className="border-t border-border pt-4 mt-2">
+                <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe (overridable per recipe).</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Default Prep Unit">
+                    <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
+                    <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
+                  </Field>
+                  <Field label="Conversion to Base Unit">
+                    <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                    <p className="text-xs text-text-3 mt-1">{convHint()}</p>
+                  </Field>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Waste %">
+                  <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                  <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
+                </Field>
+                <Field label="Notes">
+                  <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
+                </Field>
+              </div>
+              {modal === 'new' && (
+                <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
+                  Save the ingredient first, then reopen to manage allergens and nutrition.
+                </p>
+              )}
+              <div className="flex gap-3 justify-end pt-2">
+                <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
+                <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
+                  {saving ? 'Saving…' : 'Save Ingredient'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ── Allergens tab ─────────────────────────────────────────────── */}
+          {modal !== 'new' && ingModalTab === 'allergens' && (
+            <AllergenTabContent
+              allAllergens={allAllergens}
+              ingAllergens={ingAllergens}
+              onCycle={cycleAllergenStatus}
+              onSave={saveAllergens}
+              saving={savingAllergens}
+              onClose={() => setModal(null)}
+            />
+          )}
+
+          {/* ── Nutrition tab ─────────────────────────────────────────────── */}
+          {modal !== 'new' && ingModalTab === 'nutrition' && (
+            <NutritionTabContent
+              nutForm={nutForm}
+              setNutForm={setNutForm}
+              nutSearch={nutSearch}
+              setNutSearch={setNutSearch}
+              nutResults={nutResults}
+              nutLoading={nutLoading}
+              onSearch={searchNutrition}
+              onApply={applyNutritionResult}
+              dietaryFlags={dietaryFlags}
+              setDietaryFlags={setDietaryFlags}
+              onSave={saveNutrition}
+              saving={savingNut}
+              onClose={() => setModal(null)}
+            />
+          )}
         </Modal>
       )}
 
@@ -1257,4 +1456,187 @@ function PhoneIcon({ size = 16, className = '' }: { size?: number; className?: s
 }
 function StarIcon({ size = 16, filled = false }: { size?: number; filled?: boolean }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+}
+
+// ── AllergenTabContent ─────────────────────────────────────────────────────────
+
+const ALLERGEN_STATUS_STYLES: Record<string, string> = {
+  contains:    'bg-red-100 text-red-700 border-red-300',
+  may_contain: 'bg-amber-100 text-amber-700 border-amber-300',
+  free_from:   'bg-green-100 text-green-700 border-green-300',
+  none:        'bg-surface-2 text-text-3 border-border hover:border-text-3',
+}
+const ALLERGEN_STATUS_LABEL: Record<string, string> = {
+  contains:    'Contains',
+  may_contain: 'May contain',
+  free_from:   'Free from',
+}
+
+function AllergenTabContent({ allAllergens, ingAllergens, onCycle, onSave, saving, onClose }: {
+  allAllergens: Allergen[]
+  ingAllergens: IngAllergen[]
+  onCycle: (code: string) => void
+  onSave:  () => void
+  saving:  boolean
+  onClose: () => void
+}) {
+  return (
+    <>
+      <p className="text-xs text-text-3 mb-4">
+        Click an allergen chip to cycle: <span className="font-semibold text-red-600">Contains</span> →{' '}
+        <span className="font-semibold text-amber-600">May contain</span> →{' '}
+        <span className="font-semibold text-green-600">Free from</span> → Not set.{' '}
+        Per EU FIC Regulation 1169/2011.
+      </p>
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        {allAllergens.map(allergen => {
+          const current = ingAllergens.find(a => a.code === allergen.code)?.status
+          const style = ALLERGEN_STATUS_STYLES[current || 'none']
+          return (
+            <button
+              key={allergen.code}
+              type="button"
+              onClick={() => onCycle(allergen.code)}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-colors cursor-pointer ${style}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-xs uppercase tracking-wide">{allergen.code}</div>
+                <div className="text-xs truncate opacity-80">{allergen.name}</div>
+              </div>
+              {current && (
+                <span className="text-xs font-semibold shrink-0">{ALLERGEN_STATUS_LABEL[current]}</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="flex gap-3 justify-end pt-2 border-t border-border">
+        <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Close</button>
+        <button className="btn-primary px-4 py-2 text-sm" onClick={onSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save Allergens'}
+        </button>
+      </div>
+    </>
+  )
+}
+
+// ── NutritionTabContent ────────────────────────────────────────────────────────
+
+const DIETARY_FLAG_LABELS: Record<string, string> = {
+  vegan:       'Vegan',
+  vegetarian:  'Vegetarian',
+  halal:       'Halal',
+  kosher:      'Kosher',
+  gluten_free: 'Gluten Free',
+  dairy_free:  'Dairy Free',
+}
+
+function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nutResults, nutLoading, onSearch, onApply, dietaryFlags, setDietaryFlags, onSave, saving, onClose }: {
+  nutForm:         Record<string, string>
+  setNutForm:      (f: Record<string, string>) => void
+  nutSearch:       string
+  setNutSearch:    (v: string) => void
+  nutResults:      any[]
+  nutLoading:      boolean
+  onSearch:        () => void
+  onApply:         (r: any) => void
+  dietaryFlags:    Record<string, boolean>
+  setDietaryFlags: (f: Record<string, boolean>) => void
+  onSave:          () => void
+  saving:          boolean
+  onClose:         () => void
+}) {
+  const nutFields = [
+    { key: 'energy_kcal', label: 'Energy',        unit: 'kcal' },
+    { key: 'protein_g',   label: 'Protein',        unit: 'g' },
+    { key: 'carbs_g',     label: 'Carbohydrates',  unit: 'g' },
+    { key: 'fat_g',       label: 'Fat',            unit: 'g' },
+    { key: 'fibre_g',     label: 'Fibre',          unit: 'g' },
+    { key: 'sugar_g',     label: 'Sugars',         unit: 'g' },
+    { key: 'salt_g',      label: 'Salt',           unit: 'g' },
+  ]
+  return (
+    <>
+      {/* USDA search */}
+      <div className="mb-4">
+        <p className="text-xs text-text-3 mb-2">Search USDA FoodData Central to auto-populate values (per 100g).</p>
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="e.g. chicken breast raw"
+            value={nutSearch}
+            onChange={e => setNutSearch(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onSearch()}
+          />
+          <button className="btn-outline px-4 py-2 text-sm" onClick={onSearch} disabled={nutLoading}>
+            {nutLoading ? 'Searching…' : 'Search'}
+          </button>
+        </div>
+        {nutResults.length > 0 && (
+          <div className="mt-2 border border-border rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+            {nutResults.map((r, i) => (
+              <button
+                key={i}
+                type="button"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-accent-dim transition-colors border-b border-border last:border-0"
+                onClick={() => onApply(r)}
+              >
+                <div className="font-semibold text-text-1">{r.name}</div>
+                {r.energy_kcal != null && (
+                  <div className="text-xs text-text-3">
+                    {Math.round(r.energy_kcal)}kcal · P:{Number(r.protein_g||0).toFixed(1)}g · C:{Number(r.carbs_g||0).toFixed(1)}g · F:{Number(r.fat_g||0).toFixed(1)}g
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Nutrition fields — per 100g */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        {nutFields.map(f => (
+          <Field key={f.key} label={`${f.label} (${f.unit} / 100g)`}>
+            <input
+              className="input w-full font-mono"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="—"
+              value={nutForm[f.key] ?? ''}
+              onChange={e => setNutForm({ ...nutForm, [f.key]: e.target.value })}
+            />
+          </Field>
+        ))}
+      </div>
+
+      {/* Dietary flags */}
+      <div className="border-t border-border pt-3 mb-4">
+        <p className="text-xs text-text-3 mb-2">Dietary flags:</p>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(DIETARY_FLAG_LABELS).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setDietaryFlags({ ...dietaryFlags, [key]: !dietaryFlags[key] })}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors
+                ${dietaryFlags[key]
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-surface-2 text-text-3 border-border hover:border-accent hover:text-accent'
+                }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-3 justify-end pt-2 border-t border-border">
+        <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Close</button>
+        <button className="btn-primary px-4 py-2 text-sm" onClick={onSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save Nutrition'}
+        </button>
+      </div>
+    </>
+  )
 }
