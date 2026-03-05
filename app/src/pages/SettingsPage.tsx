@@ -24,7 +24,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds'
+type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -34,6 +34,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'exchange-rates': 'Exchange Rates',
   'system':         'System',
   'thresholds':     'COGS Thresholds',
+  'test-data':      'Test Data',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
-        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds'] as Tab[]).map(t => (
+        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -70,6 +71,7 @@ export default function SettingsPage() {
         {tab === 'exchange-rates' && <ExchangeRatesTab />}
         {tab === 'system'         && <SystemTab />}
         {tab === 'thresholds'     && <ThresholdsTab />}
+        {tab === 'test-data'      && <TestDataTab />}
       </div>
     </div>
   )
@@ -768,6 +770,157 @@ function ThresholdsTab() {
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Test Data Tab ─────────────────────────────────────────────────────────────
+
+function TestDataTab() {
+  const api = useApi()
+  const [loading,       setLoading]       = useState(false)
+  const [log,           setLog]           = useState<string[]>([])
+  const [confirmAction, setConfirmAction] = useState<'seed' | 'clear' | null>(null)
+  const [toast,         setToast]         = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  async function handleSeed() {
+    setConfirmAction(null)
+    setLoading(true)
+    setLog(['Clearing existing data…', 'Seeding test data — please wait…'])
+    try {
+      const result = await api.post('/seed', {})
+      setLog(result.log || [])
+      setToast({ message: 'Test data loaded successfully', type: 'success' })
+    } catch (err: any) {
+      setLog(prev => [...prev, `Error: ${err.message}`])
+      setToast({ message: err.message || 'Failed to load test data', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleClear() {
+    setConfirmAction(null)
+    setLoading(true)
+    setLog(['Clearing all data…'])
+    try {
+      const result = await api.post('/seed/clear', {})
+      setLog(result.log || ['All data cleared.'])
+      setToast({ message: 'Database cleared', type: 'success' })
+    } catch (err: any) {
+      setLog(prev => [...prev, `Error: ${err.message}`])
+      setToast({ message: err.message || 'Failed to clear data', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const SEED_SUMMARY = [
+    ['4',     'Countries (UK, US, France, Germany)'],
+    ['3',     'Price Levels (Eat-In, Takeaway, Delivery)'],
+    ['10',    'Vendors'],
+    ['1,000', 'Ingredients across 12 categories'],
+    ['500',   'Price Quotes'],
+    ['48',    'Recipes with ingredient line items'],
+    ['4',     'Menus with items linked to recipes'],
+  ]
+
+  return (
+    <div className="max-w-2xl">
+      <div className="mb-6">
+        <h2 className="text-base font-bold text-text-1 mb-1">Test Data</h2>
+        <p className="text-sm text-text-3">
+          Load a full set of realistic dummy data to explore and test the app, or wipe the database to start fresh.
+          All operations run inside a transaction and roll back on error.
+        </p>
+      </div>
+
+      {/* Load Test Data card */}
+      <div className="bg-surface border border-border rounded-xl p-5 mb-4">
+        <div className="flex items-start justify-between gap-6">
+          <div className="flex-1">
+            <h3 className="font-bold text-text-1 mb-2">Load Test Data</h3>
+            <p className="text-xs text-text-3 mb-3">
+              Clears <strong>all existing data</strong> first, then inserts:
+            </p>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+              {SEED_SUMMARY.map(([n, label]) => (
+                <div key={label} className="flex items-center gap-1.5 text-sm text-text-2">
+                  <span className="font-mono font-bold text-accent w-12 shrink-0 text-right">{n}</span>
+                  <span className="text-text-3">{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            onClick={() => setConfirmAction('seed')}
+            disabled={loading}
+            className="btn-primary px-4 py-2 text-sm whitespace-nowrap shrink-0 disabled:opacity-60"
+          >
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                Running…
+              </span>
+            ) : 'Load Test Data'}
+          </button>
+        </div>
+      </div>
+
+      {/* Clear All Data card */}
+      <div className="bg-surface border border-red-200 rounded-xl p-5 mb-6">
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <h3 className="font-bold text-red-600 mb-1">Clear All Data</h3>
+            <p className="text-sm text-text-3">
+              Permanently removes all rows from every table. The schema and table structure are preserved.
+              This cannot be undone.
+            </p>
+          </div>
+          <button
+            onClick={() => setConfirmAction('clear')}
+            disabled={loading}
+            className="btn-danger px-4 py-2 text-sm whitespace-nowrap shrink-0 disabled:opacity-60"
+          >
+            Clear Database
+          </button>
+        </div>
+      </div>
+
+      {/* Log output panel */}
+      {log.length > 0 && (
+        <div className="bg-gray-950 rounded-lg p-4 font-mono text-xs text-green-400 max-h-56 overflow-y-auto space-y-0.5">
+          {loading && (
+            <div className="flex items-center gap-2 text-green-300 mb-1">
+              <span className="w-3 h-3 border-2 border-green-400/40 border-t-green-400 rounded-full animate-spin inline-block" />
+              Working…
+            </div>
+          )}
+          {log.map((line, i) => (
+            <div key={i} className={line.startsWith('Error') ? 'text-red-400' : ''}>{line}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Confirm — seed */}
+      {confirmAction === 'seed' && (
+        <ConfirmDialog
+          message="This will DELETE all existing data and load fresh test data. This cannot be undone. Continue?"
+          onConfirm={handleSeed}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {/* Confirm — clear */}
+      {confirmAction === 'clear' && (
+        <ConfirmDialog
+          message="This will permanently DELETE ALL DATA from every table. The schema is preserved but all records will be gone. Are you sure?"
+          onConfirm={handleClear}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
