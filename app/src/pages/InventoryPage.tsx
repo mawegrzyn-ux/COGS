@@ -626,17 +626,21 @@ function IngredientsTab() {
     const ing = modal as Ingredient
     setSavingNut(true)
     try {
-      await api.put(`/nutrition/ingredient/${ing.id}`, {
-        energy_kcal: nutForm.energy_kcal !== '' ? Number(nutForm.energy_kcal) : null,
-        protein_g:   nutForm.protein_g   !== '' ? Number(nutForm.protein_g)   : null,
-        carbs_g:     nutForm.carbs_g     !== '' ? Number(nutForm.carbs_g)     : null,
-        fat_g:       nutForm.fat_g       !== '' ? Number(nutForm.fat_g)       : null,
-        fibre_g:     nutForm.fibre_g     !== '' ? Number(nutForm.fibre_g)     : null,
-        sugar_g:     nutForm.sugar_g     !== '' ? Number(nutForm.sugar_g)     : null,
-        salt_g:      nutForm.salt_g      !== '' ? Number(nutForm.salt_g)      : null,
-        dietary_flags: dietaryFlags,
-      })
+      // Two separate endpoints — nutrition values and dietary flags are stored differently
+      await Promise.all([
+        api.put(`/nutrition/ingredient/${ing.id}`, {
+          energy_kcal: nutForm.energy_kcal !== '' ? Number(nutForm.energy_kcal) : null,
+          protein_g:   nutForm.protein_g   !== '' ? Number(nutForm.protein_g)   : null,
+          carbs_g:     nutForm.carbs_g     !== '' ? Number(nutForm.carbs_g)     : null,
+          fat_g:       nutForm.fat_g       !== '' ? Number(nutForm.fat_g)       : null,
+          fibre_g:     nutForm.fibre_g     !== '' ? Number(nutForm.fibre_g)     : null,
+          sugar_g:     nutForm.sugar_g     !== '' ? Number(nutForm.sugar_g)     : null,
+          salt_g:      nutForm.salt_g      !== '' ? Number(nutForm.salt_g)      : null,
+        }),
+        api.put(`/nutrition/ingredient/${ing.id}/dietary-flags`, dietaryFlags),
+      ])
       showToast('Nutrition saved')
+      load() // Refresh ingredient list so reopening the modal shows the saved values
     } catch (err: any) { showToast(err.message || 'Failed to save nutrition', 'error') }
     finally { setSavingNut(false) }
   }
