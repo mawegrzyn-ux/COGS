@@ -518,30 +518,39 @@ async function seedData(client, log = console.log) {
   log(`✓ ${quoteIds.length} price quotes created`);
 
   // 8. Preferred vendors (one per ingredient per country — use whichever vendor has a quote)
+  // Use SAVEPOINT so a schema mismatch here can't abort the whole transaction.
   let pvCount = 0;
-  for (let i = 0; i < quotedPairs.length; i++) {
-    const { ingId, vendorId } = quotedPairs[i];
-    const quoteId = quoteIds[i];
-    for (const countryId of countryIds) {
-      try {
+  await client.query('SAVEPOINT before_pv');
+  try {
+    for (let i = 0; i < quotedPairs.length; i++) {
+      const { ingId, vendorId } = quotedPairs[i];
+      const quoteId = quoteIds[i];
+      for (const countryId of countryIds) {
         await client.query(
           `INSERT INTO mcogs_ingredient_preferred_vendor
-             (ingredient_id, country_id, vendor_id, price_quote_id)
+             (ingredient_id, country_id, vendor_id, quote_id)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (ingredient_id, country_id) DO NOTHING`,
           [ingId, countryId, vendorId, quoteId]
         );
         pvCount++;
-      } catch {
-        // Schema may differ — skip silently
       }
     }
+    await client.query('RELEASE SAVEPOINT before_pv');
+    log(`✓ ${pvCount} preferred vendor entries created`);
+  } catch (pvErr) {
+    await client.query('ROLLBACK TO SAVEPOINT before_pv');
+    await client.query('RELEASE SAVEPOINT before_pv');
+    log(`⚠ Preferred vendors skipped (${pvErr.message})`);
   }
-  if (pvCount > 0) log(`✓ ${pvCount} preferred vendor entries created`);
 
   // 9. Recipes (48)
   const recCatMap = {};
   REC_CATEGORIES.forEach((n, i) => { recCatMap[n] = recCatIds[i]; });
+
+  // Build ingId → unit abbreviation map for recipe item prep_unit
+  const ingIdToUnit = {};
+  ingIds.forEach((id, i) => { ingIdToUnit[id] = ingList[i].unit; });
 
   let recipeItemCount = 0;
   const recipeNameMap = {};
@@ -555,17 +564,16 @@ async function seedData(client, log = console.log) {
     );
     recipeNameMap[tmpl.name] = rec.id;
 
-    // Recipe items
-    for (let si = 0; si < tmpl.items.length; si++) {
-      const [ingName, qty] = tmpl.items[si];
+    // Recipe items — prep_unit is a text abbreviation (not an FK)
+    for (const [ingName, qty] of tmpl.items) {
       const ingId = ingNameMap[ingName];
-      if (!ingId) continue; // skip if ingredient not found
-      const unitId = unitMap[ingList[ingIds.indexOf(ingId)]?.unit] || unitIds[0];
+      if (!ingId) continue; // skip if ingredient not found in seeded list
+      const prepUnit = ingIdToUnit[ingId] || 'kg';
       await client.query(
         `INSERT INTO mcogs_recipe_items
-           (recipe_id, item_type, ingredient_id, qty, prep_unit_id, prep_to_base_conversion, sort_order)
-         VALUES ($1, 'ingredient', $2, $3, $4, 1.0, $5)`,
-        [rec.id, ingId, qty, unitId, si + 1]
+           (recipe_id, item_type, ingredient_id, prep_qty, prep_unit, prep_to_base_conversion)
+         VALUES ($1, 'ingredient', $2, $3, $4, 1.0)`,
+        [rec.id, ingId, qty, prepUnit]
       );
       recipeItemCount++;
     }
@@ -581,15 +589,14 @@ async function seedData(client, log = console.log) {
       [menu.name, countryId]
     );
 
-    for (let si = 0; si < menu.items.length; si++) {
-      const recipeName = menu.items[si];
-      const recipeId   = recipeNameMap[recipeName];
+    for (const recipeName of menu.items) {
+      const recipeId = recipeNameMap[recipeName];
       if (!recipeId) continue;
       await client.query(
         `INSERT INTO mcogs_menu_items
-           (menu_id, item_type, recipe_id, display_name, sort_order)
-         VALUES ($1, 'recipe', $2, $3, $4)`,
-        [m.id, recipeId, recipeName, (si + 1) * 10]
+           (menu_id, item_type, recipe_id, display_name)
+         VALUES ($1, 'recipe', $2, $3)`,
+        [m.id, recipeId, recipeName]
       );
       menuItemCount++;
     }
