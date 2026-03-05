@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { ColumnHeader } from '../components/ColumnHeader'
+import { useSortFilter } from '../hooks/useSortFilter'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,6 +113,7 @@ interface LevelReportItem {
   display_name: string
   item_type: 'recipe' | 'ingredient'
   menu_name: string
+  category: string
   cost: number
   levels: Record<number, { set: boolean; gross: number | null; net: number | null; cogs_pct: number | null; gp_net: number | null; lp_id?: number }>
 }
@@ -189,7 +192,6 @@ export default function MenusPage() {
   const [levelReportLoading, setLevelReportLoading] = useState(false)
   const [lrCountryId,        setLrCountryId]        = useState<number | ''>('')
   const [lrSearch,           setLrSearch]           = useState('')
-  const [lrMenuFilter,       setLrMenuFilter]       = useState('')
   const [lrSaveTimers,       setLrSaveTimers]       = useState<Record<string, ReturnType<typeof setTimeout>>>({})
   const [lrSaving,           setLrSaving]           = useState<Record<string, boolean>>({})
   const [lrSaved,            setLrSaved]            = useState<Record<string, boolean>>({})
@@ -670,12 +672,10 @@ export default function MenusPage() {
           loading={levelReportLoading}
           countryId={lrCountryId}
           search={lrSearch}
-          menuFilter={lrMenuFilter}
           saving={lrSaving}
           saved={lrSaved}
           onCountryChange={v => setLrCountryId(v)}
           onSearch={setLrSearch}
-          onMenuFilter={setLrMenuFilter}
           onSavePrice={saveLrPrice}
           showToast={showToast}
         />
@@ -1212,25 +1212,7 @@ function InlinePriceCell({
   )
 }
 
-// Sortable column header
-function SortableHeader({
-  label, colKey, sortCol, sortDir, onSort, right,
-}: {
-  label: string; colKey: string; sortCol: string; sortDir: 1 | -1; onSort(k: string): void; right?: boolean
-}) {
-  const active = sortCol === colKey
-  return (
-    <th
-      className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:text-gray-700 ${right ? 'text-right' : 'text-left'}`}
-      onClick={() => onSort(colKey)}
-    >
-      {label}
-      <span className={`ml-1 ${active ? 'text-blue-500' : 'opacity-25'}`}>
-        {active ? (sortDir === 1 ? '↑' : '↓') : '⇅'}
-      </span>
-    </th>
-  )
-}
+
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1373,21 +1355,7 @@ function PriceLevelTool({
     return result
   }, [data, filtered, currencyMode, targetRate, displaySym])
 
-  const [sortCol, setSortCol] = useState('recipe_name')
-  const [sortDir, setSortDir] = useState<1 | -1>(1)
-
-  function onSort(col: string) {
-    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
-    else { setSortCol(col); setSortDir(1) }
-  }
-
-  const sortedRows = useMemo(() => {
-    return [...gridRows].sort((a: any, b: any) => {
-      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
-      return String(av).localeCompare(String(bv)) * sortDir
-    })
-  }, [gridRows, sortCol, sortDir])
+  const { sorted: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(gridRows, 'recipe_name')
 
   async function handleSavePrice(row: PltGridRow, grossDisplay: number | null) {
     if (!row.menu_item_id || !selectedLevel) return
@@ -1483,14 +1451,18 @@ function PriceLevelTool({
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <SortableHeader label="Recipe"   colKey="recipe_name"  sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                  <SortableHeader label="Category" colKey="category"     sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                  <SortableHeader label="Country"  colKey="country_name" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                  <SortableHeader label="Cost"     colKey="cost_display" sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                  <ColumnHeader<PltGridRow> label="Recipe"   field="recipe_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                  <ColumnHeader<PltGridRow> label="Category" field="category"           sortField={sortField} sortDir={sortDir} onSort={setSort}
+                    filterOptions={[...new Set(gridRows.map(r => r.category).filter(Boolean))].sort().map(c => ({ value: c, label: c }))}
+                    filterValue={filters.category || ''} onFilter={v => setFilter('category', v)} />
+                  <ColumnHeader<PltGridRow> label="Country"  field="country_name"       sortField={sortField} sortDir={sortDir} onSort={setSort}
+                    filterOptions={[...new Set(gridRows.map(r => r.country_name))].sort().map(c => ({ value: c, label: c }))}
+                    filterValue={filters.country_name || ''} onFilter={v => setFilter('country_name', v)} />
+                  <ColumnHeader<PltGridRow> label="Cost"     field="cost_display"       sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                   {selectedLevel ? (
                     <>
-                      <SortableHeader label="Gross Price"  colKey="sell_gross_display" sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
-                      <SortableHeader label="COGS %"       colKey="cogs_pct"           sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                      <ColumnHeader<PltGridRow> label="Gross Price" field="sell_gross_display" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
+                      <ColumnHeader<PltGridRow> label="COGS %"      field="cogs_pct"           sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                     </>
                   ) : (
                     <th className="px-3 py-2.5 text-xs font-semibold text-gray-400 text-right">Gross Price</th>
@@ -1561,19 +1533,17 @@ interface MarketPriceToolProps {
   loading: boolean
   countryId: number | ''
   search: string
-  menuFilter: string
   saving: Record<string, boolean>
   saved: Record<string, boolean>
   onCountryChange(v: number | ''): void
   onSearch(v: string): void
-  onMenuFilter(v: string): void
   onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): void
   showToast(msg: string, type?: 'error'): void
 }
 
 function MarketPriceTool({
-  countries, data, loading, countryId, search, menuFilter,
-  saving, saved, onCountryChange, onSearch, onMenuFilter, onSavePrice,
+  countries, data, loading, countryId, search,
+  saving, saved, onCountryChange, onSearch, onSavePrice,
 }: MarketPriceToolProps) {
 
   const levels     = data?.levels ?? []
@@ -1592,6 +1562,7 @@ function MarketPriceTool({
     display_name: string
     item_type:    string
     menu_name:    string
+    category:     string
     cost:         number
     [key: string]: any   // level_N_gross, level_N_cogs
   }
@@ -1603,6 +1574,7 @@ function MarketPriceTool({
         display_name: item.display_name,
         item_type:    item.item_type,
         menu_name:    item.menu_name,
+        category:     item.category || '',
         cost:         item.cost,
       }
       levels.forEach(l => {
@@ -1617,30 +1589,11 @@ function MarketPriceTool({
   }, [data, levels])
 
   const filteredRows = useMemo(() => {
-    return flatRows.filter(r => {
-      if (search && !r.display_name.toLowerCase().includes(search.toLowerCase())) return false
-      if (menuFilter && r.menu_name !== menuFilter) return false
-      return true
-    })
-  }, [flatRows, search, menuFilter])
+    if (!search) return flatRows
+    return flatRows.filter(r => r.display_name.toLowerCase().includes(search.toLowerCase()))
+  }, [flatRows, search])
 
-  const [sortCol, setSortCol] = useState('display_name')
-  const [sortDir, setSortDir] = useState<1 | -1>(1)
-
-  function onSort(col: string) {
-    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
-    else { setSortCol(col); setSortDir(1) }
-  }
-
-  const sortedRows = useMemo(() => {
-    return [...filteredRows].sort((a: any, b: any) => {
-      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
-      if (av === null) return 1 * sortDir
-      if (bv === null) return -1 * sortDir
-      return String(av).localeCompare(String(bv)) * sortDir
-    })
-  }, [filteredRows, sortCol, sortDir])
+  const { sorted: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(filteredRows, 'display_name')
 
   function exportCSV() {
     if (!data) return
@@ -1674,10 +1627,6 @@ function MarketPriceTool({
           </div>
           <div className="flex gap-2 ml-auto flex-wrap items-center">
             <input className="input input-sm w-40" placeholder="Filter items…" value={search} onChange={e => onSearch(e.target.value)} />
-            <select className="select select-sm" value={menuFilter} onChange={e => onMenuFilter(e.target.value)}>
-              <option value="">All Menus</option>
-              {menuNames.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
             {data && <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>}
           </div>
         </div>
@@ -1694,12 +1643,19 @@ function MarketPriceTool({
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <SortableHeader label="Item"     colKey="display_name" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                    <SortableHeader label="Menu"     colKey="menu_name"    sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                    <SortableHeader label="Type"     colKey="item_type"    sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-                    <SortableHeader label="Cost"     colKey="cost"         sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                    <ColumnHeader<MptRow> label="Item"     field="display_name" sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                    <ColumnHeader<MptRow> label="Category" field="category"     sortField={sortField} sortDir={sortDir} onSort={setSort}
+                      filterOptions={[...new Set(flatRows.map(r => r.category).filter(Boolean))].sort().map(c => ({ value: c, label: c }))}
+                      filterValue={filters.category || ''} onFilter={v => setFilter('category', v)} />
+                    <ColumnHeader<MptRow> label="Menu"     field="menu_name"    sortField={sortField} sortDir={sortDir} onSort={setSort}
+                      filterOptions={menuNames.map(m => ({ value: m, label: m }))}
+                      filterValue={filters.menu_name || ''} onFilter={v => setFilter('menu_name', v)} />
+                    <ColumnHeader<MptRow> label="Type"     field="item_type"    sortField={sortField} sortDir={sortDir} onSort={setSort}
+                      filterOptions={[{ value: 'recipe', label: 'Recipe' }, { value: 'ingredient', label: 'Ingredient' }]}
+                      filterValue={filters.item_type || ''} onFilter={v => setFilter('item_type', v)} />
+                    <ColumnHeader<MptRow> label="Cost"     field="cost"         sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                     {levels.flatMap(l => [
-                      <SortableHeader key={`${l.id}_g`} label={`${l.name} Gross`} colKey={`lvl_${l.id}_gross`} sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />,
+                      <ColumnHeader<MptRow> key={`${l.id}_g`} label={`${l.name} Gross`} field={`lvl_${l.id}_gross` as keyof MptRow} sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />,
                       <th key={`${l.id}_c`} className="px-3 py-2.5 text-xs font-semibold text-gray-500 text-right whitespace-nowrap">COGS %</th>,
                     ])}
                   </tr>
@@ -1713,6 +1669,11 @@ function MarketPriceTool({
                   {sortedRows.map(row => (
                     <tr key={row.menu_item_id} className="hover:bg-gray-50">
                       <td className="px-3 py-2.5 font-medium text-gray-900">{row.display_name}</td>
+                      <td className="px-3 py-2.5">
+                        {row.category
+                          ? <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{row.category}</span>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
                       <td className="px-3 py-2.5 text-gray-600 text-xs">{row.menu_name}</td>
                       <td className="px-3 py-2.5">
                         <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{row.item_type}</span>

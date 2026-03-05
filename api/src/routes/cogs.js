@@ -309,6 +309,7 @@ router.get('/report/price-levels', async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT mi.*,
              r.name         AS recipe_name,
+             r.category     AS recipe_category,
              r.yield_qty,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr,
@@ -425,6 +426,7 @@ router.get('/report/price-levels', async (req, res) => {
         display_name: display,
         item_type:    itemType,
         menu_name:    item.menu_name || '',
+        category:     item.recipe_category || '',
         cost:         cpp,
         levels:       rowLevels,
       };
