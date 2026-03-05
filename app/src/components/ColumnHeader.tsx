@@ -13,8 +13,8 @@ interface ColumnHeaderProps<T> {
   sortDir:        SortDir
   onSort:         (field: keyof T, dir: SortDir) => void
   filterOptions?: FilterOption[]
-  filterValue?:   string
-  onFilter?:      (value: string) => void
+  filterValues?:  string[]
+  onFilter?:      (values: string[]) => void
   align?:         'left' | 'right'
 }
 
@@ -25,7 +25,7 @@ export function ColumnHeader<T>({
   sortDir,
   onSort,
   filterOptions,
-  filterValue,
+  filterValues = [],
   onFilter,
   align = 'left',
 }: ColumnHeaderProps<T>) {
@@ -35,8 +35,8 @@ export function ColumnHeader<T>({
   const ref       = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const isActive  = sortField === field
-  const hasFilter = !!filterValue && filterValue !== ''
+  const isActive         = sortField === field
+  const hasFilter        = filterValues.length > 0
   const hasFilterOptions = !!filterOptions && filterOptions.length > 0
 
   const visibleOptions = hasFilterOptions
@@ -48,6 +48,15 @@ export function ColumnHeader<T>({
     const r = ref.current.getBoundingClientRect()
     setDropPos({ top: r.bottom + window.scrollY + 4, left: r.left + window.scrollX })
     setOpen(true)
+  }
+
+  function toggleValue(value: string) {
+    if (!onFilter) return
+    if (filterValues.includes(value)) {
+      onFilter(filterValues.filter(v => v !== value))
+    } else {
+      onFilter([...filterValues, value])
+    }
   }
 
   // Close on outside click
@@ -76,11 +85,9 @@ export function ColumnHeader<T>({
     return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition) }
   }, [open])
 
-  // Auto-focus search input when dropdown opens
+  // Auto-focus search when dropdown opens
   useEffect(() => {
-    if (open && hasFilterOptions) {
-      setTimeout(() => searchRef.current?.focus(), 50)
-    }
+    if (open && hasFilterOptions) setTimeout(() => searchRef.current?.focus(), 50)
     if (!open) setFilterSearch('')
   }, [open])
 
@@ -101,16 +108,19 @@ export function ColumnHeader<T>({
               : <ChevronsUpDownIcon size={10} />
             }
           </span>
-          {hasFilter && <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block ml-0.5" />}
+          {hasFilter && (
+            <span className="ml-0.5 px-1 rounded-full bg-accent text-white text-[9px] font-bold leading-4 min-w-[14px] text-center">
+              {filterValues.length}
+            </span>
+          )}
         </button>
 
-        {/* Dropdown — fixed to escape overflow:hidden/auto ancestors */}
+        {/* Dropdown — fixed positioning to escape overflow:hidden ancestors */}
         {open && dropPos && (
           <div
-            className="w-52 bg-surface border border-border rounded-lg shadow-lg overflow-hidden"
+            className="w-56 bg-surface border border-border rounded-lg shadow-lg overflow-hidden"
             style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 99999 }}
           >
-
             {/* Sort section */}
             <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-b border-border bg-surface-2">
               Sort
@@ -133,11 +143,19 @@ export function ColumnHeader<T>({
             {/* Filter section */}
             {hasFilterOptions && onFilter && (
               <>
-                <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-t border-b border-border bg-surface-2">
-                  Filter
+                <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-t border-b border-border bg-surface-2 flex items-center justify-between">
+                  <span>Filter</span>
+                  {hasFilter && (
+                    <button
+                      className="text-accent hover:underline font-normal normal-case tracking-normal"
+                      onMouseDown={e => { e.preventDefault(); onFilter([]) }}
+                    >
+                      Clear all
+                    </button>
+                  )}
                 </div>
 
-                {/* Search input */}
+                {/* Search */}
                 <div className="px-2 py-2 border-b border-border">
                   <div className="relative">
                     <SearchIcon className="absolute left-2 top-1/2 -translate-y-1/2 text-text-3" />
@@ -153,27 +171,37 @@ export function ColumnHeader<T>({
                   </div>
                 </div>
 
-                {/* Options list */}
-                <div className="max-h-44 overflow-y-auto">
-                  <button
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors
-                      ${!filterValue ? 'text-accent font-semibold' : 'text-text-1'}`}
-                    onMouseDown={e => { e.preventDefault(); onFilter(''); setOpen(false); setFilterSearch('') }}
-                  >
-                    All
-                  </button>
+                {/* Multi-select options — dropdown stays open while selecting */}
+                <div className="max-h-52 overflow-y-auto">
                   {visibleOptions.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-text-3 italic">No matches</div>
-                  ) : visibleOptions.map(opt => (
-                    <button
-                      key={opt.value}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors
-                        ${filterValue === opt.value ? 'text-accent font-semibold' : 'text-text-1'}`}
-                      onMouseDown={e => { e.preventDefault(); onFilter(opt.value); setOpen(false); setFilterSearch('') }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                  ) : visibleOptions.map(opt => {
+                    const checked = filterValues.includes(opt.value)
+                    return (
+                      <button
+                        key={opt.value}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2.5
+                          ${checked ? 'text-accent' : 'text-text-1'}`}
+                        onMouseDown={e => { e.preventDefault(); toggleValue(opt.value) }}
+                      >
+                        <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors
+                          ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
+                          {checked && <CheckIcon />}
+                        </span>
+                        <span className="truncate">{opt.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Footer */}
+                <div className="px-2 py-2 border-t border-border bg-surface-2">
+                  <button
+                    className="w-full py-1.5 text-xs font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity"
+                    onMouseDown={e => { e.preventDefault(); setOpen(false); setFilterSearch('') }}
+                  >
+                    {hasFilter ? `Apply (${filterValues.length} selected)` : 'Close'}
+                  </button>
                 </div>
               </>
             )}
@@ -184,20 +212,20 @@ export function ColumnHeader<T>({
   )
 }
 
-// ── Icons (self-contained so ColumnHeader has no external icon deps) ──────────
+// ── Icons ─────────────────────────────────────────────────────────────────────
 
 function ChevronUpIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="18 15 12 9 6 15"/></svg>
 }
-
 function ChevronDownIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="6 9 12 15 18 9"/></svg>
 }
-
 function ChevronsUpDownIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="18 15 12 9 6 15" opacity="0.4"/><polyline points="6 9 12 15 18 9" opacity="0.4"/></svg>
 }
-
 function SearchIcon({ className = '' }: { className?: string }) {
   return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+}
+function CheckIcon() {
+  return <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
 }
