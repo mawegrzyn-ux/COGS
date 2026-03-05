@@ -17,10 +17,10 @@ interface Menu {
 }
 
 interface MatrixRow {
-  menu_item_id:   number
-  menu_item_name: string
-  recipe_name:    string | null
-  allergens:      Record<string, 'contains' | 'may_contain' | 'free_from' | null>
+  menu_item_id: number
+  display_name: string
+  item_type:    string
+  allergens:    Record<string, 'contains' | 'may_contain' | 'free_from' | null>
 }
 
 type ToastState = { message: string; type: 'success' | 'error' }
@@ -79,7 +79,8 @@ export default function AllergenMatrixPage() {
     setLoading(true)
     try {
       const data = await api.get(`/allergens/menu/${menuId}`)
-      setMatrix(data || [])
+      // API returns { allergens: [...], items: [...] }
+      setMatrix(data?.items || [])
     } catch {
       showToast('Failed to load allergen matrix', 'error')
       setMatrix([])
@@ -167,10 +168,7 @@ export default function AllergenMatrixPage() {
                 {matrix.map(row => (
                   <tr key={row.menu_item_id} className="hover:bg-surface-2 transition-colors">
                     <td className="sticky left-0 z-10 bg-surface border border-border px-4 py-2.5 font-semibold text-text-1 whitespace-nowrap">
-                      {row.menu_item_name}
-                      {row.recipe_name && row.recipe_name !== row.menu_item_name && (
-                        <div className="text-text-3 font-normal text-xs">{row.recipe_name}</div>
-                      )}
+                      {row.display_name}
                     </td>
                     {allergens.map(a => {
                       const status = row.allergens[a.code]
