@@ -6,7 +6,9 @@
       "Bash(python \"C:/Users/micha/Downloads/extract_docs.py\")",
       "Bash(node \"C:/Users/micha/Downloads/extract_docs.js\")",
       "mcp__Claude_Preview__preview_start",
-      "Bash(git -C \"C:/Users/micha/OneDrive/Documents/GitHub/COGS\" status)"
+      "Bash(git -C \"C:/Users/micha/OneDrive/Documents/GitHub/COGS\" status)",
+      "Bash(git -C \"C:\\\\Users\\\\micha\\\\OneDrive\\\\Documents\\\\GitHub\\\\COGS\" status)",
+      "Bash(git -C \"/c/Users/micha/OneDrive/Documents/GitHub/COGS\" status)"
     ]
   }
 }
