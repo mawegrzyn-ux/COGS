@@ -14,6 +14,23 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ── GET /allergens/ingredients — all allergen assignments (batch) ─────────────
+// Returns flat array: [{ ingredient_id, allergen_id, status, code }]
+router.get('/ingredients', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT ia.ingredient_id, ia.allergen_id, ia.status, a.code
+      FROM   mcogs_ingredient_allergens ia
+      JOIN   mcogs_allergens a ON a.id = ia.allergen_id
+      ORDER  BY ia.ingredient_id, a.sort_order ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch all ingredient allergens' } });
+  }
+});
+
 // ── GET /allergens/ingredient/:id — allergens set on one ingredient ───────────
 router.get('/ingredient/:id', async (req, res) => {
   try {
