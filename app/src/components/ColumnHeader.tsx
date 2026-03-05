@@ -31,6 +31,7 @@ export function ColumnHeader<T>({
 }: ColumnHeaderProps<T>) {
   const [open,         setOpen]         = useState(false)
   const [filterSearch, setFilterSearch] = useState('')
+  const [dropPos,      setDropPos]      = useState<{ top: number; left: number } | null>(null)
   const ref       = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -42,8 +43,16 @@ export function ColumnHeader<T>({
     ? filterOptions!.filter(o => o.label.toLowerCase().includes(filterSearch.toLowerCase()))
     : []
 
+  function openDropdown() {
+    if (!ref.current) return
+    const r = ref.current.getBoundingClientRect()
+    setDropPos({ top: r.bottom + window.scrollY + 4, left: r.left + window.scrollX })
+    setOpen(true)
+  }
+
   // Close on outside click
   useEffect(() => {
+    if (!open) return
     function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false)
@@ -52,7 +61,20 @@ export function ColumnHeader<T>({
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
+  }, [open])
+
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!open) return
+    function reposition() {
+      if (!ref.current) return
+      const r = ref.current.getBoundingClientRect()
+      setDropPos({ top: r.bottom + window.scrollY + 4, left: r.left + window.scrollX })
+    }
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition) }
+  }, [open])
 
   // Auto-focus search input when dropdown opens
   useEffect(() => {
@@ -68,7 +90,7 @@ export function ColumnHeader<T>({
 
         {/* Header button */}
         <button
-          onClick={() => setOpen(o => !o)}
+          onClick={() => open ? setOpen(false) : openDropdown()}
           className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-wide transition-colors select-none
             ${isActive || hasFilter ? 'text-accent' : 'text-text-2 hover:text-text-1'}`}
         >
@@ -82,9 +104,12 @@ export function ColumnHeader<T>({
           {hasFilter && <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block ml-0.5" />}
         </button>
 
-        {/* Dropdown */}
-        {open && (
-          <div className="absolute z-50 top-full left-0 mt-1 w-52 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
+        {/* Dropdown — fixed to escape overflow:hidden/auto ancestors */}
+        {open && dropPos && (
+          <div
+            className="w-52 bg-surface border border-border rounded-lg shadow-lg overflow-hidden"
+            style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 99999 }}
+          >
 
             {/* Sort section */}
             <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-b border-border bg-surface-2">
