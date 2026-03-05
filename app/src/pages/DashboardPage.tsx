@@ -1,40 +1,531 @@
-import { useAuth0 } from '@auth0/auth0-react'
-import Logo from '../components/Logo'
+import { useEffect, useState, useCallback } from 'react'
+import { useApi } from '../hooks/useApi'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface DashStats {
+  ingredients: number
+  recipes: number
+  vendors: number
+  countries: number
+  activeQuotes: number
+  categories: number
+  priceLevels: number
+  coverage: number // % of ingredients with at least one active quote
+}
+
+interface RecentQuote {
+  id: number
+  ingredient_name: string
+  vendor_name: string
+  country_name: string
+  unit_price: number
+  currency_code: string
+  updated_at: string
+}
+
+interface CoverageItem {
+  name: string
+  hasQuote: boolean
+  country: string
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmt(n: number) {
+  return n.toLocaleString()
+}
+
+function timeSince(dateStr: string) {
+  const d = new Date(dateStr)
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function StatCard({
+  label,
+  value,
+  icon,
+  accent = false,
+  sub,
+}: {
+  label: string
+  value: number | string
+  icon: React.ReactNode
+  accent?: boolean
+  sub?: string
+}) {
+  return (
+    <div
+      className={`card p-5 flex flex-col gap-3 ${
+        accent ? 'border-accent/30 bg-accent-dim' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-text-3 text-xs font-medium uppercase tracking-wide">
+          {label}
+        </span>
+        <span
+          className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+            accent ? 'bg-accent/15 text-accent' : 'bg-surface-2 text-text-2'
+          }`}
+        >
+          {icon}
+        </span>
+      </div>
+      <div>
+        <div
+          className={`text-3xl font-bold tabular-nums ${
+            accent ? 'text-accent' : 'text-text-1'
+          }`}
+        >
+          {value}
+        </div>
+        {sub && <div className="text-text-3 text-xs mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+function CoverageMeter({ pct }: { pct: number }) {
+  const color =
+    pct >= 80 ? '#146A34' : pct >= 50 ? '#D97706' : '#DC2626'
+  const label =
+    pct >= 80 ? 'Good' : pct >= 50 ? 'Partial' : 'Low'
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-text-2">Price Quote Coverage</span>
+        <span
+          className="text-sm font-bold"
+          style={{ color }}
+        >
+          {pct}% — {label}
+        </span>
+      </div>
+      <div className="h-2.5 rounded-full bg-surface-2 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, backgroundColor: color }}
+        />
+      </div>
+      <p className="text-text-3 text-xs">
+        Percentage of ingredients with at least one active price quote
+      </p>
+    </div>
+  )
+}
+
+function SectionHeader({ title, count }: { title: string; count?: number }) {
+  return (
+    <div className="flex items-center gap-2 mb-4">
+      <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">
+        {title}
+      </h2>
+      {count !== undefined && (
+        <span className="text-xs font-medium text-text-3 bg-surface-2 px-2 py-0.5 rounded-full">
+          {count}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="py-8 text-center text-text-3 text-sm">{message}</div>
+  )
+}
+
+function Skeleton({ className = '' }: { className?: string }) {
+  return (
+    <div
+      className={`bg-surface-2 rounded animate-pulse ${className}`}
+    />
+  )
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+
+const IconIngredient = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/>
+    <path d="M12 6v6l4 2"/>
+  </svg>
+)
+const IconRecipe = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M9 11l3 3L22 4"/>
+    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+  </svg>
+)
+const IconVendor = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    <polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+)
+const IconCountry = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <circle cx="12" cy="12" r="10"/>
+    <line x1="2" y1="12" x2="22" y2="12"/>
+    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+  </svg>
+)
+const IconQuote = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <line x1="12" y1="1" x2="12" y2="23"/>
+    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+  </svg>
+)
+const IconCategory = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <rect x="2" y="3" width="9" height="9"/>
+    <rect x="13" y="3" width="9" height="9"/>
+    <rect x="2" y="13" width="9" height="9"/>
+    <rect x="13" y="13" width="9" height="9"/>
+  </svg>
+)
+const IconAlert = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/>
+    <line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+)
+const IconRefresh = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <polyline points="23 4 23 10 17 10"/>
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+  </svg>
+)
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { user, logout } = useAuth0()
+  const api = useApi()
+
+  const [stats, setStats] = useState<DashStats | null>(null)
+  const [recentQuotes, setRecentQuotes] = useState<RecentQuote[]>([])
+  const [missingCoverage, setMissingCoverage] = useState<CoverageItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
+
+  const load = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true)
+      else setRefreshing(true)
+
+      try {
+        const [
+          ingredients,
+          recipes,
+          vendors,
+          countries,
+          quotes,
+          categories,
+          priceLevels,
+        ] = await Promise.all([
+          api.get('/ingredients').catch(() => []),
+          api.get('/recipes').catch(() => []),
+          api.get('/vendors').catch(() => []),
+          api.get('/countries').catch(() => []),
+          api.get('/price-quotes').catch(() => []),
+          api.get('/categories').catch(() => []),
+          api.get('/price-levels').catch(() => []),
+        ])
+
+        const activeQuotes: RecentQuote[] = (quotes || []).filter(
+          (q: any) => q.is_active
+        )
+
+        // Coverage: ingredients that have at least 1 active quote
+        const quotedIngIds = new Set(
+          activeQuotes.map((q: any) => q.ingredient_id)
+        )
+        const ingList: any[] = ingredients || []
+        const coverage =
+          ingList.length > 0
+            ? Math.round((quotedIngIds.size / ingList.length) * 100)
+            : 0
+
+        // Missing coverage — ingredients with no active quote (show first 10)
+        const countryMap: Record<number, string> = {}
+        for (const c of countries || []) countryMap[c.id] = c.name
+
+        const vendorCountryMap: Record<number, number> = {}
+        for (const v of vendors || []) vendorCountryMap[v.id] = v.country_id
+
+        const missing: CoverageItem[] = ingList
+          .filter((ing: any) => !quotedIngIds.has(ing.id))
+          .slice(0, 10)
+          .map((ing: any) => ({
+            id: ing.id,
+            name: ing.name,
+            hasQuote: false,
+            country: '—',
+          }))
+
+        setMissingCoverage(missing)
+
+        // Recent active quotes sorted by updated_at desc
+        const sorted = [...activeQuotes]
+          .sort(
+            (a: any, b: any) =>
+              new Date(b.updated_at || b.created_at || 0).getTime() -
+              new Date(a.updated_at || a.created_at || 0).getTime()
+          )
+          .slice(0, 8)
+
+        setRecentQuotes(sorted)
+
+        setStats({
+          ingredients: ingList.length,
+          recipes: (recipes || []).length,
+          vendors: (vendors || []).length,
+          countries: (countries || []).length,
+          activeQuotes: activeQuotes.length,
+          categories: (categories || []).length,
+          priceLevels: (priceLevels || []).length,
+          coverage,
+        })
+
+        setLastRefresh(new Date())
+      } finally {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    },
+    [api]
+  )
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // ── Render ──
+
+  const now = lastRefresh.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 
   return (
     <div className="min-h-screen bg-surface-2">
-      {/* Top nav */}
-      <header className="bg-surface border-b border-border px-6 py-4 flex items-center justify-between shadow-sm">
-        <Logo size="sm" />
-        <div className="flex items-center gap-4">
-          <span className="text-text-3 text-sm">{user?.email}</span>
+      <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-text-1">Dashboard</h1>
+            <p className="text-text-3 text-sm mt-0.5">
+              Your COGS overview at a glance
+            </p>
+          </div>
           <button
-            onClick={() => logout({ logoutParams: { returnTo: window.location.origin + '/login' } })}
-            className="btn-outline py-1.5 px-3 text-sm"
+            onClick={() => load(true)}
+            disabled={refreshing}
+            className="btn-outline flex items-center gap-2 text-sm py-1.5 px-3"
           >
-            Sign out
+            <span className={refreshing ? 'animate-spin' : ''}>
+              <IconRefresh />
+            </span>
+            {refreshing ? 'Refreshing…' : `Updated ${now}`}
           </button>
         </div>
-      </header>
 
-      {/* Body */}
-      <main className="max-w-5xl mx-auto px-6 py-12">
-        <div className="card p-8 text-center">
-          <div className="w-14 h-14 rounded-full bg-accent-dim flex items-center justify-center mx-auto mb-4">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#146A34" strokeWidth="2" strokeLinecap="round">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-              <polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>
+        {/* ── KPI Grid ── */}
+        {loading ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-28" />
+            ))}
           </div>
-          <h2 className="text-xl font-bold text-text-1 mb-2">You're in!</h2>
-          <p className="text-text-3 text-sm mb-6">
-            React frontend is running. Dashboard content coming in Phase 1.
-          </p>
-          <span className="badge-green">Auth0 ✓ Connected</span>
+        ) : stats ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard
+              label="Ingredients"
+              value={fmt(stats.ingredients)}
+              icon={<IconIngredient />}
+            />
+            <StatCard
+              label="Recipes"
+              value={fmt(stats.recipes)}
+              icon={<IconRecipe />}
+            />
+            <StatCard
+              label="Vendors"
+              value={fmt(stats.vendors)}
+              icon={<IconVendor />}
+            />
+            <StatCard
+              label="Markets"
+              value={fmt(stats.countries)}
+              icon={<IconCountry />}
+              sub="Countries / regions"
+            />
+            <StatCard
+              label="Active Quotes"
+              value={fmt(stats.activeQuotes)}
+              icon={<IconQuote />}
+              accent
+            />
+            <StatCard
+              label="Categories"
+              value={fmt(stats.categories)}
+              icon={<IconCategory />}
+            />
+            <StatCard
+              label="Price Levels"
+              value={fmt(stats.priceLevels)}
+              icon={<IconCategory />}
+            />
+            <StatCard
+              label="Coverage"
+              value={`${stats.coverage}%`}
+              icon={<IconQuote />}
+              accent={stats.coverage >= 80}
+              sub={
+                stats.coverage >= 80
+                  ? 'All major ingredients priced'
+                  : 'Some ingredients unpriced'
+              }
+            />
+          </div>
+        ) : null}
+
+        {/* ── Coverage bar ── */}
+        {!loading && stats && (
+          <div className="card p-6">
+            <CoverageMeter pct={stats.coverage} />
+          </div>
+        )}
+
+        {/* ── Two-column: Missing Quotes + Recent Quotes ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          {/* Missing price coverage */}
+          <div className="card p-5">
+            <SectionHeader
+              title="Missing Price Quotes"
+              count={missingCoverage.length}
+            />
+            {loading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-8" />
+                ))}
+              </div>
+            ) : missingCoverage.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-8">
+                <span className="badge-green text-sm">✓ Full coverage</span>
+                <p className="text-text-3 text-sm">
+                  All ingredients have at least one active price quote
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {missingCoverage.map((item, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 transition-colors"
+                  >
+                    <span className="text-amber-500 flex-shrink-0">
+                      <IconAlert />
+                    </span>
+                    <span className="text-text-1 text-sm flex-1 truncate">
+                      {item.name}
+                    </span>
+                    <span className="text-text-3 text-xs">No quote</span>
+                  </div>
+                ))}
+                {missingCoverage.length === 10 && (
+                  <p className="text-text-3 text-xs text-center pt-2">
+                    Showing first 10 — visit Inventory for full list
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Recent price quotes */}
+          <div className="card p-5">
+            <SectionHeader title="Recent Price Quotes" count={recentQuotes.length} />
+            {loading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-8" />
+                ))}
+              </div>
+            ) : recentQuotes.length === 0 ? (
+              <EmptyState message="No active price quotes yet" />
+            ) : (
+              <div className="space-y-1">
+                {recentQuotes.map((q, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-text-1 text-sm truncate font-medium">
+                        {q.ingredient_name ?? `Ingredient #${q.id}`}
+                      </p>
+                      <p className="text-text-3 text-xs truncate">
+                        {q.vendor_name ?? '—'}
+                        {q.country_name ? ` · ${q.country_name}` : ''}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-text-1 text-sm font-mono">
+                        {q.currency_code ?? ''}{' '}
+                        {typeof q.unit_price === 'number'
+                          ? q.unit_price.toFixed(2)
+                          : '—'}
+                      </p>
+                      <p className="text-text-3 text-xs">
+                        {q.updated_at ? timeSince(q.updated_at) : ''}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* ── Quick Links ── */}
+        <div className="card p-5">
+          <SectionHeader title="Quick Links" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+            {[
+              { label: 'Inventory', href: '/inventory', icon: <IconIngredient /> },
+              { label: 'Recipes', href: '/recipes', icon: <IconRecipe /> },
+              { label: 'Menus', href: '/menus', icon: <IconCategory /> },
+              { label: 'Vendors', href: '/settings', icon: <IconVendor /> },
+              { label: 'Markets', href: '/countries', icon: <IconCountry /> },
+            ].map(({ label, href, icon }) => (
+              <a
+                key={label}
+                href={href}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center group"
+              >
+                <span className="w-9 h-9 rounded-lg bg-surface-2 group-hover:bg-accent/15 flex items-center justify-center text-text-2 group-hover:text-accent transition-colors">
+                  {icon}
+                </span>
+                <span className="text-xs font-medium text-text-2 group-hover:text-text-1 transition-colors">
+                  {label}
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+
       </main>
     </div>
   )
