@@ -1258,8 +1258,8 @@ interface PriceLevelToolProps {
 
 function PriceLevelTool({
   data, loading, countries, priceLevels, selectedLevel, currencyMode, singleCurrency,
-  search, cat, menuFilter, onLevelChange, onCurrencyMode, onSingleCurrency,
-  onSearch, onCat, onMenuFilter, onSavePrice, showToast,
+  search, cat, onLevelChange, onCurrencyMode, onSingleCurrency,
+  onSearch, onCat, onSavePrice, showToast,
 }: PriceLevelToolProps) {
 
   const [savingKey, setSavingKey] = useState<Record<string, boolean>>({})
