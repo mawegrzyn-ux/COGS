@@ -25,7 +25,7 @@ export function ColumnHeader<T>({
   sortDir,
   onSort,
   filterOptions,
-  filterValues = [],
+  filterValues = [] as string[],
   onFilter,
   align = 'left',
 }: ColumnHeaderProps<T>) {
