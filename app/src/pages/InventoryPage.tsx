@@ -389,7 +389,7 @@ function IngredientsTab() {
     ingredients.filter(i => !search || i.name.toLowerCase().includes(search.toLowerCase()))
   , [ingredients, search])
 
-  const { sorted, sortField, sortDir, filters, setSort, setFilter, hasActiveFilters } =
+  const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
     useSortFilter<Ingredient>(searchFiltered, 'name', 'asc')
 
   // ── Column definitions for DataGrid ─────────────────────────────────────────
@@ -736,7 +736,7 @@ function PriceQuotesTab() {
     ), [quotes, search]
   )
 
-  const { sorted, sortField, sortDir, filters, setSort, setFilter, hasActiveFilters } =
+  const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
     useSortFilter<Quote>(searchFiltered, 'ingredient_name', 'asc')
 
   const selectedVendor = useMemo(() =>

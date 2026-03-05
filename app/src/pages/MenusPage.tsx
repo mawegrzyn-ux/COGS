@@ -1357,7 +1357,7 @@ function PriceLevelTool({
     return result
   }, [data, filtered, currencyMode, targetRate, displaySym])
 
-  const { sorted, getFilter: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(gridRows, 'recipe_name')
+  const { sorted: sortedRows, getFilter, sortField, sortDir, setSort, setFilter } = useSortFilter(gridRows, 'recipe_name')
 
   async function handleSavePrice(row: PltGridRow, grossDisplay: number | null) {
     if (!row.menu_item_id || !selectedLevel) return
@@ -1594,7 +1594,7 @@ function MarketPriceTool({
     return flatRows.filter(r => r.display_name.toLowerCase().includes(search.toLowerCase()))
   }, [flatRows, search])
 
-  const { sorted, getFilter: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(filteredRows, 'display_name')
+  const { sorted: sortedRows, getFilter, sortField, sortDir, setSort, setFilter } = useSortFilter(filteredRows, 'display_name')
 
   function exportCSV() {
     if (!data) return
