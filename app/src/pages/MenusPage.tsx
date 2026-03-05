@@ -1357,7 +1357,7 @@ function PriceLevelTool({
     return result
   }, [data, filtered, currencyMode, targetRate, displaySym])
 
-  const { sorted: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(gridRows, 'recipe_name')
+  const { sorted, getFilter: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(gridRows, 'recipe_name')
 
   async function handleSavePrice(row: PltGridRow, grossDisplay: number | null) {
     if (!row.menu_item_id || !selectedLevel) return
@@ -1456,10 +1456,10 @@ function PriceLevelTool({
                   <ColumnHeader<PltGridRow> label="Recipe"   field="recipe_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} />
                   <ColumnHeader<PltGridRow> label="Category" field="category"           sortField={sortField} sortDir={sortDir} onSort={setSort}
                     filterOptions={[...new Set(gridRows.map(r => r.category).filter(Boolean))].sort().map(c => ({ value: c, label: c }))}
-                    filterValues={filters.category || []} onFilter={v => setFilter('category', v)} />
+                    filterValues={getFilter('category')} onFilter={v => setFilter('category', v)} />
                   <ColumnHeader<PltGridRow> label="Country"  field="country_name"       sortField={sortField} sortDir={sortDir} onSort={setSort}
                     filterOptions={[...new Set(gridRows.map(r => r.country_name))].sort().map(c => ({ value: c, label: c }))}
-                    filterValues={filters.country_name || []} onFilter={v => setFilter('country_name', v)} />
+                    filterValues={getFilter('country_name')} onFilter={v => setFilter('country_name', v)} />
                   <ColumnHeader<PltGridRow> label="Cost"     field="cost_display"       sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                   {selectedLevel ? (
                     <>
@@ -1594,7 +1594,7 @@ function MarketPriceTool({
     return flatRows.filter(r => r.display_name.toLowerCase().includes(search.toLowerCase()))
   }, [flatRows, search])
 
-  const { sorted: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(filteredRows, 'display_name')
+  const { sorted, getFilter: sortedRows, sortField, sortDir, filters, setSort, setFilter } = useSortFilter(filteredRows, 'display_name')
 
   function exportCSV() {
     if (!data) return
@@ -1647,13 +1647,13 @@ function MarketPriceTool({
                     <ColumnHeader<MptRow> label="Item"     field="display_name" sortField={sortField} sortDir={sortDir} onSort={setSort} />
                     <ColumnHeader<MptRow> label="Category" field="category"     sortField={sortField} sortDir={sortDir} onSort={setSort}
                       filterOptions={[...new Set(flatRows.map(r => r.category).filter(Boolean))].sort().map(c => ({ value: c, label: c }))}
-                      filterValues={filters.category || []} onFilter={v => setFilter('category', v)} />
+                      filterValues={getFilter('category')} onFilter={v => setFilter('category', v)} />
                     <ColumnHeader<MptRow> label="Menu"     field="menu_name"    sortField={sortField} sortDir={sortDir} onSort={setSort}
                       filterOptions={menuNames.map(m => ({ value: m, label: m }))}
-                      filterValues={filters.menu_name || []} onFilter={v => setFilter('menu_name', v)} />
+                      filterValues={getFilter('menu_name')} onFilter={v => setFilter('menu_name', v)} />
                     <ColumnHeader<MptRow> label="Type"     field="item_type"    sortField={sortField} sortDir={sortDir} onSort={setSort}
                       filterOptions={[{ value: 'recipe', label: 'Recipe' }, { value: 'ingredient', label: 'Ingredient' }]}
-                      filterValues={filters.item_type || []} onFilter={v => setFilter('item_type', v)} />
+                      filterValues={getFilter('item_type')} onFilter={v => setFilter('item_type', v)} />
                     <ColumnHeader<MptRow> label="Cost"     field="cost"         sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                     {levels.flatMap(l => [
                       <ColumnHeader<MptRow> key={`${l.id}_g`} label={`${l.name} Gross`} field={`lvl_${l.id}_gross` as keyof MptRow} sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />,

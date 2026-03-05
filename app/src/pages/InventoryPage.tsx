@@ -571,7 +571,7 @@ function IngredientsTab() {
             <thead>
               <tr className="bg-surface-2 border-b border-border rounded-t-xl">
                 <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Category"   field="category"                        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={filters.category || []} onFilter={v => setFilter('category', v)} />
+                <ColumnHeader<Ingredient> label="Category"   field="category"                        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category')} onFilter={v => setFilter('category', v)} />
                 <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
@@ -976,12 +976,12 @@ function PriceQuotesTab() {
             <thead>
               <tr className="bg-surface-2 border-b border-border rounded-t-xl">
                 <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={filters.vendor_id  || []} onFilter={v => setFilter('vendor_id',  v)} />
-                <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValues={filters.country_id || []} onFilter={v => setFilter('country_id', v)} />
+                <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={getFilter('vendor_id')} onFilter={v => setFilter('vendor_id',  v)} />
+                <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValues={getFilter('country_id')} onFilter={v => setFilter('country_id', v)} />
                 <ColumnHeader<Quote> label="Purchase Unit" field="purchase_unit"       sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Quote> label="Price"         field="purchase_price"      sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                 <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
-                <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions} filterValues={filters.is_active || []} onFilter={v => setFilter('is_active', v)} />
+                <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions} filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-2">Preferred</th>
                 <th className="w-24" />
               </tr>

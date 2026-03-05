@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react'
 
 export type SortDir = 'asc' | 'desc'
 
+type Filters<T> = Partial<Record<keyof T, string[]>>
+
 export function useSortFilter<T>(
   items: T[],
   defaultField: keyof T,
@@ -9,7 +11,7 @@ export function useSortFilter<T>(
 ) {
   const [sortField, setSortField] = useState<keyof T>(defaultField)
   const [sortDir,   setSortDir]   = useState<SortDir>(defaultDir)
-  const [filters,   setFilters]   = useState<Partial<Record<keyof T, string[]>>>({})
+  const [filters,   setFilters]   = useState<Filters<T>>({})
 
   function setSort(field: keyof T, dir: SortDir) {
     setSortField(field)
@@ -24,16 +26,18 @@ export function useSortFilter<T>(
     setFilters({})
   }
 
+  function getFilter(field: keyof T): string[] {
+    return filters[field] ?? []
+  }
+
   const sorted = useMemo(() => {
     let result = [...items]
 
-    // Apply column filters — row must match ALL active filters
-    for (const [field, values] of Object.entries(filters)) {
+    for (const [field, values] of Object.entries(filters) as [string, string[] | undefined][]) {
       if (!values || values.length === 0) continue
-      result = result.filter(item => (values as string[]).includes(String((item as any)[field])))
+      result = result.filter(item => values.includes(String((item as any)[field])))
     }
 
-    // Apply sort
     result.sort((a, b) => {
       const av = (a as any)[sortField]
       const bv = (b as any)[sortField]
@@ -48,7 +52,7 @@ export function useSortFilter<T>(
     return result
   }, [items, sortField, sortDir, filters])
 
-  const hasActiveFilters = Object.values(filters).some(v => v && v.length > 0)
+  const hasActiveFilters = Object.values(filters).some((v): v is string[] => !!v && v.length > 0)
 
-  return { sorted, sortField, sortDir, filters, setSort, setFilter, clearFilters, hasActiveFilters }
+  return { sorted, sortField, sortDir, filters, getFilter, setSort, setFilter, clearFilters, hasActiveFilters }
 }
