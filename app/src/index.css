@@ -75,3 +75,25 @@
            focus:border-accent focus:ring-2 focus:ring-accent/20;
   }
 }
+
+/* ── Print styles ──────────────────────────────────────────────────────────── */
+@media print {
+  /* Render background colours exactly (badges, allergen cells, etc.) */
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+  /* Landscape A4, generous margins */
+  @page { size: A4 landscape; margin: 1.5cm; }
+
+  /* Remove app-shell height/overflow constraints */
+  html, body, #root { height: auto !important; overflow: visible !important; }
+  main              { overflow: visible !important; width: 100% !important; }
+
+  /* Any scrollable container must expand for print */
+  .overflow-auto, .overflow-x-auto, .overflow-y-auto { overflow: visible !important; }
+
+  /* Sticky columns don't work in print — fall back to normal flow */
+  .sticky { position: relative !important; }
+
+  /* Don't break table rows across pages */
+  tr { page-break-inside: avoid; }
+}
