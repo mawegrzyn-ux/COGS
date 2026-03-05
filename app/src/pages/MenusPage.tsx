@@ -182,7 +182,7 @@ export default function MenusPage() {
   const [priceSingleCurrency,setPriceSingleCurrency]= useState('')
   const [priceSearch,        setPriceSearch]        = useState('')
   const [priceCat,           setPriceCat]           = useState('')
-  const [priceMenuFilter,    setPriceMenuFilter]    = useState('')
+
 
   // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
@@ -648,13 +648,11 @@ export default function MenusPage() {
           singleCurrency={priceSingleCurrency}
           search={priceSearch}
           cat={priceCat}
-          menuFilter={priceMenuFilter}
           onLevelChange={v => { setPriceSelectedLevel(v); setPriceReportLoaded(false) }}
           onCurrencyMode={setPriceCurrencyMode}
           onSingleCurrency={setPriceSingleCurrency}
           onSearch={setPriceSearch}
           onCat={setPriceCat}
-          onMenuFilter={setPriceMenuFilter}
           onSavePrice={async (menuItemId, levelId, grossDisplay, countryRate) => {
             const localPrice = countryRate !== 0 ? grossDisplay / countryRate : grossDisplay
             await api.post('/menu-item-prices', { menu_item_id: menuItemId, price_level_id: levelId, sell_price: Math.round(localPrice * 10000) / 10000 })
@@ -1234,25 +1232,6 @@ function SortableHeader({
   )
 }
 
-function useGridSort<T>(items: T[], initial = 'name') {
-  const [sortCol, setSortCol] = useState(initial)
-  const [sortDir, setSortDir] = useState<1 | -1>(1)
-
-  function onSort(col: string) {
-    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
-    else { setSortCol(col); setSortDir(1) }
-  }
-
-  const sorted = useMemo(() => {
-    return [...items].sort((a: any, b: any) => {
-      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
-      return String(av).localeCompare(String(bv)) * sortDir
-    })
-  }, [items, sortCol, sortDir])
-
-  return { sorted, sortCol, sortDir, onSort }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  PRICE LEVEL TOOL
@@ -1268,13 +1247,11 @@ interface PriceLevelToolProps {
   singleCurrency: string
   search: string
   cat: string
-  menuFilter: string
   onLevelChange(v: number | ''): void
   onCurrencyMode(v: 'own' | 'single'): void
   onSingleCurrency(v: string): void
   onSearch(v: string): void
   onCat(v: string): void
-  onMenuFilter(v: string): void
   onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): Promise<void>
   showToast(msg: string, type?: 'error'): void
 }
@@ -1320,26 +1297,10 @@ function PriceLevelTool({
   }, [currencyMode, singleCurrency, countries])
 
   // Get country by id from data
-  const countryById = useMemo(() => {
-    const m: Record<number, PriceReportCountry> = {}
-    data?.countries.forEach(c => { m[c.id] = c })
-    return m
-  }, [data])
-
   // Filter data
   const cats = useMemo(() => {
     const s = new Set((data?.recipes ?? []).map(r => r.category).filter(Boolean))
     return [...s].sort() as string[]
-  }, [data])
-
-  const menuNames = useMemo(() => {
-    const s = new Set<string>()
-    data?.recipes.forEach(r => {
-      Object.values(r.countries).forEach((cd: any) => {
-        if (cd.on_menu && cd.menu_name) s.add(cd.menu_name)
-      })
-    })
-    return [...s].sort()
   }, [data])
 
   const filtered = useMemo(() => {
@@ -1350,58 +1311,6 @@ function PriceLevelTool({
       return true
     })
   }, [data, search, cat])
-
-  // Build flat rows: one row per (recipe × country) that is on a menu
-  interface PlRow {
-    recipe_id: number
-    recipe_name: string
-    category: string
-    country_id: number
-    country_name: string
-    country_sym: string
-    country_rate: number  // local→base exchange rate
-    cost_local: number
-    levels: Record<number, { gross_local: number | null; cogs_pct: number | null; menu_item_id: number | null; lp_id: number | null }>
-  }
-
-  const rows: PlRow[] = useMemo(() => {
-    const result: PlRow[] = []
-    filtered.forEach(recipe => {
-      data?.countries.forEach(c => {
-        const cd = recipe.countries[c.id]
-        if (!cd?.on_menu) return
-        // levels map from data - we get this per recipe×country from the report
-        // The report gives sell_gross per country (averaged across items) — we need per-level data
-        // Since price-report endpoint doesn't return per-level breakdown, we'll use the level data
-        // For PLT we need to use the level report structure — but that's per-country
-        // We'll use data.recipes[].countries[cid] which has sell_gross for the selected level
-        result.push({
-          recipe_id:    recipe.recipe_id,
-          recipe_name:  recipe.recipe_name,
-          category:     recipe.category || '',
-          country_id:   c.id,
-          country_name: c.name,
-          country_sym:  c.symbol,
-          country_rate: c.rate,
-          cost_local:   (cd.cost ?? 0),
-          levels:       {},  // populated below from cd
-        })
-      })
-    })
-    return result
-  }, [filtered, data])
-
-  // For PLT, the API returns sell_gross for the SELECTED level only
-  // We want all levels — so we need to reload per level (or use the level-report data)
-  // PRAGMATIC SOLUTION: show data for the currently selected level in a single column
-  // plus the ability to switch level. The grid shows: Item | Country | Cost | [selected level gross] | [selected level COGS%]
-  // For all-levels view: tell user to select a level, or iterate through all levels
-  // Actually the best UX: show all levels as columns. We need a different API call.
-  // For now, build rows from the LevelReportData structure (countryId-based)
-  // The parent already has loadLevelReport — but PLT is different (recipe×country matrix)
-  // FINAL DECISION: PLT shows the matrix as designed — rows=recipes, columns=countries×levels
-  // We need the full level price data — use menu-item-prices endpoint per recipe
-  // Since data already has per-country, per-selectedLevel breakdown, let's extend the API response usage
 
   // Build display rows from the price report data
   interface PltGridRow {
