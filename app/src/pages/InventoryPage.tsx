@@ -1758,8 +1758,8 @@ function AllergenGridTab() {
                 {/* 14 allergen columns — rotated headers */}
                 {allergens.map(a => (
                   <th key={a.code} title={a.name} className="border-r border-border last:border-r-0 bg-surface-2 w-[52px] min-w-[52px]">
-                    <div className="flex items-end justify-center pb-1 text-[10px] font-bold uppercase text-text-2 tracking-wide"
-                      style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 68 }}>
+                    <div className="flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
+                      style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 96 }}>
                       {a.code}
                     </div>
                   </th>
@@ -1797,19 +1797,21 @@ function AllergenGridTab() {
                   {allergens.map(a => {
                     const status = row[a.code] as AlgStatus | null
                     return (
-                      <td key={a.code} className="border-r border-border last:border-r-0 p-0.5 text-center">
-                        <button
-                          type="button"
-                          title={`${a.name}: ${status ? ALG_LABEL[status] : 'Not set'} — click to cycle`}
-                          onClick={() => cycleStatus(row.ingredient_id, a.code)}
-                          className={`w-9 h-8 rounded font-bold text-xs transition-all active:scale-90
-                            ${status
-                              ? ALG_CELL_CLS[status]
-                              : 'bg-surface-2 text-text-3 hover:bg-border border border-border'
-                            }`}
-                        >
-                          {status ? ALG_ABBR[status] : '—'}
-                        </button>
+                      <td key={a.code} className="border-r border-border last:border-r-0">
+                        <div className="flex items-center justify-center py-1.5">
+                          <button
+                            type="button"
+                            title={`${a.name}: ${status ? ALG_LABEL[status] : 'Not set'} — click to cycle`}
+                            onClick={() => cycleStatus(row.ingredient_id, a.code)}
+                            className={`w-9 h-8 rounded font-bold text-xs transition-all active:scale-90
+                              ${status
+                                ? ALG_CELL_CLS[status]
+                                : 'bg-surface-2 text-text-3 hover:bg-border border border-border'
+                              }`}
+                          >
+                            {status ? ALG_ABBR[status] : '—'}
+                          </button>
+                        </div>
                       </td>
                     )
                   })}
