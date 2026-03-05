@@ -1406,7 +1406,7 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
             className="ml-0.5 text-text-3 hover:text-accent transition-colors"
             title="Filter"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
           </button>
         )}
 
