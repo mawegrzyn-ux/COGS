@@ -126,14 +126,6 @@ const fmt2 = (n: number | null | undefined) => Number(n ?? 0).toFixed(2)
 const cogsClass = (pct: number): 'green' | 'yellow' | 'red' =>
   pct <= 28 ? 'green' : pct <= 35 ? 'yellow' : 'red'
 
-function exportCSV(rows: string[][], filename: string) {
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-  a.download = filename
-  document.body.appendChild(a); a.click(); document.body.removeChild(a)
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function MenusPage() {
@@ -181,21 +173,21 @@ export default function MenusPage() {
   const [miLevelInputs, setMiLevelInputs] = useState<Record<number, { price: string; taxId: number | '' }>>({})
 
   // price report
+  // price level tool
   const [priceReportData,    setPriceReportData]    = useState<PriceReportData | null>(null)
   const [priceReportLoading, setPriceReportLoading] = useState(false)
   const [priceReportLoaded,  setPriceReportLoaded]  = useState(false)
   const [priceSelectedLevel, setPriceSelectedLevel] = useState<number | ''>('')
-  const [priceGrossNet,      setPriceGrossNet]      = useState<'gross' | 'net'>('gross')
-  const [priceSelCountries,  setPriceSelCountries]  = useState<Record<number, boolean>>({})
+  const [priceCurrencyMode,  setPriceCurrencyMode]  = useState<'own' | 'single'>('own')
+  const [priceSingleCurrency,setPriceSingleCurrency]= useState('')
   const [priceSearch,        setPriceSearch]        = useState('')
   const [priceCat,           setPriceCat]           = useState('')
-  const [priceGroupBy,       setPriceGroupBy]       = useState(false)
+  const [priceMenuFilter,    setPriceMenuFilter]    = useState('')
 
-  // level report
+  // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
   const [levelReportLoading, setLevelReportLoading] = useState(false)
   const [lrCountryId,        setLrCountryId]        = useState<number | ''>('')
-  const [lrGrossNet,         setLrGrossNet]         = useState<'gross' | 'net'>('gross')
   const [lrSearch,           setLrSearch]           = useState('')
   const [lrMenuFilter,       setLrMenuFilter]       = useState('')
   const [lrSaveTimers,       setLrSaveTimers]       = useState<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -468,12 +460,11 @@ export default function MenusPage() {
       const data: PriceReportData = await api.get(url)
       setPriceReportData(data)
       setPriceReportLoaded(true)
-      const sel: Record<number, boolean> = {}
-      data.countries.forEach(c => { sel[c.id] = true })
-      setPriceSelCountries(sel)
+      // Default single-currency to base currency if not set
+      if (!priceSingleCurrency && data.base_currency?.code) setPriceSingleCurrency(data.base_currency.code)
     } catch { showToast('Failed to load price report.', 'error') }
     finally { setPriceReportLoading(false) }
-  }, [api, priceSelectedLevel])
+  }, [api, priceSelectedLevel]) // eslint-disable-line
 
   useEffect(() => {
     if (activeTab === 'price-report' && !priceReportLoaded) loadPriceReport()
@@ -482,25 +473,6 @@ export default function MenusPage() {
   useEffect(() => {
     if (activeTab === 'price-report') { setPriceReportLoaded(false) }
   }, [priceSelectedLevel]) // eslint-disable-line
-
-  const priceReportFiltered = useMemo(() => {
-    if (!priceReportData) return []
-    return priceReportData.recipes.filter(r => {
-      const matchQ   = !priceSearch || r.recipe_name.toLowerCase().includes(priceSearch.toLowerCase())
-      const matchCat = !priceCat || r.category === priceCat
-      return matchQ && matchCat
-    })
-  }, [priceReportData, priceSearch, priceCat])
-
-  const priceReportCountries = useMemo(() =>
-    (priceReportData?.countries ?? []).filter(c => priceSelCountries[c.id]),
-    [priceReportData, priceSelCountries]
-  )
-
-  const priceReportCats = useMemo(() => {
-    const cats = new Set((priceReportData?.recipes ?? []).map(r => r.category).filter(Boolean))
-    return [...cats].sort() as string[]
-  }, [priceReportData])
 
   // ── Level Report ──────────────────────────────────────────────────────────
 
@@ -517,31 +489,19 @@ export default function MenusPage() {
     if (activeTab === 'level-report' && lrCountryId) loadLevelReport(Number(lrCountryId))
   }, [activeTab, lrCountryId]) // eslint-disable-line
 
-  const lrFilteredItems = useMemo(() => {
-    if (!levelReportData) return []
-    return levelReportData.items.filter(item => {
-      const matchQ = !lrSearch || item.display_name.toLowerCase().includes(lrSearch.toLowerCase())
-      const matchM = !lrMenuFilter || item.menu_name === lrMenuFilter
-      return matchQ && matchM
-    })
-  }, [levelReportData, lrSearch, lrMenuFilter])
-
-  const lrMenuNames = useMemo(() => {
-    const names = new Set((levelReportData?.items ?? []).map(i => i.menu_name))
-    return [...names].sort()
-  }, [levelReportData])
-
-  async function saveLrPrice(menuItemId: number, levelId: number, value: string, origValue: string) {
+  // saveLrPrice: saves gross price, converting from display currency back to local if needed
+  async function saveLrPrice(menuItemId: number, levelId: number, grossInDisplay: number, countryExchangeRate: number) {
     const key = `${menuItemId}_${levelId}`
-    if (value === origValue) return
-    const price = value === '' ? 0 : parseFloat(value)
-    if (isNaN(price) || price < 0) return
+    if (isNaN(grossInDisplay) || grossInDisplay < 0) return
+    // Convert from display currency (base) back to country local currency
+    // display = local * exchangeRate => local = display / exchangeRate
+    const localPrice = countryExchangeRate !== 0 ? grossInDisplay / countryExchangeRate : grossInDisplay
+    const rounded = Math.round(localPrice * 10000) / 10000
     setLrSaving(prev => ({ ...prev, [key]: true }))
     try {
-      await api.post('/menu-item-prices', { menu_item_id: menuItemId, price_level_id: levelId, sell_price: price })
+      await api.post('/menu-item-prices', { menu_item_id: menuItemId, price_level_id: levelId, sell_price: rounded })
       setLrSaved(prev => ({ ...prev, [key]: true }))
       setTimeout(() => setLrSaved(prev => ({ ...prev, [key]: false })), 700)
-      // debounced reload
       clearTimeout(lrSaveTimers[key])
       const t = setTimeout(() => { if (lrCountryId) loadLevelReport(Number(lrCountryId)) }, 1200)
       setLrSaveTimers(prev => ({ ...prev, [key]: t }))
@@ -678,89 +638,48 @@ export default function MenusPage() {
 
       {/* ══ TAB: PRICE REPORT ════════════════════════════════════════════════ */}
       {activeTab === 'price-report' && (
-        <PriceReport
+        <PriceLevelTool
           data={priceReportData}
           loading={priceReportLoading}
+          countries={countries}
           priceLevels={priceLevels}
           selectedLevel={priceSelectedLevel}
-          grossNet={priceGrossNet}
-          selCountries={priceSelCountries}
+          currencyMode={priceCurrencyMode}
+          singleCurrency={priceSingleCurrency}
           search={priceSearch}
           cat={priceCat}
-          cats={priceReportCats}
-          filtered={priceReportFiltered}
-          groupBy={priceGroupBy}
+          menuFilter={priceMenuFilter}
           onLevelChange={v => { setPriceSelectedLevel(v); setPriceReportLoaded(false) }}
-          onGrossNetChange={setPriceGrossNet}
-          onToggleCountry={(id, val) => setPriceSelCountries(prev => ({ ...prev, [id]: val }))}
-          onAllCountries={() => {
-            const sel: Record<number, boolean> = {}
-            priceReportData?.countries.forEach(c => { sel[c.id] = true })
-            setPriceSelCountries(sel)
-          }}
-          onNoneCountries={() => {
-            const sel: Record<number, boolean> = {}
-            priceReportData?.countries.forEach(c => { sel[c.id] = false })
-            setPriceSelCountries(sel)
-          }}
+          onCurrencyMode={setPriceCurrencyMode}
+          onSingleCurrency={setPriceSingleCurrency}
           onSearch={setPriceSearch}
           onCat={setPriceCat}
-          onGroupBy={() => setPriceGroupBy(v => !v)}
-          onExport={() => {
-            if (!priceReportData) return
-            const cols = priceReportCountries
-            const field = priceGrossNet === 'gross' ? 'sell_gross' : 'sell_net'
-            const header = ['Recipe', 'Category', ...cols.map(c => `${c.name} (${c.code} ${priceGrossNet})`)]
-            const rows = [header, ...priceReportFiltered.map(r => [
-              r.recipe_name, r.category,
-              ...cols.map(c => {
-                const cd = r.countries[c.id]
-                if (!cd?.on_menu) return ''
-                return String((cd as any)[field] ?? '')
-              })
-            ])]
-            exportCSV(rows, 'menu-price-report.csv')
+          onMenuFilter={setPriceMenuFilter}
+          onSavePrice={async (menuItemId, levelId, grossDisplay, countryRate) => {
+            const localPrice = countryRate !== 0 ? grossDisplay / countryRate : grossDisplay
+            await api.post('/menu-item-prices', { menu_item_id: menuItemId, price_level_id: levelId, sell_price: Math.round(localPrice * 10000) / 10000 })
+            setPriceReportLoaded(false)
           }}
+          showToast={showToast}
         />
       )}
 
       {/* ══ TAB: LEVEL REPORT ════════════════════════════════════════════════ */}
       {activeTab === 'level-report' && (
-        <LevelReport
+        <MarketPriceTool
           countries={countries}
           data={levelReportData}
           loading={levelReportLoading}
           countryId={lrCountryId}
-          grossNet={lrGrossNet}
           search={lrSearch}
           menuFilter={lrMenuFilter}
-          menuNames={lrMenuNames}
-          filteredItems={lrFilteredItems}
           saving={lrSaving}
           saved={lrSaved}
           onCountryChange={v => setLrCountryId(v)}
-          onGrossNetChange={setLrGrossNet}
           onSearch={setLrSearch}
           onMenuFilter={setLrMenuFilter}
           onSavePrice={saveLrPrice}
-          onExport={() => {
-            if (!levelReportData) return
-            const levels = levelReportData.levels
-            const field  = lrGrossNet === 'gross' ? 'gross' : 'net'
-            const code   = levelReportData.country.code
-            const header = ['Item', 'Menu', 'Type', `Cost (${code})`,
-              ...levels.flatMap(l => [`${l.name} ${lrGrossNet} (${code})`, `${l.name} COGS%`])]
-            const rows = [header, ...lrFilteredItems.map(item => [
-              item.display_name, item.menu_name, item.item_type,
-              fmt2(item.cost),
-              ...levels.flatMap(l => {
-                const ld = item.levels[l.id]
-                if (!ld?.set) return ['', '']
-                return [fmt2((ld as any)[field]), ld.cogs_pct != null ? ld.cogs_pct.toFixed(2) : '']
-              })
-            ])]
-            exportCSV(rows, 'market-price-tool.csv')
-          }}
+          showToast={showToast}
         />
       )}
 
@@ -1225,167 +1144,495 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
   )
 }
 
-// ── Price Report ──────────────────────────────────────────────────────────────
 
-interface PriceReportProps {
-  data: PriceReportData | null; loading: boolean
-  priceLevels: PriceLevel[]; selectedLevel: number | ''; grossNet: 'gross' | 'net'
-  selCountries: Record<number, boolean>
-  search: string; cat: string; cats: string[]; filtered: PriceReportRecipe[]
-  groupBy: boolean
-  onLevelChange(v: number | ''): void; onGrossNetChange(v: 'gross' | 'net'): void
-  onToggleCountry(id: number, val: boolean): void
-  onAllCountries(): void; onNoneCountries(): void
-  onSearch(v: string): void; onCat(v: string): void
-  onGroupBy(): void; onExport(): void
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SHARED GRID HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const COGS_THRESHOLDS = { excellent: 28, acceptable: 35 }
+
+function cogsBadge(pct: number | null) {
+  if (pct === null) return null
+  if (pct <= COGS_THRESHOLDS.excellent)  return { cls: 'bg-green-100 text-green-700',  label: `${pct.toFixed(1)}%` }
+  if (pct <= COGS_THRESHOLDS.acceptable) return { cls: 'bg-yellow-100 text-yellow-700', label: `${pct.toFixed(1)}%` }
+  return                                        { cls: 'bg-red-100 text-red-700',       label: `${pct.toFixed(1)}%` }
 }
 
-function PriceReport({ data, loading, priceLevels, selectedLevel, grossNet, selCountries,
-  search, cat, cats, filtered, groupBy, onLevelChange, onGrossNetChange, onToggleCountry,
-  onAllCountries, onNoneCountries, onSearch, onCat, onGroupBy, onExport }: PriceReportProps) {
+// Inline editable price cell — shared by both tools
+function InlinePriceCell({
+  value, sym, saving, saved, onCommit,
+}: {
+  value: number | null
+  sym: string
+  saving?: boolean
+  saved?: boolean
+  onCommit(v: number | null): void
+}) {
+  const fmt = (n: number | null) => n !== null && n > 0 ? n.toFixed(2) : ''
+  const [editing, setEditing] = useState(false)
+  const [draft,   setDraft]   = useState(fmt(value))
+  const ref = useRef<HTMLInputElement>(null)
 
-  const [countryDropdown, setCountryDropdown] = useState(false)
-  const allCols = data?.countries ?? []
-  const cols    = allCols.filter(c => selCountries[c.id])
-  const nSel    = cols.length
-  const field   = grossNet === 'gross' ? 'sell_gross' : 'sell_net'
+  useEffect(() => {
+    if (!editing) setDraft(fmt(value))
+  }, [value, editing])
 
-  const groups = useMemo(() => {
-    if (!groupBy) return null
-    const map: Record<string, PriceReportRecipe[]> = {}
-    filtered.forEach(r => { const k = r.category || 'Uncategorised'; if (!map[k]) map[k] = []; map[k].push(r) })
-    return map
-  }, [filtered, groupBy])
+  function commit() {
+    setEditing(false)
+    const n = draft.trim() === '' ? null : parseFloat(draft)
+    if (n === null || (!isNaN(n) && n >= 0)) onCommit(n !== null && isNaN(n) ? null : n)
+    else setDraft(fmt(value))
+  }
 
-  function renderRows(rows: PriceReportRecipe[]) {
-    return rows.map(recipe => {
-      const vals = cols.map(c => {
-        const cd = recipe.countries[c.id]
-        if (!cd?.on_menu) return null
-        return (cd as any)[field] as number ?? null
-      })
-      const nums = vals.filter((v): v is number => v !== null)
-      const avg  = nums.length && grossNet !== 'gross' ? nums.reduce((a, b) => a + b, 0) / nums.length : null
-      const min  = nums.length > 1 ? Math.min(...nums) : null
-      const max  = nums.length > 1 ? Math.max(...nums) : null
+  return (
+    <div
+      className={`flex items-center rounded px-1.5 py-1 min-w-[90px] border transition-all cursor-text
+        ${saved  ? 'bg-green-50 border-green-300' : ''}
+        ${saving ? 'opacity-50 pointer-events-none border-gray-200' : ''}
+        ${!saving && !saved ? 'border-transparent hover:border-gray-300 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-200' : ''}
+      `}
+      onClick={() => { setEditing(true); setTimeout(() => ref.current?.select(), 10) }}
+    >
+      <span className="text-gray-400 text-xs mr-0.5 select-none">{sym}</span>
+      <input
+        ref={ref}
+        type="number"
+        min="0"
+        step="0.01"
+        value={draft}
+        placeholder="—"
+        className="w-20 bg-transparent outline-none text-xs font-mono"
+        onChange={e => setDraft(e.target.value)}
+        onFocus={() => setEditing(true)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter')  { e.currentTarget.blur() }
+          if (e.key === 'Escape') { setDraft(fmt(value)); setEditing(false); e.currentTarget.blur() }
+        }}
+      />
+    </div>
+  )
+}
 
-      return (
-        <tr key={recipe.recipe_id} className="hover:bg-gray-50">
-          <td className="px-3 py-2.5 font-medium text-gray-900 sticky left-0 bg-white">{recipe.recipe_name}</td>
-          <td className="px-3 py-2.5 sticky left-[180px] bg-white">
-            {recipe.category
-              ? <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{recipe.category}</span>
-              : <span className="text-gray-300 text-xs">—</span>}
-          </td>
-          {vals.map((v, i) => {
-            if (v === null) return <td key={i} className="px-3 py-2.5 text-right text-gray-300 text-xs">—</td>
-            const hl = v === min ? 'bg-green-50' : v === max ? 'bg-red-50' : ''
-            return (
-              <td key={i} className={`px-3 py-2.5 text-right font-mono text-xs ${hl}`}>
-                {cols[i].symbol}{v.toFixed(2)}
-              </td>
-            )
-          })}
-          {avg !== null && (
-            <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold bg-gray-50">
-              {avg.toFixed(2)}
-            </td>
-          )}
-        </tr>
-      )
+// Sortable column header
+function SortableHeader({
+  label, colKey, sortCol, sortDir, onSort, right,
+}: {
+  label: string; colKey: string; sortCol: string; sortDir: 1 | -1; onSort(k: string): void; right?: boolean
+}) {
+  const active = sortCol === colKey
+  return (
+    <th
+      className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:text-gray-700 ${right ? 'text-right' : 'text-left'}`}
+      onClick={() => onSort(colKey)}
+    >
+      {label}
+      <span className={`ml-1 ${active ? 'text-blue-500' : 'opacity-25'}`}>
+        {active ? (sortDir === 1 ? '↑' : '↓') : '⇅'}
+      </span>
+    </th>
+  )
+}
+
+function useGridSort<T>(items: T[], initial = 'name') {
+  const [sortCol, setSortCol] = useState(initial)
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
+
+  function onSort(col: string) {
+    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
+    else { setSortCol(col); setSortDir(1) }
+  }
+
+  const sorted = useMemo(() => {
+    return [...items].sort((a: any, b: any) => {
+      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
+      return String(av).localeCompare(String(bv)) * sortDir
     })
+  }, [items, sortCol, sortDir])
+
+  return { sorted, sortCol, sortDir, onSort }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PRICE LEVEL TOOL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface PriceLevelToolProps {
+  data: PriceReportData | null
+  loading: boolean
+  countries: Country[]
+  priceLevels: PriceLevel[]
+  selectedLevel: number | ''
+  currencyMode: 'own' | 'single'
+  singleCurrency: string
+  search: string
+  cat: string
+  menuFilter: string
+  onLevelChange(v: number | ''): void
+  onCurrencyMode(v: 'own' | 'single'): void
+  onSingleCurrency(v: string): void
+  onSearch(v: string): void
+  onCat(v: string): void
+  onMenuFilter(v: string): void
+  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): Promise<void>
+  showToast(msg: string, type?: 'error'): void
+}
+
+function PriceLevelTool({
+  data, loading, countries, priceLevels, selectedLevel, currencyMode, singleCurrency,
+  search, cat, menuFilter, onLevelChange, onCurrencyMode, onSingleCurrency,
+  onSearch, onCat, onMenuFilter, onSavePrice, showToast,
+}: PriceLevelToolProps) {
+
+  const [savingKey, setSavingKey] = useState<Record<string, boolean>>({})
+  const [savedKey,  setSavedKey]  = useState<Record<string, boolean>>({})
+
+  // All unique currencies from countries
+  const allCurrencies = useMemo(() => {
+    const seen = new Set<string>()
+    const result: { code: string; symbol: string }[] = []
+    countries.forEach(c => {
+      if (!seen.has(c.currency_code)) {
+        seen.add(c.currency_code)
+        result.push({ code: c.currency_code, symbol: c.currency_symbol })
+      }
+    })
+    if (data?.base_currency && !seen.has(data.base_currency.code)) {
+      result.push({ code: data.base_currency.code, symbol: data.base_currency.code })
+    }
+    return result.sort((a, b) => a.code.localeCompare(b.code))
+  }, [countries, data])
+
+  // Exchange rate: country local → base (stored in country.exchange_rate)
+  // To convert local → single display: price_base = price_local * rate
+  // For "single currency" display: find the rate of the target currency to base
+  const targetRate = useMemo(() => {
+    if (currencyMode === 'own') return null
+    const c = countries.find(c => c.currency_code === singleCurrency)
+    return c?.exchange_rate ?? 1
+  }, [currencyMode, singleCurrency, countries])
+
+  const displaySym = useMemo(() => {
+    if (currencyMode === 'own') return null
+    const c = countries.find(c => c.currency_code === singleCurrency)
+    return c?.currency_symbol ?? singleCurrency
+  }, [currencyMode, singleCurrency, countries])
+
+  // Get country by id from data
+  const countryById = useMemo(() => {
+    const m: Record<number, PriceReportCountry> = {}
+    data?.countries.forEach(c => { m[c.id] = c })
+    return m
+  }, [data])
+
+  // Filter data
+  const cats = useMemo(() => {
+    const s = new Set((data?.recipes ?? []).map(r => r.category).filter(Boolean))
+    return [...s].sort() as string[]
+  }, [data])
+
+  const menuNames = useMemo(() => {
+    const s = new Set<string>()
+    data?.recipes.forEach(r => {
+      Object.values(r.countries).forEach((cd: any) => {
+        if (cd.on_menu && cd.menu_name) s.add(cd.menu_name)
+      })
+    })
+    return [...s].sort()
+  }, [data])
+
+  const filtered = useMemo(() => {
+    if (!data) return []
+    return data.recipes.filter(r => {
+      if (search && !r.recipe_name.toLowerCase().includes(search.toLowerCase())) return false
+      if (cat && r.category !== cat) return false
+      return true
+    })
+  }, [data, search, cat])
+
+  // Build flat rows: one row per (recipe × country) that is on a menu
+  interface PlRow {
+    recipe_id: number
+    recipe_name: string
+    category: string
+    country_id: number
+    country_name: string
+    country_sym: string
+    country_rate: number  // local→base exchange rate
+    cost_local: number
+    levels: Record<number, { gross_local: number | null; cogs_pct: number | null; menu_item_id: number | null; lp_id: number | null }>
+  }
+
+  const rows: PlRow[] = useMemo(() => {
+    const result: PlRow[] = []
+    filtered.forEach(recipe => {
+      data?.countries.forEach(c => {
+        const cd = recipe.countries[c.id]
+        if (!cd?.on_menu) return
+        // levels map from data - we get this per recipe×country from the report
+        // The report gives sell_gross per country (averaged across items) — we need per-level data
+        // Since price-report endpoint doesn't return per-level breakdown, we'll use the level data
+        // For PLT we need to use the level report structure — but that's per-country
+        // We'll use data.recipes[].countries[cid] which has sell_gross for the selected level
+        result.push({
+          recipe_id:    recipe.recipe_id,
+          recipe_name:  recipe.recipe_name,
+          category:     recipe.category || '',
+          country_id:   c.id,
+          country_name: c.name,
+          country_sym:  c.symbol,
+          country_rate: c.rate,
+          cost_local:   (cd.cost ?? 0),
+          levels:       {},  // populated below from cd
+        })
+      })
+    })
+    return result
+  }, [filtered, data])
+
+  // For PLT, the API returns sell_gross for the SELECTED level only
+  // We want all levels — so we need to reload per level (or use the level-report data)
+  // PRAGMATIC SOLUTION: show data for the currently selected level in a single column
+  // plus the ability to switch level. The grid shows: Item | Country | Cost | [selected level gross] | [selected level COGS%]
+  // For all-levels view: tell user to select a level, or iterate through all levels
+  // Actually the best UX: show all levels as columns. We need a different API call.
+  // For now, build rows from the LevelReportData structure (countryId-based)
+  // The parent already has loadLevelReport — but PLT is different (recipe×country matrix)
+  // FINAL DECISION: PLT shows the matrix as designed — rows=recipes, columns=countries×levels
+  // We need the full level price data — use menu-item-prices endpoint per recipe
+  // Since data already has per-country, per-selectedLevel breakdown, let's extend the API response usage
+
+  // Build display rows from the price report data
+  interface PltGridRow {
+    key: string
+    recipe_id: number
+    recipe_name: string
+    category: string
+    country_id: number
+    country_name: string
+    country_sym: string
+    country_rate: number
+    cost_local: number
+    cost_display: number
+    sell_gross_local: number | null
+    sell_gross_display: number | null
+    cogs_pct: number | null
+    menu_item_id: number | null
+  }
+
+  const gridRows: PltGridRow[] = useMemo(() => {
+    if (!data) return []
+    const result: PltGridRow[] = []
+    filtered.forEach(recipe => {
+      data.countries.forEach(c => {
+        const cd = recipe.countries[c.id]
+        if (!cd?.on_menu) return
+
+        // Convert to display currency
+        // stored prices are in country local currency
+        // display rate conversion: local * countryRate = base; base / targetRate = singleDisplay
+        let dispRate = 1
+        if (currencyMode === 'single' && targetRate) {
+          // country local → base = * c.rate; base → target single = / targetRate
+          dispRate = c.rate / (targetRate || 1)
+        }
+
+        const costLocal    = cd.cost ?? 0
+        const grossLocal   = cd.sell_gross ?? null
+        const costDisplay  = costLocal * (currencyMode === 'single' ? dispRate : 1)
+        const grossDisplay = grossLocal !== null ? grossLocal * (currencyMode === 'single' ? dispRate : 1) : null
+
+        result.push({
+          key:               `${recipe.recipe_id}_${c.id}`,
+          recipe_id:         recipe.recipe_id,
+          recipe_name:       recipe.recipe_name,
+          category:          recipe.category || '',
+          country_id:        c.id,
+          country_name:      c.name,
+          country_sym:       currencyMode === 'own' ? c.symbol : (displaySym ?? c.symbol),
+          country_rate:      c.rate,
+          cost_local:        costLocal,
+          cost_display:      costDisplay,
+          sell_gross_local:  grossLocal,
+          sell_gross_display:grossDisplay,
+          cogs_pct:          cd.cogs_pct ?? null,
+          menu_item_id:      cd.menu_item_id ?? null,
+        })
+      })
+    })
+    return result
+  }, [data, filtered, currencyMode, targetRate, displaySym])
+
+  const [sortCol, setSortCol] = useState('recipe_name')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
+
+  function onSort(col: string) {
+    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
+    else { setSortCol(col); setSortDir(1) }
+  }
+
+  const sortedRows = useMemo(() => {
+    return [...gridRows].sort((a: any, b: any) => {
+      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
+      return String(av).localeCompare(String(bv)) * sortDir
+    })
+  }, [gridRows, sortCol, sortDir])
+
+  async function handleSavePrice(row: PltGridRow, grossDisplay: number | null) {
+    if (!row.menu_item_id || !selectedLevel) return
+    if (grossDisplay === null) return
+    const key = `${row.menu_item_id}_${selectedLevel}`
+    setSavingKey(p => ({ ...p, [key]: true }))
+    try {
+      await onSavePrice(row.menu_item_id, Number(selectedLevel), grossDisplay, row.country_rate)
+      setSavedKey(p => ({ ...p, [key]: true }))
+      setTimeout(() => setSavedKey(p => ({ ...p, [key]: false })), 700)
+    } catch { showToast('Failed to save price', 'error') }
+    finally { setSavingKey(p => ({ ...p, [key]: false })) }
+  }
+
+  function exportCSV() {
+    if (!data) return
+    const header = ['Recipe', 'Category', 'Country', `Cost`, `Gross Price`, 'COGS %']
+    const csvRows = [header, ...sortedRows.map(r => [
+      r.recipe_name, r.category, r.country_name,
+      r.cost_display.toFixed(2),
+      r.sell_gross_display?.toFixed(2) ?? '',
+      r.cogs_pct?.toFixed(1) ?? '',
+    ])]
+    const csv = csvRows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'price-level-tool.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a)
   }
 
   return (
     <div className="flex-1 overflow-auto p-6">
-      {/* Controls */}
-      <div className="bg-white rounded-lg border border-gray-200 mb-4">
-        <div className="p-4 flex flex-wrap gap-3 items-center border-b border-gray-100">
-          <span className="font-semibold text-gray-700">📈 Price Level Tool</span>
-          <div className="flex items-center gap-2 ml-auto flex-wrap">
-            <input className="input input-sm w-40" placeholder="Filter recipes…" value={search} onChange={e => onSearch(e.target.value)} />
+      <div className="bg-white rounded-lg border border-gray-200">
+
+        {/* Toolbar */}
+        <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
+          <span className="font-semibold text-gray-700 text-sm">📈 Price Level Tool</span>
+
+          {/* Level selector */}
+          <div className="flex items-center gap-1.5 ml-2">
+            <span className="text-xs text-gray-400">Level</span>
+            <select className="select select-sm" value={selectedLevel} onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}>
+              <option value="">— All levels —</option>
+              {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>)}
+            </select>
+          </div>
+
+          {/* Currency mode */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">Currency</span>
+            <div className="flex rounded border border-gray-200 overflow-hidden">
+              <button
+                className={`px-2.5 py-1 text-xs font-medium transition-colors ${currencyMode === 'own' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                onClick={() => onCurrencyMode('own')}
+              >Own</button>
+              <button
+                className={`px-2.5 py-1 text-xs font-medium transition-colors border-l border-gray-200 ${currencyMode === 'single' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                onClick={() => onCurrencyMode('single')}
+              >Single</button>
+            </div>
+            {currencyMode === 'single' && (
+              <select className="select select-sm" value={singleCurrency} onChange={e => onSingleCurrency(e.target.value)}>
+                <option value="">— Pick currency —</option>
+                {allCurrencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+              </select>
+            )}
+          </div>
+
+          <div className="flex gap-2 ml-auto flex-wrap items-center">
+            <input className="input input-sm w-40" placeholder="Search recipes…" value={search} onChange={e => onSearch(e.target.value)} />
             <select className="select select-sm" value={cat} onChange={e => onCat(e.target.value)}>
               <option value="">All Categories</option>
               {cats.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            {/* Country picker */}
-            <div className="relative">
-              <button className="btn btn-sm btn-outline" onClick={() => setCountryDropdown(v => !v)}>
-                🌐 Countries {nSel < allCols.length ? `(${nSel}/${allCols.length})` : ''}
-              </button>
-              {countryDropdown && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[180px]">
-                  <div className="flex gap-2 p-2 border-b border-gray-100">
-                    <button className="btn btn-xs btn-ghost" onClick={onAllCountries}>All</button>
-                    <button className="btn btn-xs btn-ghost" onClick={onNoneCountries}>None</button>
-                  </div>
-                  <div className="max-h-52 overflow-y-auto p-1">
-                    {allCols.map(c => (
-                      <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 text-sm">
-                        <input type="checkbox" checked={!!selCountries[c.id]} onChange={e => onToggleCountry(c.id, e.target.checked)} />
-                        {c.name}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Level</span>
-              <select className="select select-sm" value={selectedLevel} onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}>
-                <option value="">Default price</option>
-                {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Price</span>
-              <select className="select select-sm" value={grossNet} onChange={e => onGrossNetChange(e.target.value as 'gross' | 'net')}>
-                <option value="gross">Gross (incl. tax)</option>
-                <option value="net">Net (excl. tax)</option>
-              </select>
-            </div>
-            <button className={`btn btn-sm btn-outline ${groupBy ? 'ring-1 ring-blue-400' : ''}`} onClick={onGroupBy}>⬛ Group</button>
-            <button className="btn btn-sm btn-outline" onClick={onExport}>⬇ Export CSV</button>
+            <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>
           </div>
         </div>
 
-        {loading && <div className="p-8 text-center text-gray-400"><Spinner /></div>}
-        {!loading && !data && <div className="p-8 text-center text-gray-400 text-sm">No data loaded yet.</div>}
+        {/* Currency mode hint */}
+        {currencyMode === 'single' && singleCurrency && (
+          <div className="px-4 py-2 bg-blue-50 text-blue-700 text-xs border-b border-blue-100">
+            Prices converted to <strong>{singleCurrency}</strong> using stored exchange rates. Edits will be converted back to each country's local currency before saving.
+          </div>
+        )}
+        {!selectedLevel && (
+          <div className="px-4 py-2 bg-yellow-50 text-yellow-700 text-xs border-b border-yellow-100">
+            Select a price level above to see and edit sell prices. COGS% requires a level to be selected.
+          </div>
+        )}
+
+        {loading && <div className="p-12 text-center"><Spinner /></div>}
+        {!loading && !data && <div className="p-12 text-center text-sm text-gray-400">Loading…</div>}
         {!loading && data && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 min-w-[180px]">Recipe</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 sticky left-[180px] bg-gray-50 min-w-[110px]">Category</th>
-                  {cols.map(c => (
-                    <th key={c.id} className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 min-w-[130px]">
-                      <div>{c.name}</div>
-                      <div className="font-normal text-gray-400">{c.symbol} {c.code} · {grossNet}</div>
-                    </th>
-                  ))}
-                  {grossNet === 'net' && cols.length > 1 && (
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 bg-gray-100 min-w-[110px]">Avg</th>
+                  <SortableHeader label="Recipe"   colKey="recipe_name"  sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                  <SortableHeader label="Category" colKey="category"     sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                  <SortableHeader label="Country"  colKey="country_name" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                  <SortableHeader label="Cost"     colKey="cost_display" sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                  {selectedLevel ? (
+                    <>
+                      <SortableHeader label="Gross Price"  colKey="sell_gross_display" sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                      <SortableHeader label="COGS %"       colKey="cogs_pct"           sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                    </>
+                  ) : (
+                    <th className="px-3 py-2.5 text-xs font-semibold text-gray-400 text-right">Gross Price</th>
                   )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filtered.length === 0 && (
-                  <tr><td colSpan={2 + cols.length + 1} className="px-4 py-8 text-center text-sm text-gray-400">No recipes found.</td></tr>
+                {sortedRows.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">
+                    No data. Make sure recipes are added to menus.
+                  </td></tr>
                 )}
-                {groups
-                  ? Object.entries(groups).map(([groupName, rows]) => (
-                    <>
-                      <tr key={groupName} className="bg-gray-50">
-                        <td colSpan={2 + cols.length + 1} className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-gray-500">
-                          {groupName} <span className="font-normal text-gray-400">({rows.length})</span>
-                        </td>
-                      </tr>
-                      {renderRows(rows)}
-                    </>
-                  ))
-                  : renderRows(filtered)
-                }
+                {sortedRows.map(row => {
+                  const sym     = row.country_sym
+                  const saveKey = `${row.menu_item_id}_${selectedLevel}`
+                  const badge   = cogsBadge(row.cogs_pct)
+                  return (
+                    <tr key={row.key} className="hover:bg-gray-50">
+                      <td className="px-3 py-2.5 font-medium text-gray-900">{row.recipe_name}</td>
+                      <td className="px-3 py-2.5">
+                        {row.category
+                          ? <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{row.category}</span>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600">{row.country_name}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs">{sym}{row.cost_display.toFixed(2)}</td>
+                      {selectedLevel ? (
+                        <>
+                          <td className="px-2 py-1.5">
+                            <div className="flex justify-end">
+                              <InlinePriceCell
+                                value={row.sell_gross_display}
+                                sym={sym}
+                                saving={savingKey[saveKey]}
+                                saved={savedKey[saveKey]}
+                                onCommit={v => { if (v !== null) handleSavePrice(row, v) }}
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            {badge
+                              ? <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
+                              : <span className="text-gray-300 text-xs">—</span>}
+                          </td>
+                        </>
+                      ) : (
+                        <td className="px-3 py-2.5 text-right text-gray-300 text-xs">Select a level</td>
+                      )}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -1395,125 +1642,196 @@ function PriceReport({ data, loading, priceLevels, selectedLevel, grossNet, selC
   )
 }
 
-// ── Level Report ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MARKET PRICE TOOL  (formerly Level Report)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-interface LevelReportProps {
-  countries: Country[]; data: LevelReportData | null; loading: boolean
-  countryId: number | ''; grossNet: 'gross' | 'net'
-  search: string; menuFilter: string; menuNames: string[]
-  filteredItems: LevelReportItem[]; saving: Record<string, boolean>; saved: Record<string, boolean>
-  onCountryChange(v: number | ''): void; onGrossNetChange(v: 'gross' | 'net'): void
-  onSearch(v: string): void; onMenuFilter(v: string): void
-  onSavePrice(menuItemId: number, levelId: number, value: string, orig: string): void
-  onExport(): void
+interface MarketPriceToolProps {
+  countries: Country[]
+  data: LevelReportData | null
+  loading: boolean
+  countryId: number | ''
+  search: string
+  menuFilter: string
+  saving: Record<string, boolean>
+  saved: Record<string, boolean>
+  onCountryChange(v: number | ''): void
+  onSearch(v: string): void
+  onMenuFilter(v: string): void
+  onSavePrice(menuItemId: number, levelId: number, grossDisplay: number, countryRate: number): void
+  showToast(msg: string, type?: 'error'): void
 }
 
-function LevelReport({ countries, data, loading, countryId, grossNet, search, menuFilter, menuNames,
-  filteredItems, saving, saved, onCountryChange, onGrossNetChange, onSearch, onMenuFilter, onSavePrice, onExport }: LevelReportProps) {
+function MarketPriceTool({
+  countries, data, loading, countryId, search, menuFilter,
+  saving, saved, onCountryChange, onSearch, onMenuFilter, onSavePrice,
+}: MarketPriceToolProps) {
 
-  const levels  = data?.levels ?? []
-  const country = data?.country
-  const sym     = country?.symbol ?? ''
+  const levels     = data?.levels ?? []
+  const country    = data?.country
+  const sym        = country?.symbol ?? ''
+  const countryRate= country?.rate ?? 1
+
+  const menuNames = useMemo(() => {
+    const s = new Set((data?.items ?? []).map(i => i.menu_name))
+    return [...s].sort()
+  }, [data])
+
+  // Flatten items for sorting
+  interface MptRow {
+    menu_item_id: number
+    display_name: string
+    item_type:    string
+    menu_name:    string
+    cost:         number
+    [key: string]: any   // level_N_gross, level_N_cogs
+  }
+
+  const flatRows: MptRow[] = useMemo(() => {
+    return (data?.items ?? []).map(item => {
+      const row: MptRow = {
+        menu_item_id: item.menu_item_id,
+        display_name: item.display_name,
+        item_type:    item.item_type,
+        menu_name:    item.menu_name,
+        cost:         item.cost,
+      }
+      levels.forEach(l => {
+        const ld = item.levels[l.id]
+        row[`lvl_${l.id}_gross`] = ld?.gross ?? null
+        row[`lvl_${l.id}_cogs`]  = ld?.cogs_pct ?? null
+        row[`lvl_${l.id}_net`]   = ld?.net ?? null
+        row[`lvl_${l.id}_set`]   = ld?.set ?? false
+      })
+      return row
+    })
+  }, [data, levels])
+
+  const filteredRows = useMemo(() => {
+    return flatRows.filter(r => {
+      if (search && !r.display_name.toLowerCase().includes(search.toLowerCase())) return false
+      if (menuFilter && r.menu_name !== menuFilter) return false
+      return true
+    })
+  }, [flatRows, search, menuFilter])
+
+  const [sortCol, setSortCol] = useState('display_name')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
+
+  function onSort(col: string) {
+    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
+    else { setSortCol(col); setSortDir(1) }
+  }
+
+  const sortedRows = useMemo(() => {
+    return [...filteredRows].sort((a: any, b: any) => {
+      const av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir
+      if (av === null) return 1 * sortDir
+      if (bv === null) return -1 * sortDir
+      return String(av).localeCompare(String(bv)) * sortDir
+    })
+  }, [filteredRows, sortCol, sortDir])
+
+  function exportCSV() {
+    if (!data) return
+    const header = ['Item', 'Menu', 'Type', `Cost (${country?.code})`,
+      ...levels.flatMap(l => [`${l.name} Gross (${country?.code})`, `${l.name} COGS%`])]
+    const csvRows = [header, ...sortedRows.map(r => [
+      r.display_name, r.menu_name, r.item_type, r.cost.toFixed(2),
+      ...levels.flatMap(l => [
+        r[`lvl_${l.id}_gross`]?.toFixed(2) ?? '',
+        r[`lvl_${l.id}_cogs`]?.toFixed(1) ?? '',
+      ])
+    ])]
+    const csv = csvRows.map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'market-price-tool.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
 
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="bg-white rounded-lg border border-gray-200">
-        <div className="p-4 flex flex-wrap gap-3 items-center border-b border-gray-100">
-          <span className="font-semibold text-gray-700">🏷 Market Price Tool</span>
-          <div className="flex items-center gap-1.5 ml-auto">
+
+        {/* Toolbar */}
+        <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
+          <span className="font-semibold text-gray-700 text-sm">🏷 Market Price Tool</span>
+          <div className="flex items-center gap-1.5 ml-2">
             <span className="text-xs text-gray-400">Market</span>
-            <select
-              className="select select-sm min-w-[160px]"
-              value={countryId}
-              onChange={e => onCountryChange(e.target.value ? Number(e.target.value) : '')}
-            >
+            <select className="select select-sm min-w-[160px]" value={countryId} onChange={e => onCountryChange(e.target.value ? Number(e.target.value) : '')}>
               <option value="">— Select market —</option>
-              {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {countries.map(c => <option key={c.id} value={c.id}>{c.name} ({c.currency_code})</option>)}
             </select>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400">Price</span>
-            <select className="select select-sm" value={grossNet} onChange={e => onGrossNetChange(e.target.value as 'gross' | 'net')}>
-              <option value="gross">Gross (incl. tax)</option>
-              <option value="net">Net (excl. tax)</option>
+          <div className="flex gap-2 ml-auto flex-wrap items-center">
+            <input className="input input-sm w-40" placeholder="Filter items…" value={search} onChange={e => onSearch(e.target.value)} />
+            <select className="select select-sm" value={menuFilter} onChange={e => onMenuFilter(e.target.value)}>
+              <option value="">All Menus</option>
+              {menuNames.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            {data && <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>}
           </div>
-          <input className="input input-sm w-40" placeholder="Filter items…" value={search} onChange={e => onSearch(e.target.value)} />
-          <select className="select select-sm" value={menuFilter} onChange={e => onMenuFilter(e.target.value)}>
-            <option value="">All Menus</option>
-            {menuNames.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <button className="btn btn-sm btn-outline" onClick={onExport}>⬇ Export CSV</button>
         </div>
 
-        {!countryId && <div className="p-8 text-center text-sm text-gray-400">Select a market to load the report.</div>}
-        {countryId && loading && <div className="p-8 text-center"><Spinner /></div>}
+        {!countryId && <div className="p-12 text-center text-sm text-gray-400">Select a market to load prices.</div>}
+        {countryId && loading && <div className="p-12 text-center"><Spinner /></div>}
+
         {countryId && !loading && data && (
           <>
             <div className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">
-              {grossNet === 'gross'
-                ? `Gross prices in ${sym} ${country?.code}. Click any cell to edit.`
-                : `Net prices in ${sym} ${country?.code}. Switch to Gross to edit.`}
+              Prices in {sym} {country?.code}. Click any gross price cell to edit. COGS% updates after save.
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 min-w-[180px]">Item</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 sticky left-[180px] bg-gray-50 min-w-[110px]">Menu</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 min-w-[90px]">Cost</th>
-                    {levels.map(l => (
-                      <th key={l.id} className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 min-w-[130px]">{l.name}</th>
-                    ))}
+                    <SortableHeader label="Item"     colKey="display_name" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                    <SortableHeader label="Menu"     colKey="menu_name"    sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                    <SortableHeader label="Type"     colKey="item_type"    sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+                    <SortableHeader label="Cost"     colKey="cost"         sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />
+                    {levels.flatMap(l => [
+                      <SortableHeader key={`${l.id}_g`} label={`${l.name} Gross`} colKey={`lvl_${l.id}_gross`} sortCol={sortCol} sortDir={sortDir} onSort={onSort} right />,
+                      <th key={`${l.id}_c`} className="px-3 py-2.5 text-xs font-semibold text-gray-500 text-right whitespace-nowrap">COGS %</th>,
+                    ])}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filteredItems.length === 0 && (
-                    <tr><td colSpan={3 + levels.length} className="px-4 py-8 text-center text-sm text-gray-400">No items match the current filter.</td></tr>
+                  {sortedRows.length === 0 && (
+                    <tr><td colSpan={4 + levels.length * 2} className="px-4 py-10 text-center text-sm text-gray-400">
+                      No items match the current filter.
+                    </td></tr>
                   )}
-                  {filteredItems.map(item => (
-                    <tr key={item.menu_item_id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2.5 sticky left-0 bg-white">
-                        <div className="font-medium text-gray-900">{item.display_name}</div>
-                        {item.item_type === 'ingredient' && (
-                          <div className="text-xs text-gray-400">ingredient</div>
-                        )}
+                  {sortedRows.map(row => (
+                    <tr key={row.menu_item_id} className="hover:bg-gray-50">
+                      <td className="px-3 py-2.5 font-medium text-gray-900">{row.display_name}</td>
+                      <td className="px-3 py-2.5 text-gray-600 text-xs">{row.menu_name}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{row.item_type}</span>
                       </td>
-                      <td className="px-3 py-2.5 sticky left-[180px] bg-white text-sm text-gray-600">{item.menu_name}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-xs">{sym}{fmt2(item.cost)}</td>
-                      {levels.map(level => {
-                        const ld = item.levels[level.id]
-                        const key = `${item.menu_item_id}_${level.id}`
-                        const isSaving = saving[key]
-                        const isSaved  = saved[key]
-
-                        if (grossNet === 'gross') {
-                          const orig = ld?.set && ld.gross !== null ? fmt2(ld.gross) : ''
-                          return (
-                            <LrPriceCell
-                              key={level.id}
-                              sym={sym}
-                              gross={ld?.gross ?? null}
-                              cogs={ld?.cogs_pct ?? null}
-                              saving={isSaving}
-                              saved={isSaved}
-                              onBlur={(val) => onSavePrice(item.menu_item_id, level.id, val, orig)}
-                            />
-                          )
-                        } else {
-                          const net = ld?.set && ld.net !== null ? `${sym}${fmt2(ld.net)}` : null
-                          const cogs = ld?.cogs_pct ?? null
-                          return (
-                            <td key={level.id} className="px-3 py-2.5 text-right">
-                              <div className="font-mono text-xs font-semibold">{net ?? <span className="text-gray-300">—</span>}</div>
-                              {cogs !== null && net && (
-                                <div className={`text-xs mt-0.5 inline-block px-1 rounded ${
-                                  cogs <= 28 ? 'bg-green-100 text-green-700' : cogs <= 35 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'
-                                }`}>{cogs.toFixed(1)}%</div>
-                              )}
-                            </td>
-                          )
-                        }
+                      <td className="px-3 py-2.5 text-right font-mono text-xs">{sym}{row.cost.toFixed(2)}</td>
+                      {levels.flatMap(l => {
+                        const key   = `${row.menu_item_id}_${l.id}`
+                        const gross = row[`lvl_${l.id}_gross`] as number | null
+                        const cogs  = row[`lvl_${l.id}_cogs`]  as number | null
+                        const badge = cogsBadge(cogs)
+                        return [
+                          <td key={`${l.id}_g`} className="px-2 py-1.5">
+                            <div className="flex justify-end">
+                              <InlinePriceCell
+                                value={gross}
+                                sym={sym}
+                                saving={saving[key]}
+                                saved={saved[key]}
+                                onCommit={v => { if (v !== null) onSavePrice(row.menu_item_id, l.id, v, countryRate) }}
+                              />
+                            </div>
+                          </td>,
+                          <td key={`${l.id}_c`} className="px-3 py-2.5 text-right">
+                            {badge
+                              ? <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
+                              : <span className="text-gray-300 text-xs">—</span>}
+                          </td>,
+                        ]
                       })}
                     </tr>
                   ))}
@@ -1524,49 +1842,5 @@ function LevelReport({ countries, data, loading, countryId, grossNet, search, me
         )}
       </div>
     </div>
-  )
-}
-
-// ── Level Report Price Cell (inline editable) ─────────────────────────────────
-
-function LrPriceCell({ sym, gross, cogs, saving, saved, onBlur }: {
-  sym: string; gross: number | null; cogs: number | null
-  saving?: boolean; saved?: boolean
-  onBlur(val: string): void
-}) {
-  const origRef = useRef(gross !== null ? fmt2(gross) : '')
-  const [val, setVal] = useState(gross !== null ? fmt2(gross) : '')
-
-  useEffect(() => {
-    const v = gross !== null ? fmt2(gross) : ''
-    origRef.current = v
-    setVal(v)
-  }, [gross])
-
-  const cogsCls = cogs !== null
-    ? cogs <= 28 ? 'bg-green-100 text-green-700' : cogs <= 35 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'
-    : ''
-
-  return (
-    <td className={`px-2 py-2 ${saving ? 'opacity-50' : ''} ${saved ? 'bg-green-50' : ''}`}>
-      <div className="flex items-center border rounded px-1.5 bg-white focus-within:ring-1 focus-within:ring-blue-400">
-        <span className="text-gray-400 text-xs mr-0.5">{sym}</span>
-        <input
-          type="number" min="0" step="0.01"
-          className="w-20 py-1 text-xs font-mono outline-none bg-transparent"
-          value={val}
-          placeholder="—"
-          onChange={e => setVal(e.target.value)}
-          onBlur={() => onBlur(val)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-            if (e.key === 'Escape') { setVal(origRef.current); e.currentTarget.blur() }
-          }}
-        />
-      </div>
-      {cogs !== null && gross !== null && gross > 0 && (
-        <div className={`text-xs mt-0.5 inline-block px-1 rounded ${cogsCls}`}>{cogs.toFixed(1)}%</div>
-      )}
-    </td>
   )
 }
