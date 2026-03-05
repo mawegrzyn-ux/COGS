@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "extractor",
+      "runtimeExecutable": "C:/Program Files/Git/bin/bash.exe",
+      "runtimeArgs": ["C:/Users/micha/Downloads/extract_shell7.sh"],
+      "port": 4567
+    }
+  ]
+}

@@ -229,6 +229,102 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_country_tax_country      ON mcogs_country_tax_rates(country_id)`,
   `CREATE INDEX IF NOT EXISTS idx_pref_vendor_ingredient   ON mcogs_ingredient_preferred_vendor(ingredient_id)`,
 
+  // ── 17. Allergens (Phase 4 — EU/UK FIC 1169/2011 reference table) ──────────
+  `CREATE TABLE IF NOT EXISTS mcogs_allergens (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(100) NOT NULL,
+    code         VARCHAR(30)  NOT NULL UNIQUE,
+    description  VARCHAR(300),
+    sort_order   INTEGER NOT NULL DEFAULT 0
+  )`,
+
+  // ── 18. Ingredient Allergens (junction) ────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_ingredient_allergens (
+    id            SERIAL PRIMARY KEY,
+    ingredient_id INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE CASCADE,
+    allergen_id   INTEGER NOT NULL REFERENCES mcogs_allergens(id)   ON DELETE CASCADE,
+    status        VARCHAR(20) NOT NULL DEFAULT 'contains'
+                  CHECK (status IN ('contains', 'may_contain', 'free_from')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (ingredient_id, allergen_id)
+  )`,
+
+  // ── 19. HACCP Equipment register ───────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_equipment (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    type            VARCHAR(50)  NOT NULL
+                    CHECK (type IN ('fridge', 'freezer', 'hot_hold', 'display', 'other')),
+    location_desc   VARCHAR(200),
+    target_min_temp NUMERIC(5,1),
+    target_max_temp NUMERIC(5,1),
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 20. Equipment Temperature Logs ────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_equipment_temp_logs (
+    id                SERIAL PRIMARY KEY,
+    equipment_id      INTEGER NOT NULL REFERENCES mcogs_equipment(id) ON DELETE CASCADE,
+    logged_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    temp_c            NUMERIC(5,1) NOT NULL,
+    in_range          BOOLEAN NOT NULL,
+    corrective_action TEXT,
+    logged_by         VARCHAR(200),
+    notes             TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 21. CCP Logs (cooking / cooling / delivery) ────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_ccp_logs (
+    id                SERIAL PRIMARY KEY,
+    log_type          VARCHAR(20) NOT NULL
+                      CHECK (log_type IN ('cooking', 'cooling', 'delivery')),
+    recipe_id         INTEGER REFERENCES mcogs_recipes(id) ON DELETE SET NULL,
+    item_name         VARCHAR(200) NOT NULL,
+    target_min_temp   NUMERIC(5,1) NOT NULL,
+    target_max_temp   NUMERIC(5,1) NOT NULL,
+    actual_temp       NUMERIC(5,1) NOT NULL,
+    passed            BOOLEAN NOT NULL,
+    corrective_action TEXT,
+    logged_by         VARCHAR(200),
+    logged_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    notes             TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── Phase 4 column additions to existing tables ────────────────────────────
+
+  // Ingredients — nutrition (per 100g), dietary flags, barcode, temp-sensitive
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS barcode               VARCHAR(100)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS temp_sensitive         BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS storage_type           VARCHAR(50)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS dietary_flags          JSONB NOT NULL DEFAULT '{}'`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS energy_kcal            NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS protein_g              NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS carbs_g                NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS fat_g                  NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS fibre_g                NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS sugar_g                NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS salt_g                 NUMERIC(8,2)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS nutrition_source       VARCHAR(50)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS nutrition_source_id    VARCHAR(100)`,
+  `ALTER TABLE mcogs_ingredients ADD COLUMN IF NOT EXISTS nutrition_updated_at   TIMESTAMPTZ`,
+
+  // Recipes — dietary flags (propagated from ingredients)
+  `ALTER TABLE mcogs_recipes ADD COLUMN IF NOT EXISTS dietary_flags JSONB NOT NULL DEFAULT '{}'`,
+
+  // ── Phase 4 indexes ────────────────────────────────────────────────────────
+  `CREATE INDEX IF NOT EXISTS idx_ingredient_allergens_ingredient ON mcogs_ingredient_allergens(ingredient_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_ingredient_allergens_allergen   ON mcogs_ingredient_allergens(allergen_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_equipment_temp_logs_equipment   ON mcogs_equipment_temp_logs(equipment_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_equipment_temp_logs_logged_at   ON mcogs_equipment_temp_logs(logged_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_ccp_logs_logged_at              ON mcogs_ccp_logs(logged_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_ccp_logs_recipe                 ON mcogs_ccp_logs(recipe_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_ingredients_barcode             ON mcogs_ingredients(barcode)`,
+
   // ── Column migrations (safe to run on existing installs) ──────────────────
   // Adds columns introduced after initial schema — ALTER TABLE IF NOT EXISTS is idempotent
   `ALTER TABLE mcogs_price_levels ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -237,6 +333,24 @@ const migrations = [
   `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL`,
   `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET NOT NULL`,
   `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET DEFAULT ''`,
+
+  // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
+  `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
+    ('GLUTEN',      'Gluten',              'Cereals containing gluten: wheat, rye, barley, oats and their hybridised strains', 1),
+    ('CRUSTACEANS', 'Crustaceans',         'Crustaceans and crustacean products (e.g. shrimp, crab, lobster)', 2),
+    ('EGGS',        'Eggs',                'Eggs and egg products', 3),
+    ('FISH',        'Fish',                'Fish and fish products', 4),
+    ('PEANUTS',     'Peanuts',             'Peanuts and peanut products', 5),
+    ('SOYBEANS',    'Soybeans',            'Soybeans and soy products', 6),
+    ('MILK',        'Milk',                'Milk and dairy products (including lactose)', 7),
+    ('NUTS',        'Nuts',                'Tree nuts: almonds, hazelnuts, walnuts, cashews, pecans, Brazil nuts, pistachios, macadamia', 8),
+    ('CELERY',      'Celery',              'Celery and celeriac', 9),
+    ('MUSTARD',     'Mustard',             'Mustard and mustard products', 10),
+    ('SESAME',      'Sesame seeds',        'Sesame seeds and sesame products', 11),
+    ('SULPHITES',   'Sulphur dioxide',     'Sulphur dioxide and sulphites at concentrations of more than 10mg/kg or 10mg/litre', 12),
+    ('LUPIN',       'Lupin',               'Lupin and lupin products', 13),
+    ('MOLLUSCS',    'Molluscs',            'Molluscs and mollusc products (e.g. clams, mussels, oysters, squid)', 14)
+  ON CONFLICT (code) DO NOTHING`,
 ];
 
 async function migrate() {

@@ -18,5 +18,8 @@ router.use('/menus',               require('./menus'));
 router.use('/menu-items',          require('./menu-items'));
 router.use('/menu-item-prices',    require('./menu-item-prices'));
 router.use('/cogs',                require('./cogs'));
+router.use('/allergens',           require('./allergens'));
+router.use('/nutrition',           require('./nutrition'));
+router.use('/haccp',               require('./haccp'));
 
 module.exports = router;
