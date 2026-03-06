@@ -950,196 +950,192 @@ export default function MarketsPage() {
           </div>
         </>
       ) : (
-        /* ── Locations tab ── */
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+        /* ── Locations tab — 2-panel layout ── */
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex gap-6 items-start">
 
-          {/* ── Locations section ── */}
-          <div>
-            {/* Filter bar */}
-            <div className="flex gap-3 mb-5 flex-wrap items-center">
-              <select
-                className="select text-sm"
-                value={filterLocMkt}
-                onChange={e => setFilterLocMkt(e.target.value)}
-              >
-                <option value="">All Markets</option>
-                {markets.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {isoToFlag(m.country_iso)} {m.name}
-                  </option>
-                ))}
-              </select>
+            {/* ── LEFT: Locations table ── */}
+            <div className="flex-1 min-w-0">
+              {/* Filter bar */}
+              <div className="flex gap-3 mb-4 flex-wrap items-center">
+                <select
+                  className="select text-sm"
+                  value={filterLocMkt}
+                  onChange={e => setFilterLocMkt(e.target.value)}
+                >
+                  <option value="">All Markets</option>
+                  {markets.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {isoToFlag(m.country_iso)} {m.name}
+                    </option>
+                  ))}
+                </select>
 
-              <select
-                className="select text-sm"
-                value={filterLocGrp}
-                onChange={e => setFilterLocGrp(e.target.value)}
-              >
-                <option value="">All Groups</option>
-                {locationGroups.map(g => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
+                <select
+                  className="select text-sm"
+                  value={filterLocGrp}
+                  onChange={e => setFilterLocGrp(e.target.value)}
+                >
+                  <option value="">All Groups</option>
+                  {locationGroups.map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
 
-              <label className="flex items-center gap-2 text-sm text-text-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showLocInactive}
-                  onChange={e => setShowLocInactive(e.target.checked)}
-                  className="w-4 h-4 accent-accent"
+                <label className="flex items-center gap-2 text-sm text-text-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showLocInactive}
+                    onChange={e => setShowLocInactive(e.target.checked)}
+                    className="w-4 h-4 accent-accent"
+                  />
+                  Show inactive
+                </label>
+              </div>
+
+              {filteredLocations.length === 0 ? (
+                <EmptyState
+                  message={locations.length === 0 ? 'No locations yet.' : 'No locations match the current filters.'}
+                  action={locations.length === 0
+                    ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAddLoc}>Add Location</button>
+                    : undefined}
                 />
-                Show inactive
-              </label>
-            </div>
-
-            {filteredLocations.length === 0 ? (
-              <EmptyState
-                message={locations.length === 0 ? 'No locations yet.' : 'No locations match the current filters.'}
-                action={locations.length === 0
-                  ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAddLoc}>Add Location</button>
-                  : undefined}
-              />
-            ) : (
-              <div className="bg-surface border border-border rounded-xl overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-surface-2 border-b border-border">
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Location</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Market</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Address</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Contact Person</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Status</th>
-                      <th className="w-20" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredLocations.map(loc => (
-                      <tr key={loc.id} className={`border-b border-border last:border-0 hover:bg-surface-2 transition-colors ${!loc.is_active ? 'opacity-60' : ''}`}>
-                        <td className="px-4 py-3">
-                          <div className="font-semibold text-text-1">{loc.name}</div>
-                          {loc.email && <div className="text-xs text-text-3">{loc.email}</div>}
-                          {loc.phone && !loc.email && <div className="text-xs text-text-3">{loc.phone}</div>}
-                        </td>
-                        <td className="px-4 py-3">
-                          {loc.market_name ? (
-                            <span className="flex items-center gap-1.5 text-text-2">
-                              <span className="text-base leading-none">{isoToFlag(loc.market_iso)}</span>
-                              <span>{loc.market_name}</span>
+              ) : (
+                <div className="bg-surface border border-border rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-surface-2 border-b border-border">
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Location</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Market</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Address</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Contact</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Status</th>
+                        <th className="w-16" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredLocations.map(loc => (
+                        <tr key={loc.id} className={`border-b border-border last:border-0 hover:bg-surface-2 transition-colors ${!loc.is_active ? 'opacity-60' : ''}`}>
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-text-1">{loc.name}</div>
+                            {loc.email && <div className="text-xs text-text-3">{loc.email}</div>}
+                            {loc.phone && !loc.email && <div className="text-xs text-text-3">{loc.phone}</div>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {loc.market_name ? (
+                              <span className="flex items-center gap-1.5 text-text-2 text-xs">
+                                <span className="text-base leading-none">{isoToFlag(loc.market_iso)}</span>
+                                <span>{loc.market_name}</span>
+                              </span>
+                            ) : <span className="text-text-3">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {loc.group_name
+                              ? <span className="text-xs font-semibold bg-accent-dim text-accent px-2 py-0.5 rounded-full">{loc.group_name}</span>
+                              : <span className="text-text-3">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-text-2 max-w-[140px]">
+                            {loc.address
+                              ? <span className="text-xs leading-snug line-clamp-2">{loc.address}</span>
+                              : <span className="text-text-3">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {loc.contact_name ? (
+                              <div>
+                                <div className="text-text-1 font-medium text-xs">{loc.contact_name}</div>
+                                {loc.contact_email && <div className="text-xs text-text-3">{loc.contact_email}</div>}
+                                {loc.contact_phone && <div className="text-xs text-text-3">{loc.contact_phone}</div>}
+                              </div>
+                            ) : <span className="text-text-3">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${loc.is_active ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3 border border-border'}`}>
+                              {loc.is_active ? 'Active' : 'Inactive'}
                             </span>
-                          ) : <span className="text-text-3">—</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          {loc.group_name
-                            ? <span className="text-xs font-semibold bg-accent-dim text-accent px-2 py-0.5 rounded-full">{loc.group_name}</span>
-                            : <span className="text-text-3">—</span>}
-                        </td>
-                        <td className="px-4 py-3 text-text-2 max-w-[180px]">
-                          {loc.address
-                            ? <span className="text-xs leading-snug line-clamp-2">{loc.address}</span>
-                            : <span className="text-text-3">—</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          {loc.contact_name ? (
-                            <div>
-                              <div className="text-text-1 font-medium text-xs">{loc.contact_name}</div>
-                              {loc.contact_email && <div className="text-xs text-text-3">{loc.contact_email}</div>}
-                              {loc.contact_phone && <div className="text-xs text-text-3">{loc.contact_phone}</div>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1.5 justify-end">
+                              <button
+                                className="w-7 h-7 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
+                                onClick={() => openEditLoc(loc)}
+                                title="Edit"
+                              >
+                                <EditIcon size={12} />
+                              </button>
+                              <button
+                                className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                onClick={() => setConfirmDelete({ type: 'location', id: loc.id })}
+                                title="Delete"
+                              >
+                                <TrashIcon size={12} />
+                              </button>
                             </div>
-                          ) : <span className="text-text-3">—</span>}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${loc.is_active ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3 border border-border'}`}>
-                            {loc.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1.5 justify-end">
-                            <button
-                              className="w-7 h-7 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
-                              onClick={() => openEditLoc(loc)}
-                              title="Edit"
-                            >
-                              <EditIcon size={12} />
-                            </button>
-                            <button
-                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                              onClick={() => setConfirmDelete({ type: 'location', id: loc.id })}
-                              title="Delete"
-                            >
-                              <TrashIcon size={12} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* ── Groups section ── */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-text-1">Location Groups</h3>
-                <p className="text-xs text-text-3 mt-0.5">Cluster locations by city or region (e.g. "London Central").</p>
-              </div>
-              <button className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5" onClick={openAddGrp}>
-                <PlusIcon size={12} /> Add Group
-              </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
-            {locationGroups.length === 0 ? (
-              <div className="text-sm text-text-3 italic">No groups yet.</div>
-            ) : (
+            {/* ── RIGHT: Groups panel ── */}
+            <div className="w-72 shrink-0">
               <div className="bg-surface border border-border rounded-xl overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-surface-2 border-b border-border">
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group Name</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Description</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-text-2">Locations</th>
-                      <th className="w-20" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {locationGroups.map(g => (
-                      <tr key={g.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-                        <td className="px-4 py-3 font-semibold text-text-1">{g.name}</td>
-                        <td className="px-4 py-3 text-text-2">{g.description || <span className="text-text-3">—</span>}</td>
-                        <td className="px-4 py-3 text-right">
-                          <span className="text-xs font-bold bg-accent-dim text-accent px-2 py-0.5 rounded-full">
-                            {g.location_count}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1.5 justify-end">
-                            <button
-                              className="w-7 h-7 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
-                              onClick={() => openEditGrp(g)}
-                              title="Edit"
-                            >
-                              <EditIcon size={12} />
-                            </button>
-                            <button
-                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                              onClick={() => setConfirmDelete({ type: 'group', id: g.id })}
-                              title="Delete"
-                            >
-                              <TrashIcon size={12} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface-2">
+                  <div>
+                    <div className="text-xs font-bold text-text-1 uppercase tracking-wide">Groups</div>
+                    <div className="text-xs text-text-3 mt-0.5">Cluster by city or region</div>
+                  </div>
+                  <button
+                    className="btn-ghost px-2.5 py-1.5 text-xs flex items-center gap-1"
+                    onClick={openAddGrp}
+                  >
+                    <PlusIcon size={12} /> Add
+                  </button>
+                </div>
 
+                {locationGroups.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-text-3 italic">No groups yet.</div>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {locationGroups.map(g => (
+                      <div key={g.id} className="flex items-center gap-2 px-4 py-3 hover:bg-surface-2 transition-colors group">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-text-1 truncate">{g.name}</div>
+                          {g.description && (
+                            <div className="text-xs text-text-3 truncate mt-0.5">{g.description}</div>
+                          )}
+                        </div>
+                        <span className="text-xs font-bold bg-accent-dim text-accent px-1.5 py-0.5 rounded-full shrink-0">
+                          {g.location_count}
+                        </span>
+                        <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            className="w-6 h-6 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
+                            onClick={() => openEditGrp(g)}
+                            title="Edit"
+                          >
+                            <EditIcon size={11} />
+                          </button>
+                          <button
+                            className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                            onClick={() => setConfirmDelete({ type: 'group', id: g.id })}
+                            title="Delete"
+                          >
+                            <TrashIcon size={11} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+          </div>
         </div>
       )}
 
