@@ -336,7 +336,13 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 13 | `mcogs_menus` | Menu definitions, linked to a country |
 | 14 | `mcogs_menu_items` | Menu line items: recipe or ingredient, display name, sort order |
 | 15 | `mcogs_menu_item_prices` | Sell prices per menu item per price level, with tax rate |
-| 16 | `mcogs_locations` | Restaurant locations (Phase 2 foundation — schema only, no UI yet) |
+| 16 | `mcogs_locations` | Physical store locations — linked to market, optional group, address, contact details |
+| 17 | `mcogs_location_groups` | Clusters of locations (e.g. "London Central") — optional grouping |
+| 18 | `mcogs_allergens` | EU/UK FIC reference allergens (14 regulated) |
+| 19 | `mcogs_ingredient_allergens` | Junction: allergen status per ingredient (contains/may_contain/free_from) |
+| 20 | `mcogs_equipment` | HACCP equipment register — linked to location |
+| 21 | `mcogs_equipment_temp_logs` | Temperature readings per equipment |
+| 22 | `mcogs_ccp_logs` | CCP logs (cooking/cooling/delivery) — linked to location |
 
 ### Key Schema Details
 
@@ -415,8 +421,18 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/price-quotes` | `price-quotes.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/preferred-vendors` | `preferred-vendors.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/recipes` | `recipes.js` | ✅ Active |
-| `/api/menus` | `menus.js` | 🔜 Commented out — uncomment to activate |
-| `/api/cogs` | `cogs.js` | 🔜 Commented out — uncomment to activate |
+| `GET/POST/PUT/DELETE /api/menus` | `menus.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/menu-items` | `menu-items.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/menu-item-prices` | `menu-item-prices.js` | ✅ Active |
+| `GET /api/cogs` | `cogs.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/allergens` | `allergens.js` | ✅ Active |
+| `GET /api/nutrition` | `nutrition.js` | ✅ Active (USDA proxy) |
+| `GET/POST/PUT/DELETE /api/haccp/equipment` | `haccp.js` | ✅ Active — supports `?location_id=` |
+| `GET/POST/DELETE /api/haccp/equipment/:id/logs` | `haccp.js` | ✅ Active |
+| `GET/POST/DELETE /api/haccp/ccp-logs` | `haccp.js` | ✅ Active — supports `?location_id=` |
+| `GET /api/haccp/report` | `haccp.js` | ✅ Active — supports `?location_id=` |
+| `GET/POST/PUT/DELETE /api/locations` | `locations.js` | ✅ Active — supports `?market_id=&group_id=&active=` |
+| `GET/POST/PUT/DELETE /api/location-groups` | `location-groups.js` | ✅ Active |
 
 ### Exchange Rate Sync
 
@@ -877,6 +893,7 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 | **AWS Lightsail Console** | https://lightsail.aws.amazon.com |
 | **Frankfurter API** (exchange rates) | https://api.frankfurter.app — free, no key |
 | **Let's Encrypt / Certbot** | `sudo certbot renew --dry-run` |
+| **Enterprise Scale-Up Plan** | [`docs/ENTERPRISE_SCALE.md`](docs/ENTERPRISE_SCALE.md) |
 
 ---
 

@@ -4,10 +4,17 @@ import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } f
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface Location {
+  id:   number
+  name: string
+}
+
 interface Equipment {
   id:              number
   name:            string
   type:            string
+  location_id:     number | null
+  location_name:   string | null
   location_desc:   string | null
   target_min_temp: number | null
   target_max_temp: number | null
@@ -61,7 +68,14 @@ const CCP_LOG_TYPES   = ['cooking', 'cooling', 'delivery']
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function HACCPPage() {
-  const [tab, setTab] = useState<HACCPTab>('equipment')
+  const api = useApi()
+  const [tab,        setTab]        = useState<HACCPTab>('equipment')
+  const [locationId, setLocationId] = useState<number | null>(null)
+  const [locations,  setLocations]  = useState<Location[]>([])
+
+  useEffect(() => {
+    api.get('/locations?active=true').then((d: Location[]) => setLocations(d || [])).catch(() => {})
+  }, [api])
 
   const TAB_LABELS: Record<HACCPTab, string> = {
     'equipment':  'Equipment',
@@ -70,6 +84,8 @@ export default function HACCPPage() {
     'report':     'Report',
   }
 
+  const selectedLocation = locations.find(l => l.id === locationId)
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
@@ -77,6 +93,35 @@ export default function HACCPPage() {
         subtitle="Hazard Analysis Critical Control Points — equipment monitoring and process logs."
       />
 
+      {/* Location selector bar */}
+      <div className="flex items-center gap-3 px-6 py-3 bg-surface-2 border-b border-border">
+        <span className="text-xs font-semibold text-text-3 uppercase tracking-wide shrink-0">Location</span>
+        <select
+          className="select text-sm max-w-xs"
+          value={locationId ?? ''}
+          onChange={e => setLocationId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">All Locations</option>
+          {locations.map(l => (
+            <option key={l.id} value={l.id}>{l.name}</option>
+          ))}
+        </select>
+        {selectedLocation && (
+          <span className="text-xs text-text-3">
+            Showing data for <span className="font-semibold text-text-2">{selectedLocation.name}</span>
+          </span>
+        )}
+        {locationId && (
+          <button
+            className="text-xs text-text-3 hover:text-accent underline"
+            onClick={() => setLocationId(null)}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Tabs */}
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border">
         {(['equipment', 'temp-logs', 'ccp-logs', 'report'] as HACCPTab[]).map(t => (
           <button
@@ -94,10 +139,10 @@ export default function HACCPPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'equipment'  && <EquipmentTab />}
-        {tab === 'temp-logs'  && <TempLogsTab />}
-        {tab === 'ccp-logs'   && <CcpLogsTab />}
-        {tab === 'report'     && <ReportTab />}
+        {tab === 'equipment'  && <EquipmentTab  locationId={locationId} locations={locations} />}
+        {tab === 'temp-logs'  && <TempLogsTab   locationId={locationId} />}
+        {tab === 'ccp-logs'   && <CcpLogsTab    locationId={locationId} />}
+        {tab === 'report'     && <ReportTab     locationId={locationId} />}
       </div>
     </div>
   )
@@ -105,7 +150,7 @@ export default function HACCPPage() {
 
 // ── Equipment Tab ─────────────────────────────────────────────────────────────
 
-function EquipmentTab() {
+function EquipmentTab({ locationId, locations }: { locationId: number | null; locations: Location[] }) {
   const api = useApi()
 
   const [equipment,     setEquipment]     = useState<Equipment[]>([])
@@ -114,7 +159,7 @@ function EquipmentTab() {
   const [confirmDelete, setConfirmDelete] = useState<Equipment | null>(null)
   const [toast,         setToast]         = useState<ToastState | null>(null)
 
-  const blankForm = { name: '', type: 'fridge', location_desc: '', target_min_temp: '', target_max_temp: '', is_active: 'true' }
+  const blankForm = { name: '', type: 'fridge', location_id: locationId ? String(locationId) : '', location_desc: '', target_min_temp: '', target_max_temp: '', is_active: 'true' }
   const [form,   setForm]   = useState(blankForm)
   const [saving, setSaving] = useState(false)
 
@@ -122,19 +167,23 @@ function EquipmentTab() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    try { setEquipment(await api.get('/haccp/equipment') || []) }
+    try {
+      const qs = locationId ? `?location_id=${locationId}` : ''
+      setEquipment(await api.get(`/haccp/equipment${qs}`) || [])
+    }
     catch { showToast('Failed to load equipment', 'error') }
     finally { setLoading(false) }
-  }, [api])
+  }, [api, locationId])
 
   useEffect(() => { load() }, [load])
 
-  function openAdd() { setModal('new'); setForm(blankForm) }
+  function openAdd() { setModal('new'); setForm({ ...blankForm, location_id: locationId ? String(locationId) : '' }) }
   function openEdit(e: Equipment) {
     setModal(e)
     setForm({
       name:            e.name,
       type:            e.type,
+      location_id:     e.location_id != null ? String(e.location_id) : '',
       location_desc:   e.location_desc || '',
       target_min_temp: e.target_min_temp != null ? String(e.target_min_temp) : '',
       target_max_temp: e.target_max_temp != null ? String(e.target_max_temp) : '',
@@ -149,6 +198,7 @@ function EquipmentTab() {
       const payload = {
         name:            form.name.trim(),
         type:            form.type,
+        location_id:     form.location_id ? Number(form.location_id) : null,
         location_desc:   form.location_desc.trim() || null,
         target_min_temp: form.target_min_temp !== '' ? Number(form.target_min_temp) : null,
         target_max_temp: form.target_max_temp !== '' ? Number(form.target_max_temp) : null,
@@ -197,6 +247,7 @@ function EquipmentTab() {
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
                   <div className="font-extrabold text-text-1">{eq.name}</div>
+                  {eq.location_name && <div className="text-xs text-accent font-semibold mt-0.5">📍 {eq.location_name}</div>}
                   {eq.location_desc && <div className="text-xs text-text-3 mt-0.5">{eq.location_desc}</div>}
                 </div>
                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${typeColors[eq.type] || typeColors.other}`}>
@@ -254,9 +305,17 @@ function EquipmentTab() {
               </select>
             </Field>
           </div>
-          <Field label="Location Description">
-            <input className="input w-full" value={form.location_desc} onChange={e => setForm(f => ({ ...f, location_desc: e.target.value }))} placeholder="e.g. Kitchen — back wall" />
-          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Location">
+              <select className="select w-full" value={form.location_id} onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}>
+                <option value="">— No location —</option>
+                {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Position / Description">
+              <input className="input w-full" value={form.location_desc} onChange={e => setForm(f => ({ ...f, location_desc: e.target.value }))} placeholder="e.g. Kitchen — back wall" />
+            </Field>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Min Target Temp (°C)">
               <input className="input w-full font-mono" type="number" step="0.5" value={form.target_min_temp} onChange={e => setForm(f => ({ ...f, target_min_temp: e.target.value }))} placeholder="e.g. 1" />
@@ -288,7 +347,7 @@ function EquipmentTab() {
 
 // ── Temp Logs Tab ─────────────────────────────────────────────────────────────
 
-function TempLogsTab() {
+function TempLogsTab({ locationId }: { locationId: number | null }) {
   const api = useApi()
 
   const [equipment,   setEquipment]   = useState<Equipment[]>([])
@@ -306,8 +365,15 @@ function TempLogsTab() {
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => setToast({ message: msg, type })
 
   useEffect(() => {
-    api.get('/haccp/equipment').then((d: Equipment[]) => setEquipment(d || [])).catch(() => {})
-  }, [api])
+    const qs = locationId ? `?location_id=${locationId}` : ''
+    api.get(`/haccp/equipment${qs}`).then((d: Equipment[]) => {
+      setEquipment(d || [])
+      // Clear selection if the selected equipment is no longer in the filtered list
+      if (selectedEq && !(d || []).find((e: Equipment) => String(e.id) === selectedEq)) {
+        setSelectedEq('')
+      }
+    }).catch(() => {})
+  }, [api, locationId])
 
   const loadLogs = useCallback(async (eqId: string) => {
     if (!eqId) { setLogs([]); return }
@@ -474,7 +540,7 @@ function TempLogsTab() {
 
 // ── CCP Logs Tab ──────────────────────────────────────────────────────────────
 
-function CcpLogsTab() {
+function CcpLogsTab({ locationId }: { locationId: number | null }) {
   const api = useApi()
 
   const [logs,        setLogs]        = useState<CcpLog[]>([])
@@ -493,11 +559,14 @@ function CcpLogsTab() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const query = filterType ? `?log_type=${filterType}` : ''
+      const params = new URLSearchParams()
+      if (filterType) params.set('log_type', filterType)
+      if (locationId) params.set('location_id', String(locationId))
+      const query = params.toString() ? `?${params}` : ''
       setLogs(await api.get(`/haccp/ccp-logs${query}`) || [])
     } catch { showToast('Failed to load CCP logs', 'error') }
     finally { setLoading(false) }
-  }, [api, filterType])
+  }, [api, filterType, locationId])
 
   useEffect(() => { load() }, [load])
 
@@ -524,6 +593,7 @@ function CcpLogsTab() {
         logged_by:         form.logged_by.trim() || null,
         notes:             form.notes.trim() || null,
         logged_at:         form.logged_at || undefined,
+        location_id:       locationId || null,
       })
       showToast('CCP log saved'); setModal(false); setForm(blankForm); load()
     } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
@@ -668,7 +738,7 @@ function CcpLogsTab() {
 
 // ── Report Tab ────────────────────────────────────────────────────────────────
 
-function ReportTab() {
+function ReportTab({ locationId }: { locationId: number | null }) {
   const api = useApi()
 
   const [report,    setReport]    = useState<Report | null>(null)
@@ -683,13 +753,14 @@ function ReportTab() {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      if (dateFrom) params.set('date_from', dateFrom)
-      if (dateTo)   params.set('date_to', dateTo)
+      if (dateFrom)  params.set('date_from',   dateFrom)
+      if (dateTo)    params.set('date_to',      dateTo)
+      if (locationId) params.set('location_id', String(locationId))
       const query = params.toString() ? `?${params}` : ''
       setReport(await api.get(`/haccp/report${query}`))
     } catch { showToast('Failed to generate report', 'error') }
     finally { setLoading(false) }
-  }, [api, dateFrom, dateTo])
+  }, [api, dateFrom, dateTo, locationId])
 
   useEffect(() => { loadReport() }, [loadReport])
 

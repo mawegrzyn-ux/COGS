@@ -21,6 +21,8 @@ router.use('/cogs',                require('./cogs'));
 router.use('/allergens',           require('./allergens'));
 router.use('/nutrition',           require('./nutrition'));
 router.use('/haccp',               require('./haccp'));
+router.use('/locations',           require('./locations'));
+router.use('/location-groups',     require('./location-groups'));
 router.use('/seed',                require('./seed'));
 
 module.exports = router;
