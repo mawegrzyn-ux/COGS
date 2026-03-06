@@ -34,7 +34,7 @@ const PRICE_LEVELS = [
 
 const COUNTRIES = [
   {
-    name: 'United Kingdom', currency_code: 'GBP', currency_symbol: '£', exchange_rate: 1.27,
+    name: 'United Kingdom', country_iso: 'GB', currency_code: 'GBP', currency_symbol: '£', exchange_rate: 1.27,
     taxes: [
       { name: 'Standard VAT', rate: 0.20,    is_default: true  },
       { name: 'Zero Rate',    rate: 0.00,    is_default: false },
@@ -43,7 +43,7 @@ const COUNTRIES = [
     levelTax: { 'Eat-In': 'Standard VAT', 'Takeaway': 'Zero Rate', 'Delivery': 'Standard VAT' },
   },
   {
-    name: 'United States', currency_code: 'USD', currency_symbol: '$', exchange_rate: 1.00,
+    name: 'United States', country_iso: 'US', currency_code: 'USD', currency_symbol: '$', exchange_rate: 1.00,
     taxes: [
       { name: 'Sales Tax',  rate: 0.08875, is_default: true  },
       { name: 'Tax Exempt', rate: 0.00,    is_default: false },
@@ -52,7 +52,7 @@ const COUNTRIES = [
     levelTax: { 'Eat-In': 'Sales Tax', 'Takeaway': 'Tax Exempt', 'Delivery': 'Sales Tax' },
   },
   {
-    name: 'France', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
+    name: 'France', country_iso: 'FR', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
     taxes: [
       { name: 'TVA Service', rate: 0.10,   is_default: true  },
       { name: 'TVA Réduit',  rate: 0.055,  is_default: false },
@@ -61,7 +61,7 @@ const COUNTRIES = [
     levelTax: { 'Eat-In': 'TVA Service', 'Takeaway': 'TVA Réduit', 'Delivery': 'TVA Service' },
   },
   {
-    name: 'Germany', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
+    name: 'Germany', country_iso: 'DE', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
     taxes: [
       { name: 'MwSt Standard', rate: 0.19, is_default: true  },
       { name: 'MwSt Ermäßigt', rate: 0.07, is_default: false },
@@ -514,9 +514,9 @@ async function seedData(client, log = console.log) {
   let taxRateCount = 0;
   for (const c of COUNTRIES) {
     const { rows: [country] } = await client.query(
-      `INSERT INTO mcogs_countries (name, currency_code, currency_symbol, exchange_rate, default_price_level_id)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [c.name, c.currency_code, c.currency_symbol, c.exchange_rate, plIds[0]]
+      `INSERT INTO mcogs_countries (name, country_iso, currency_code, currency_symbol, exchange_rate, default_price_level_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [c.name, c.country_iso || null, c.currency_code, c.currency_symbol, c.exchange_rate, plIds[0]]
     );
     countryIds.push(country.id);
 

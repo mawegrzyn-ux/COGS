@@ -368,7 +368,7 @@ export default function DashboardPage() {
               label="Markets"
               value={fmt(stats.countries)}
               icon={<IconCountry />}
-              sub="Countries / regions"
+              sub="Franchise markets"
             />
             <StatCard
               label="Active Quotes"
@@ -508,7 +508,7 @@ export default function DashboardPage() {
               { label: 'Recipes', href: '/recipes', icon: <IconRecipe /> },
               { label: 'Menus', href: '/menus', icon: <IconCategory /> },
               { label: 'Vendors', href: '/settings', icon: <IconVendor /> },
-              { label: 'Markets', href: '/countries', icon: <IconCountry /> },
+              { label: 'Markets', href: '/markets', icon: <IconCountry /> },
             ].map(({ label, href, icon }) => (
               <a
                 key={label}

@@ -5,7 +5,7 @@ import AppLayout          from './components/AppLayout'
 import DashboardPage      from './pages/DashboardPage'
 import SettingsPage       from './pages/SettingsPage'
 import LoadingScreen      from './components/LoadingScreen'
-import CountriesPage      from './pages/CountriesPage'
+import MarketsPage        from './pages/MarketsPage'
 import CategoriesPage     from './pages/CategoriesPage'
 import InventoryPage      from './pages/InventoryPage'
 import RecipesPage        from './pages/RecipesPage'
@@ -38,7 +38,8 @@ export default function App() {
           <Route index             element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard"  element={<DashboardPage />} />
           <Route path="settings"   element={<SettingsPage />} />
-          <Route path="countries" element={<CountriesPage />} />
+          <Route path="markets"   element={<MarketsPage />} />
+          <Route path="countries" element={<Navigate to="/markets" replace />} />
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="inventory"  element={<InventoryPage />} />
           <Route path="recipes"    element={<RecipesPage />} />

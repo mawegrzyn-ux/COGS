@@ -14,16 +14,16 @@ router.get('/', async (req, res) => {
 
 // POST /countries
 router.post('/', async (req, res) => {
-  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id } = req.body;
+  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso } = req.body;
   if (!name || !currency_code || !currency_symbol || exchange_rate == null)
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
   try {
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_countries (name, currency_code, currency_symbol, exchange_rate, default_price_level_id)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null]
+      `INSERT INTO mcogs_countries (name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -34,7 +34,7 @@ router.post('/', async (req, res) => {
 
 // PUT /countries/:id
 router.put('/:id', async (req, res) => {
-  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id } = req.body;
+  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso } = req.body;
   if (!name || !currency_code || !currency_symbol || exchange_rate == null)
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
@@ -43,9 +43,9 @@ router.put('/:id', async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE mcogs_countries
        SET name=$1, currency_code=$2, currency_symbol=$3, exchange_rate=$4,
-           default_price_level_id=$5, updated_at=NOW()
-       WHERE id=$6 RETURNING *`,
-      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, req.params.id]
+           default_price_level_id=$5, country_iso=$6, updated_at=NOW()
+       WHERE id=$7 RETURNING *`,
+      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
     res.json(rows[0]);
@@ -57,7 +57,7 @@ router.put('/:id', async (req, res) => {
 
 // PATCH /countries/:id  (partial — used for default_price_level_id inline update)
 router.patch('/:id', async (req, res) => {
-  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id'];
+  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso'];
   const fields  = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length)
     return res.status(400).json({ error: { message: 'No valid fields to update' } });
