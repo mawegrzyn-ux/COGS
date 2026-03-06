@@ -57,7 +57,7 @@ router.put('/:id', async (req, res) => {
 
 // PATCH /countries/:id  (partial — used for default_price_level_id inline update)
 router.patch('/:id', async (req, res) => {
-  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso'];
+  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso','brand_partner_id'];
   const fields  = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length)
     return res.status(400).json({ error: { message: 'No valid fields to update' } });

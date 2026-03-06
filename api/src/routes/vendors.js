@@ -8,7 +8,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT v.*, c.name as country_name, c.currency_code, c.currency_symbol
       FROM mcogs_vendors v
-      JOIN mcogs_countries c ON c.id = v.country_id
+      LEFT JOIN mcogs_countries c ON c.id = v.country_id
     `;
     const vals = [];
     if (country_id) { query += ` WHERE v.country_id = $1`; vals.push(country_id); }
@@ -27,7 +27,7 @@ router.get('/:id', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT v.*, c.name as country_name, c.currency_code, c.currency_symbol
       FROM mcogs_vendors v
-      JOIN mcogs_countries c ON c.id = v.country_id
+      LEFT JOIN mcogs_countries c ON c.id = v.country_id
       WHERE v.id = $1
     `, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
@@ -42,12 +42,11 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const { name, country_id, contact, email, phone, notes } = req.body;
   if (!name?.trim())  return res.status(400).json({ error: { message: 'name is required' } });
-  if (!country_id)    return res.status(400).json({ error: { message: 'country_id is required' } });
   try {
     const { rows } = await pool.query(`
       INSERT INTO mcogs_vendors (name, country_id, contact, email, phone, notes)
       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-    `, [name.trim(), country_id, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null]);
+    `, [name.trim(), country_id || null, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null]);
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -59,13 +58,12 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { name, country_id, contact, email, phone, notes } = req.body;
   if (!name?.trim())  return res.status(400).json({ error: { message: 'name is required' } });
-  if (!country_id)    return res.status(400).json({ error: { message: 'country_id is required' } });
   try {
     const { rows } = await pool.query(`
       UPDATE mcogs_vendors
       SET name=$1, country_id=$2, contact=$3, email=$4, phone=$5, notes=$6, updated_at=NOW()
       WHERE id=$7 RETURNING *
-    `, [name.trim(), country_id, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null, req.params.id]);
+    `, [name.trim(), country_id || null, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
     res.json(rows[0]);
   } catch (err) {

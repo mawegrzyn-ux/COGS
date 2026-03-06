@@ -108,6 +108,7 @@ interface Market {
   exchange_rate: string
   default_price_level_id: number | null
   country_iso: string | null
+  brand_partner_id: number | null
 }
 
 interface TaxRate {
@@ -130,15 +131,17 @@ interface MarketLevelTax {
   tax_rate_id: number
 }
 
-interface Vendor {
+// Brand Partners = Vendors (no country required — they span multiple markets)
+interface BrandPartner {
   id: number
   name: string
-  country_id: number
-  country_name: string
   contact: string | null
   email: string | null
   phone: string | null
   notes: string | null
+  // country_id optional — kept for backward compat with price quote vendors
+  country_id: number | null
+  country_name: string | null
 }
 
 interface ToastData { message: string; type: 'success' | 'error' }
@@ -147,7 +150,7 @@ interface ToastData { message: string; type: 'success' | 'error' }
 
 const blankMarket = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '' }
 const blankTax    = { name: '', rate: '' }
-const blankVendor = { name: '', country_id: '', contact: '', email: '', phone: '', notes: '' }
+const blankBP     = { name: '', contact: '', email: '', phone: '', notes: '' }
 
 // ── CountryPicker ─────────────────────────────────────────────────────────────
 
@@ -158,9 +161,9 @@ interface CountryPickerProps {
 }
 
 function CountryPicker({ value, onChange, error }: CountryPickerProps) {
-  const [open, setOpen]   = useState(false)
+  const [open, setOpen]     = useState(false)
   const [search, setSearch] = useState('')
-  const [pos, setPos]     = useState({ top: 0, left: 0, width: 0 })
+  const [pos, setPos]       = useState({ top: 0, left: 0, width: 0 })
   const btnRef = useRef<HTMLButtonElement>(null)
 
   const selected = useMemo(() => WORLD_COUNTRIES.find(c => c.iso === value) || null, [value])
@@ -246,15 +249,15 @@ function CountryPicker({ value, onChange, error }: CountryPickerProps) {
 export default function MarketsPage() {
   const api = useApi()
   const [activeTab, setActiveTab]   = useState<'Markets' | 'Brand Partners'>('Markets')
-  const [markets,     setMarkets]   = useState<Market[]>([])
-  const [taxRates,    setTaxRates]  = useState<TaxRate[]>([])
-  const [priceLevels, setPriceLevels] = useState<PriceLevel[]>([])
-  const [levelTax,    setLevelTax]  = useState<MarketLevelTax[]>([])
-  const [vendors,     setVendors]   = useState<Vendor[]>([])
-  const [baseCurrency, setBaseCurrency] = useState('USD')
-  const [loading,     setLoading]   = useState(true)
-  const [search,      setSearch]    = useState('')
-  const [toast,       setToast]     = useState<ToastData | null>(null)
+  const [markets,       setMarkets]       = useState<Market[]>([])
+  const [taxRates,      setTaxRates]      = useState<TaxRate[]>([])
+  const [priceLevels,   setPriceLevels]   = useState<PriceLevel[]>([])
+  const [levelTax,      setLevelTax]      = useState<MarketLevelTax[]>([])
+  const [brandPartners, setBrandPartners] = useState<BrandPartner[]>([])
+  const [baseCurrency,  setBaseCurrency]  = useState('USD')
+  const [loading,       setLoading]       = useState(true)
+  const [search,        setSearch]        = useState('')
+  const [toast,         setToast]         = useState<ToastData | null>(null)
 
   // Market modal
   const [marketModal,      setMarketModal]      = useState(false)
@@ -271,15 +274,15 @@ export default function MarketsPage() {
   const [taxErrors,     setTaxErrors]     = useState<Partial<typeof blankTax>>({})
   const [taxSubmitting, setTaxSubmitting] = useState(false)
 
-  // Vendor modal
-  const [vendorModal,      setVendorModal]      = useState(false)
-  const [editingVendor,    setEditingVendor]    = useState<Vendor | null>(null)
-  const [vendorForm,       setVendorForm]       = useState(blankVendor)
-  const [vendorErrors,     setVendorErrors]     = useState<Partial<typeof blankVendor>>({})
-  const [vendorSubmitting, setVendorSubmitting] = useState(false)
+  // Brand Partner modal
+  const [bpModal,      setBpModal]      = useState(false)
+  const [editingBP,    setEditingBP]    = useState<BrandPartner | null>(null)
+  const [bpForm,       setBpForm]       = useState(blankBP)
+  const [bpErrors,     setBpErrors]     = useState<Partial<typeof blankBP>>({})
+  const [bpSubmitting, setBpSubmitting] = useState(false)
 
   // Confirm delete
-  const [confirmDelete, setConfirmDelete] = useState<{ type: 'market' | 'tax' | 'vendor'; id: number } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'market' | 'tax' | 'bp'; id: number } | null>(null)
 
   // ── Load data ───────────────────────────────────────────────────────────────
 
@@ -298,7 +301,7 @@ export default function MarketsPage() {
       setTaxRates(t  || [])
       setPriceLevels(pl || [])
       setLevelTax(clt || [])
-      setVendors(v   || [])
+      setBrandPartners(v || [])
       const bc = (settings as any)?.base_currency
       setBaseCurrency(typeof bc === 'object' && bc !== null ? (bc.code || 'USD') : (bc || 'USD'))
     } catch {
@@ -323,17 +326,29 @@ export default function MarketsPage() {
     [markets, search]
   )
 
-  const filteredVendors = useMemo(() =>
-    vendors.filter(v =>
-      v.name.toLowerCase().includes(search.toLowerCase()) ||
-      v.country_name.toLowerCase().includes(search.toLowerCase()) ||
-      (v.email || '').toLowerCase().includes(search.toLowerCase()) ||
-      (v.contact || '').toLowerCase().includes(search.toLowerCase())
+  const filteredBPs = useMemo(() =>
+    brandPartners.filter(bp =>
+      bp.name.toLowerCase().includes(search.toLowerCase()) ||
+      (bp.email    || '').toLowerCase().includes(search.toLowerCase()) ||
+      (bp.contact  || '').toLowerCase().includes(search.toLowerCase()) ||
+      (bp.phone    || '').toLowerCase().includes(search.toLowerCase())
     ),
-    [vendors, search]
+    [brandPartners, search]
   )
 
   const uniqueCurrencies = useMemo(() => new Set(markets.map(m => m.currency_code)).size, [markets])
+
+  // For each brand partner, which markets use it?
+  const bpMarkets = useMemo(() => {
+    const map: Record<number, Market[]> = {}
+    for (const m of markets) {
+      if (m.brand_partner_id != null) {
+        if (!map[m.brand_partner_id]) map[m.brand_partner_id] = []
+        map[m.brand_partner_id].push(m)
+      }
+    }
+    return map
+  }, [markets, brandPartners])
 
   // ── Market CRUD ─────────────────────────────────────────────────────────────
 
@@ -418,6 +433,17 @@ export default function MarketsPage() {
     }
   }
 
+  async function setMarketBrandPartner(marketId: number, bpId: number | null) {
+    try {
+      await api.patch(`/countries/${marketId}`, { brand_partner_id: bpId })
+      setMarkets(prev => prev.map(m =>
+        m.id === marketId ? { ...m, brand_partner_id: bpId } : m
+      ))
+    } catch (err: any) {
+      showToast(err.message || 'Update failed', 'error')
+    }
+  }
+
   // ── Tax rate CRUD ───────────────────────────────────────────────────────────
 
   function openAddTax(marketId: number) {
@@ -450,11 +476,7 @@ export default function MarketsPage() {
     if (!validateTax()) return
     setTaxSubmitting(true)
     try {
-      const payload = {
-        name:       taxForm.name.trim(),
-        rate:       Number(taxForm.rate) / 100,
-        country_id: taxMarketId,
-      }
+      const payload = { name: taxForm.name.trim(), rate: Number(taxForm.rate) / 100, country_id: taxMarketId }
       if (editingTax) {
         await api.put(`/tax-rates/${editingTax.id}`, payload)
         showToast('Tax rate updated')
@@ -503,66 +525,63 @@ export default function MarketsPage() {
     }
   }
 
-  // ── Vendor / Brand Partner CRUD ─────────────────────────────────────────────
+  // ── Brand Partner CRUD ──────────────────────────────────────────────────────
 
-  function openAddVendor() {
-    setEditingVendor(null)
-    setVendorForm(blankVendor)
-    setVendorErrors({})
-    setVendorModal(true)
+  function openAddBP() {
+    setEditingBP(null)
+    setBpForm(blankBP)
+    setBpErrors({})
+    setBpModal(true)
   }
 
-  function openEditVendor(v: Vendor) {
-    setEditingVendor(v)
-    setVendorForm({
-      name:       v.name,
-      country_id: String(v.country_id),
-      contact:    v.contact || '',
-      email:      v.email   || '',
-      phone:      v.phone   || '',
-      notes:      v.notes   || '',
+  function openEditBP(bp: BrandPartner) {
+    setEditingBP(bp)
+    setBpForm({
+      name:    bp.name,
+      contact: bp.contact || '',
+      email:   bp.email   || '',
+      phone:   bp.phone   || '',
+      notes:   bp.notes   || '',
     })
-    setVendorErrors({})
-    setVendorModal(true)
+    setBpErrors({})
+    setBpModal(true)
   }
 
-  function validateVendor() {
-    const e: Partial<typeof blankVendor> = {}
-    if (!vendorForm.name.trim())  e.name       = 'Required'
-    if (!vendorForm.country_id)   e.country_id = 'Required'
-    setVendorErrors(e)
+  function validateBP() {
+    const e: Partial<typeof blankBP> = {}
+    if (!bpForm.name.trim()) e.name = 'Required'
+    setBpErrors(e)
     return Object.keys(e).length === 0
   }
 
-  async function submitVendor() {
-    if (!validateVendor()) return
-    setVendorSubmitting(true)
+  async function submitBP() {
+    if (!validateBP()) return
+    setBpSubmitting(true)
     try {
       const payload = {
-        name:       vendorForm.name.trim(),
-        country_id: Number(vendorForm.country_id),
-        contact:    vendorForm.contact.trim() || null,
-        email:      vendorForm.email.trim()   || null,
-        phone:      vendorForm.phone.trim()   || null,
-        notes:      vendorForm.notes.trim()   || null,
+        name:    bpForm.name.trim(),
+        contact: bpForm.contact.trim() || null,
+        email:   bpForm.email.trim()   || null,
+        phone:   bpForm.phone.trim()   || null,
+        notes:   bpForm.notes.trim()   || null,
       }
-      if (editingVendor) {
-        await api.put(`/vendors/${editingVendor.id}`, payload)
+      if (editingBP) {
+        await api.put(`/vendors/${editingBP.id}`, payload)
         showToast('Brand Partner updated')
       } else {
         await api.post('/vendors', payload)
         showToast('Brand Partner added')
       }
-      setVendorModal(false)
+      setBpModal(false)
       loadAll()
     } catch (err: any) {
       showToast(err.message || 'Save failed', 'error')
     } finally {
-      setVendorSubmitting(false)
+      setBpSubmitting(false)
     }
   }
 
-  async function deleteVendor(id: number) {
+  async function deleteBP(id: number) {
     try {
       await api.delete(`/vendors/${id}`)
       showToast('Brand Partner deleted')
@@ -576,9 +595,9 @@ export default function MarketsPage() {
 
   function handleConfirmDelete() {
     if (!confirmDelete) return
-    if (confirmDelete.type === 'market')  deleteMarket(confirmDelete.id)
-    else if (confirmDelete.type === 'tax')    deleteTax(confirmDelete.id)
-    else if (confirmDelete.type === 'vendor') deleteVendor(confirmDelete.id)
+    if (confirmDelete.type === 'market') deleteMarket(confirmDelete.id)
+    else if (confirmDelete.type === 'tax') deleteTax(confirmDelete.id)
+    else if (confirmDelete.type === 'bp')  deleteBP(confirmDelete.id)
     setConfirmDelete(null)
   }
 
@@ -595,7 +614,7 @@ export default function MarketsPage() {
               <PlusIcon /> Add Market
             </button>
           ) : (
-            <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddVendor}>
+            <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddBP}>
               <PlusIcon /> Add Brand Partner
             </button>
           )
@@ -618,8 +637,8 @@ export default function MarketsPage() {
             {tab === 'Markets' && markets.length > 0 && (
               <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{markets.length}</span>
             )}
-            {tab === 'Brand Partners' && vendors.length > 0 && (
-              <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{vendors.length}</span>
+            {tab === 'Brand Partners' && brandPartners.length > 0 && (
+              <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{brandPartners.length}</span>
             )}
           </button>
         ))}
@@ -668,6 +687,7 @@ export default function MarketsPage() {
                     taxRates={taxRates.filter(t => t.country_id === market.id)}
                     priceLevels={priceLevels}
                     levelTax={levelTax.filter(lt => lt.country_id === market.id)}
+                    brandPartners={brandPartners}
                     baseCurrency={baseCurrency}
                     onEdit={openEditMarket}
                     onDelete={id => setConfirmDelete({ type: 'market', id })}
@@ -677,6 +697,7 @@ export default function MarketsPage() {
                     onSetDefaultTax={setDefaultTax}
                     onSetDefaultPriceLevel={setDefaultPriceLevel}
                     onSetLevelTax={setLevelTaxMapping}
+                    onSetBrandPartner={setMarketBrandPartner}
                   />
                 ))}
               </div>
@@ -686,7 +707,6 @@ export default function MarketsPage() {
       ) : (
         /* ── Brand Partners tab ── */
         <>
-          {/* Search */}
           <div className="px-6 py-3 border-b border-border bg-surface">
             <div className="relative max-w-sm">
               <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
@@ -701,12 +721,12 @@ export default function MarketsPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {filteredVendors.length === 0 ? (
+            {filteredBPs.length === 0 ? (
               <div className="p-6">
                 <EmptyState
                   message={search ? 'No brand partners match your search.' : 'No brand partners yet. Add your first brand partner.'}
                   action={!search ? (
-                    <button className="btn-primary px-4 py-2 text-sm" onClick={openAddVendor}>Add Brand Partner</button>
+                    <button className="btn-primary px-4 py-2 text-sm" onClick={openAddBP}>Add Brand Partner</button>
                   ) : undefined}
                 />
               </div>
@@ -715,7 +735,7 @@ export default function MarketsPage() {
                 <thead>
                   <tr className="bg-surface-2 border-b border-border">
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Name</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Market</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Markets Covered</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Contact</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Email</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-3">Phone</th>
@@ -723,38 +743,48 @@ export default function MarketsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredVendors.map(v => {
-                    const market = markets.find(m => m.id === v.country_id)
-                    const flag   = isoToFlag(market?.country_iso)
+                  {filteredBPs.map(bp => {
+                    const covered = bpMarkets[bp.id] || []
                     return (
-                      <tr key={v.id} className="hover:bg-surface-2 transition-colors">
-                        <td className="px-4 py-3 font-medium text-text-1">{v.name}</td>
-                        <td className="px-4 py-3 text-text-2">
-                          <span className="flex items-center gap-1.5">
-                            <span className="text-base leading-none">{flag}</span>
-                            {v.country_name}
-                          </span>
+                      <tr key={bp.id} className="hover:bg-surface-2 transition-colors">
+                        <td className="px-4 py-3 font-medium text-text-1">{bp.name}</td>
+                        <td className="px-4 py-3">
+                          {covered.length === 0 ? (
+                            <span className="text-text-3 text-xs">Not assigned</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {covered.map(m => (
+                                <span
+                                  key={m.id}
+                                  className="inline-flex items-center gap-1 text-xs bg-accent-dim text-accent rounded-full px-2 py-0.5 font-medium"
+                                >
+                                  <span className="leading-none">{isoToFlag(m.country_iso)}</span>
+                                  {m.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </td>
-                        <td className="px-4 py-3 text-text-2">{v.contact || <span className="text-text-3">—</span>}</td>
+                        <td className="px-4 py-3 text-text-2">{bp.contact || <span className="text-text-3">—</span>}</td>
                         <td className="px-4 py-3 text-text-2">
-                          {v.email
-                            ? <a href={`mailto:${v.email}`} className="text-accent hover:underline">{v.email}</a>
+                          {bp.email
+                            ? <a href={`mailto:${bp.email}`} className="text-accent hover:underline">{bp.email}</a>
                             : <span className="text-text-3">—</span>
                           }
                         </td>
-                        <td className="px-4 py-3 text-text-2">{v.phone || <span className="text-text-3">—</span>}</td>
+                        <td className="px-4 py-3 text-text-2">{bp.phone || <span className="text-text-3">—</span>}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 justify-end">
                             <button
                               className="p-1.5 text-text-3 hover:text-text-1 hover:bg-surface-2 rounded transition-colors"
-                              onClick={() => openEditVendor(v)}
+                              onClick={() => openEditBP(bp)}
                               title="Edit"
                             >
                               <EditIcon size={14} />
                             </button>
                             <button
                               className="p-1.5 text-text-3 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                              onClick={() => setConfirmDelete({ type: 'vendor', id: v.id })}
+                              onClick={() => setConfirmDelete({ type: 'bp', id: bp.id })}
                               title="Delete"
                             >
                               <TrashIcon size={14} />
@@ -787,7 +817,6 @@ export default function MarketsPage() {
               placeholder="e.g. United Kingdom, Germany North…"
               autoFocus
             />
-            <p className="text-xs text-text-3 mt-1">The name you use to refer to this franchise market.</p>
           </Field>
 
           <Field label="Country" required error={marketErrors.country_iso}>
@@ -884,42 +913,28 @@ export default function MarketsPage() {
       )}
 
       {/* Brand Partner Modal */}
-      {vendorModal && (
+      {bpModal && (
         <Modal
-          title={editingVendor ? 'Edit Brand Partner' : 'Add Brand Partner'}
-          onClose={() => setVendorModal(false)}
+          title={editingBP ? 'Edit Brand Partner' : 'Add Brand Partner'}
+          onClose={() => setBpModal(false)}
         >
-          <Field label="Business Name" required error={vendorErrors.name}>
+          <Field label="Business Name" required error={bpErrors.name}>
             <input
               className="input w-full"
-              value={vendorForm.name}
-              onChange={e => setVendorForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. UK Fresh Produce Ltd"
+              value={bpForm.name}
+              onChange={e => setBpForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. UK Franchise Holdings Ltd"
               autoFocus
             />
-          </Field>
-
-          <Field label="Market" required error={vendorErrors.country_id}>
-            <select
-              className="select w-full"
-              value={vendorForm.country_id}
-              onChange={e => setVendorForm(f => ({ ...f, country_id: e.target.value }))}
-            >
-              <option value="">— Select market —</option>
-              {markets.map(m => (
-                <option key={m.id} value={m.id}>
-                  {isoToFlag(m.country_iso)} {m.name}
-                </option>
-              ))}
-            </select>
+            <p className="text-xs text-text-3 mt-1">Brand partners can be assigned to one or more markets from the Markets tab.</p>
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Contact Name">
               <input
                 className="input w-full"
-                value={vendorForm.contact}
-                onChange={e => setVendorForm(f => ({ ...f, contact: e.target.value }))}
+                value={bpForm.contact}
+                onChange={e => setBpForm(f => ({ ...f, contact: e.target.value }))}
                 placeholder="e.g. Jane Smith"
               />
             </Field>
@@ -927,8 +942,8 @@ export default function MarketsPage() {
               <input
                 className="input w-full"
                 type="tel"
-                value={vendorForm.phone}
-                onChange={e => setVendorForm(f => ({ ...f, phone: e.target.value }))}
+                value={bpForm.phone}
+                onChange={e => setBpForm(f => ({ ...f, phone: e.target.value }))}
                 placeholder="e.g. +44 20 7946 0958"
               />
             </Field>
@@ -938,9 +953,9 @@ export default function MarketsPage() {
             <input
               className="input w-full"
               type="email"
-              value={vendorForm.email}
-              onChange={e => setVendorForm(f => ({ ...f, email: e.target.value }))}
-              placeholder="e.g. contact@supplier.com"
+              value={bpForm.email}
+              onChange={e => setBpForm(f => ({ ...f, email: e.target.value }))}
+              placeholder="e.g. contact@partner.com"
             />
           </Field>
 
@@ -948,16 +963,16 @@ export default function MarketsPage() {
             <textarea
               className="input w-full resize-none"
               rows={3}
-              value={vendorForm.notes}
-              onChange={e => setVendorForm(f => ({ ...f, notes: e.target.value }))}
+              value={bpForm.notes}
+              onChange={e => setBpForm(f => ({ ...f, notes: e.target.value }))}
               placeholder="Any additional notes…"
             />
           </Field>
 
           <div className="flex gap-3 justify-end pt-2">
-            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setVendorModal(false)}>Cancel</button>
-            <button className="btn-primary px-4 py-2 text-sm" onClick={submitVendor} disabled={vendorSubmitting}>
-              {vendorSubmitting ? 'Saving…' : 'Save Brand Partner'}
+            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setBpModal(false)}>Cancel</button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={submitBP} disabled={bpSubmitting}>
+              {bpSubmitting ? 'Saving…' : 'Save Brand Partner'}
             </button>
           </div>
         </Modal>
@@ -971,7 +986,7 @@ export default function MarketsPage() {
               ? 'Delete this market? All its tax rates and level-tax mappings will also be removed.'
               : confirmDelete.type === 'tax'
               ? 'Delete this tax rate?'
-              : 'Delete this brand partner?'
+              : 'Delete this brand partner? This will also unassign it from all markets.'
           }
           onConfirm={handleConfirmDelete}
           onCancel={() => setConfirmDelete(null)}
@@ -990,6 +1005,7 @@ interface MarketCardProps {
   taxRates:               TaxRate[]
   priceLevels:            PriceLevel[]
   levelTax:               MarketLevelTax[]
+  brandPartners:          BrandPartner[]
   baseCurrency:           string
   onEdit:                 (m: Market) => void
   onDelete:               (id: number) => void
@@ -999,16 +1015,18 @@ interface MarketCardProps {
   onSetDefaultTax:        (taxId: number, marketId: number) => void
   onSetDefaultPriceLevel: (marketId: number, priceLevelId: number | null) => void
   onSetLevelTax:          (marketId: number, priceLevelId: number, taxRateId: number | null) => void
+  onSetBrandPartner:      (marketId: number, bpId: number | null) => void
 }
 
 function MarketCard({
-  market, taxRates, priceLevels, levelTax, baseCurrency,
+  market, taxRates, priceLevels, levelTax, brandPartners, baseCurrency,
   onEdit, onDelete, onAddTax, onEditTax, onDeleteTax, onSetDefaultTax,
-  onSetDefaultPriceLevel, onSetLevelTax,
+  onSetDefaultPriceLevel, onSetLevelTax, onSetBrandPartner,
 }: MarketCardProps) {
   const flag          = isoToFlag(market.country_iso)
   const rate          = Number(market.exchange_rate)
   const linkedCountry = WORLD_COUNTRIES.find(c => c.iso === market.country_iso)
+  const currentBP     = brandPartners.find(bp => bp.id === market.brand_partner_id)
 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -1052,6 +1070,28 @@ function MarketCard({
       </div>
 
       <div className="p-5 space-y-5">
+        {/* Brand Partner */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Brand Partner</span>
+            {currentBP
+              ? <Badge label={currentBP.name} variant="green" />
+              : <Badge label="Not assigned" variant="neutral" />
+            }
+          </div>
+          <p className="text-xs text-text-3 mb-2">The franchisee or partner business operating this market.</p>
+          <select
+            className="select w-full text-xs"
+            value={market.brand_partner_id ?? ''}
+            onChange={e => onSetBrandPartner(market.id, e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">— Not assigned —</option>
+            {brandPartners.map(bp => (
+              <option key={bp.id} value={bp.id}>{bp.name}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Default Price Level */}
         {priceLevels.length > 0 && (
           <div>
@@ -1062,7 +1102,6 @@ function MarketCard({
                 : <Badge label="Not set" variant="neutral" />
               }
             </div>
-            <p className="text-xs text-text-3 mb-2">Used in dashboard and reports as the default price level for this market.</p>
             <select
               className="select w-full text-xs"
               value={market.default_price_level_id ?? ''}
@@ -1124,7 +1163,7 @@ function MarketCard({
           <div className="border-t border-border pt-4">
             <div className="mb-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Default Tax per Price Level</span>
-              <p className="text-xs text-text-3 mt-1">Set which tax rate applies by default for each sales channel. Items inherit this unless overridden individually.</p>
+              <p className="text-xs text-text-3 mt-1">Set which tax rate applies by default for each sales channel.</p>
             </div>
             <div className="space-y-2">
               {priceLevels.map(pl => {

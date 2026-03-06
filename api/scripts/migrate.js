@@ -334,6 +334,8 @@ const migrations = [
   `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET NOT NULL`,
   `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET DEFAULT ''`,
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS country_iso CHAR(2)`,
+  `ALTER TABLE mcogs_vendors  ALTER COLUMN country_id DROP NOT NULL`,
+  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS brand_partner_id INTEGER REFERENCES mcogs_vendors(id) ON DELETE SET NULL`,
 
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
