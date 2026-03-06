@@ -41,7 +41,7 @@ export default function App() {
           <Route path="settings"   element={<SettingsPage />} />
           <Route path="markets"    element={<MarketsPage />} />
           <Route path="countries"  element={<Navigate to="/markets" replace />} />
-          <Route path="locations"  element={<LocationsPage />} />
+          <Route path="locations"  element={<Navigate to="/markets" replace />} />
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="inventory"  element={<InventoryPage />} />
           <Route path="recipes"    element={<RecipesPage />} />

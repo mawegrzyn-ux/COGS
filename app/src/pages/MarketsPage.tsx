@@ -146,11 +146,37 @@ interface BrandPartner {
 
 interface ToastData { message: string; type: 'success' | 'error' }
 
+interface Location {
+  id:            number
+  name:          string
+  country_id:    number | null
+  group_id:      number | null
+  address:       string | null
+  email:         string | null
+  phone:         string | null
+  contact_name:  string | null
+  contact_email: string | null
+  contact_phone: string | null
+  is_active:     boolean
+  market_name:   string | null
+  market_iso:    string | null
+  group_name:    string | null
+}
+
+interface LocationGroup {
+  id:             number
+  name:           string
+  description:    string | null
+  location_count: number
+}
+
 // ── Blank forms ───────────────────────────────────────────────────────────────
 
-const blankMarket = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '' }
-const blankTax    = { name: '', rate: '' }
-const blankBP     = { name: '', contact: '', email: '', phone: '', notes: '' }
+const blankMarket   = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '' }
+const blankTax      = { name: '', rate: '' }
+const blankBP       = { name: '', contact: '', email: '', phone: '', notes: '' }
+const blankLocation = { name: '', country_id: '', group_id: '', address: '', email: '', phone: '', contact_name: '', contact_email: '', contact_phone: '', is_active: 'true' }
+const blankGroup    = { name: '', description: '' }
 
 // ── CountryPicker ─────────────────────────────────────────────────────────────
 
@@ -248,7 +274,7 @@ function CountryPicker({ value, onChange, error }: CountryPickerProps) {
 
 export default function MarketsPage() {
   const api = useApi()
-  const [activeTab, setActiveTab]   = useState<'Markets' | 'Brand Partners'>('Markets')
+  const [activeTab, setActiveTab]   = useState<'Brand Partners' | 'Markets' | 'Locations'>('Brand Partners')
   const [markets,       setMarkets]       = useState<Market[]>([])
   const [taxRates,      setTaxRates]      = useState<TaxRate[]>([])
   const [priceLevels,   setPriceLevels]   = useState<PriceLevel[]>([])
@@ -281,21 +307,40 @@ export default function MarketsPage() {
   const [bpErrors,     setBpErrors]     = useState<Partial<typeof blankBP>>({})
   const [bpSubmitting, setBpSubmitting] = useState(false)
 
+  // Locations state
+  const [locations,       setLocations]       = useState<Location[]>([])
+  const [locationGroups,  setLocationGroups]  = useState<LocationGroup[]>([])
+  const [filterLocMkt,    setFilterLocMkt]    = useState('')
+  const [filterLocGrp,    setFilterLocGrp]    = useState('')
+  const [showLocInactive, setShowLocInactive] = useState(false)
+
+  // Location modal
+  const [locModal,  setLocModal]  = useState<Location | 'new' | null>(null)
+  const [locForm,   setLocForm]   = useState(blankLocation)
+  const [locSaving, setLocSaving] = useState(false)
+
+  // Group modal
+  const [grpModal,  setGrpModal]  = useState<LocationGroup | 'new' | null>(null)
+  const [grpForm,   setGrpForm]   = useState(blankGroup)
+  const [grpSaving, setGrpSaving] = useState(false)
+
   // Confirm delete
-  const [confirmDelete, setConfirmDelete] = useState<{ type: 'market' | 'tax' | 'bp'; id: number } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'market' | 'tax' | 'bp' | 'location' | 'group'; id: number } | null>(null)
 
   // ── Load data ───────────────────────────────────────────────────────────────
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [c, t, pl, clt, v, settings] = await Promise.all([
+      const [c, t, pl, clt, v, settings, locs, grps] = await Promise.all([
         api.get('/countries'),
         api.get('/tax-rates'),
         api.get('/price-levels'),
         api.get('/country-level-tax'),
         api.get('/vendors'),
         api.get('/settings').catch(() => ({})),
+        api.get('/locations'),
+        api.get('/location-groups'),
       ])
       setMarkets(c   || [])
       setTaxRates(t  || [])
@@ -304,6 +349,8 @@ export default function MarketsPage() {
       setBrandPartners(v || [])
       const bc = (settings as any)?.base_currency
       setBaseCurrency(typeof bc === 'object' && bc !== null ? (bc.code || 'USD') : (bc || 'USD'))
+      setLocations(locs  || [])
+      setLocationGroups(grps || [])
     } catch {
       showToast('Failed to load data', 'error')
     } finally {
@@ -338,6 +385,16 @@ export default function MarketsPage() {
 
   const uniqueCurrencies = useMemo(() => new Set(markets.map(m => m.currency_code)).size, [markets])
 
+  const filteredLocations = useMemo(() =>
+    locations.filter(loc => {
+      if (filterLocMkt && String(loc.country_id) !== filterLocMkt) return false
+      if (filterLocGrp && String(loc.group_id)   !== filterLocGrp) return false
+      if (!showLocInactive && !loc.is_active) return false
+      return true
+    }),
+    [locations, filterLocMkt, filterLocGrp, showLocInactive]
+  )
+
   // For each brand partner, which markets use it?
   const bpMarkets = useMemo(() => {
     const map: Record<number, Market[]> = {}
@@ -349,6 +406,90 @@ export default function MarketsPage() {
     }
     return map
   }, [markets, brandPartners])
+
+  // ── Location CRUD ───────────────────────────────────────────────────────────
+
+  function openAddLoc() { setLocModal('new'); setLocForm(blankLocation) }
+  function openEditLoc(loc: Location) {
+    setLocModal(loc)
+    setLocForm({
+      name:          loc.name,
+      country_id:    loc.country_id ? String(loc.country_id) : '',
+      group_id:      loc.group_id   ? String(loc.group_id)   : '',
+      address:       loc.address       || '',
+      email:         loc.email         || '',
+      phone:         loc.phone         || '',
+      contact_name:  loc.contact_name  || '',
+      contact_email: loc.contact_email || '',
+      contact_phone: loc.contact_phone || '',
+      is_active:     String(loc.is_active),
+    })
+  }
+
+  async function submitLoc() {
+    if (!locForm.name.trim()) return showToast('Name is required', 'error')
+    setLocSaving(true)
+    try {
+      const payload = {
+        name:          locForm.name.trim(),
+        country_id:    locForm.country_id  ? Number(locForm.country_id)  : null,
+        group_id:      locForm.group_id    ? Number(locForm.group_id)    : null,
+        address:       locForm.address.trim()       || null,
+        email:         locForm.email.trim()         || null,
+        phone:         locForm.phone.trim()          || null,
+        contact_name:  locForm.contact_name.trim()  || null,
+        contact_email: locForm.contact_email.trim() || null,
+        contact_phone: locForm.contact_phone.trim() || null,
+        is_active:     locForm.is_active !== 'false',
+      }
+      if (locModal === 'new') {
+        await api.post('/locations', payload)
+        showToast('Location added')
+      } else if (locModal) {
+        await api.put(`/locations/${(locModal as Location).id}`, payload)
+        showToast('Location updated')
+      }
+      setLocModal(null); loadAll()
+    } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
+    finally { setLocSaving(false) }
+  }
+
+  async function deleteLoc(id: number) {
+    try {
+      await api.delete(`/locations/${id}`)
+      showToast('Location deleted'); loadAll()
+    } catch (err: any) { showToast(err.message || 'Delete failed', 'error') }
+  }
+
+  // ── Group CRUD ──────────────────────────────────────────────────────────────
+
+  function openAddGrp() { setGrpModal('new'); setGrpForm(blankGroup) }
+  function openEditGrp(g: LocationGroup) {
+    setGrpModal(g)
+    setGrpForm({ name: g.name, description: g.description || '' })
+  }
+
+  async function submitGrp() {
+    if (!grpForm.name.trim()) return showToast('Group name is required', 'error')
+    setGrpSaving(true)
+    try {
+      const payload = { name: grpForm.name.trim(), description: grpForm.description.trim() || null }
+      if (grpModal === 'new') {
+        await api.post('/location-groups', payload); showToast('Group added')
+      } else if (grpModal) {
+        await api.put(`/location-groups/${(grpModal as LocationGroup).id}`, payload); showToast('Group updated')
+      }
+      setGrpModal(null); loadAll()
+    } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
+    finally { setGrpSaving(false) }
+  }
+
+  async function deleteGrp(id: number) {
+    try {
+      await api.delete(`/location-groups/${id}`)
+      showToast('Group deleted'); loadAll()
+    } catch (err: any) { showToast(err.message || 'Delete failed', 'error') }
+  }
 
   // ── Market CRUD ─────────────────────────────────────────────────────────────
 
@@ -595,9 +736,11 @@ export default function MarketsPage() {
 
   function handleConfirmDelete() {
     if (!confirmDelete) return
-    if (confirmDelete.type === 'market') deleteMarket(confirmDelete.id)
-    else if (confirmDelete.type === 'tax') deleteTax(confirmDelete.id)
-    else if (confirmDelete.type === 'bp')  deleteBP(confirmDelete.id)
+    if (confirmDelete.type === 'market')       deleteMarket(confirmDelete.id)
+    else if (confirmDelete.type === 'tax')      deleteTax(confirmDelete.id)
+    else if (confirmDelete.type === 'bp')       deleteBP(confirmDelete.id)
+    else if (confirmDelete.type === 'location') deleteLoc(confirmDelete.id)
+    else if (confirmDelete.type === 'group')    deleteGrp(confirmDelete.id)
     setConfirmDelete(null)
   }
 
@@ -613,9 +756,13 @@ export default function MarketsPage() {
             <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddMarket}>
               <PlusIcon /> Add Market
             </button>
-          ) : (
+          ) : activeTab === 'Brand Partners' ? (
             <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddBP}>
               <PlusIcon /> Add Brand Partner
+            </button>
+          ) : (
+            <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddLoc}>
+              <PlusIcon /> Add Location
             </button>
           )
         }
@@ -623,7 +770,7 @@ export default function MarketsPage() {
 
       {/* Tab bar */}
       <div className="flex border-b border-border bg-surface px-6">
-        {(['Markets', 'Brand Partners'] as const).map(tab => (
+        {(['Brand Partners', 'Markets', 'Locations'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setSearch('') }}
@@ -639,6 +786,9 @@ export default function MarketsPage() {
             )}
             {tab === 'Brand Partners' && brandPartners.length > 0 && (
               <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{brandPartners.length}</span>
+            )}
+            {tab === 'Locations' && locations.length > 0 && (
+              <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{locations.length}</span>
             )}
           </button>
         ))}
@@ -704,7 +854,7 @@ export default function MarketsPage() {
             )}
           </div>
         </>
-      ) : (
+      ) : activeTab === 'Brand Partners' ? (
         /* ── Brand Partners tab ── */
         <>
           <div className="px-6 py-3 border-b border-border bg-surface">
@@ -799,6 +949,198 @@ export default function MarketsPage() {
             )}
           </div>
         </>
+      ) : (
+        /* ── Locations tab ── */
+        <div className="flex-1 overflow-y-auto p-6 space-y-8">
+
+          {/* ── Locations section ── */}
+          <div>
+            {/* Filter bar */}
+            <div className="flex gap-3 mb-5 flex-wrap items-center">
+              <select
+                className="select text-sm"
+                value={filterLocMkt}
+                onChange={e => setFilterLocMkt(e.target.value)}
+              >
+                <option value="">All Markets</option>
+                {markets.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {isoToFlag(m.country_iso)} {m.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="select text-sm"
+                value={filterLocGrp}
+                onChange={e => setFilterLocGrp(e.target.value)}
+              >
+                <option value="">All Groups</option>
+                {locationGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+
+              <label className="flex items-center gap-2 text-sm text-text-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showLocInactive}
+                  onChange={e => setShowLocInactive(e.target.checked)}
+                  className="w-4 h-4 accent-accent"
+                />
+                Show inactive
+              </label>
+            </div>
+
+            {filteredLocations.length === 0 ? (
+              <EmptyState
+                message={locations.length === 0 ? 'No locations yet.' : 'No locations match the current filters.'}
+                action={locations.length === 0
+                  ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAddLoc}>Add Location</button>
+                  : undefined}
+              />
+            ) : (
+              <div className="bg-surface border border-border rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-surface-2 border-b border-border">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Location</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Market</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Address</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Contact Person</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Status</th>
+                      <th className="w-20" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLocations.map(loc => (
+                      <tr key={loc.id} className={`border-b border-border last:border-0 hover:bg-surface-2 transition-colors ${!loc.is_active ? 'opacity-60' : ''}`}>
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-text-1">{loc.name}</div>
+                          {loc.email && <div className="text-xs text-text-3">{loc.email}</div>}
+                          {loc.phone && !loc.email && <div className="text-xs text-text-3">{loc.phone}</div>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {loc.market_name ? (
+                            <span className="flex items-center gap-1.5 text-text-2">
+                              <span className="text-base leading-none">{isoToFlag(loc.market_iso)}</span>
+                              <span>{loc.market_name}</span>
+                            </span>
+                          ) : <span className="text-text-3">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {loc.group_name
+                            ? <span className="text-xs font-semibold bg-accent-dim text-accent px-2 py-0.5 rounded-full">{loc.group_name}</span>
+                            : <span className="text-text-3">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-text-2 max-w-[180px]">
+                          {loc.address
+                            ? <span className="text-xs leading-snug line-clamp-2">{loc.address}</span>
+                            : <span className="text-text-3">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {loc.contact_name ? (
+                            <div>
+                              <div className="text-text-1 font-medium text-xs">{loc.contact_name}</div>
+                              {loc.contact_email && <div className="text-xs text-text-3">{loc.contact_email}</div>}
+                              {loc.contact_phone && <div className="text-xs text-text-3">{loc.contact_phone}</div>}
+                            </div>
+                          ) : <span className="text-text-3">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${loc.is_active ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3 border border-border'}`}>
+                            {loc.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1.5 justify-end">
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
+                              onClick={() => openEditLoc(loc)}
+                              title="Edit"
+                            >
+                              <EditIcon size={12} />
+                            </button>
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              onClick={() => setConfirmDelete({ type: 'location', id: loc.id })}
+                              title="Delete"
+                            >
+                              <TrashIcon size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* ── Groups section ── */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-text-1">Location Groups</h3>
+                <p className="text-xs text-text-3 mt-0.5">Cluster locations by city or region (e.g. "London Central").</p>
+              </div>
+              <button className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5" onClick={openAddGrp}>
+                <PlusIcon size={12} /> Add Group
+              </button>
+            </div>
+
+            {locationGroups.length === 0 ? (
+              <div className="text-sm text-text-3 italic">No groups yet.</div>
+            ) : (
+              <div className="bg-surface border border-border rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-surface-2 border-b border-border">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group Name</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Description</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-text-2">Locations</th>
+                      <th className="w-20" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {locationGroups.map(g => (
+                      <tr key={g.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
+                        <td className="px-4 py-3 font-semibold text-text-1">{g.name}</td>
+                        <td className="px-4 py-3 text-text-2">{g.description || <span className="text-text-3">—</span>}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="text-xs font-bold bg-accent-dim text-accent px-2 py-0.5 rounded-full">
+                            {g.location_count}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1.5 justify-end">
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors"
+                              onClick={() => openEditGrp(g)}
+                              title="Edit"
+                            >
+                              <EditIcon size={12} />
+                            </button>
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              onClick={() => setConfirmDelete({ type: 'group', id: g.id })}
+                              title="Delete"
+                            >
+                              <TrashIcon size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+        </div>
       )}
 
       {/* ── Modals ── */}
@@ -978,6 +1320,121 @@ export default function MarketsPage() {
         </Modal>
       )}
 
+      {/* Location Modal */}
+      {locModal !== null && (
+        <Modal
+          title={locModal === 'new' ? 'Add Location' : `Edit: ${(locModal as Location).name}`}
+          onClose={() => setLocModal(null)}
+          width="max-w-2xl"
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Location Name" required>
+              <input
+                className="input w-full"
+                value={locForm.name}
+                onChange={e => setLocForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. King Street Store"
+                autoFocus
+              />
+            </Field>
+            <Field label="Status">
+              <select className="select w-full" value={locForm.is_active} onChange={e => setLocForm(f => ({ ...f, is_active: e.target.value }))}>
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Market">
+              <select className="select w-full" value={locForm.country_id} onChange={e => setLocForm(f => ({ ...f, country_id: e.target.value }))}>
+                <option value="">— No market —</option>
+                {markets.map(m => (
+                  <option key={m.id} value={m.id}>{isoToFlag(m.country_iso)} {m.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Group">
+              <select className="select w-full" value={locForm.group_id} onChange={e => setLocForm(f => ({ ...f, group_id: e.target.value }))}>
+                <option value="">— No group —</option>
+                {locationGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <Field label="Address">
+            <textarea
+              className="input w-full"
+              rows={3}
+              value={locForm.address}
+              onChange={e => setLocForm(f => ({ ...f, address: e.target.value }))}
+              placeholder="Street, city, postcode"
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Location Email">
+              <input className="input w-full" type="email" value={locForm.email} onChange={e => setLocForm(f => ({ ...f, email: e.target.value }))} placeholder="store@brand.com" />
+            </Field>
+            <Field label="Location Phone">
+              <input className="input w-full" type="tel" value={locForm.phone} onChange={e => setLocForm(f => ({ ...f, phone: e.target.value }))} placeholder="+44 20 1234 5678" />
+            </Field>
+          </div>
+          <div className="border-t border-border pt-4 mt-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-text-3 mb-3">Contact Person</p>
+            <Field label="Full Name">
+              <input className="input w-full" value={locForm.contact_name} onChange={e => setLocForm(f => ({ ...f, contact_name: e.target.value }))} placeholder="e.g. Jane Smith" />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Email">
+                <input className="input w-full" type="email" value={locForm.contact_email} onChange={e => setLocForm(f => ({ ...f, contact_email: e.target.value }))} placeholder="jane@brand.com" />
+              </Field>
+              <Field label="Phone">
+                <input className="input w-full" type="tel" value={locForm.contact_phone} onChange={e => setLocForm(f => ({ ...f, contact_phone: e.target.value }))} placeholder="+44 7700 900000" />
+              </Field>
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end pt-2">
+            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setLocModal(null)}>Cancel</button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={submitLoc} disabled={locSaving}>
+              {locSaving ? 'Saving…' : locModal === 'new' ? 'Add Location' : 'Save Changes'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Group Modal */}
+      {grpModal !== null && (
+        <Modal
+          title={grpModal === 'new' ? 'Add Group' : 'Edit Group'}
+          onClose={() => setGrpModal(null)}
+          width="max-w-sm"
+        >
+          <Field label="Group Name" required>
+            <input
+              className="input w-full"
+              value={grpForm.name}
+              onChange={e => setGrpForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. London Central"
+              autoFocus
+            />
+          </Field>
+          <Field label="Description">
+            <input
+              className="input w-full"
+              value={grpForm.description}
+              onChange={e => setGrpForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="Optional note"
+            />
+          </Field>
+          <div className="flex gap-3 justify-end pt-2">
+            <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setGrpModal(null)}>Cancel</button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={submitGrp} disabled={grpSaving}>
+              {grpSaving ? 'Saving…' : 'Save Group'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {/* Confirm Delete */}
       {confirmDelete && (
         <ConfirmDialog
@@ -986,7 +1443,11 @@ export default function MarketsPage() {
               ? 'Delete this market? All its tax rates and level-tax mappings will also be removed.'
               : confirmDelete.type === 'tax'
               ? 'Delete this tax rate?'
-              : 'Delete this brand partner? This will also unassign it from all markets.'
+              : confirmDelete.type === 'bp'
+              ? 'Delete this brand partner? This will also unassign it from all markets.'
+              : confirmDelete.type === 'location'
+              ? 'Delete this location? This cannot be undone.'
+              : 'Delete this group? Locations in this group will be unassigned but not deleted.'
           }
           onConfirm={handleConfirmDelete}
           onCancel={() => setConfirmDelete(null)}
