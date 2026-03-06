@@ -21,6 +21,7 @@ const pool = new Pool({
 const IMPORT_ORDER = [
   'mcogs_units',
   'mcogs_price_levels',
+  'mcogs_brand_partners',        // must precede mcogs_countries (brand_partner_id FK)
   'mcogs_countries',
   'mcogs_country_tax_rates',
   'mcogs_country_level_tax',
@@ -34,6 +35,7 @@ const IMPORT_ORDER = [
   'mcogs_menus',
   'mcogs_menu_items',
   'mcogs_menu_item_prices',
+  'mcogs_location_groups',       // must precede mcogs_locations (group_id FK)
   'mcogs_locations',
 ];
 

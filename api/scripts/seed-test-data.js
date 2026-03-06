@@ -79,6 +79,34 @@ const ING_CATEGORIES = [
 
 const REC_CATEGORIES = ['Starters', 'Mains', 'Sides', 'Desserts', 'Beverages'];
 
+// Brand Partners = franchisees that operate markets (separate from ingredient vendors)
+const BRAND_PARTNERS = [
+  {
+    name: 'UK Franchise Holdings Ltd',
+    contact: 'James Whitfield',
+    email: 'j.whitfield@ukfh.co.uk',
+    phone: '+44 20 7946 0100',
+    notes: 'Master franchisee for all United Kingdom markets',
+    markets: ['United Kingdom'],
+  },
+  {
+    name: 'American Franchise Group LLC',
+    contact: 'Sarah McKenzie',
+    email: 's.mckenzie@afgllc.com',
+    phone: '+1 212 555 0182',
+    notes: 'Operates US east and west coast markets',
+    markets: ['United States'],
+  },
+  {
+    name: 'European Hospitality Partners SA',
+    contact: 'Marc Dubois',
+    email: 'm.dubois@ehpartners.eu',
+    phone: '+33 1 42 86 0200',
+    notes: 'Master franchisee for France and Germany',
+    markets: ['France', 'Germany'],
+  },
+];
+
 const VENDORS = [
   { name: 'Metro Foodservice',    country: 'United Kingdom' },
   { name: 'Brakes Wholesale',     country: 'United Kingdom' },
@@ -487,7 +515,9 @@ async function clearData(client) {
       mcogs_countries,
       mcogs_price_levels,
       mcogs_units,
-      mcogs_locations
+      mcogs_locations,
+      mcogs_location_groups,
+      mcogs_brand_partners
     RESTART IDENTITY CASCADE
   `);
 }
@@ -548,7 +578,32 @@ async function seedData(client, log = console.log) {
   }
   log(`✓ ${COUNTRIES.length} countries, ${taxRateCount} tax rates created`);
 
-  // 4. Categories
+  // 4. Brand Partners — insert first so we can assign country FK immediately after
+  const countryNameMap = {};
+  COUNTRIES.forEach((c, i) => { countryNameMap[c.name] = countryIds[i]; });
+
+  let bpCount = 0;
+  for (const bp of BRAND_PARTNERS) {
+    const { rows: [{ id: bpId }] } = await client.query(
+      `INSERT INTO mcogs_brand_partners (name, contact, email, phone, notes)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [bp.name, bp.contact, bp.email, bp.phone, bp.notes]
+    );
+    bpCount++;
+    // Assign this brand partner to the relevant markets
+    for (const marketName of bp.markets) {
+      const countryId = countryNameMap[marketName];
+      if (countryId) {
+        await client.query(
+          `UPDATE mcogs_countries SET brand_partner_id = $1 WHERE id = $2`,
+          [bpId, countryId]
+        );
+      }
+    }
+  }
+  log(`✓ ${bpCount} brand partners created`);
+
+  // 5. Categories
   const ingCatIds = await bulkInsert(client, 'mcogs_categories',
     ['name', 'group_name', 'type'],
     ING_CATEGORIES.map(n => [n, n, 'ingredient']), true);
@@ -557,14 +612,12 @@ async function seedData(client, log = console.log) {
     REC_CATEGORIES.map(n => [n, n, 'recipe']), true);
   log(`✓ ${ingCatIds.length} ingredient + ${recCatIds.length} recipe categories created`);
 
-  // 5. Vendors
-  const countryNameMap = {};
-  COUNTRIES.forEach((c, i) => { countryNameMap[c.name] = countryIds[i]; });
+  // 6. Vendors (ingredient suppliers — separate from brand partners)
   const vendorIds = await bulkInsert(client, 'mcogs_vendors', ['name', 'country_id'],
     VENDORS.map(v => [v.name, countryNameMap[v.country]]), true);
   log(`✓ ${vendorIds.length} vendors created`);
 
-  // 6. Ingredients (1000)
+  // 7. Ingredients (1000)
   const ingList = generateIngredientList();
   const ingRows = ingList.map(ing => {
     const unitId = unitMap[ing.unit] || unitIds[0]; // fallback to first unit
@@ -584,7 +637,7 @@ async function seedData(client, log = console.log) {
     if (baseName && !ingNameMap[baseName]) ingNameMap[baseName] = ingIds[i];
   });
 
-  // 7. Price Quotes (500 — round-robin: ingredient[i] × vendor[i % 10])
+  // 8. Price Quotes (500 — round-robin: ingredient[i] × vendor[i % 10])
   const quoteRows = [];
   const quotedPairs = []; // track for preferred vendors
   for (let i = 0; i < 500; i++) {
@@ -602,7 +655,7 @@ async function seedData(client, log = console.log) {
     quoteRows, true);
   log(`✓ ${quoteIds.length} price quotes created`);
 
-  // 8. Preferred vendors (one per ingredient per country — use whichever vendor has a quote)
+  // 9. Preferred vendors (one per ingredient per country — use whichever vendor has a quote)
   // Use SAVEPOINT so a schema mismatch here can't abort the whole transaction.
   let pvCount = 0;
   await client.query('SAVEPOINT before_pv');
@@ -629,7 +682,7 @@ async function seedData(client, log = console.log) {
     log(`⚠ Preferred vendors skipped (${pvErr.message})`);
   }
 
-  // 9. Recipes (48)
+  // 10. Recipes (48)
   const recCatMap = {};
   REC_CATEGORIES.forEach((n, i) => { recCatMap[n] = recCatIds[i]; });
 
@@ -665,7 +718,7 @@ async function seedData(client, log = console.log) {
   }
   log(`✓ ${RECIPE_TEMPLATES.length} recipes created with ${recipeItemCount} recipe items`);
 
-  // 10. Menus (4) with menu items + a price row per price level
+  // 11. Menus (4) with menu items + a price row per price level
   let menuItemCount = 0;
   let mipCount      = 0;
   for (const menu of MENUS) {
@@ -721,6 +774,7 @@ async function seedData(client, log = console.log) {
     units: unitIds.length,
     priceLevels: plIds.length,
     countries: countryIds.length,
+    brandPartners: bpCount,
     categories: ingCatIds.length + recCatIds.length,
     vendors: vendorIds.length,
     ingredients: ingIds.length,

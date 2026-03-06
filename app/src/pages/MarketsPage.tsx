@@ -131,7 +131,7 @@ interface MarketLevelTax {
   tax_rate_id: number
 }
 
-// Brand Partners = Vendors (no country required — they span multiple markets)
+// Brand Partners = franchisees that operate markets (distinct from mcogs_vendors = ingredient suppliers)
 interface BrandPartner {
   id: number
   name: string
@@ -139,9 +139,6 @@ interface BrandPartner {
   email: string | null
   phone: string | null
   notes: string | null
-  // country_id optional — kept for backward compat with price quote vendors
-  country_id: number | null
-  country_name: string | null
 }
 
 interface ToastData { message: string; type: 'success' | 'error' }
@@ -337,7 +334,7 @@ export default function MarketsPage() {
         api.get('/tax-rates'),
         api.get('/price-levels'),
         api.get('/country-level-tax'),
-        api.get('/vendors'),
+        api.get('/brand-partners'),
         api.get('/settings').catch(() => ({})),
         api.get('/locations'),
         api.get('/location-groups'),
@@ -707,10 +704,10 @@ export default function MarketsPage() {
         notes:   bpForm.notes.trim()   || null,
       }
       if (editingBP) {
-        await api.put(`/vendors/${editingBP.id}`, payload)
+        await api.put(`/brand-partners/${editingBP.id}`, payload)
         showToast('Brand Partner updated')
       } else {
-        await api.post('/vendors', payload)
+        await api.post('/brand-partners', payload)
         showToast('Brand Partner added')
       }
       setBpModal(false)
@@ -724,7 +721,7 @@ export default function MarketsPage() {
 
   async function deleteBP(id: number) {
     try {
-      await api.delete(`/vendors/${id}`)
+      await api.delete(`/brand-partners/${id}`)
       showToast('Brand Partner deleted')
       loadAll()
     } catch (err: any) {

@@ -334,6 +334,19 @@ const migrations = [
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 
+  // ── 23. Brand Partners (franchisees that operate markets) ──────────────────
+  // Distinct from mcogs_vendors (ingredient/price-quote suppliers)
+  `CREATE TABLE IF NOT EXISTS mcogs_brand_partners (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(200) NOT NULL,
+    contact     VARCHAR(200),
+    email       VARCHAR(200),
+    phone       VARCHAR(50),
+    notes       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
   // ── Column migrations (safe to run on existing installs) ──────────────────
   // Adds columns introduced after initial schema — ALTER TABLE IF NOT EXISTS is idempotent
   `ALTER TABLE mcogs_price_levels ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -344,7 +357,39 @@ const migrations = [
   `ALTER TABLE mcogs_menu_items ALTER COLUMN display_name SET DEFAULT ''`,
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS country_iso CHAR(2)`,
   `ALTER TABLE mcogs_vendors  ALTER COLUMN country_id DROP NOT NULL`,
-  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS brand_partner_id INTEGER REFERENCES mcogs_vendors(id) ON DELETE SET NULL`,
+  // brand_partner_id: add column without FK first so the DO block below can safely migrate the reference
+  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS brand_partner_id INTEGER`,
+
+  // Migrate brand_partner_id FK from mcogs_vendors → mcogs_brand_partners (idempotent)
+  `DO $$
+  BEGIN
+    -- Drop old FK to mcogs_vendors if it exists
+    IF EXISTS (
+      SELECT 1 FROM information_schema.table_constraints
+      WHERE constraint_name = 'mcogs_countries_brand_partner_id_fkey'
+        AND table_name = 'mcogs_countries'
+    ) THEN
+      ALTER TABLE mcogs_countries DROP CONSTRAINT mcogs_countries_brand_partner_id_fkey;
+      -- Clear stale vendor IDs — they no longer map to brand partners
+      UPDATE mcogs_countries SET brand_partner_id = NULL WHERE brand_partner_id IS NOT NULL;
+    END IF;
+
+    -- Add new FK to mcogs_brand_partners if not already present
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_class ref ON ref.oid = con.confrelid
+      WHERE con.contype = 'f'
+        AND rel.relname = 'mcogs_countries'
+        AND ref.relname = 'mcogs_brand_partners'
+        AND con.conname = 'mcogs_countries_brand_partner_id_fkey'
+    ) THEN
+      ALTER TABLE mcogs_countries
+        ADD CONSTRAINT mcogs_countries_brand_partner_id_fkey
+        FOREIGN KEY (brand_partner_id) REFERENCES mcogs_brand_partners(id) ON DELETE SET NULL;
+    END IF;
+  END
+  $$`,
 
   // Locations — full property set (Phase 2 upgrade from skeleton schema)
   // NOTE: group_id must be added BEFORE indexes that reference it
