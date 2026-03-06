@@ -10,7 +10,11 @@
       "Bash(git -C \"C:\\\\Users\\\\micha\\\\OneDrive\\\\Documents\\\\GitHub\\\\COGS\" status)",
       "Bash(git -C \"/c/Users/micha/OneDrive/Documents/GitHub/COGS\" status)",
       "Bash(node scripts/migrate.js)",
-      "Bash(node \"C:/Users/micha/OneDrive/Documents/GitHub/COGS/api/scripts/migrate.js\")"
+      "Bash(node \"C:/Users/micha/OneDrive/Documents/GitHub/COGS/api/scripts/migrate.js\")",
+      "Bash(git add api/scripts/migrate.js)",
+      "Bash(git -C \"C:/Users/micha/OneDrive/Documents/GitHub/COGS\" add api/scripts/migrate.js)",
+      "Bash(git -C \"/c/Users/micha/OneDrive/Documents/GitHub/COGS\" add api/scripts/migrate.js)",
+      "Bash(where git)"
     ]
   }
 }

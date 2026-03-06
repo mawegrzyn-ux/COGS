@@ -334,12 +334,6 @@ const migrations = [
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
 
-  // ── Location + HACCP indexes ───────────────────────────────────────────────
-  `CREATE INDEX IF NOT EXISTS idx_locations_market    ON mcogs_locations(country_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_locations_group     ON mcogs_locations(group_id)    WHERE group_id IS NOT NULL`,
-  `CREATE INDEX IF NOT EXISTS idx_equipment_location  ON mcogs_equipment(location_id) WHERE location_id IS NOT NULL`,
-  `CREATE INDEX IF NOT EXISTS idx_ccp_logs_location   ON mcogs_ccp_logs(location_id)  WHERE location_id IS NOT NULL`,
-
   // ── Column migrations (safe to run on existing installs) ──────────────────
   // Adds columns introduced after initial schema — ALTER TABLE IF NOT EXISTS is idempotent
   `ALTER TABLE mcogs_price_levels ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -353,6 +347,7 @@ const migrations = [
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS brand_partner_id INTEGER REFERENCES mcogs_vendors(id) ON DELETE SET NULL`,
 
   // Locations — full property set (Phase 2 upgrade from skeleton schema)
+  // NOTE: group_id must be added BEFORE indexes that reference it
   `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS group_id       INTEGER REFERENCES mcogs_location_groups(id) ON DELETE SET NULL`,
   `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS address        TEXT`,
   `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS email          VARCHAR(200)`,
@@ -367,6 +362,12 @@ const migrations = [
 
   // CCP Logs — link to location
   `ALTER TABLE mcogs_ccp_logs ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES mcogs_locations(id) ON DELETE SET NULL`,
+
+  // ── Location + HACCP indexes (must come AFTER the column ALTER TABLEs above)
+  `CREATE INDEX IF NOT EXISTS idx_locations_market    ON mcogs_locations(country_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_locations_group     ON mcogs_locations(group_id)    WHERE group_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_equipment_location  ON mcogs_equipment(location_id) WHERE location_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_ccp_logs_location   ON mcogs_ccp_logs(location_id)  WHERE location_id IS NOT NULL`,
 
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
