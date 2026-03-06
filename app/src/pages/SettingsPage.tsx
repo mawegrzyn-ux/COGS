@@ -818,13 +818,13 @@ function TestDataTab() {
   }
 
   const SEED_SUMMARY = [
-    ['4',     'Countries (UK, US, France, Germany)'],
+    ['4',     'Countries with realistic tax rates per level'],
     ['3',     'Price Levels (Eat-In, Takeaway, Delivery)'],
     ['10',    'Vendors'],
     ['1,000', 'Ingredients across 12 categories'],
     ['500',   'Price Quotes'],
     ['48',    'Recipes with ingredient line items'],
-    ['4',     'Menus with items linked to recipes'],
+    ['4',     'Menus — items priced across all price levels'],
   ]
 
   return (

@@ -33,10 +33,42 @@ const PRICE_LEVELS = [
 ];
 
 const COUNTRIES = [
-  { name: 'United Kingdom', currency_code: 'GBP', currency_symbol: '£', exchange_rate: 1.27, tax: { name: 'VAT',       rate: 20.0  } },
-  { name: 'United States',  currency_code: 'USD', currency_symbol: '$', exchange_rate: 1.00, tax: { name: 'Sales Tax', rate: 8.875 } },
-  { name: 'France',         currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08, tax: { name: 'TVA',       rate: 20.0  } },
-  { name: 'Germany',        currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08, tax: { name: 'MwSt',      rate: 19.0  } },
+  {
+    name: 'United Kingdom', currency_code: 'GBP', currency_symbol: '£', exchange_rate: 1.27,
+    taxes: [
+      { name: 'Standard VAT', rate: 0.20,    is_default: true  },
+      { name: 'Zero Rate',    rate: 0.00,    is_default: false },
+    ],
+    // UK: Eat-In food is standard-rated; cold takeaway is zero-rated; delivery is standard-rated
+    levelTax: { 'Eat-In': 'Standard VAT', 'Takeaway': 'Zero Rate', 'Delivery': 'Standard VAT' },
+  },
+  {
+    name: 'United States', currency_code: 'USD', currency_symbol: '$', exchange_rate: 1.00,
+    taxes: [
+      { name: 'Sales Tax',  rate: 0.08875, is_default: true  },
+      { name: 'Tax Exempt', rate: 0.00,    is_default: false },
+    ],
+    // US: Eat-In and Delivery are taxable; Takeaway grocery food often exempt
+    levelTax: { 'Eat-In': 'Sales Tax', 'Takeaway': 'Tax Exempt', 'Delivery': 'Sales Tax' },
+  },
+  {
+    name: 'France', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
+    taxes: [
+      { name: 'TVA Service', rate: 0.10,   is_default: true  },
+      { name: 'TVA Réduit',  rate: 0.055,  is_default: false },
+    ],
+    // France: restaurant service 10%; takeaway food 5.5% reduced rate
+    levelTax: { 'Eat-In': 'TVA Service', 'Takeaway': 'TVA Réduit', 'Delivery': 'TVA Service' },
+  },
+  {
+    name: 'Germany', currency_code: 'EUR', currency_symbol: '€', exchange_rate: 1.08,
+    taxes: [
+      { name: 'MwSt Standard', rate: 0.19, is_default: true  },
+      { name: 'MwSt Ermäßigt', rate: 0.07, is_default: false },
+    ],
+    // Germany: Eat-In 19%; Takeaway and Delivery reduced 7%
+    levelTax: { 'Eat-In': 'MwSt Standard', 'Takeaway': 'MwSt Ermäßigt', 'Delivery': 'MwSt Ermäßigt' },
+  },
 ];
 
 const ING_CATEGORIES = [
@@ -328,6 +360,49 @@ const RECIPE_TEMPLATES = [
 ];
 // Total recipes: 12 + 20 + 8 + 8 = 48
 
+// Eat-In base sell prices per recipe per menu, in the menu's local currency.
+// Takeaway = ×0.90, Delivery = ×1.15 (see LEVEL_MULTIPLIERS below).
+const MENU_PRICES = {
+  'UK Lunch Menu': {
+    'Garlic Bread': 5.50, 'Tomato Soup': 7.50, 'Bruschetta': 7.00, 'Avocado Toast': 9.00,
+    'Fish & Chips': 16.00, 'Beef Burger': 14.00, 'Club Sandwich': 13.00,
+    'Grilled Chicken Breast': 16.00, 'Chicken Caesar Wrap': 12.00,
+    'Mushroom Risotto': 16.00, 'Spinach & Cheese Quiche': 13.00,
+    'Chips': 4.50, 'Side Salad': 5.50, 'Garlic Mashed Potato': 5.00,
+    'Coleslaw': 3.50, 'Onion Rings': 5.00,
+    'Chocolate Brownie': 7.00, 'Apple Crumble': 7.50,
+  },
+  'UK Dinner Menu': {
+    'Caesar Salad': 10.00, 'Prawn Cocktail': 11.00, 'Smoked Salmon Blinis': 12.00,
+    'Burrata Salad': 11.00, 'Mushroom Pâté': 9.00, 'Calamari': 10.00,
+    'Sirloin Steak': 32.00, 'Lamb Chops': 28.00, 'Salmon with Greens': 24.00,
+    'Fish & Chips': 18.00, 'Pork Belly Roast': 22.00, 'Spaghetti Bolognese': 15.00,
+    'BBQ Pork Ribs': 22.00, "Duck Breast à l'Orange": 26.00,
+    'Chips': 5.00, 'Seasonal Vegetables': 6.00, 'Roast Potatoes': 5.50,
+    'Garlic Mashed Potato': 5.50, 'Side Salad': 5.50,
+    'Chocolate Mousse': 8.50, 'Crème Brûlée': 8.00, 'Cheesecake': 7.50, 'Fruit Pavlova': 9.00,
+  },
+  'US Lunch Menu': {
+    'Chicken Wings': 14.00, 'Avocado Toast': 13.00, 'Caesar Salad': 13.00,
+    'Beef Burger': 17.00, 'Club Sandwich': 16.00, 'Chicken Curry': 18.00,
+    'BBQ Pork Ribs': 24.00, 'Grilled Chicken Breast': 19.00,
+    'Tuna Niçoise Salad': 22.00, 'Chicken Caesar Wrap': 15.00,
+    'Chips': 6.00, 'Coleslaw': 5.00, 'Onion Rings': 7.00, 'Side Salad': 7.00,
+    'Chocolate Brownie': 9.00, 'Cheesecake': 9.00,
+  },
+  'France Dinner Menu': {
+    'Bruschetta': 9.00, 'Burrata Salad': 14.00, 'Tomato Soup': 9.00, 'Crispy Calamari': 13.00,
+    "Duck Breast à l'Orange": 28.00, 'Salmon with Greens': 26.00,
+    'Lamb Chops': 30.00, 'Mushroom Risotto': 19.00, 'Prawn Linguine': 22.00,
+    'Thai Green Curry': 19.00, 'Sirloin Steak': 34.00,
+    'Seasonal Vegetables': 7.00, 'Side Salad': 6.00, 'Steamed Basmati Rice': 5.00,
+    'Crème Brûlée': 10.00, 'Tiramisu': 10.00, 'Vanilla Panna Cotta': 9.00, 'Fruit Pavlova': 11.00,
+  },
+};
+
+// Multipliers applied to Eat-In base price per price level
+const LEVEL_MULTIPLIERS = { 'Eat-In': 1.00, 'Takeaway': 0.90, 'Delivery': 1.15 };
+
 // 4 menus — each is { name, country, items: [recipeName, ...] }
 const MENUS = [
   {
@@ -434,7 +509,8 @@ async function seedData(client, log = console.log) {
   log(`✓ ${plIds.length} price levels created`);
 
   // 3. Countries + tax rates + country-level-tax
-  const countryIds = [];
+  const countryIds    = [];
+  const countryTaxMaps = []; // [{ taxName → taxRateId }, ...] — same order as COUNTRIES
   let taxRateCount = 0;
   for (const c of COUNTRIES) {
     const { rows: [country] } = await client.query(
@@ -444,20 +520,29 @@ async function seedData(client, log = console.log) {
     );
     countryIds.push(country.id);
 
-    // Tax rate
-    const { rows: [taxRate] } = await client.query(
-      `INSERT INTO mcogs_country_tax_rates (country_id, name, rate, is_default)
-       VALUES ($1, $2, $3, true) RETURNING id`,
-      [country.id, c.tax.name, c.tax.rate]
-    );
-    taxRateCount++;
+    // Insert all tax rates for this country
+    const taxRateMap = {}; // name → id
+    for (const tax of c.taxes) {
+      const { rows: [tr] } = await client.query(
+        `INSERT INTO mcogs_country_tax_rates (country_id, name, rate, is_default)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [country.id, tax.name, tax.rate, tax.is_default]
+      );
+      taxRateMap[tax.name] = tr.id;
+      taxRateCount++;
+    }
+    countryTaxMaps.push(taxRateMap);
 
-    // Link tax rate to all price levels
-    for (const plId of plIds) {
+    // Link the correct tax rate to each price level using levelTax mapping
+    for (let pi = 0; pi < PRICE_LEVELS.length; pi++) {
+      const levelName = PRICE_LEVELS[pi].name;
+      const taxName   = c.levelTax[levelName];
+      const taxRateId = taxRateMap[taxName];
+      if (!taxRateId) continue;
       await client.query(
         `INSERT INTO mcogs_country_level_tax (country_id, price_level_id, tax_rate_id)
          VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [country.id, plId, taxRate.id]
+        [country.id, plIds[pi], taxRateId]
       );
     }
   }
@@ -580,10 +665,15 @@ async function seedData(client, log = console.log) {
   }
   log(`✓ ${RECIPE_TEMPLATES.length} recipes created with ${recipeItemCount} recipe items`);
 
-  // 10. Menus (4) with menu items
+  // 10. Menus (4) with menu items + a price row per price level
   let menuItemCount = 0;
+  let mipCount      = 0;
   for (const menu of MENUS) {
-    const countryId = countryNameMap[menu.country];
+    const countryId  = countryNameMap[menu.country];
+    const countryIdx = COUNTRIES.findIndex(c => c.name === menu.country);
+    const taxMap     = countryTaxMaps[countryIdx] || {};
+    const menuPrices = MENU_PRICES[menu.name]     || {};
+
     const { rows: [m] } = await client.query(
       `INSERT INTO mcogs_menus (name, country_id) VALUES ($1, $2) RETURNING id`,
       [menu.name, countryId]
@@ -592,16 +682,40 @@ async function seedData(client, log = console.log) {
     for (const recipeName of menu.items) {
       const recipeId = recipeNameMap[recipeName];
       if (!recipeId) continue;
-      await client.query(
+
+      // Insert menu item — get back the id so we can attach prices
+      const { rows: [mi] } = await client.query(
         `INSERT INTO mcogs_menu_items
            (menu_id, item_type, recipe_id, display_name)
-         VALUES ($1, 'recipe', $2, $3)`,
+         VALUES ($1, 'recipe', $2, $3) RETURNING id`,
         [m.id, recipeId, recipeName]
       );
       menuItemCount++;
+
+      // Insert one price row per price level
+      const eatInPrice = menuPrices[recipeName] || 0;
+      for (let pi = 0; pi < PRICE_LEVELS.length; pi++) {
+        const levelName  = PRICE_LEVELS[pi].name;
+        const multiplier = LEVEL_MULTIPLIERS[levelName] ?? 1.0;
+        const sellPrice  = Math.round(eatInPrice * multiplier * 100) / 100;
+        if (sellPrice <= 0) continue; // skip if no price defined for this recipe
+
+        const taxName   = COUNTRIES[countryIdx]?.levelTax?.[levelName];
+        const taxRateId = taxMap[taxName] || null;
+
+        await client.query(
+          `INSERT INTO mcogs_menu_item_prices
+             (menu_item_id, price_level_id, sell_price, tax_rate_id)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (menu_item_id, price_level_id)
+           DO UPDATE SET sell_price=$3, tax_rate_id=$4`,
+          [mi.id, plIds[pi], sellPrice, taxRateId]
+        );
+        mipCount++;
+      }
     }
   }
-  log(`✓ ${MENUS.length} menus created with ${menuItemCount} menu items`);
+  log(`✓ ${MENUS.length} menus, ${menuItemCount} menu items, ${mipCount} item prices seeded`);
 
   return {
     units: unitIds.length,
@@ -616,6 +730,7 @@ async function seedData(client, log = console.log) {
     recipeItems: recipeItemCount,
     menus: MENUS.length,
     menuItems: menuItemCount,
+    menuItemPrices: mipCount,
   };
 }
 
