@@ -2,13 +2,15 @@
 /**
  * Seed / clear routes — for development and testing only.
  *
- * POST /api/seed         — clear + seed test data
+ * POST /api/seed         — clear + seed full test data  (1000 ingredients, 500 quotes)
+ * POST /api/seed/small   — clear + seed small test data (200 ingredients, 400 quotes)
  * POST /api/seed/clear   — clear all table data (keeps schema)
  */
 
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { seedData, clearData } = require('../../scripts/seed-test-data');
+const { seedData, clearData }                     = require('../../scripts/seed-test-data');
+const { seedData: seedSmall, clearData: clearSmall } = require('../../scripts/seed-test-data-small');
 
 // POST /seed — clear existing data then load test data
 router.post('/', async (req, res) => {
@@ -36,6 +38,38 @@ router.post('/', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('[seed] Error:', err.message);
+    res.status(500).json({ error: { message: err.message }, log });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /seed/small — clear existing data then load small test data
+router.post('/small', async (req, res) => {
+  const client = await pool.connect();
+  const log    = [];
+  const push   = (msg) => { log.push(msg); };
+
+  try {
+    await client.query('BEGIN');
+
+    push('Clearing existing data…');
+    await clearSmall(client);
+    push('Database cleared.');
+
+    push('Seeding small test data (200 ingredients, 400 quotes)…');
+    const summary = await seedSmall(client, push);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      summary,
+      log,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[seed/small] Error:', err.message);
     res.status(500).json({ error: { message: err.message }, log });
   } finally {
     client.release();
