@@ -24,7 +24,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data'
+type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -35,6 +35,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'system':         'System',
   'thresholds':     'COGS Thresholds',
   'test-data':      'Test Data',
+  'ai':             'AI',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
-        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data'] as Tab[]).map(t => (
+        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -72,6 +73,7 @@ export default function SettingsPage() {
         {tab === 'system'         && <SystemTab />}
         {tab === 'thresholds'     && <ThresholdsTab />}
         {tab === 'test-data'      && <TestDataTab />}
+        {tab === 'ai'             && <AiTab />}
       </div>
     </div>
   )
@@ -988,6 +990,142 @@ function TestDataTab() {
           onCancel={() => setConfirmAction(null)}
         />
       )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── AI Integration Tab ────────────────────────────────────────────────────────
+
+interface AiKeyStatus {
+  anthropic_key_set: boolean
+  voyage_key_set:    boolean
+}
+
+function AiTab() {
+  const api = useApi()
+  const [loading,   setLoading]   = useState(true)
+  const [saving,    setSaving]    = useState(false)
+  const [status,    setStatus]    = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false })
+  const [anthropic, setAnthropic] = useState('')
+  const [voyage,    setVoyage]    = useState('')
+  const [toast,     setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.get('/ai-config')
+      .then((s: AiKeyStatus) => setStatus(s))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleSave() {
+    const payload: Record<string, string> = {}
+    if (anthropic.trim()) payload.ANTHROPIC_API_KEY = anthropic.trim()
+    if (voyage.trim())    payload.VOYAGE_API_KEY    = voyage.trim()
+    if (!Object.keys(payload).length) return
+    setSaving(true)
+    try {
+      const updated: AiKeyStatus = await api.patch('/ai-config', payload)
+      setStatus(updated)
+      setAnthropic('')
+      setVoyage('')
+      setToast({ message: 'Keys saved', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY') {
+    try {
+      const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
+      setStatus(updated)
+      setToast({ message: 'Key cleared', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to clear key', type: 'error' })
+    }
+  }
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="max-w-lg">
+      <div className="mb-6">
+        <h2 className="text-base font-bold text-text-1 mb-1">AI Integration</h2>
+        <p className="text-sm text-text-3">
+          API keys are stored securely in the database and never returned to the browser. Paste a new key to update — leave blank to keep the existing value.
+        </p>
+      </div>
+
+      {/* Status cards */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        {[
+          { label: 'Anthropic (Claude)', set: status.anthropic_key_set, key: 'ANTHROPIC_API_KEY' as const },
+          { label: 'Voyage AI (RAG)',    set: status.voyage_key_set,    key: 'VOYAGE_API_KEY'    as const },
+        ].map(({ label, set, key }) => (
+          <div
+            key={key}
+            className="flex items-center justify-between rounded-xl border px-4 py-3"
+            style={{ borderColor: set ? 'var(--accent-mid)' : 'var(--border)', background: set ? 'var(--accent-dim)' : 'var(--surface-2)' }}
+          >
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-2)' }}>{label}</div>
+              <Badge label={set ? 'Configured' : 'Not set'} variant={set ? 'green' : 'neutral'} />
+            </div>
+            {set && (
+              <button
+                onClick={() => handleClear(key)}
+                className="text-xs text-text-3 hover:text-red-500 transition-colors ml-2"
+                title="Clear this key"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Key inputs */}
+      <div className="space-y-4">
+        <Field label="Anthropic API Key">
+          <input
+            type="password"
+            className="input w-full font-mono text-sm"
+            value={anthropic}
+            onChange={e => setAnthropic(e.target.value)}
+            placeholder={status.anthropic_key_set ? '••••••••  (leave blank to keep existing)' : 'sk-ant-…'}
+            autoComplete="off"
+          />
+          <p className="text-xs text-text-3 mt-1">Required for the COGS Assistant. Get your key at console.anthropic.com</p>
+        </Field>
+
+        <Field label="Voyage AI API Key">
+          <input
+            type="password"
+            className="input w-full font-mono text-sm"
+            value={voyage}
+            onChange={e => setVoyage(e.target.value)}
+            placeholder={status.voyage_key_set ? '••••••••  (leave blank to keep existing)' : 'pa-…'}
+            autoComplete="off"
+          />
+          <p className="text-xs text-text-3 mt-1">Optional — enables semantic search over COGS documentation. Falls back to keyword search if not set. Get your key at dash.voyageai.com</p>
+        </Field>
+      </div>
+
+      <div className="flex justify-end pt-4">
+        <button
+          className="btn-primary px-5 py-2 text-sm"
+          onClick={handleSave}
+          disabled={saving || (!anthropic.trim() && !voyage.trim())}
+        >
+          {saving ? 'Saving…' : 'Save Keys'}
+        </button>
+      </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

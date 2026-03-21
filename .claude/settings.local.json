@@ -1,6 +1,10 @@
 {
+  "env": {
+    "INTERNAL_API_KEY": "change-me-before-deploying"
+  },
   "permissions": {
     "allow": [
+      "Bash(curl http://localhost:3001/api/internal/feedback*)",
       "Bash(dir \"C:\\\\Users\\\\micha\\\\Downloads\\\\menu-cogs-roadmap*\")",
       "Bash(powershell -Command \":*)",
       "Bash(python \"C:/Users/micha/Downloads/extract_docs.py\")",
