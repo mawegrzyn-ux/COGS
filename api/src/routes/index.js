@@ -25,5 +25,7 @@ router.use('/haccp',               require('./haccp'));
 router.use('/locations',           require('./locations'));
 router.use('/location-groups',     require('./location-groups'));
 router.use('/seed',                require('./seed'));
+router.use('/feedback',            require('./feedback'));
+router.use('/internal/feedback',   require('./internal-feedback'));
 
 module.exports = router;

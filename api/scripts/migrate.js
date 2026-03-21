@@ -414,6 +414,22 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_equipment_location  ON mcogs_equipment(location_id) WHERE location_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_ccp_logs_location   ON mcogs_ccp_logs(location_id)  WHERE location_id IS NOT NULL`,
 
+  // ── 24. Feedback ──────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_feedback (
+    id          SERIAL PRIMARY KEY,
+    type        VARCHAR(50)  NOT NULL DEFAULT 'general'
+                CHECK (type IN ('bug', 'feature', 'general')),
+    status      VARCHAR(50)  NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'in_progress', 'resolved')),
+    title       VARCHAR(500) NOT NULL,
+    description TEXT,
+    page        VARCHAR(200),
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_feedback_status ON mcogs_feedback(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_feedback_type   ON mcogs_feedback(type)`,
+
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
     ('GLUTEN',      'Gluten',              'Cereals containing gluten: wheat, rye, barley, oats and their hybridised strains', 1),
