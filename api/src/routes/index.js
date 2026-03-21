@@ -27,5 +27,6 @@ router.use('/location-groups',     require('./location-groups'));
 router.use('/seed',                require('./seed'));
 router.use('/feedback',            require('./feedback'));
 router.use('/internal/feedback',   require('./internal-feedback'));
+router.use('/ai-chat',             require('./ai-chat'));
 
 module.exports = router;

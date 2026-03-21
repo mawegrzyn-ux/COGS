@@ -430,6 +430,22 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_feedback_status ON mcogs_feedback(status)`,
   `CREATE INDEX IF NOT EXISTS idx_feedback_type   ON mcogs_feedback(type)`,
 
+  // ── 25. AI Chat Log ────────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_ai_chat_log (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    user_email   TEXT,
+    user_message TEXT,
+    response     TEXT,
+    tools_called JSONB,
+    context      JSONB,
+    tokens_in    INTEGER,
+    tokens_out   INTEGER,
+    error        TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created_at ON mcogs_ai_chat_log(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_chat_log_user_email ON mcogs_ai_chat_log(user_email)`,
+
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
     ('GLUTEN',      'Gluten',              'Cereals containing gluten: wheat, rye, barley, oats and their hybridised strains', 1),

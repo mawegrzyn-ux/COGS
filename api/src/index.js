@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+// Initialise RAG (non-blocking — runs in background after startup)
+require('./helpers/rag').init().catch(err => console.error('[rag] init error:', err.message));
+
 const express      = require('express');
 const helmet       = require('helmet');
 const cors         = require('cors');
