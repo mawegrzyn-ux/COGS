@@ -1,7 +1,11 @@
 require('dotenv').config();
 
-// Initialise RAG (non-blocking — runs in background after startup)
-require('./helpers/rag').init().catch(err => console.error('[rag] init error:', err.message));
+// Load AI keys from DB, then init RAG (both non-blocking)
+const aiConfig = require('./helpers/aiConfig');
+const rag      = require('./helpers/rag');
+aiConfig.init()
+  .then(() => rag.init())
+  .catch(err => console.error('[startup] AI init error:', err.message));
 
 const express      = require('express');
 const helmet       = require('helmet');

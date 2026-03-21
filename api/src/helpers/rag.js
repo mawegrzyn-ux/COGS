@@ -4,8 +4,9 @@
 // Falls back to keyword search if VOYAGE_API_KEY is not set.
 // =============================================================================
 
-const fs   = require('fs');
-const path = require('path');
+const fs       = require('fs');
+const path     = require('path');
+const aiConfig = require('./aiConfig');
 
 // In-memory store (populated at startup)
 const _chunks   = [];  // [{ key, text, vector }]
@@ -40,7 +41,7 @@ async function _voyageEmbed(texts) {
     method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${process.env.VOYAGE_API_KEY}`,
+      'Authorization': `Bearer ${aiConfig.get('VOYAGE_API_KEY')}`,
     },
     body: JSON.stringify({ model: 'voyage-3-lite', input: texts }),
   });
@@ -81,7 +82,7 @@ async function init() {
   const raw = _loadChunks();
   if (!raw.length) { console.log('[rag] claude.md not found — RAG disabled'); return; }
 
-  if (!process.env.VOYAGE_API_KEY) {
+  if (!aiConfig.get('VOYAGE_API_KEY')) {
     for (const c of raw) _chunks.push({ key: c.key, text: c.text, vector: null });
     _ready = true;
     console.log(`[rag] Loaded ${_chunks.length} sections (keyword fallback — no VOYAGE_API_KEY)`);
@@ -107,7 +108,7 @@ async function init() {
 
 async function retrieve(query, k = 4) {
   if (!_chunks.length) return '';
-  if (!process.env.VOYAGE_API_KEY || _chunks[0].vector === null) {
+  if (!aiConfig.get('VOYAGE_API_KEY') || _chunks[0].vector === null) {
     return _keywordSearch(query, k).join('\n\n---\n\n');
   }
   try {

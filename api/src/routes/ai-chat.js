@@ -8,8 +8,14 @@ const router    = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 const pool      = require('../db/pool');
 const rag       = require('../helpers/rag');
+const aiConfig  = require('../helpers/aiConfig');
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Client is created per-request so it always picks up the latest key
+function getClient() {
+  const key = aiConfig.get('ANTHROPIC_API_KEY');
+  if (!key) return null;
+  return new Anthropic({ apiKey: key });
+}
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -278,8 +284,9 @@ ${helpContext ? `## Relevant COGS Documentation\n\n${helpContext}` : ''}
 // ── POST /ai-chat ─────────────────────────────────────────────────────────────
 
 router.post('/', async (req, res) => {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY is not configured' } });
+  const anthropic = getClient();
+  if (!anthropic) {
+    return res.status(503).json({ error: { message: 'Anthropic API key is not configured. Add it in Settings → AI.' } });
   }
 
   const { message, context = {}, history = [] } = req.body;
