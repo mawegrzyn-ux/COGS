@@ -19,7 +19,10 @@
       "Bash(git -C \"C:/Users/micha/OneDrive/Documents/GitHub/COGS\" add api/scripts/migrate.js)",
       "Bash(git -C \"/c/Users/micha/OneDrive/Documents/GitHub/COGS\" add api/scripts/migrate.js)",
       "Bash(where git)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(npx tsc:*)",
+      "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit 2>&1\")",
+      "Bash(export SHELL=/bin/bash)"
     ]
   }
 }

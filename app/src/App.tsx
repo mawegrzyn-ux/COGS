@@ -12,6 +12,7 @@ import RecipesPage        from './pages/RecipesPage'
 import MenusPage          from './pages/MenusPage'
 import AllergenMatrixPage from './pages/AllergenMatrixPage'
 import HACCPPage          from './pages/HACCPPage'
+import HelpPage           from './pages/HelpPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -47,8 +48,7 @@ export default function App() {
           <Route path="menus"      element={<MenusPage />} />
           <Route path="allergens"  element={<AllergenMatrixPage />} />
           <Route path="haccp"      element={<HACCPPage />} />
-        
-       
+          <Route path="help"       element={<HelpPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
