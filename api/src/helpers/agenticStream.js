@@ -89,21 +89,23 @@ async function agenticStream({ anthropic, systemPrompt, messages, tools, execute
         messages.push({ role: 'assistant', content: assistantContent });
 
         const toolBlocks  = assistantContent.filter(b => b.type === 'tool_use');
-        const toolResults = await Promise.all(
-          toolBlocks.map(async (b) => {
-            let result;
-            try {
-              result = await executeTool(b.name, b.input || {});
-            } catch (err) {
-              result = { error: err.message };
-            }
-            return {
-              type:        'tool_result',
-              tool_use_id: b.id,
-              content:     JSON.stringify(result),
-            };
-          })
-        );
+        // Run tool calls sequentially to avoid exhausting the pg connection pool
+        // (concurrent transactions each require a dedicated client; with max:10
+        // and batches of 50+ tools, parallel execution causes connection timeouts)
+        const toolResults = [];
+        for (const b of toolBlocks) {
+          let result;
+          try {
+            result = await executeTool(b.name, b.input || {});
+          } catch (err) {
+            result = { error: err.message };
+          }
+          toolResults.push({
+            type:        'tool_result',
+            tool_use_id: b.id,
+            content:     JSON.stringify(result),
+          });
+        }
         messages.push({ role: 'user', content: toolResults });
         continue;
       }
