@@ -432,7 +432,10 @@ function IngredientsTab() {
   , [dbCategories, ingredients])
 
   const searchFiltered = useMemo(() =>
-    ingredients.filter(i => !search || i.name.toLowerCase().includes(search.toLowerCase()))
+    ingredients.filter(i => !search ||
+      i.name.toLowerCase().includes(search.toLowerCase()) ||
+      (i.category || '').toLowerCase().includes(search.toLowerCase())
+    )
   , [ingredients, search])
 
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
@@ -655,7 +658,7 @@ function IngredientsTab() {
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
-            type="search" placeholder="Search ingredients…"
+            type="search" placeholder="Search ingredients or categories…"
             value={search} onChange={e => setSearch(e.target.value)}
             className="input pl-9 w-full"
           />
@@ -1101,9 +1104,16 @@ function PriceQuotesTab() {
     } catch (err: any) { showToast(err.message || 'Failed to update preferred vendor', 'error') }
   }
 
-  const vendorFilterOptions  = vendors.map(v => ({ label: v.name, value: String(v.id) }))
-  const countryFilterOptions = countries.map(c => ({ label: c.name, value: String(c.id) }))
-  const statusFilterOptions  = [{ label: 'Active', value: 'true' }, { label: 'Inactive', value: 'false' }]
+  const vendorFilterOptions      = vendors.map(v => ({ label: v.name, value: String(v.id) }))
+  const countryFilterOptions     = countries.map(c => ({ label: c.name, value: String(c.id) }))
+  const statusFilterOptions      = [{ label: 'Active', value: 'true' }, { label: 'Inactive', value: 'false' }]
+  const preferredFilterOptions   = [{ label: '★ Preferred', value: 'true' }, { label: 'Not preferred', value: 'false' }]
+  const ingredientFilterOptions  = [...new Map(
+    quotes.map(q => [q.ingredient_id, { label: q.ingredient_name, value: String(q.ingredient_id) }])
+  ).values()].sort((a, b) => a.label.localeCompare(b.label))
+  const categoryFilterOptions    = [...new Set(
+    quotes.map(q => q.ingredient_category).filter(Boolean) as string[]
+  )].sort().map(c => ({ label: c, value: c }))
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -1181,24 +1191,23 @@ function PriceQuotesTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-2 border-b border-border rounded-t-xl">
-                <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={ingredientFilterOptions} filterValues={getFilter('ingredient_id')} onFilter={v => setFilter('ingredient_id', v)} />
+                <ColumnHeader<Quote> label="Category"      field="ingredient_category" sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions}   filterValues={getFilter('ingredient_category')} onFilter={v => setFilter('ingredient_category', v)} />
                 <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={getFilter('vendor_id')} onFilter={v => setFilter('vendor_id',  v)} />
                 <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValues={getFilter('country_id')} onFilter={v => setFilter('country_id', v)} />
                 <ColumnHeader<Quote> label="Purchase Unit" field="purchase_unit"       sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Quote> label="Price"         field="purchase_price"      sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                 <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
-                <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions} filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-2">Preferred</th>
+                <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions}    filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
+                <ColumnHeader<Quote> label="Preferred"     field="is_preferred"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={preferredFilterOptions}  filterValues={getFilter('is_preferred')} onFilter={v => setFilter('is_preferred', v)} />
                 <th className="w-24" />
               </tr>
             </thead>
             <tbody>
               {sorted.map(q => (
                 <tr key={q.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3">
-                    <div className="font-semibold text-text-1">{q.ingredient_name}</div>
-                    {q.ingredient_category && <div className="text-xs text-text-3">{q.ingredient_category}</div>}
-                  </td>
+                  <td className="px-4 py-3 font-semibold text-text-1">{q.ingredient_name}</td>
+                  <td className="px-4 py-3 text-text-3">{q.ingredient_category || '—'}</td>
                   <td className="px-4 py-3 text-text-2">{q.vendor_name}</td>
                   <td className="px-4 py-3 text-text-2">{q.country_name}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{q.purchase_unit || '—'}</td>
