@@ -674,7 +674,7 @@ export default function ImportPage() {
       <div className="flex items-center justify-between mb-6">
         <PageHeader
           title="Import Data"
-          description="Upload a spreadsheet and review before importing to your live database." />
+          subtitle="Upload a spreadsheet and review before importing to your live database." />
         {step !== 'upload' && step !== 'parsing' && step !== 'done' && (
           <button onClick={handleDiscard} className="btn-ghost text-sm" style={{ color: 'var(--text-3)' }}>✕ Discard</button>
         )}
@@ -722,7 +722,7 @@ const TH = ({ children }: { children: React.ReactNode }) => (
     {children}
   </th>
 )
-const TD = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+const TD = ({ children, className = '' }: { children?: React.ReactNode; className?: string }) => (
   <td className={`px-3 py-2 text-xs border-b ${className}`} style={{ borderColor: 'var(--border)', color: 'var(--text-1)' }}>
     {children}
   </td>
