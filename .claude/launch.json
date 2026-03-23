@@ -12,6 +12,12 @@
       "runtimeExecutable": "cmd.exe",
       "runtimeArgs": ["/c", "cd C:\\GitHubReps\\COGS\\app && npm run dev"],
       "port": 5173
+    },
+    {
+      "name": "xlsb-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\micha\\Downloads\\xlsb_server.js"],
+      "port": 8765
     }
   ]
 }

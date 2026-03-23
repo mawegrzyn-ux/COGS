@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Spinner } from '../components/ui'
@@ -20,6 +20,8 @@ interface StagedRow {
   _status:       RowStatus
   _issues:       string[]
   _duplicate_of: { id: number; name: string } | null
+  unit_source?:  string   // original imported unit when auto-resolved
+  unit_method?:  string   // 'alias' | 'fuzzy'
   [key: string]: unknown
 }
 
@@ -169,9 +171,10 @@ function EditCell({
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function ImportPage() {
-  const api      = useApi()
-  const navigate = useNavigate()
-  const { user } = useAuth0()
+  const api            = useApi()
+  const navigate       = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { user }       = useAuth0()
 
   const [step,        setStep]        = useState<Step>('upload')
   const [importPath,  setImportPath]  = useState<ImportPath>('ai')
@@ -186,9 +189,26 @@ export default function ImportPage() {
   const [filterDups,  setFilterDups]  = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Load categories
   useEffect(() => {
     api.get('/categories').then((d: DbCategory[]) => setDbCats(d || [])).catch(() => {})
   }, [api])
+
+  // Load existing job from ?job=<id> URL param (chatbot deep-link)
+  useEffect(() => {
+    const jobFromUrl = searchParams.get('job')
+    if (!jobFromUrl) return
+    fetch(`${API_BASE}/import/${jobFromUrl}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.staged_data) return
+        setJobId(data.id)
+        setStaged(data.staged_data)
+        const hasMappings = Object.keys(data.staged_data.category_mapping || {}).length > 0
+        setStep(hasMappings ? 'mapping' : 'review')
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Row helpers ─────────────────────────────────────────────────────────────
 
@@ -402,7 +422,7 @@ export default function ImportPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
-                  <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Your Category</th>
+                  <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Imported Category</th>
                   <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Action</th>
                   <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>COGS Category</th>
                   <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Type</th>
@@ -545,7 +565,7 @@ export default function ImportPage() {
         <div className="card overflow-x-auto">
           {reviewTab === 'ingredients' && <IngredientsTable rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} dbCats={dbCats} />}
           {reviewTab === 'vendors'     && <VendorsTable     rows={filtered} updateRow={updateRow} />}
-          {reviewTab === 'price_quotes'&& <QuotesTable      rows={filtered} updateRow={updateRow} />}
+          {reviewTab === 'price_quotes'&& <QuotesTable      rows={filtered} updateRow={updateRow} staged={staged!} />}
           {reviewTab === 'recipes'     && <RecipesTable     rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} />}
         </div>
 
@@ -733,7 +753,7 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
   if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No ingredients found.</div>
   return (
     <table className="w-full min-w-[700px]">
-      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Unit</TH><TH>Waste %</TH></tr></thead>
+      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Base Unit</TH><TH>Waste %</TH></tr></thead>
       <tbody>
         {rows.map(row => (
           <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
@@ -741,7 +761,19 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
             <TD><RowStatusBadge row={row} /></TD>
             <TD><EditCell value={String(row.name||'')}          onChange={v => updateRow('ingredients', row._id, { name: v })} /></TD>
             <TD><EditCell value={resolvedCat!(String(row.source_category||''))} onChange={v => updateRow('ingredients', row._id, { source_category: v })} type="select" options={catOptions} /></TD>
-            <TD><EditCell value={String(row.unit||'')}          onChange={v => updateRow('ingredients', row._id, { unit: v })} placeholder="e.g. kg" /></TD>
+            <TD>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <EditCell value={String(row.unit||'')} onChange={v => updateRow('ingredients', row._id, { unit: v })} placeholder="e.g. kg" />
+                {row.unit_source && row.unit_source !== row.unit && (
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded font-medium cursor-help shrink-0"
+                    style={{ background: '#FEF3C7', color: '#92400E' }}
+                    title={`Imported as "${row.unit_source}" — auto-matched to "${row.unit}" (${row.unit_method || 'matched'}). Click to override.`}>
+                    was: {String(row.unit_source)}
+                  </span>
+                )}
+              </div>
+            </TD>
             <TD><EditCell value={String(row.waste_pct||0)}      onChange={v => updateRow('ingredients', row._id, { waste_pct: parseFloat(v)||0 })} type="number" /></TD>
           </tr>
         ))}
@@ -769,23 +801,48 @@ function VendorsTable({ rows, updateRow }: TableProps) {
   )
 }
 
-function QuotesTable({ rows, updateRow }: TableProps) {
+function QuotesTable({ rows, updateRow, staged }: TableProps) {
+  // Build ingredient name → resolved base unit map for display in the conversion column
+  const ingBaseUnit = new Map(
+    (staged?.ingredients || []).map(i => [
+      String(i.name || '').toLowerCase(),
+      String(i.unit || ''),
+    ])
+  )
+
   if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No price quotes found.</div>
   return (
-    <table className="w-full min-w-[700px]">
-      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Ingredient</TH><TH>Vendor</TH><TH>Price</TH><TH>Unit</TH><TH>Qty</TH></tr></thead>
+    <table className="w-full min-w-[750px]">
+      <thead>
+        <tr>
+          <TH>Action</TH><TH>Status</TH><TH>Ingredient</TH><TH>Vendor</TH>
+          <TH>Price</TH><TH>Purchase Unit</TH>
+          <TH>
+            <div>Conv. to Base</div>
+            <div className="font-normal text-xs opacity-70">how many base units per purchase</div>
+          </TH>
+        </tr>
+      </thead>
       <tbody>
-        {rows.map(row => (
-          <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
-            <TD><ActionToggle value={row._action} onChange={v => updateRow('price_quotes', row._id, { _action: v })} /></TD>
-            <TD><RowStatusBadge row={row} /></TD>
-            <TD><EditCell value={String(row.ingredient_name||'')} onChange={v => updateRow('price_quotes', row._id, { ingredient_name: v })} /></TD>
-            <TD><EditCell value={String(row.vendor_name||'')}     onChange={v => updateRow('price_quotes', row._id, { vendor_name: v })} /></TD>
-            <TD><EditCell value={String(row.purchase_price||0)}   onChange={v => updateRow('price_quotes', row._id, { purchase_price: parseFloat(v)||0 })} type="number" /></TD>
-            <TD><EditCell value={String(row.purchase_unit||'')}   onChange={v => updateRow('price_quotes', row._id, { purchase_unit: v })} placeholder="kg" /></TD>
-            <TD><EditCell value={String(row.qty_in_base_units||1)} onChange={v => updateRow('price_quotes', row._id, { qty_in_base_units: parseFloat(v)||1 })} type="number" /></TD>
-          </tr>
-        ))}
+        {rows.map(row => {
+          const baseUnit = ingBaseUnit.get(String(row.ingredient_name || '').toLowerCase()) || ''
+          return (
+            <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
+              <TD><ActionToggle value={row._action} onChange={v => updateRow('price_quotes', row._id, { _action: v })} /></TD>
+              <TD><RowStatusBadge row={row} /></TD>
+              <TD><EditCell value={String(row.ingredient_name||'')} onChange={v => updateRow('price_quotes', row._id, { ingredient_name: v })} /></TD>
+              <TD><EditCell value={String(row.vendor_name||'')}     onChange={v => updateRow('price_quotes', row._id, { vendor_name: v })} /></TD>
+              <TD><EditCell value={String(row.purchase_price||0)}   onChange={v => updateRow('price_quotes', row._id, { purchase_price: parseFloat(v)||0 })} type="number" /></TD>
+              <TD><EditCell value={String(row.purchase_unit||'')}   onChange={v => updateRow('price_quotes', row._id, { purchase_unit: v })} placeholder="kg" /></TD>
+              <TD>
+                <div className="flex items-center gap-1">
+                  <EditCell value={String(row.qty_in_base_units||1)} onChange={v => updateRow('price_quotes', row._id, { qty_in_base_units: parseFloat(v)||1 })} type="number" />
+                  {baseUnit && <span className="text-xs text-text-3 shrink-0">{baseUnit}</span>}
+                </div>
+              </TD>
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )
@@ -807,7 +864,7 @@ function RecipesTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) {
       <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Yield</TH><TH>Items</TH></tr></thead>
       <tbody>
         {rows.flatMap(row => {
-          const items      = (row.items as { ingredient_name: string; qty: number; unit: string }[]) || []
+          const items      = (row.items as { item_name?: string; ingredient_name?: string; item_type?: string; qty: number; unit: string }[]) || []
           const isExpanded = expanded.has(row._id)
           return [
             <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
@@ -818,20 +875,36 @@ function RecipesTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) {
               <TD>{String(row.yield_qty||1)} {String(row.yield_unit||'')}</TD>
               <TD>
                 <button onClick={() => toggle(row._id)} className="text-xs underline decoration-dotted" style={{ color: 'var(--accent)' }}>
-                  {items.length} ingredient{items.length !== 1 ? 's' : ''} {isExpanded ? '▲' : '▼'}
+                  {items.length} item{items.length !== 1 ? 's' : ''} {isExpanded ? '▲' : '▼'}
                 </button>
               </TD>
             </tr>,
-            ...(isExpanded ? items.map((item, j) => (
-              <tr key={`${row._id}-item-${j}`} style={{ background: 'var(--surface-2)' }}>
-                <TD />
-                <TD />
-                <TD className="pl-8 italic text-text-3">↳ {item.ingredient_name}</TD>
-                <TD />
-                <TD>{item.qty} {item.unit}</TD>
-                <TD />
-              </tr>
-            )) : []),
+            ...(isExpanded ? items.map((item, j) => {
+              const isSubRecipe = item.item_type === 'recipe'
+              const displayName = item.item_name || item.ingredient_name || ''
+              return (
+                <tr key={`${row._id}-item-${j}`} style={{ background: 'var(--surface-2)' }}>
+                  <TD />
+                  <TD />
+                  <TD className="pl-8">
+                    <span className="italic text-text-3">
+                      {isSubRecipe ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span style={{ color: 'var(--accent)', fontSize: '10px' }}>📋</span>
+                          <span>{displayName}</span>
+                          <span className="text-xs px-1 rounded ml-1" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>sub-recipe</span>
+                        </span>
+                      ) : (
+                        `↳ ${displayName}`
+                      )}
+                    </span>
+                  </TD>
+                  <TD />
+                  <TD>{item.qty} {item.unit}</TD>
+                  <TD />
+                </tr>
+              )
+            }) : []),
           ]
         })}
       </tbody>

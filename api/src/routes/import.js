@@ -58,6 +58,76 @@ const upload = multer({
   },
 });
 
+// ── Unit aliases (imported unit → canonical metric abbreviation) ──────────────
+
+const UNIT_ALIASES = {
+  // Weight
+  pound: 'kg', pounds: 'kg', lb: 'kg', lbs: 'kg',
+  ounce: 'g',  ounces: 'g',  oz: 'g',
+  gram: 'g', grams: 'g', gm: 'g', grm: 'g',
+  kilogram: 'kg', kilograms: 'kg', kgs: 'kg',
+  // Volume
+  milliliter: 'ml', millilitre: 'ml', milliliters: 'ml', millilitres: 'ml', mls: 'ml',
+  liter: 'L',  litre: 'L',  liters: 'L',  litres: 'L',
+  centiliter: 'ml', centilitre: 'ml', cl: 'ml',
+  'fl oz': 'ml', floz: 'ml',
+  // Count
+  piece: 'ea', pieces: 'ea', pcs: 'ea', pc: 'ea',
+  each: 'ea', unit: 'ea', units: 'ea',
+  portion: 'ea', serve: 'ea', serving: 'ea', servings: 'ea',
+  pack: 'ea', packet: 'ea', packets: 'ea',
+  can: 'ea', tin: 'ea', bottle: 'ea', jar: 'ea',
+  bag: 'ea', box: 'ea', case: 'ea',
+  tray: 'ea', bunch: 'ea', head: 'ea', loaf: 'ea',
+};
+
+/**
+ * Resolves an imported unit string against DB units.
+ * @param {string} unitStr  — raw imported value, e.g. "pound", "ml", "Kg"
+ * @param {Array}  dbUnits  — rows from mcogs_units: { id, name, abbreviation }
+ * @returns {{ resolved: string, source: string, method: string }}
+ *   method: 'exact' | 'alias' | 'fuzzy' | 'unmatched'
+ */
+function resolveUnit(unitStr, dbUnits) {
+  const src = (unitStr || '').trim();
+  if (!src) return { resolved: '', source: '', method: 'none' };
+  const lower = src.toLowerCase();
+
+  // Build lookup maps
+  const byAbbr = new Map(dbUnits.map(u => [u.abbreviation.toLowerCase(), u.abbreviation]));
+  const byName = new Map(dbUnits.map(u => [u.name.toLowerCase(),         u.abbreviation]));
+
+  // 1. Exact match
+  if (byAbbr.has(lower)) return { resolved: byAbbr.get(lower), source: src, method: 'exact' };
+  if (byName.has(lower)) return { resolved: byName.get(lower), source: src, method: 'exact' };
+
+  // 2. Alias → check if canonical target is in DB
+  const alias = UNIT_ALIASES[lower];
+  if (alias) {
+    const al = alias.toLowerCase();
+    if (byAbbr.has(al)) return { resolved: byAbbr.get(al), source: src, method: 'alias' };
+    if (byName.has(al)) return { resolved: byName.get(al), source: src, method: 'alias' };
+    // Alias found but canonical not in DB — look for any unit whose abbr starts similarly
+    for (const [k, v] of byAbbr) {
+      if (k.startsWith(al[0]) && k.length <= 3) return { resolved: v, source: src, method: 'alias' };
+    }
+  }
+
+  // 3. Fuzzy: DB abbr/name is a substring of the import string or vice-versa
+  for (const [k, v] of byAbbr) {
+    if (k.length >= 1 && (lower.startsWith(k) || lower.endsWith(k))) {
+      return { resolved: v, source: src, method: 'fuzzy' };
+    }
+  }
+  for (const [k, v] of byName) {
+    if (k.length >= 3 && (lower.includes(k) || k.includes(lower))) {
+      return { resolved: v, source: src, method: 'fuzzy' };
+    }
+  }
+
+  return { resolved: src, source: src, method: 'unmatched' };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const newId = () => crypto.randomUUID();
@@ -272,11 +342,13 @@ const EXTRACT_TOOL = {
               items: {
                 type: 'object',
                 properties: {
-                  ingredient_name: { type: 'string' },
-                  qty:             { type: 'number' },
-                  unit:            { type: 'string' },
+                  item_name: { type: 'string', description: 'Name of the ingredient or sub-recipe' },
+                  item_type: { type: 'string', enum: ['ingredient', 'recipe'],
+                    description: 'Use "recipe" when this line is itself a sub-recipe or assembled component (sauce, side, dip, etc.)' },
+                  qty:       { type: 'number' },
+                  unit:      { type: 'string' },
                 },
-                required: ['ingredient_name'],
+                required: ['item_name'],
               },
             },
           },
@@ -294,16 +366,28 @@ async function extractWithAI(client, fileContent) {
     tool_choice: { type: 'any' },
     tools:       [EXTRACT_TOOL],
     system: `You are a data extraction assistant for a restaurant cost-of-goods (COGS) platform.
-Extract all vendors, ingredients, price quotes/costs and recipes from the provided file.
+Extract all vendors, ingredients, price quotes and recipes from the file.
 
-Rules:
-- Map column names intelligently: "cost"/"price"/"unit cost" → purchase_price; "UOM"/"measure" → unit
+COLUMN MAPPING
+- "cost"/"price"/"unit cost"/"INR"/"Cost per UOM" → purchase_price
+- "UOM"/"Recipe Use"/"Unit of Measure"/"measure" → unit
 - Keep source_category EXACTLY as it appears in the source file
-- waste_pct: extract as a number 0-100 (e.g. "2%" → 2, not 0.02)
+- waste_pct as 0-100 (e.g. "2%" → 2, not 0.02)
 - If costs are listed without a vendor name, use vendor_name "Default Vendor"
-- Extract ALL ingredients even if they have no cost
-- For recipes, include every ingredient line item
-- qty_in_base_units defaults to 1 if unclear`,
+- Extract ALL ingredients even if they have no cost yet
+
+UNITS — always use metric abbreviations:
+- pounds/lb/lbs → kg  |  oz/ounce → g  |  gram/grams/gm → g  |  kilogram/kgs → kg
+- milliliter/ml/mls → ml  |  liter/litre/L → L
+- piece/pieces/per piece/each/ea → ea  |  per 100g → use unit "100g"
+- "Conversion Factor" or "Conv Factor" columns describe how many recipe units are in one purchase unit — use as qty_in_base_units
+
+MULTI-TIER RECIPE STRUCTURES (important)
+- Many spreadsheets have THREE tiers: raw ingredients → sub-recipes (sauces, dips, sides) → main menu items
+- Sheets named "Sauces", "Dips", "Sides", "Components", "Sub-recipes" contain sub-recipes — extract each as a recipe
+- When a main recipe (Menu Builder) references a sub-recipe name (e.g. "Lemon Pepper Sauce", "House Fries", "Ranch"), set item_type="recipe" and item_name to the sub-recipe name
+- Blended averages like "Sauce Average" or "Avg Per Wing" are NOT real sub-recipes — skip them or replace with the primary sauce name
+- A "Burger" or "Side" entry in a main recipe that is also defined as its own sub-recipe → item_type="recipe"`,
     messages: [{ role: 'user', content: fileContent }],
   });
 
@@ -315,7 +399,7 @@ Rules:
     vendors:      (raw.vendors      || []).map(v => blankRow({ name: String(v.name||'').trim(), country: String(v.country||'').trim() })),
     ingredients:  (raw.ingredients  || []).map(i => blankRow({ name: String(i.name||'').trim(), source_category: String(i.source_category||'').trim(), unit: String(i.unit||'').trim(), waste_pct: parseFloat(i.waste_pct)||0, notes: String(i.notes||'').trim() })),
     price_quotes: (raw.price_quotes || []).map(p => blankRow({ ingredient_name: String(p.ingredient_name||'').trim(), vendor_name: String(p.vendor_name||'').trim(), purchase_price: parseFloat(p.purchase_price)||0, purchase_unit: String(p.purchase_unit||'').trim(), qty_in_base_units: parseFloat(p.qty_in_base_units)||1 })),
-    recipes:      (raw.recipes      || []).map(r => blankRow({ name: String(r.name||'').trim(), source_category: String(r.source_category||'').trim(), yield_qty: parseFloat(r.yield_qty)||1, yield_unit: String(r.yield_unit||'').trim(), items: (r.items||[]).map(i => ({ ingredient_name: String(i.ingredient_name||'').trim(), qty: parseFloat(i.qty)||0, unit: String(i.unit||'').trim() })) })),
+    recipes:      (raw.recipes      || []).map(r => blankRow({ name: String(r.name||'').trim(), source_category: String(r.source_category||'').trim(), yield_qty: parseFloat(r.yield_qty)||1, yield_unit: String(r.yield_unit||'').trim(), items: (r.items||[]).map(i => ({ item_name: String(i.item_name || i.ingredient_name || '').trim(), item_type: i.item_type === 'recipe' ? 'recipe' : 'ingredient', qty: parseFloat(i.qty)||0, unit: String(i.unit||'').trim() })) })),
   };
 }
 
@@ -354,19 +438,40 @@ function validateStaged(staged) {
   for (const r of staged.recipes      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.items?.length) r._issues.push('Recipe has no ingredients'); }
 }
 
-// ── Prerequisites detection ───────────────────────────────────────────────────
+// ── Prerequisites detection + unit resolution ─────────────────────────────────
 
 async function detectPrerequisites(staged) {
   const [{ rows: units }, { rows: countries }] = await Promise.all([
-    pool.query('SELECT LOWER(name) AS n, LOWER(abbreviation) AS a FROM mcogs_units'),
+    pool.query('SELECT id, name, abbreviation FROM mcogs_units'),
     pool.query('SELECT LOWER(name) AS n FROM mcogs_countries'),
   ]);
-  const unitSet    = new Set([...units.map(u => u.n), ...units.map(u => u.a)]);
   const countrySet = new Set(countries.map(c => c.n));
 
   const mu = new Set(), mc = new Set();
-  for (const r of staged.ingredients || []) { if (r.unit && !unitSet.has(r.unit.toLowerCase())) mu.add(r.unit); }
-  for (const r of staged.vendors     || []) { if (r.country && !countrySet.has(r.country.toLowerCase())) mc.add(r.country); }
+
+  // Resolve every ingredient unit against DB units
+  for (const r of staged.ingredients || []) {
+    if (!r.unit) continue;
+    const res = resolveUnit(r.unit, units);
+    if (res.method === 'exact') {
+      // Already matched — ensure we're storing the DB abbreviation form
+      r.unit = res.resolved;
+    } else if (res.method !== 'none' && res.method !== 'unmatched') {
+      // Auto-resolved via alias or fuzzy match
+      r.unit_source = r.unit;           // keep original for display
+      r.unit_method = res.method;
+      r.unit        = res.resolved;     // replace with matched DB abbreviation
+      r._issues = [...(r._issues || []),
+        `Unit "${res.source}" auto-matched to "${res.resolved}" (${res.method}) — check it is correct`];
+      if (r._status !== 'error') r._status = 'warning';
+    } else if (res.method === 'unmatched') {
+      mu.add(r.unit);
+    }
+  }
+
+  for (const r of staged.vendors || []) {
+    if (r.country && !countrySet.has(r.country.toLowerCase())) mc.add(r.country);
+  }
   return { missing_units: [...mu], missing_countries: [...mc] };
 }
 
@@ -416,6 +521,26 @@ Examples: "Chicken"→Protein, "Sauces"→Sauce, "Drinks"→Beverage, "Paper"→
   return {};
 }
 
+// ── Shared staging pipeline ───────────────────────────────────────────────────
+// Called by the upload route (AI path) and the chatbot start_import tool.
+// Takes already-extracted text content, runs AI extraction + enrichment,
+// saves a job row, and returns { job_id, staged_data }.
+
+async function stageFileContent(client, fileContent, filename, userEmail) {
+  const staged = await extractWithAI(client, `File: ${filename}\n\n${fileContent}`);
+
+  await detectDuplicates(staged);
+  validateStaged(staged);
+  staged.prerequisites    = await detectPrerequisites(staged);
+  staged.category_mapping = await suggestCategoryMapping(client, staged);
+
+  const { rows } = await pool.query(
+    `INSERT INTO mcogs_import_jobs (user_email, source_file, status, staged_data) VALUES ($1,$2,'staging',$3) RETURNING id`,
+    [userEmail || null, filename, JSON.stringify(staged)]
+  );
+  return { job_id: rows[0].id, staged_data: staged };
+}
+
 // ── POST /upload ──────────────────────────────────────────────────────────────
 
 router.post('/upload', upload.single('file'), async (req, res) => {
@@ -429,36 +554,51 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
     if (importPath === 'template') {
       staged = parseTemplateFile(file.buffer);
-    } else {
+
+      // Enrichment for template path
+      await detectDuplicates(staged);
+      validateStaged(staged);
+      staged.prerequisites    = await detectPrerequisites(staged);
+      staged.category_mapping = {};
       const key = aiConfig.get('ANTHROPIC_API_KEY');
-      if (!key) return res.status(503).json({ error: { message: 'AI import requires an Anthropic API key — configure it in Settings → AI, or use the Template import path.' } });
-      const client  = new Anthropic({ apiKey: key });
-      const content = await fileToText(file.buffer, file.originalname);
-      staged = await extractWithAI(client, `File: ${file.originalname}\n\n${content}`);
+      if (key) staged.category_mapping = await suggestCategoryMapping(new Anthropic({ apiKey: key }), staged);
+
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_import_jobs (user_email, source_file, status, staged_data) VALUES ($1,$2,'staging',$3) RETURNING id`,
+        [userEmail, file.originalname, JSON.stringify(staged)]
+      );
+      return res.json({ job_id: rows[0].id, staged_data: staged });
     }
 
-    // Run parallel enrichment
-    await detectDuplicates(staged);
-    validateStaged(staged);
-    const prerequisites = await detectPrerequisites(staged);
-    staged.prerequisites   = prerequisites;
-    staged.category_mapping = {};
-
-    // AI category suggestions (if key available)
+    // AI path
     const key = aiConfig.get('ANTHROPIC_API_KEY');
-    if (key) {
-      const client = new Anthropic({ apiKey: key });
-      staged.category_mapping = await suggestCategoryMapping(client, staged);
-    }
+    if (!key) return res.status(503).json({ error: { message: 'AI import requires an Anthropic API key — configure it in Settings → AI, or use the Template import path.' } });
+    const client  = new Anthropic({ apiKey: key });
+    const content = await fileToText(file.buffer, file.originalname);
+    const result  = await stageFileContent(client, content, file.originalname, userEmail);
+    res.json({ job_id: result.job_id, staged_data: result.staged_data });
 
-    const { rows } = await pool.query(
-      `INSERT INTO mcogs_import_jobs (user_email, source_file, status, staged_data) VALUES ($1,$2,'staging',$3) RETURNING id`,
-      [userEmail, file.originalname, JSON.stringify(staged)]
-    );
-
-    res.json({ job_id: rows[0].id, staged_data: staged });
   } catch (err) {
     console.error('[import/upload]', err);
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// ── POST /from-text — used by the McFry chatbot import tool ──────────────────
+// Accepts pre-extracted text content (already in the conversation) and runs
+// the AI staging pipeline. Returns the same shape as /upload.
+
+router.post('/from-text', async (req, res) => {
+  try {
+    const { file_content, filename = 'upload', user_email = null } = req.body;
+    if (!file_content) return res.status(400).json({ error: { message: 'file_content is required' } });
+    const key = aiConfig.get('ANTHROPIC_API_KEY');
+    if (!key) return res.status(503).json({ error: { message: 'AI import requires an Anthropic API key.' } });
+    const client = new Anthropic({ apiKey: key });
+    const result = await stageFileContent(client, file_content, filename, user_email);
+    res.json({ job_id: result.job_id, staged_data: result.staged_data });
+  } catch (err) {
+    console.error('[import/from-text]', err);
     res.status(500).json({ error: { message: err.message } });
   }
 });
@@ -589,26 +729,48 @@ router.post('/:id/execute', async (req, res) => {
         results.price_quotes++;
       }
 
-      // 6. Recipes + recipe items
+      // 6a. Recipes — first pass: create all recipe shells (so sub-recipe refs resolve)
+      const recipeLookup = {};
+      const { rows: exR } = await client.query('SELECT id, LOWER(name) AS n FROM mcogs_recipes');
+      for (const r of exR) recipeLookup[r.n] = r.id;
+
+      const recipeRows = []; // keep for second pass
       for (const row of staged.recipes || []) {
         if (row._action === 'skip') { results.recipes_skipped++; continue; }
         if (!row.name) continue;
         const yuid = row.yield_unit ? unitLookup[row.yield_unit.toLowerCase()] || null : null;
-        const { rows } = await client.query(
+        const { rows: ins } = await client.query(
           'INSERT INTO mcogs_recipes (name,category,yield_qty,yield_unit_id) VALUES ($1,$2,$3,$4) RETURNING id',
           [row.name, catName(row.source_category), row.yield_qty || 1, yuid]
         );
-        const rid = rows[0].id;
+        const rid = ins[0].id;
+        recipeLookup[row.name.toLowerCase()] = rid;
+        recipeRows.push({ row, rid });
         results.recipes++;
+      }
 
+      // 6b. Recipes — second pass: add items (ingredients or sub-recipe refs)
+      for (const { row, rid } of recipeRows) {
         let sort = 1;
         for (const item of row.items || []) {
-          const iid = item.ingredient_name ? ingLookup[item.ingredient_name.toLowerCase()] : null;
-          if (!iid) continue;
-          await client.query(
-            'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,qty,prep_unit,sort_order) VALUES ($1,\'ingredient\',$2,$3,$4,$5)',
-            [rid, iid, item.qty || 0, item.unit || '', sort++]
-          );
+          const name = (item.item_name || item.ingredient_name || '').toLowerCase().trim();
+          if (!name) continue;
+
+          if (item.item_type === 'recipe') {
+            const subId = recipeLookup[name] || null;
+            if (!subId) { results.errors.push(`Recipe item skipped: sub-recipe "${name}" not found in this import`); continue; }
+            await client.query(
+              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,recipe_item_id,qty,prep_unit,sort_order) VALUES ($1,\'recipe\',$2,$3,$4,$5)',
+              [rid, subId, item.qty || 0, item.unit || '', sort++]
+            );
+          } else {
+            const iid = ingLookup[name] || null;
+            if (!iid) { results.errors.push(`Recipe item skipped: ingredient "${name}" not found`); continue; }
+            await client.query(
+              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,qty,prep_unit,sort_order) VALUES ($1,\'ingredient\',$2,$3,$4,$5)',
+              [rid, iid, item.qty || 0, item.unit || '', sort++]
+            );
+          }
           results.recipe_items++;
         }
       }
@@ -641,4 +803,4 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = { router, stageFileContent };

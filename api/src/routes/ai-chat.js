@@ -464,6 +464,22 @@ const TOOLS = [
       required: ['id'],
     },
   },
+  {
+    name: 'start_import',
+    description: `Sends a file that the user has already uploaded in this conversation to the Import Wizard for structured review. Use this when:
+- The user uploads a spreadsheet and says "import this", "use the import wizard", or similar
+- The file contains many ingredients/recipes and the user wants to review before committing
+Returns a job URL — share it with the user as a clickable link: /import?job=<id>
+Do NOT use this for small single-record requests; use the individual create_* tools instead.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_content: { type: 'string', description: 'The full text content of the file as it appears in the conversation (sheet CSV data, plain text, etc.)' },
+        filename:     { type: 'string', description: 'Original filename, e.g. "ingredients.xlsx"' },
+      },
+      required: ['file_content', 'filename'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -1011,6 +1027,28 @@ async function executeTool(name, input) {
       return rows[0];
     }
 
+    case 'start_import': {
+      const { file_content, filename = 'upload' } = input;
+      if (!file_content) return { error: 'file_content is required' };
+      const importKey = aiConfig.get('ANTHROPIC_API_KEY');
+      if (!importKey) return { error: 'Anthropic API key not configured — add it in Settings → AI.' };
+      const { stageFileContent } = require('./import');
+      const Anthropic = require('@anthropic-ai/sdk');
+      const importClient = new Anthropic({ apiKey: importKey });
+      const result = await stageFileContent(importClient, file_content, filename, null);
+      const counts = result.staged_data;
+      return {
+        job_id: result.job_id,
+        url: `/import?job=${result.job_id}`,
+        summary: {
+          vendors:      counts.vendors?.length      || 0,
+          ingredients:  counts.ingredients?.length  || 0,
+          price_quotes: counts.price_quotes?.length || 0,
+          recipes:      counts.recipes?.length      || 0,
+        },
+      };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -1046,7 +1084,14 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Never create records from a file without user confirmation
 
 ## TOOLS AVAILABLE
-You have 35 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets, and feedback.
+You have 36 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets, feedback, and **start_import**.
+
+## BULK FILE IMPORT (start_import tool)
+When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
+1. Call start_import with the file content text and filename
+2. It stages the data for review and returns a job URL
+3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. before confirming."
+4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import
 
 Be concise and practical. For numbers include currency symbols and units. Format data as readable lists or tables where appropriate.
 
