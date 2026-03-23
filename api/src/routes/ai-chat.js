@@ -464,6 +464,113 @@ const TOOLS = [
       required: ['id'],
     },
   },
+  // ── Markets (countries) CRUD ──────────────────────────────────────────────────
+  {
+    name: 'create_market',
+    description: 'Creates a new market (country) with currency and exchange rate. Call list_price_levels first to resolve default_price_level_id. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:                  { type: 'string', description: 'Country/market name e.g. "India"' },
+        currency_code:         { type: 'string', description: '3-letter ISO code e.g. "INR"' },
+        currency_symbol:       { type: 'string', description: 'Symbol e.g. "₹"' },
+        exchange_rate:         { type: 'number', description: 'Rate vs USD base (e.g. 83.5 for INR). Use /api/sync-exchange-rates or ask the user.' },
+        country_iso:           { type: 'string', description: '2-letter ISO code e.g. "IN" (optional)' },
+        default_price_level_id:{ type: 'integer', description: 'ID of default price level from list_price_levels (optional)' },
+      },
+      required: ['name', 'currency_code', 'currency_symbol', 'exchange_rate'],
+    },
+  },
+  {
+    name: 'update_market',
+    description: 'Updates an existing market (country). Call list_markets first to get the ID. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                    { type: 'integer' },
+        name:                  { type: 'string' },
+        currency_code:         { type: 'string' },
+        currency_symbol:       { type: 'string' },
+        exchange_rate:         { type: 'number' },
+        country_iso:           { type: 'string' },
+        default_price_level_id:{ type: 'integer' },
+      },
+      required: ['id', 'name', 'currency_code', 'currency_symbol', 'exchange_rate'],
+    },
+  },
+  {
+    name: 'delete_market',
+    description: 'Deletes a market (country). Warn that this will also remove any vendors, menus, and tax rates linked to this market. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'assign_brand_partner',
+    description: 'Assigns (or removes) a brand partner from a market. Call list_markets and list_brand_partners to resolve IDs first. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        market_id:        { type: 'integer', description: 'Market (country) ID' },
+        brand_partner_id: { type: ['integer', 'null'], description: 'Brand partner ID, or null to unassign' },
+      },
+      required: ['market_id'],
+    },
+  },
+
+  // ── Brand Partners CRUD ───────────────────────────────────────────────────────
+  {
+    name: 'list_brand_partners',
+    description: 'Lists all brand partners with id, name, contact, email, phone, notes.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'create_brand_partner',
+    description: 'Creates a new brand partner (franchise owner/operator). CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:    { type: 'string' },
+        contact: { type: 'string', description: 'Contact person name' },
+        email:   { type: 'string' },
+        phone:   { type: 'string' },
+        notes:   { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_brand_partner',
+    description: 'Updates a brand partner. Call list_brand_partners first to get the ID. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:      { type: 'integer' },
+        name:    { type: 'string' },
+        contact: { type: 'string' },
+        email:   { type: 'string' },
+        phone:   { type: 'string' },
+        notes:   { type: 'string' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'delete_brand_partner',
+    description: 'Deletes a brand partner. Warn that it must be unassigned from all markets first. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+
   {
     name: 'start_import',
     description: `Sends a file that the user has already uploaded in this conversation to the Import Wizard for structured review. Use this when:
@@ -1027,6 +1134,122 @@ async function executeTool(name, input) {
       return rows[0];
     }
 
+    // ── Markets (countries) CRUD ───────────────────────────────────────────────
+
+    case 'create_market': {
+      const { name, currency_code, currency_symbol, exchange_rate,
+              country_iso, default_price_level_id } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      if (!currency_code?.trim()) return { error: 'currency_code is required' };
+      if (!currency_symbol?.trim()) return { error: 'currency_symbol is required' };
+      if (!(exchange_rate > 0)) return { error: 'exchange_rate must be a positive number' };
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_countries
+           (name, currency_code, currency_symbol, exchange_rate, country_iso, default_price_level_id)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [
+          name.trim(),
+          currency_code.toUpperCase().trim(),
+          currency_symbol.trim(),
+          exchange_rate,
+          country_iso ? country_iso.toUpperCase().trim() : null,
+          default_price_level_id || null,
+        ]
+      );
+      return rows[0];
+    }
+
+    case 'update_market': {
+      const { id, name, currency_code, currency_symbol, exchange_rate,
+              country_iso, default_price_level_id } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      if (!(exchange_rate > 0)) return { error: 'exchange_rate must be positive' };
+      const { rows } = await pool.query(
+        `UPDATE mcogs_countries
+         SET name=$1, currency_code=$2, currency_symbol=$3, exchange_rate=$4,
+             country_iso=$5, default_price_level_id=$6, updated_at=NOW()
+         WHERE id=$7 RETURNING *`,
+        [
+          name.trim(),
+          currency_code.toUpperCase().trim(),
+          currency_symbol.trim(),
+          exchange_rate,
+          country_iso ? country_iso.toUpperCase().trim() : null,
+          default_price_level_id || null,
+          id,
+        ]
+      );
+      if (!rows.length) return { error: 'Market not found' };
+      return rows[0];
+    }
+
+    case 'delete_market': {
+      const { id } = input;
+      const { rowCount } = await pool.query(`DELETE FROM mcogs_countries WHERE id=$1`, [id]);
+      if (!rowCount) return { error: 'Market not found' };
+      return { deleted: true, id };
+    }
+
+    case 'assign_brand_partner': {
+      const { market_id, brand_partner_id } = input;
+      const { rows } = await pool.query(
+        `UPDATE mcogs_countries SET brand_partner_id=$1, updated_at=NOW() WHERE id=$2 RETURNING id, name, brand_partner_id`,
+        [brand_partner_id ?? null, market_id]
+      );
+      if (!rows.length) return { error: 'Market not found' };
+      return rows[0];
+    }
+
+    // ── Brand Partners CRUD ────────────────────────────────────────────────────
+
+    case 'list_brand_partners': {
+      const { rows } = await pool.query(
+        `SELECT bp.*, COUNT(c.id)::int AS market_count
+         FROM mcogs_brand_partners bp
+         LEFT JOIN mcogs_countries c ON c.brand_partner_id = bp.id
+         GROUP BY bp.id ORDER BY bp.name`
+      );
+      return rows;
+    }
+
+    case 'create_brand_partner': {
+      const { name, contact, email, phone, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_brand_partners (name, contact, email, phone, notes)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [name.trim(), contact?.trim()||null, email?.trim()||null,
+         phone?.trim()||null, notes?.trim()||null]
+      );
+      return rows[0];
+    }
+
+    case 'update_brand_partner': {
+      const { id, name, contact, email, phone, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(
+        `UPDATE mcogs_brand_partners
+         SET name=$1, contact=$2, email=$3, phone=$4, notes=$5, updated_at=NOW()
+         WHERE id=$6 RETURNING *`,
+        [name.trim(), contact?.trim()||null, email?.trim()||null,
+         phone?.trim()||null, notes?.trim()||null, id]
+      );
+      if (!rows.length) return { error: 'Brand partner not found' };
+      return rows[0];
+    }
+
+    case 'delete_brand_partner': {
+      const { id } = input;
+      try {
+        const { rowCount } = await pool.query(`DELETE FROM mcogs_brand_partners WHERE id=$1`, [id]);
+        if (!rowCount) return { error: 'Brand partner not found' };
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') return { error: 'Brand partner is still assigned to one or more markets — unassign it first using assign_brand_partner.' };
+        throw err;
+      }
+    }
+
     case 'start_import': {
       const { file_content, filename = 'upload' } = input;
       if (!file_content) return { error: 'file_content is required' };
@@ -1084,7 +1307,7 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Never create records from a file without user confirmation
 
 ## TOOLS AVAILABLE
-You have 36 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets, feedback, and **start_import**.
+You have 44 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets (create/update/delete), brand partners (create/update/delete/assign), feedback, and **start_import**.
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:

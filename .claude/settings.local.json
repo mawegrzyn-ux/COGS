@@ -2,6 +2,7 @@
   "env": {
     "INTERNAL_API_KEY": "change-me-before-deploying"
   },
+  "disableAllHooks": true,
   "permissions": {
     "allow": [
       "Bash(curl http://localhost:3001/api/internal/feedback*)",

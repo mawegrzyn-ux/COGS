@@ -21,10 +21,11 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 11. [Design System & Conventions](#11-design-system--conventions)
 12. [Pages Built](#12-pages-built)
 13. [Pages Remaining to Build](#13-pages-remaining-to-build)
-14. [Known Bugs Fixed](#14-known-bugs-fixed)
-15. [Critical Gotchas & Lessons Learned](#15-critical-gotchas--lessons-learned)
-16. [Backlog](#16-backlog)
-17. [Key Contacts & Resources](#17-key-contacts--resources)
+14. [McFry AI Assistant](#14-mcfry-ai-assistant)
+15. [Known Bugs Fixed](#15-known-bugs-fixed)
+16. [Critical Gotchas & Lessons Learned](#16-critical-gotchas--lessons-learned)
+17. [Backlog](#17-backlog)
+18. [Key Contacts & Resources](#18-key-contacts--resources)
 
 ---
 
@@ -92,6 +93,7 @@ COGS/
 │       │   ├── LoadingScreen.tsx   # Auth0 loading spinner
 │       │   ├── DataGrid.tsx        # Generic sortable/filterable grid
 │       │   ├── ColumnHeader.tsx    # Sort + multi-select filter dropdown
+│       │   ├── AiChat.tsx          # McFry AI chat panel (SSE streaming)
 │       │   └── ui.tsx              # Shared UI: PageHeader, Modal, Field,
 │       │                           #   EmptyState, Spinner, ConfirmDialog,
 │       │                           #   Toast, Badge
@@ -103,13 +105,20 @@ COGS/
 │           ├── CategoriesPage.tsx  # Ingredient/recipe categories
 │           ├── InventoryPage.tsx   # Ingredients, vendors, price quotes
 │           ├── RecipesPage.tsx     # Recipe builder with COGS calculation
-│           └── MenusPage.tsx       # Menu builder (PLT/MPT/Menu Builder tabs)
+│           ├── MenusPage.tsx       # Menu builder (PLT/MPT/Menu Builder tabs)
+│           ├── ImportPage.tsx      # AI-powered data import wizard
+│           ├── AllergenMatrixPage.tsx  # Allergen matrix (EU/UK FIC 14)
+│           ├── HACCPPage.tsx       # HACCP temp logs & CCP logs
+│           ├── MarketsPage.tsx     # Markets (countries) + brand partners
+│           └── HelpPage.tsx        # Help & documentation
 │
 ├── api/                            # Node.js/Express API
 │   ├── package.json
 │   ├── .env                        # NOT in git — see env vars section
 │   └── src/
 │       ├── index.js                # Express entry point
+│       ├── helpers/
+│       │   └── agenticStream.js    # Shared SSE agentic loop (ai-chat + ai-upload)
 │       └── routes/
 │           ├── index.js            # Route registry
 │           ├── health.js
@@ -122,12 +131,26 @@ COGS/
 │           ├── country-level-tax.js
 │           ├── categories.js
 │           ├── vendors.js
+│           ├── brand-partners.js   # Brand partners CRUD
 │           ├── ingredients.js
 │           ├── price-quotes.js
 │           ├── preferred-vendors.js
-│           └── recipes.js
-│           # menus.js  ← commented out in index.js, ready to uncomment
-│           # cogs.js   ← commented out in index.js, ready to uncomment
+│           ├── recipes.js
+│           ├── menus.js
+│           ├── menu-items.js
+│           ├── menu-item-prices.js
+│           ├── cogs.js
+│           ├── allergens.js
+│           ├── nutrition.js        # USDA nutrition proxy
+│           ├── haccp.js
+│           ├── locations.js
+│           ├── location-groups.js
+│           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
+│           ├── ai-chat.js          # McFry AI chat (44 tools)
+│           ├── ai-upload.js        # File upload → AI extraction (multipart)
+│           ├── ai-config.js        # AI feature flag / config
+│           ├── feedback.js
+│           └── internal-feedback.js
 │
 └── api/scripts/
     ├── migrate.js                  # DB schema migration (npm run migrate)
@@ -343,6 +366,9 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 20 | `mcogs_equipment` | HACCP equipment register — linked to location |
 | 21 | `mcogs_equipment_temp_logs` | Temperature readings per equipment |
 | 22 | `mcogs_ccp_logs` | CCP logs (cooking/cooling/delivery) — linked to location |
+| 23 | `mcogs_brand_partners` | Brand/franchise partners (e.g. "McDonald's UK") — linked to markets |
+| 24 | `mcogs_import_jobs` | AI import staging jobs: raw AI output, enriched rows, status, created_by |
+| 25 | `mcogs_ai_chat_log` | McFry AI conversation log: messages, tools_called, token counts, context JSONB |
 
 ### Key Schema Details
 
@@ -433,6 +459,14 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/haccp/report` | `haccp.js` | ✅ Active — supports `?location_id=` |
 | `GET/POST/PUT/DELETE /api/locations` | `locations.js` | ✅ Active — supports `?market_id=&group_id=&active=` |
 | `GET/POST/PUT/DELETE /api/location-groups` | `location-groups.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/brand-partners` | `brand-partners.js` | ✅ Active |
+| `POST /api/import` | `import.js` | ✅ Active — multipart file upload → AI extraction → staging job |
+| `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
+| `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
+| `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by McFry) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming McFry chat with 44 tools |
+| `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
+| `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
 
 ### Exchange Rate Sync
 
@@ -504,11 +538,17 @@ Generic data grid with:
 /                 → ProtectedRoute → AppLayout (Outlet)
   /dashboard      → DashboardPage
   /settings       → SettingsPage
-  /countries      → CountriesPage
+  /markets        → MarketsPage        (countries/currencies/brand partners)
   /categories     → CategoriesPage
   /inventory      → InventoryPage
   /recipes        → RecipesPage
-  /menus          → MenusPage          ← currently redirects to /dashboard
+  /menus          → MenusPage
+  /allergens      → AllergenMatrixPage
+  /haccp          → HACCPPage
+  /import         → ImportPage
+  /help           → HelpPage
+  /countries      → redirects to /markets
+  /locations      → redirects to /markets
 ```
 
 To activate a new page route:
@@ -665,14 +705,29 @@ Three tabs:
 - Quick links to all main pages
 - Refresh button (silent re-fetch, shows last-updated time)
 
+### ✅ Import Page (`/import`)
+
+AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and runs them through Claude to extract structured data.
+
+**5-step wizard:**
+1. **Upload** — drag-and-drop file or initiate from McFry chatbot (`?job=<id>` URL param auto-skips to step 2)
+2. **Review** — AI-extracted data shown in tabbed tables (Ingredients, Price Quotes, Recipes)
+3. **Categories** — map each "Imported Category" to an existing COGS category (or create new)
+4. **Vendors** — map imported vendor names to existing vendors (or create new)
+5. **Execute** — write all staged data to the database
+
+**Key features:**
+- Unit fuzzy-matching: auto-resolves imported unit strings (e.g. "pound" → `kg`) via `UNIT_ALIASES` map; shows amber `was: <original>` badge when auto-resolved
+- Price Quotes table: "Conv. to Base" column (renamed from "Qty") shows base unit from matched ingredient
+- Sub-recipe recognition: three-tier recipe hierarchies (raw ingredient → sub-recipe → main recipe); sub-recipe items show 📋 icon + green badge
+- Chatbot integration: McFry can trigger an import job with `start_import` tool; ImportPage reads `?job` param on mount
+
 ---
 
 ## 13. Pages Remaining to Build
 
 | Page | Route | Priority | Notes |
 |---|---|---|---|
-| **Menus → API activation** | `/api/menus` | Now | Uncomment `menus.js` in `api/src/routes/index.js`; the UI is built |
-| **COGS API** | `/api/cogs` | Now | Uncomment `cogs.js`; powers the MPT tab calculations |
 | **System Admin** | `/settings` → System tab | Medium | DB migration runner, import/export, health info |
 | **Reports** | TBD | Medium | Missing price quotes report; cross-market COGS comparison |
 
@@ -687,7 +742,54 @@ Three tabs:
 
 ---
 
-## 14. Known Bugs Fixed
+## 14. McFry AI Assistant
+
+McFry is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears as a collapsible chat panel at the bottom-right of every page. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
+
+### Architecture
+
+- **Frontend:** `app/src/components/AiChat.tsx` — chat panel with history tab, file attachment (paperclip), streaming display
+- **Chat endpoint:** `POST /api/ai-chat` — JSON body `{ messages, conversationId? }` → SSE stream
+- **Upload endpoint:** `POST /api/ai-upload` — multipart `{ file, message, conversationId? }` → SSE stream (image/CSV)
+- **Shared agentic loop:** `api/src/helpers/agenticStream.js` — SSE helper, keepalive ping, `while(true)` tool loop, token counting
+- **Logging:** all sessions logged to `mcogs_ai_chat_log` (messages, tools_called JSONB, token counts)
+- **File support:** CSV/text (injected as text block), PNG/JPEG/WEBP (injected as base64 vision block); max 5MB; PDF not supported
+
+### Tool Count: 44
+
+**Lookup / Read (15):**
+`get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
+
+**Write — Create (10):**
+`create_ingredient`, `create_vendor`, `create_price_quote`, `set_preferred_vendor`, `create_recipe`, `add_recipe_item`, `create_menu`, `add_menu_item`, `set_menu_item_price`, `create_category`
+
+**Write — Update (5):**
+`update_ingredient`, `update_vendor`, `update_price_quote`, `update_recipe`, `update_recipe_item`
+
+**Write — Delete (5):**
+`delete_ingredient`, `delete_vendor`, `delete_price_quote`, `delete_recipe_item`, `delete_menu`
+
+**Market / Brand (9):**
+`create_market`, `update_market`, `delete_market`, `assign_brand_partner`, `list_brand_partners`, `create_brand_partner`, `update_brand_partner`, `delete_brand_partner`
+
+**Import (1):**
+`start_import` — accepts file text content already in conversation, calls `stageFileContent()`, returns `{ job_id, url: '/import?job=<id>', summary }` so the user can click through to the Import Wizard
+
+### Confirmation Safety
+
+Enforced via system prompt: Claude must verbally describe any create/update/delete action and ask "Shall I proceed?" before calling write tools. Batch operations (>3 records) get one plan + one confirm. `delete_menu` always warns about cascade. FK violations on delete return a friendly error string rather than throwing.
+
+### Chatbot → Import Wizard Flow
+
+1. User pastes or uploads spreadsheet content in chat
+2. McFry calls `start_import` with the text content
+3. Server calls `stageFileContent()` (shared with the `/import` upload route) — AI extraction + DB staging
+4. McFry replies with a link: `/import?job=<id>`
+5. User clicks link → ImportPage mounts → reads `?job` param → skips upload step → lands on Review tab
+
+---
+
+## 15. Known Bugs Fixed
 
 ### Fix 1 — Mixed Content Error (HTTP vs HTTPS)
 
@@ -776,7 +878,44 @@ const localPrice = grossDisplay / dispRate  // where dispRate = c.rate / targetR
 
 ---
 
-## 15. Critical Gotchas & Lessons Learned
+### Fix 6 — TypeScript Build Failure (ImportPage)
+
+**Symptom:** GitHub Actions CI/CD failed at the Vite build step with two TypeScript errors in `ImportPage.tsx`.
+
+**Error 1:** `PageHeader` called with `description` prop — but `ui.tsx` defines it as `subtitle`.
+
+**Error 2:** `<TD />` used self-closing (no children) but `TD`'s type declared `children: React.ReactNode` (required, not optional).
+
+**Fix:**
+```tsx
+// Error 1
+<PageHeader description="...">  →  <PageHeader subtitle="...">
+
+// Error 2
+children: React.ReactNode  →  children?: React.ReactNode
+```
+
+**File:** `app/src/pages/ImportPage.tsx`, `app/src/pages/ImportPage.tsx` (`TD` component)
+
+---
+
+### Fix 7 — import.js Router Export Shape
+
+**Symptom:** After extracting `stageFileContent` from `import.js`, the route registration broke — Express threw "Router.use() requires a middleware function" at startup.
+
+**Root Cause:** `import.js` was changed from `module.exports = router` to `module.exports = { router, stageFileContent }`. But `api/src/routes/index.js` still did `require('./import')` — which now returned a plain object, not a router.
+
+**Fix:**
+```js
+// index.js
+router.use('/import', require('./import').router);
+```
+
+**File:** `api/src/routes/index.js`
+
+---
+
+## 16. Critical Gotchas & Lessons Learned
 
 ### Server User Context
 
@@ -838,9 +977,32 @@ The codebase has two filter/sort implementations:
 
 Both implement the same multi-select filter + sort pattern. If updating filter logic, update both.
 
+### import.js Dual Export Shape
+
+`api/src/routes/import.js` exports **both** the Express router and the `stageFileContent` helper:
+
+```js
+module.exports = { router, stageFileContent };
+```
+
+When registering in `index.js` use `.router`:
+```js
+router.use('/import', require('./import').router);   // ✅
+router.use('/import', require('./import'));            // ❌ — breaks Express
+```
+
+When requiring `stageFileContent` from `ai-chat.js`:
+```js
+const { stageFileContent } = require('./import');
+```
+
+### Local Dev Server Not Required
+
+This project deploys via GitHub Actions to Lightsail. There is no local dev server workflow. Claude Code hooks that require a running local server (e.g., the Claude Preview plugin Stop hook) are suppressed via `"disableAllHooks": true` in `.claude/settings.local.json`.
+
 ---
 
-## 16. Backlog
+## 17. Backlog
 
 ### Category Groups Migration
 
@@ -883,7 +1045,7 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-## 17. Key Contacts & Resources
+## 18. Key Contacts & Resources
 
 | Resource | URL/Value |
 |---|---|
@@ -897,4 +1059,4 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-*README last updated: March 2026*
+*README last updated: March 2026 (session: import wizard, McFry AI tools, market/brand CRUD)*
