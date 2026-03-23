@@ -784,7 +784,7 @@ function TestDataTab() {
   const api = useApi()
   const [loading,       setLoading]       = useState(false)
   const [log,           setLog]           = useState<string[]>([])
-  const [confirmAction, setConfirmAction] = useState<'seed' | 'seed-small' | 'clear' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'seed' | 'seed-small' | 'clear' | 'defaults' | null>(null)
   const [toast,         setToast]         = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   async function handleSeed() {
@@ -830,6 +830,22 @@ function TestDataTab() {
     } catch (err: any) {
       setLog(prev => [...prev, `Error: ${err.message}`])
       setToast({ message: err.message || 'Failed to clear data', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleDefaults() {
+    setConfirmAction(null)
+    setLoading(true)
+    setLog(['Loading default data…'])
+    try {
+      const result = await api.post('/seed/defaults', {})
+      setLog(result.log || ['Default data loaded.'])
+      setToast({ message: 'Default data loaded successfully', type: 'success' })
+    } catch (err: any) {
+      setLog(prev => [...prev, `Error: ${err.message}`])
+      setToast({ message: err.message || 'Failed to load default data', type: 'error' })
     } finally {
       setLoading(false)
     }
@@ -930,7 +946,7 @@ function TestDataTab() {
       </div>
 
       {/* Clear All Data card */}
-      <div className="bg-surface border border-red-200 rounded-xl p-5 mb-6">
+      <div className="bg-surface border border-red-200 rounded-xl p-5 mb-4">
         <div className="flex items-start justify-between gap-6">
           <div>
             <h3 className="font-bold text-red-600 mb-1">Clear All Data</h3>
@@ -945,6 +961,50 @@ function TestDataTab() {
             className="btn-danger px-4 py-2 text-sm whitespace-nowrap shrink-0 disabled:opacity-60"
           >
             Clear Database
+          </button>
+        </div>
+      </div>
+
+      {/* Load Default Data card */}
+      <div className="bg-surface border border-border rounded-xl p-5 mb-6">
+        <div className="flex items-start justify-between gap-6">
+          <div className="flex-1">
+            <h3 className="font-bold text-text-1 mb-2">Load Default Data</h3>
+            <p className="text-xs text-text-3 mb-3">
+              Adds a minimal, production-ready starting point. Safe to run after{' '}
+              <strong>Clear Database</strong> — does not wipe existing data first.
+            </p>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+              {[
+                ['1', 'Market — United Kingdom (GBP)'],
+                ['1', 'Brand — Default Brand'],
+                ['1', 'Location — Default Location'],
+                ['3', 'Units — Kilogram, Litre, Each'],
+                ['6', 'Categories — Food, Beverage, Other × 2 types'],
+                ['1', 'Price Level — Default (is_default)'],
+                ['1', 'Vendor — Default Vendor'],
+                ['3', 'UK Tax Rates — 20%, 5%, 0% VAT'],
+                ['1', 'Standard VAT → Default price level'],
+              ].map(([n, label]) => (
+                <div key={label} className="flex items-center gap-1.5 text-sm text-text-2">
+                  <span className="font-mono font-bold text-accent w-12 shrink-0 text-right">{n}</span>
+                  <span className="text-text-3">{label}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-text-3 mt-3 italic">No recipes or price quotes are created — those are entered by you.</p>
+          </div>
+          <button
+            onClick={() => setConfirmAction('defaults')}
+            disabled={loading}
+            className="btn-outline px-4 py-2 text-sm whitespace-nowrap shrink-0 disabled:opacity-60"
+          >
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-accent/40 border-t-accent rounded-full animate-spin" />
+                Running…
+              </span>
+            ) : 'Load Defaults'}
           </button>
         </div>
       </div>
@@ -987,6 +1047,15 @@ function TestDataTab() {
         <ConfirmDialog
           message="This will permanently DELETE ALL DATA from every table. The schema is preserved but all records will be gone. Are you sure?"
           onConfirm={handleClear}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {/* Confirm — defaults */}
+      {confirmAction === 'defaults' && (
+        <ConfirmDialog
+          message="This will insert default data (UK market, 3 units, categories, price level, vendor, tax rates) into the current database without clearing existing records. Continue?"
+          onConfirm={handleDefaults}
           onCancel={() => setConfirmAction(null)}
         />
       )}

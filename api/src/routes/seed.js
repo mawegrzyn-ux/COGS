@@ -9,8 +9,9 @@
 
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { seedData, clearData }                     = require('../../scripts/seed-test-data');
+const { seedData, clearData }                        = require('../../scripts/seed-test-data');
 const { seedData: seedSmall, clearData: clearSmall } = require('../../scripts/seed-test-data-small');
+const { seedDefaults }                               = require('../../scripts/seed-defaults');
 
 // POST /seed — clear existing data then load test data
 router.post('/', async (req, res) => {
@@ -88,6 +89,26 @@ router.post('/clear', async (req, res) => {
     await client.query('ROLLBACK');
     console.error('[seed/clear] Error:', err.message);
     res.status(500).json({ error: { message: err.message } });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /seed/defaults — load minimal production-ready default data (does NOT clear first)
+router.post('/defaults', async (req, res) => {
+  const client = await pool.connect();
+  const log    = [];
+  const push   = (msg) => { log.push(msg); };
+
+  try {
+    await client.query('BEGIN');
+    const summary = await seedDefaults(client, push);
+    await client.query('COMMIT');
+    res.json({ success: true, summary, log });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[seed/defaults] Error:', err.message);
+    res.status(500).json({ error: { message: err.message }, log });
   } finally {
     client.release();
   }
