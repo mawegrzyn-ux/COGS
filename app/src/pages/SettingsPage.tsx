@@ -29,7 +29,7 @@ type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds'
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
 const TAB_LABELS: Record<Tab, string> = {
-  'units':          'Units',
+  'units':          'Base Units',
   'price-levels':   'Price Levels',
   'exchange-rates': 'Exchange Rates',
   'system':         'System',
@@ -129,64 +129,47 @@ function UnitsTab() {
     }
   }
 
-  const grouped = UNIT_TYPES.map(type => ({
-    type,
-    units: units.filter(u => u.type === type),
-  }))
-
   return (
     <>
       <div className="flex justify-between items-center mb-6">
-        <p className="text-sm text-text-3">Measurement units used across ingredients and recipes.</p>
+        <p className="text-sm text-text-3">Base units used across ingredients and recipes.</p>
         <button onClick={() => setModal('new')} className="btn-primary px-4 py-2 text-sm">
-          + Add Unit
+          + Add Base Unit
         </button>
       </div>
 
-      {loading ? <Spinner /> : (
-        <div className="space-y-6">
-          {grouped.map(({ type, units: typeUnits }) => (
-            <div key={type}>
-              <h3 className="text-xs font-bold uppercase tracking-widest text-text-3 mb-3 capitalize">{type}</h3>
-              {typeUnits.length === 0 ? (
-                <p className="text-sm text-text-3 italic pl-2">No {type} units yet</p>
-              ) : (
-                <div className="bg-surface rounded-lg border border-border overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-surface-2 border-b border-border">
-                        <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
-                        <th className="text-left px-4 py-2.5 font-semibold text-text-2">Abbreviation</th>
-                        <th className="text-left px-4 py-2.5 font-semibold text-text-2">Type</th>
-                        <th className="w-20"/>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {typeUnits.map((unit, i) => (
-                        <tr key={unit.id} className={`border-b border-border last:border-0 hover:bg-surface-2 transition-colors ${i % 2 === 0 ? '' : 'bg-surface-2/50'}`}>
-                          <td className="px-4 py-3 font-semibold text-text-1">{unit.name}</td>
-                          <td className="px-4 py-3 font-mono text-text-2">{unit.abbreviation}</td>
-                          <td className="px-4 py-3"><Badge label={unit.type} variant="neutral" /></td>
-                          <td className="px-4 py-3">
-                            <div className="flex gap-2 justify-end">
-                              <button onClick={() => setModal(unit)} className="btn-ghost px-2 py-1 text-xs">Edit</button>
-                              <button onClick={() => setDeleting(unit)} className="btn-ghost px-2 py-1 text-xs text-red-500 hover:text-red-600">Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ))}
-          {units.length === 0 && !loading && (
-            <EmptyState
-              message="No units yet. Add your first unit to get started."
-              action={<button onClick={() => setModal('new')} className="btn-primary px-4 py-2 text-sm">Add Unit</button>}
-            />
-          )}
+      {loading ? <Spinner /> : units.length === 0 ? (
+        <EmptyState
+          message="No base units yet. Add your first unit to get started."
+          action={<button onClick={() => setModal('new')} className="btn-primary px-4 py-2 text-sm">Add Base Unit</button>}
+        />
+      ) : (
+        <div className="bg-surface rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border">
+                <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
+                <th className="text-left px-4 py-2.5 font-semibold text-text-2">Abbreviation</th>
+                <th className="text-left px-4 py-2.5 font-semibold text-text-2">Type</th>
+                <th className="w-20"/>
+              </tr>
+            </thead>
+            <tbody>
+              {units.map((unit, i) => (
+                <tr key={unit.id} className={`border-b border-border last:border-0 hover:bg-surface-2 transition-colors ${i % 2 === 0 ? '' : 'bg-surface-2/50'}`}>
+                  <td className="px-4 py-3 font-semibold text-text-1">{unit.name}</td>
+                  <td className="px-4 py-3 font-mono text-text-2">{unit.abbreviation}</td>
+                  <td className="px-4 py-3"><Badge label={unit.type} variant="neutral" /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2 justify-end">
+                      <button onClick={() => setModal(unit)} className="btn-ghost px-2 py-1 text-xs">Edit</button>
+                      <button onClick={() => setDeleting(unit)} className="btn-ghost px-2 py-1 text-xs text-red-500 hover:text-red-600">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -1070,15 +1053,17 @@ function TestDataTab() {
 interface AiKeyStatus {
   anthropic_key_set: boolean
   voyage_key_set:    boolean
+  brave_key_set:     boolean
 }
 
 function AiTab() {
   const api = useApi()
   const [loading,   setLoading]   = useState(true)
   const [saving,    setSaving]    = useState(false)
-  const [status,    setStatus]    = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false })
+  const [status,    setStatus]    = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false })
   const [anthropic, setAnthropic] = useState('')
   const [voyage,    setVoyage]    = useState('')
+  const [brave,     setBrave]     = useState('')
   const [toast,     setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const load = useCallback(() => {
@@ -1093,8 +1078,9 @@ function AiTab() {
 
   async function handleSave() {
     const payload: Record<string, string> = {}
-    if (anthropic.trim()) payload.ANTHROPIC_API_KEY = anthropic.trim()
-    if (voyage.trim())    payload.VOYAGE_API_KEY    = voyage.trim()
+    if (anthropic.trim()) payload.ANTHROPIC_API_KEY    = anthropic.trim()
+    if (voyage.trim())    payload.VOYAGE_API_KEY       = voyage.trim()
+    if (brave.trim())     payload.BRAVE_SEARCH_API_KEY = brave.trim()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -1102,6 +1088,7 @@ function AiTab() {
       setStatus(updated)
       setAnthropic('')
       setVoyage('')
+      setBrave('')
       setToast({ message: 'Keys saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
@@ -1110,7 +1097,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -1132,10 +1119,11 @@ function AiTab() {
       </div>
 
       {/* Status cards */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { label: 'Anthropic (Claude)', set: status.anthropic_key_set, key: 'ANTHROPIC_API_KEY' as const },
-          { label: 'Voyage AI (RAG)',    set: status.voyage_key_set,    key: 'VOYAGE_API_KEY'    as const },
+          { label: 'Anthropic (Claude)', set: status.anthropic_key_set, key: 'ANTHROPIC_API_KEY'    as const },
+          { label: 'Voyage AI (RAG)',    set: status.voyage_key_set,    key: 'VOYAGE_API_KEY'       as const },
+          { label: 'Brave (Web Search)', set: status.brave_key_set,     key: 'BRAVE_SEARCH_API_KEY' as const },
         ].map(({ label, set, key }) => (
           <div
             key={key}
@@ -1184,13 +1172,25 @@ function AiTab() {
           />
           <p className="text-xs text-text-3 mt-1">Optional — enables semantic search over COGS documentation. Falls back to keyword search if not set. Get your key at dash.voyageai.com</p>
         </Field>
+
+        <Field label="Brave Search API Key">
+          <input
+            type="password"
+            className="input w-full font-mono text-sm"
+            value={brave}
+            onChange={e => setBrave(e.target.value)}
+            placeholder={status.brave_key_set ? '••••••••  (leave blank to keep existing)' : 'BSA…'}
+            autoComplete="off"
+          />
+          <p className="text-xs text-text-3 mt-1">Optional — enables full web search for the COGS Assistant. Falls back to DuckDuckGo instant answers if not set. Get your key at brave.com/search/api (free tier: 2,000 queries/month)</p>
+        </Field>
       </div>
 
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>

@@ -10,7 +10,7 @@ const pool     = require('../db/pool');
 const aiConfig = require('../helpers/aiConfig');
 const rag      = require('../helpers/rag');
 
-const ALLOWED_KEYS = ['ANTHROPIC_API_KEY', 'VOYAGE_API_KEY'];
+const ALLOWED_KEYS = ['ANTHROPIC_API_KEY', 'VOYAGE_API_KEY', 'BRAVE_SEARCH_API_KEY'];
 
 // GET /ai-config — returns boolean flags only
 router.get('/', (_req, res) => {
