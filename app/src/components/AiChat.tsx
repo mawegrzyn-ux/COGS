@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, RefObject } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 
@@ -53,10 +53,10 @@ function groupSessionsByDate(sessions: ChatSession[]) {
   }
   for (const s of sessions) {
     const d = new Date(s.last_active_at); d.setHours(0,0,0,0)
-    if (d >= today)     groups['Today'].push(s)
+    if (d >= today)          groups['Today'].push(s)
     else if (d >= yesterday) groups['Yesterday'].push(s)
-    else if (d >= week) groups['This week'].push(s)
-    else                groups['Older'].push(s)
+    else if (d >= week)      groups['This week'].push(s)
+    else                     groups['Older'].push(s)
   }
   return groups
 }
@@ -95,6 +95,220 @@ function renderMd(text: string): string {
 
 const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 
+// ── HistoryPanel — module-level component (stable identity across renders) ────
+
+interface HistoryPanelProps {
+  sessions: ChatSession[]
+  sessionsLoad: boolean
+  onBack: () => void
+  onNewChat: () => void
+  onLoadSession: (sid: string) => void
+}
+
+function HistoryPanel({ sessions, sessionsLoad, onBack, onNewChat, onLoadSession }: HistoryPanelProps) {
+  const groups  = groupSessionsByDate(sessions)
+  const isEmpty = sessions.length === 0 && !sessionsLoad
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* History header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b flex-shrink-0"
+        style={{ borderColor: 'var(--border)' }}>
+        <button onClick={onBack}
+          className="text-xs flex items-center gap-1 hover:opacity-70 transition-opacity"
+          style={{ color: 'var(--accent)' }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+          Back
+        </button>
+        <span className="text-sm font-semibold flex-1" style={{ color: 'var(--text-1)' }}>Chat History</span>
+        <button onClick={onNewChat}
+          className="text-xs px-2 py-1 rounded"
+          style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+          + New Chat
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto py-2">
+        {sessionsLoad && (
+          <div className="flex justify-center py-8">
+            <span className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin inline-block"
+              style={{ borderTopColor: 'var(--accent)' }}/>
+          </div>
+        )}
+        {isEmpty && !sessionsLoad && (
+          <div className="text-center py-10 px-4" style={{ color: 'var(--text-3)' }}>
+            <p className="text-sm">No saved conversations yet.</p>
+            <p className="text-xs mt-1">Your chats are stored after you send a message.</p>
+          </div>
+        )}
+        {Object.entries(groups).map(([label, group]) => {
+          if (!group.length) return null
+          return (
+            <div key={label}>
+              <div className="px-4 py-1 text-xs font-semibold uppercase tracking-wide"
+                style={{ color: 'var(--text-3)' }}>{label}</div>
+              {group.map(s => (
+                <button key={s.session_id} onClick={() => onLoadSession(s.session_id)}
+                  className="w-full text-left px-4 py-2.5 hover:bg-[var(--surface-2)] transition-colors border-b"
+                  style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                      {formatSessionDate(s.last_active_at)}
+                    </span>
+                    <span className="text-xs px-1.5 py-0.5 rounded"
+                      style={{ background: 'var(--surface-2)', color: 'var(--text-3)' }}>
+                      {s.turns} {s.turns === 1 ? 'turn' : 'turns'}
+                    </span>
+                  </div>
+                  <p className="text-sm truncate" style={{ color: 'var(--text-1)' }}>
+                    {s.first_message || '(file upload)'}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── ChatPanel — module-level component (stable identity across renders) ────────
+
+interface ChatPanelProps {
+  messages: Message[]
+  streaming: boolean
+  toolLabel: string | null
+  attachedFile: File | null
+  input: string
+  inputRef: RefObject<HTMLTextAreaElement>
+  fileInputRef: RefObject<HTMLInputElement>
+  bottomRef: RefObject<HTMLDivElement>
+  onInputChange: (val: string) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onSend: () => void
+  onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onFilePickerClick: () => void
+  onRemoveFile: () => void
+  canSend: boolean
+}
+
+function ChatPanel({
+  messages, streaming, toolLabel, attachedFile, input,
+  inputRef, fileInputRef, bottomRef,
+  onInputChange, onKeyDown, onSend, onFileChange, onFilePickerClick, onRemoveFile,
+  canSend,
+}: ChatPanelProps) {
+  return (
+    <>
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+        {messages.length === 0 && (
+          <div className="text-center py-8" style={{ color: 'var(--text-3)' }}>
+            <div className="flex justify-center mb-3">
+              <div className="w-12 h-12 rounded-full flex items-center justify-center"
+                style={{ background: 'var(--accent-dim)' }}>
+                <CogIcon size={28} color="var(--accent)" />
+              </div>
+            </div>
+            <p className="text-sm font-semibold mb-1" style={{ color: 'var(--accent)' }}>Hi, I'm McFry!</p>
+            <p className="text-sm">Ask me about your ingredients, recipes, COGS, or how to use the platform. I can also create and edit records — just ask!</p>
+            <p className="text-xs mt-2 opacity-70">📎 Attach CSV, Excel, Word, PPTX, PDF or images to import data</p>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm"
+              style={msg.role === 'user'
+                ? { background: 'var(--accent)', color: '#fff' }
+                : { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' }
+              }>
+              {msg.fileName && (
+                <div className="flex items-center gap-1 mb-1.5 text-xs opacity-80">
+                  <span>📎</span>
+                  <span className="truncate max-w-[180px]">{msg.fileName}</span>
+                </div>
+              )}
+              {msg.role === 'assistant' && msg.toolNames?.length ? (
+                <div className="flex flex-wrap gap-1 mb-1">
+                  {msg.toolNames.map((t, j) => (
+                    <span key={j} className="text-xs px-1.5 py-0.5 rounded"
+                      style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)' }}>
+                      ⚙ {t}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {msg.content ? (
+                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
+              ) : (
+                streaming && i === messages.length - 1 ? (
+                  <span className="opacity-60 text-xs">
+                    {toolLabel ? `Running ${toolLabel}…` : '…'}
+                  </span>
+                ) : null
+              )}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* File preview badge */}
+      {attachedFile && (
+        <div className="flex-shrink-0 mx-3 mb-1 px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs"
+          style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)' }}>
+          <span>📎</span>
+          <span className="flex-1 truncate">{attachedFile.name}</span>
+          <button onClick={onRemoveFile}
+            className="shrink-0 opacity-60 hover:opacity-100 transition-opacity font-bold"
+            title="Remove file">✕</button>
+        </div>
+      )}
+
+      {/* Input */}
+      <div className="flex-shrink-0 px-3 py-3 border-t" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-end gap-2 rounded-lg px-3 py-2"
+          style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+          <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={onFileChange} />
+          <button onClick={onFilePickerClick} disabled={streaming}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
+            style={{ color: 'var(--text-3)' }} title="Attach file" aria-label="Attach file">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={e => onInputChange(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={attachedFile ? 'Add a message… (optional)' : 'Ask anything… (Enter to send)'}
+            disabled={streaming}
+            rows={1}
+            className="flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed"
+            style={{ color: 'var(--text-1)', maxHeight: '120px', overflowY: 'auto' }}
+          />
+          <button onClick={onSend} disabled={!canSend}
+            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40"
+            style={{ background: 'var(--accent)', color: '#fff' }} aria-label="Send">
+            {streaming
+              ? <span className="text-xs animate-pulse">…</span>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
+            }
+          </button>
+        </div>
+        <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-3)' }}>
+          Shift+Enter for new line · 📎 CSV, Excel, Word, PPTX, PDF or image · 10 MB max
+        </p>
+      </div>
+    </>
+  )
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function AiChat() {
@@ -105,26 +319,35 @@ export default function AiChat() {
   const [view,         setView]         = useState<PanelView>('chat')
   const [messages,     setMessages]     = useState<Message[]>([])
   const [input,        setInput]        = useState('')
-  const [streaming,    setStreaming]     = useState(false)
+  const [streaming,    setStreaming]    = useState(false)
   const [toolLabel,    setToolLabel]    = useState<string | null>(null)
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
   const [sessionId,    setSessionId]    = useState(newSessionId)
   const [sessions,     setSessions]     = useState<ChatSession[]>([])
   const [sessionsLoad, setSessionsLoad] = useState(false)
 
-  const bottomRef   = useRef<HTMLDivElement>(null)
-  const inputRef    = useRef<HTMLTextAreaElement>(null)
+  const bottomRef    = useRef<HTMLDivElement>(null)
+  const inputRef     = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const wasStreaming = useRef(false)
 
   // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming])
 
-  // Focus input when chat view opens
+  // Focus input when chat opens or view switches back to chat
   useEffect(() => {
     if (open && view === 'chat') setTimeout(() => inputRef.current?.focus(), 150)
   }, [open, view])
+
+  // Restore focus when streaming completes
+  useEffect(() => {
+    if (wasStreaming.current && !streaming && open && view === 'chat') {
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+    wasStreaming.current = streaming
+  }, [streaming, open, view])
 
   // ── New Chat ──────────────────────────────────────────────────────────────
 
@@ -164,7 +387,7 @@ export default function AiChat() {
           toolNames: Array.isArray(t.tools_called) ? t.tools_called : [] })
       }
       setMessages(loaded)
-      setSessionId(sid)   // continue the same session in DB
+      setSessionId(sid)
       setView('chat')
     } catch { /* non-critical */ }
   }, [user?.sub])
@@ -281,192 +504,22 @@ export default function AiChat() {
     }
   }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user])
 
-  const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
-  }
+  }, [send])
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setAttachedFile(e.target.files?.[0] ?? null)
     e.target.value = ''
-  }
+  }, [])
+
+  const handleFilePickerClick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleRemoveFile = useCallback(() => setAttachedFile(null), [])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
-
-  // ── History view ──────────────────────────────────────────────────────────
-
-  const HistoryPanel = () => {
-    const groups  = groupSessionsByDate(sessions)
-    const isEmpty = sessions.length === 0 && !sessionsLoad
-
-    return (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* History header */}
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b flex-shrink-0"
-          style={{ borderColor: 'var(--border)' }}>
-          <button onClick={() => setView('chat')}
-            className="text-xs flex items-center gap-1 hover:opacity-70 transition-opacity"
-            style={{ color: 'var(--accent)' }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M15 18l-6-6 6-6"/>
-            </svg>
-            Back
-          </button>
-          <span className="text-sm font-semibold flex-1" style={{ color: 'var(--text-1)' }}>Chat History</span>
-          <button onClick={startNewChat}
-            className="text-xs px-2 py-1 rounded"
-            style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-            + New Chat
-          </button>
-        </div>
-
-        {/* Session list */}
-        <div className="flex-1 overflow-y-auto py-2">
-          {sessionsLoad && (
-            <div className="flex justify-center py-8">
-              <span className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin inline-block"
-                style={{ borderTopColor: 'var(--accent)' }}/>
-            </div>
-          )}
-          {isEmpty && !sessionsLoad && (
-            <div className="text-center py-10 px-4" style={{ color: 'var(--text-3)' }}>
-              <p className="text-sm">No saved conversations yet.</p>
-              <p className="text-xs mt-1">Your chats are stored after you send a message.</p>
-            </div>
-          )}
-          {Object.entries(groups).map(([label, group]) => {
-            if (!group.length) return null
-            return (
-              <div key={label}>
-                <div className="px-4 py-1 text-xs font-semibold uppercase tracking-wide"
-                  style={{ color: 'var(--text-3)' }}>{label}</div>
-                {group.map(s => (
-                  <button key={s.session_id} onClick={() => loadSession(s.session_id)}
-                    className="w-full text-left px-4 py-2.5 hover:bg-[var(--surface-2)] transition-colors border-b"
-                    style={{ borderColor: 'var(--border)' }}>
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-xs" style={{ color: 'var(--text-3)' }}>
-                        {formatSessionDate(s.last_active_at)}
-                      </span>
-                      <span className="text-xs px-1.5 py-0.5 rounded"
-                        style={{ background: 'var(--surface-2)', color: 'var(--text-3)' }}>
-                        {s.turns} {s.turns === 1 ? 'turn' : 'turns'}
-                      </span>
-                    </div>
-                    <p className="text-sm truncate" style={{ color: 'var(--text-1)' }}>
-                      {s.first_message || '(file upload)'}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
-
-  // ── Chat view ─────────────────────────────────────────────────────────────
-
-  const ChatPanel = () => (
-    <>
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.length === 0 && (
-          <div className="text-center py-8" style={{ color: 'var(--text-3)' }}>
-            <div className="flex justify-center mb-3">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center"
-                style={{ background: 'var(--accent-dim)' }}>
-                <CogIcon size={28} color="var(--accent)" />
-              </div>
-            </div>
-            <p className="text-sm font-semibold mb-1" style={{ color: 'var(--accent)' }}>Hi, I'm McFry!</p>
-            <p className="text-sm">Ask me about your ingredients, recipes, COGS, or how to use the platform. I can also create and edit records — just ask!</p>
-            <p className="text-xs mt-2 opacity-70">📎 Attach CSV, Excel, Word, PPTX, PDF or images to import data</p>
-          </div>
-        )}
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm"
-              style={msg.role === 'user'
-                ? { background: 'var(--accent)', color: '#fff' }
-                : { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' }
-              }>
-              {msg.fileName && (
-                <div className="flex items-center gap-1 mb-1.5 text-xs opacity-80">
-                  <span>📎</span>
-                  <span className="truncate max-w-[180px]">{msg.fileName}</span>
-                </div>
-              )}
-              {msg.role === 'assistant' && msg.toolNames?.length ? (
-                <div className="flex flex-wrap gap-1 mb-1">
-                  {msg.toolNames.map((t, j) => (
-                    <span key={j} className="text-xs px-1.5 py-0.5 rounded"
-                      style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)' }}>
-                      ⚙ {t}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {msg.content ? (
-                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
-              ) : (
-                streaming && i === messages.length - 1 ? (
-                  <span className="opacity-60 text-xs">
-                    {toolLabel ? `Running ${toolLabel}…` : '…'}
-                  </span>
-                ) : null
-              )}
-            </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* File preview badge */}
-      {attachedFile && (
-        <div className="flex-shrink-0 mx-3 mb-1 px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs"
-          style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)' }}>
-          <span>📎</span>
-          <span className="flex-1 truncate">{attachedFile.name}</span>
-          <button onClick={() => setAttachedFile(null)}
-            className="shrink-0 opacity-60 hover:opacity-100 transition-opacity font-bold"
-            title="Remove file">✕</button>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="flex-shrink-0 px-3 py-3 border-t" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-end gap-2 rounded-lg px-3 py-2"
-          style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-          <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={handleFileChange} />
-          <button onClick={() => fileInputRef.current?.click()} disabled={streaming}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
-            style={{ color: 'var(--text-3)' }} title="Attach file" aria-label="Attach file">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-            </svg>
-          </button>
-          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder={attachedFile ? 'Add a message… (optional)' : 'Ask anything… (Enter to send)'}
-            disabled={streaming} rows={1}
-            className="flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed"
-            style={{ color: 'var(--text-1)', maxHeight: '120px', overflowY: 'auto' }} />
-          <button onClick={send} disabled={!canSend}
-            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40"
-            style={{ background: 'var(--accent)', color: '#fff' }} aria-label="Send">
-            {streaming
-              ? <span className="text-xs animate-pulse">…</span>
-              : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
-            }
-          </button>
-        </div>
-        <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-3)' }}>
-          Shift+Enter for new line · 📎 CSV, Excel, Word, PPTX, PDF or image · 10 MB max
-        </p>
-      </div>
-    </>
-  )
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -526,7 +579,33 @@ export default function AiChat() {
 
           {/* Body — either chat or history */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            {view === 'history' ? HistoryPanel() : ChatPanel()}
+            {view === 'history' ? (
+              <HistoryPanel
+                sessions={sessions}
+                sessionsLoad={sessionsLoad}
+                onBack={() => setView('chat')}
+                onNewChat={startNewChat}
+                onLoadSession={loadSession}
+              />
+            ) : (
+              <ChatPanel
+                messages={messages}
+                streaming={streaming}
+                toolLabel={toolLabel}
+                attachedFile={attachedFile}
+                input={input}
+                inputRef={inputRef}
+                fileInputRef={fileInputRef}
+                bottomRef={bottomRef}
+                onInputChange={setInput}
+                onKeyDown={handleKey}
+                onSend={send}
+                onFileChange={handleFileChange}
+                onFilePickerClick={handleFilePickerClick}
+                onRemoveFile={handleRemoveFile}
+                canSend={canSend}
+              />
+            )}
           </div>
         </div>
       )}

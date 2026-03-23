@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:/Program Files/Git/bin/bash.exe",
       "runtimeArgs": ["C:/Users/micha/Downloads/extract_shell7.sh"],
       "port": 4567
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "cmd.exe",
+      "runtimeArgs": ["/c", "cd C:\\GitHubReps\\COGS\\app && npm run dev"],
+      "port": 5173
     }
   ]
 }

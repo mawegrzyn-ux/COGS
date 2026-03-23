@@ -61,10 +61,12 @@ async function agenticStream({ anthropic, systemPrompt, messages, tools, execute
         }
 
         if (event.type === 'content_block_stop' && currentBlock) {
-          if (currentBlock.type === 'tool_use' && currentBlock.input_str) {
-            try { currentBlock.input = JSON.parse(currentBlock.input_str); } catch { currentBlock.input = {}; }
+          if (currentBlock.type === 'tool_use') {
+            try { currentBlock.input = JSON.parse(currentBlock.input_str || '{}'); } catch { currentBlock.input = {}; }
           }
-          assistantContent.push(currentBlock);
+          // Strip the internal tracking field before sending back to Anthropic
+          const { input_str, ...cleanBlock } = currentBlock;
+          assistantContent.push(cleanBlock);
           currentBlock = null;
         }
 

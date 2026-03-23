@@ -13,6 +13,7 @@ import MenusPage          from './pages/MenusPage'
 import AllergenMatrixPage from './pages/AllergenMatrixPage'
 import HACCPPage          from './pages/HACCPPage'
 import HelpPage           from './pages/HelpPage'
+import ImportPage         from './pages/ImportPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="allergens"  element={<AllergenMatrixPage />} />
           <Route path="haccp"      element={<HACCPPage />} />
           <Route path="help"       element={<HelpPage />} />
+          <Route path="import"     element={<ImportPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

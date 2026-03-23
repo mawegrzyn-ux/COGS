@@ -22,7 +22,8 @@
       "Bash(node -e \":*)",
       "Bash(npx tsc:*)",
       "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit 2>&1\")",
-      "Bash(export SHELL=/bin/bash)"
+      "Bash(export SHELL=/bin/bash)",
+      "Bash(cmd.exe /c \"where npm & where node\")"
     ]
   }
 }

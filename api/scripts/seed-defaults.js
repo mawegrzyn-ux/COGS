@@ -157,9 +157,9 @@ async function seedDefaults(client, push) {
   );
   const taxResult = await client.query(
     `INSERT INTO mcogs_country_tax_rates (country_id, name, rate, is_default) VALUES
-       ($1, 'Standard VAT',  20.00, true),
-       ($1, 'Reduced VAT',    5.00, false),
-       ($1, 'Zero Rate',      0.00, false)
+       ($1, 'Standard VAT',  0.20, true),
+       ($1, 'Reduced VAT',   0.05, false),
+       ($1, 'Zero Rate',     0.00, false)
      RETURNING id, name`,
     [ukId]
   );

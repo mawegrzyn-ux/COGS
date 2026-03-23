@@ -27,6 +27,7 @@ router.use('/location-groups',     require('./location-groups'));
 router.use('/seed',                require('./seed'));
 router.use('/feedback',            require('./feedback'));
 router.use('/internal/feedback',   require('./internal-feedback'));
+router.use('/import',              require('./import'));
 router.use('/ai-chat',             require('./ai-chat').router);
 router.use('/ai-upload',           require('./ai-upload'));
 router.use('/ai-config',           require('./ai-config'));
