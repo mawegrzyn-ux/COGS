@@ -2,7 +2,6 @@
   "env": {
     "INTERNAL_API_KEY": "change-me-before-deploying"
   },
-  "disableAllHooks": true,
   "permissions": {
     "allow": [
       "Bash(curl http://localhost:3001/api/internal/feedback*)",
@@ -24,7 +23,9 @@
       "Bash(npx tsc:*)",
       "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit 2>&1\")",
       "Bash(export SHELL=/bin/bash)",
-      "Bash(cmd.exe /c \"where npm & where node\")"
+      "Bash(cmd.exe /c \"where npm & where node\")",
+      "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\api && node -e \"\"const f=require\\(''./src/routes/ai-chat.js''\\); console.log\\(''loaded OK''\\)\"\" 2>&1\")"
     ]
-  }
+  },
+  "disableAllHooks": true
 }

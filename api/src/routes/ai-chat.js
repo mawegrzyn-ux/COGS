@@ -587,6 +587,438 @@ Do NOT use this for small single-record requests; use the individual create_* to
       required: ['file_content', 'filename'],
     },
   },
+
+  // ── Category update / delete ──────────────────────────────────────────────────
+  {
+    name: 'update_category',
+    description: 'Updates a category name, group, or sort order. Call list_categories first to get the ID. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:         { type: 'integer' },
+        name:       { type: 'string' },
+        group_name: { type: 'string' },
+        sort_order: { type: 'integer' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'delete_category',
+    description: 'Deletes a category. Will fail if ingredients or recipes still reference it — reassign them first. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+
+  // ── Tax Rates CRUD ────────────────────────────────────────────────────────────
+  {
+    name: 'list_tax_rates',
+    description: 'Lists all tax rates with id, name, rate (as a decimal e.g. 0.20 for 20%), country_id, country_name, and is_default.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        country_id: { type: 'integer', description: 'Optional: filter by market/country' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_tax_rate',
+    description: 'Creates a tax rate for a market. Rate is a decimal (e.g. 0.20 for 20%). The first rate for a country auto-becomes default. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        country_id: { type: 'integer', description: 'Market ID from list_markets' },
+        name:       { type: 'string', description: 'e.g. "Standard VAT", "Reduced Rate"' },
+        rate:       { type: 'number', description: 'Decimal rate e.g. 0.20 for 20%' },
+      },
+      required: ['country_id', 'name', 'rate'],
+    },
+  },
+  {
+    name: 'update_tax_rate',
+    description: 'Updates a tax rate name or rate value. Call list_tax_rates first to get the ID. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:   { type: 'integer' },
+        name: { type: 'string' },
+        rate: { type: 'number', description: 'Decimal e.g. 0.20 for 20%' },
+      },
+      required: ['id', 'name', 'rate'],
+    },
+  },
+  {
+    name: 'set_default_tax_rate',
+    description: 'Sets a tax rate as the default for its country (clears is_default on all other rates for that country). CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:         { type: 'integer', description: 'Tax rate ID to set as default' },
+        country_id: { type: 'integer', description: 'The country this rate belongs to' },
+      },
+      required: ['id', 'country_id'],
+    },
+  },
+  {
+    name: 'delete_tax_rate',
+    description: 'Deletes a tax rate. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+
+  // ── Price Levels CRUD ─────────────────────────────────────────────────────────
+  {
+    name: 'create_price_level',
+    description: 'Creates a new price level (e.g. Eat-in, Takeout, Delivery). Set is_default=true to make it the default. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string' },
+        description: { type: 'string' },
+        is_default:  { type: 'boolean', description: 'If true, clears is_default on all other price levels' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_price_level',
+    description: 'Updates a price level. Call list_price_levels first to get the ID. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:          { type: 'integer' },
+        name:        { type: 'string' },
+        description: { type: 'string' },
+        is_default:  { type: 'boolean' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'delete_price_level',
+    description: 'Deletes a price level. Will fail if menu item prices reference it. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+
+  // ── Settings ──────────────────────────────────────────────────────────────────
+  {
+    name: 'get_settings',
+    description: 'Returns the global app settings JSONB blob (COGS thresholds, default units, etc.).',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'update_settings',
+    description: 'Merges a partial settings object into the global settings. Only supply keys you want to change. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        patch: { type: 'object', description: 'Key-value pairs to merge into settings (e.g. { "cogs_thresholds": { "excellent": 25, "acceptable": 35 } })' },
+      },
+      required: ['patch'],
+    },
+  },
+
+  // ── HACCP ─────────────────────────────────────────────────────────────────────
+  {
+    name: 'list_haccp_equipment',
+    description: 'Lists HACCP equipment (fridges, freezers, hot-holds etc.) with last logged temp and in-range status.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'integer', description: 'Optional: filter by location' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_haccp_equipment',
+    description: 'Registers new equipment in the HACCP log. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:            { type: 'string' },
+        type:            { type: 'string', enum: ['fridge', 'freezer', 'hot_hold', 'display', 'other'] },
+        location_id:     { type: 'integer', description: 'Location ID from list_locations (optional)' },
+        location_desc:   { type: 'string', description: 'Free-text location description (optional)' },
+        target_min_temp: { type: 'number', description: 'Min acceptable °C' },
+        target_max_temp: { type: 'number', description: 'Max acceptable °C' },
+      },
+      required: ['name', 'type'],
+    },
+  },
+  {
+    name: 'update_haccp_equipment',
+    description: 'Updates equipment details or target temp range. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:              { type: 'integer' },
+        name:            { type: 'string' },
+        type:            { type: 'string', enum: ['fridge', 'freezer', 'hot_hold', 'display', 'other'] },
+        location_id:     { type: 'integer' },
+        location_desc:   { type: 'string' },
+        target_min_temp: { type: 'number' },
+        target_max_temp: { type: 'number' },
+        is_active:       { type: 'boolean' },
+      },
+      required: ['id', 'name', 'type'],
+    },
+  },
+  {
+    name: 'delete_haccp_equipment',
+    description: 'Deletes equipment and all its temperature logs. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'log_temperature',
+    description: 'Logs a temperature reading for a piece of equipment. Out-of-range readings require a corrective_action. No confirmation needed for routine logging.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        equipment_id:      { type: 'integer', description: 'Equipment ID from list_haccp_equipment' },
+        temp_c:            { type: 'number', description: 'Temperature in °C' },
+        logged_by:         { type: 'string', description: 'Name of person logging' },
+        notes:             { type: 'string' },
+        corrective_action: { type: 'string', description: 'Required if temp is outside target range' },
+        logged_at:         { type: 'string', description: 'ISO timestamp (defaults to now)' },
+      },
+      required: ['equipment_id', 'temp_c'],
+    },
+  },
+  {
+    name: 'list_temp_logs',
+    description: 'Returns temperature log history for a piece of equipment.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        equipment_id: { type: 'integer' },
+        date_from:    { type: 'string', description: 'ISO date filter (optional)' },
+        date_to:      { type: 'string', description: 'ISO date filter (optional)' },
+        limit:        { type: 'integer', description: 'Max rows (default 90, max 500)' },
+      },
+      required: ['equipment_id'],
+    },
+  },
+  {
+    name: 'list_ccp_logs',
+    description: 'Returns CCP (Critical Control Point) logs for cooking, cooling, or delivery checks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        log_type:    { type: 'string', enum: ['cooking', 'cooling', 'delivery'], description: 'Optional filter' },
+        location_id: { type: 'integer', description: 'Optional location filter' },
+        recipe_id:   { type: 'integer', description: 'Optional recipe filter' },
+        date_from:   { type: 'string' },
+        date_to:     { type: 'string' },
+        limit:       { type: 'integer', description: 'Default 50' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'add_ccp_log',
+    description: 'Logs a CCP check (cooking/cooling/delivery temp). No confirmation needed for routine logging.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        log_type:          { type: 'string', enum: ['cooking', 'cooling', 'delivery'] },
+        item_name:         { type: 'string', description: 'Name of the food item checked' },
+        recipe_id:         { type: 'integer', description: 'Optional recipe reference' },
+        location_id:       { type: 'integer', description: 'Optional location reference' },
+        target_min_temp:   { type: 'number', description: 'Min target °C' },
+        target_max_temp:   { type: 'number', description: 'Max target °C' },
+        actual_temp:       { type: 'number', description: 'Measured °C' },
+        corrective_action: { type: 'string', description: 'Required if out of range' },
+        logged_by:         { type: 'string' },
+        notes:             { type: 'string' },
+        logged_at:         { type: 'string', description: 'ISO timestamp (defaults to now)' },
+      },
+      required: ['log_type', 'item_name', 'target_min_temp', 'target_max_temp', 'actual_temp'],
+    },
+  },
+
+  // ── Locations ─────────────────────────────────────────────────────────────────
+  {
+    name: 'list_locations',
+    description: 'Lists store/restaurant locations with market, group, contact details, and active status.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        market_id: { type: 'integer', description: 'Optional: filter by market (country)' },
+        group_id:  { type: 'integer', description: 'Optional: filter by location group' },
+        active:    { type: 'boolean', description: 'Optional: filter by active status' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_location',
+    description: 'Creates a new store/restaurant location. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:          { type: 'string' },
+        country_id:    { type: 'integer', description: 'Market ID from list_markets' },
+        group_id:      { type: 'integer', description: 'Location group ID from list_location_groups (optional)' },
+        address:       { type: 'string' },
+        email:         { type: 'string' },
+        phone:         { type: 'string' },
+        contact_name:  { type: 'string' },
+        contact_email: { type: 'string' },
+        contact_phone: { type: 'string' },
+        is_active:     { type: 'boolean', description: 'Default true' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_location',
+    description: 'Updates a location. Call list_locations to get the ID first. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:            { type: 'integer' },
+        name:          { type: 'string' },
+        country_id:    { type: 'integer' },
+        group_id:      { type: 'integer' },
+        address:       { type: 'string' },
+        email:         { type: 'string' },
+        phone:         { type: 'string' },
+        contact_name:  { type: 'string' },
+        contact_email: { type: 'string' },
+        contact_phone: { type: 'string' },
+        is_active:     { type: 'boolean' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'delete_location',
+    description: 'Deletes a location. Warn that this will fail if equipment is still assigned. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_location_groups',
+    description: 'Lists location groups (clusters of stores) with location count.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'create_location_group',
+    description: 'Creates a new location group. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_location_group',
+    description: 'Updates a location group name or description. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:          { type: 'integer' },
+        name:        { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'delete_location_group',
+    description: 'Deletes a location group. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+
+  // ── Allergens ─────────────────────────────────────────────────────────────────
+  {
+    name: 'list_allergens',
+    description: 'Returns the 14 EU/UK FIC regulated allergens with id, name, and code.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_ingredient_allergens',
+    description: 'Returns the allergen profile for a single ingredient.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ingredient_id: { type: 'integer' },
+      },
+      required: ['ingredient_id'],
+    },
+  },
+  {
+    name: 'set_ingredient_allergens',
+    description: 'Sets the full allergen profile for an ingredient (replaces any existing entries). Call list_allergens first to get allergen IDs. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ingredient_id: { type: 'integer' },
+        allergens: {
+          type: 'array',
+          description: 'Full desired allergen state — any allergen not listed will be removed',
+          items: {
+            type: 'object',
+            properties: {
+              allergen_id: { type: 'integer' },
+              status: { type: 'string', enum: ['contains', 'may_contain', 'free_from'] },
+            },
+            required: ['allergen_id', 'status'],
+          },
+        },
+      },
+      required: ['ingredient_id', 'allergens'],
+    },
+  },
+  {
+    name: 'get_menu_allergens',
+    description: 'Returns the full allergen matrix for a menu — each menu item with its aggregated allergen status across all ingredients.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_id: { type: 'integer', description: 'Menu ID from list_menus' },
+      },
+      required: ['menu_id'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -1272,6 +1704,536 @@ async function executeTool(name, input) {
       };
     }
 
+    // ── Category update / delete ───────────────────────────────────────────────
+
+    case 'update_category': {
+      const { id, name, group_name, sort_order } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        UPDATE mcogs_categories SET name=$1, group_name=$2, sort_order=$3, updated_at=NOW()
+        WHERE id=$4 RETURNING id, name, type, group_name, sort_order
+      `, [name.trim(), group_name?.trim() || 'Unassigned', sort_order ?? 0, id]);
+      if (!rows.length) return { error: 'Category not found' };
+      return rows[0];
+    }
+
+    case 'delete_category': {
+      const { id } = input;
+      try {
+        const { rowCount } = await pool.query(`DELETE FROM mcogs_categories WHERE id=$1`, [id]);
+        if (!rowCount) return { error: 'Category not found' };
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') return { error: 'Category is still referenced by ingredients or recipes — reassign them first.' };
+        throw err;
+      }
+    }
+
+    // ── Tax Rates CRUD ─────────────────────────────────────────────────────────
+
+    case 'list_tax_rates': {
+      const { country_id } = input;
+      const q = country_id
+        ? `SELECT t.*, c.name AS country_name FROM mcogs_country_tax_rates t JOIN mcogs_countries c ON c.id = t.country_id WHERE t.country_id=$1 ORDER BY c.name, t.name`
+        : `SELECT t.*, c.name AS country_name FROM mcogs_country_tax_rates t JOIN mcogs_countries c ON c.id = t.country_id ORDER BY c.name, t.name`;
+      const { rows } = await pool.query(q, country_id ? [country_id] : []);
+      return rows;
+    }
+
+    case 'create_tax_rate': {
+      const { country_id, name, rate } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      if (rate == null || rate < 0) return { error: 'rate must be 0 or greater' };
+      const { rows: existing } = await pool.query(
+        `SELECT id FROM mcogs_country_tax_rates WHERE country_id=$1`, [country_id]
+      );
+      const isDefault = existing.length === 0;
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_country_tax_rates (country_id, name, rate, is_default) VALUES ($1,$2,$3,$4) RETURNING *`,
+        [country_id, name.trim(), rate, isDefault]
+      );
+      return rows[0];
+    }
+
+    case 'update_tax_rate': {
+      const { id, name, rate } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      if (rate == null || rate < 0) return { error: 'rate must be 0 or greater' };
+      const { rows } = await pool.query(
+        `UPDATE mcogs_country_tax_rates SET name=$1, rate=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
+        [name.trim(), rate, id]
+      );
+      if (!rows.length) return { error: 'Tax rate not found' };
+      return rows[0];
+    }
+
+    case 'set_default_tax_rate': {
+      const { id, country_id } = input;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE mcogs_country_tax_rates SET is_default=FALSE, updated_at=NOW() WHERE country_id=$1`, [country_id]
+        );
+        const { rows } = await client.query(
+          `UPDATE mcogs_country_tax_rates SET is_default=TRUE, updated_at=NOW() WHERE id=$1 RETURNING *`, [id]
+        );
+        await client.query('COMMIT');
+        if (!rows.length) return { error: 'Tax rate not found' };
+        return rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    case 'delete_tax_rate': {
+      const { id } = input;
+      const { rowCount } = await pool.query(`DELETE FROM mcogs_country_tax_rates WHERE id=$1`, [id]);
+      if (!rowCount) return { error: 'Tax rate not found' };
+      return { deleted: true, id };
+    }
+
+    // ── Price Levels CRUD ──────────────────────────────────────────────────────
+
+    case 'create_price_level': {
+      const { name, description, is_default } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (is_default) await client.query(`UPDATE mcogs_price_levels SET is_default=FALSE, updated_at=NOW()`);
+        const { rows } = await client.query(
+          `INSERT INTO mcogs_price_levels (name, description, is_default) VALUES ($1,$2,$3) RETURNING *`,
+          [name.trim(), description?.trim() || null, !!is_default]
+        );
+        await client.query('COMMIT');
+        return rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    case 'update_price_level': {
+      const { id, name, description, is_default } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        if (is_default) {
+          await client.query(`UPDATE mcogs_price_levels SET is_default=FALSE, updated_at=NOW() WHERE id!=$1`, [id]);
+        }
+        const { rows } = await client.query(
+          `UPDATE mcogs_price_levels SET name=$1, description=$2, is_default=$3, updated_at=NOW() WHERE id=$4 RETURNING *`,
+          [name.trim(), description?.trim() || null, !!is_default, id]
+        );
+        await client.query('COMMIT');
+        if (!rows.length) return { error: 'Price level not found' };
+        return rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    case 'delete_price_level': {
+      const { id } = input;
+      try {
+        const { rowCount } = await pool.query(`DELETE FROM mcogs_price_levels WHERE id=$1`, [id]);
+        if (!rowCount) return { error: 'Price level not found' };
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') return { error: 'Price level is referenced by menu item prices — remove those entries first.' };
+        throw err;
+      }
+    }
+
+    // ── Settings ───────────────────────────────────────────────────────────────
+
+    case 'get_settings': {
+      const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id=1`);
+      return rows[0]?.data || {};
+    }
+
+    case 'update_settings': {
+      const { patch } = input;
+      if (!patch || typeof patch !== 'object') return { error: 'patch must be an object' };
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_settings (id, data) VALUES (1, $1::jsonb)
+         ON CONFLICT (id) DO UPDATE SET data = mcogs_settings.data || $1::jsonb, updated_at=NOW()
+         RETURNING data`,
+        [JSON.stringify(patch)]
+      );
+      return rows[0].data;
+    }
+
+    // ── HACCP ──────────────────────────────────────────────────────────────────
+
+    case 'list_haccp_equipment': {
+      const { location_id } = input;
+      const vals = [];
+      let where = '';
+      if (location_id) { where = `AND e.location_id = $1`; vals.push(location_id); }
+      const { rows } = await pool.query(`
+        SELECT e.*, loc.name AS location_name,
+               COUNT(tl.id)::int AS log_count,
+               MAX(tl.logged_at) AS last_logged_at,
+               (SELECT l2.temp_c   FROM mcogs_equipment_temp_logs l2 WHERE l2.equipment_id=e.id ORDER BY l2.logged_at DESC LIMIT 1) AS last_temp_c,
+               (SELECT l2.in_range FROM mcogs_equipment_temp_logs l2 WHERE l2.equipment_id=e.id ORDER BY l2.logged_at DESC LIMIT 1) AS last_in_range
+        FROM   mcogs_equipment e
+        LEFT JOIN mcogs_locations loc ON loc.id = e.location_id
+        LEFT JOIN mcogs_equipment_temp_logs tl ON tl.equipment_id = e.id
+        WHERE 1=1 ${where}
+        GROUP BY e.id, loc.name ORDER BY e.name ASC
+      `, vals);
+      return rows;
+    }
+
+    case 'create_haccp_equipment': {
+      const { name, type, location_id, location_desc, target_min_temp, target_max_temp } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const validTypes = ['fridge', 'freezer', 'hot_hold', 'display', 'other'];
+      if (!validTypes.includes(type)) return { error: `type must be one of: ${validTypes.join(', ')}` };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_equipment (name, type, location_id, location_desc, target_min_temp, target_max_temp)
+        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
+      `, [name.trim(), type, location_id||null, location_desc?.trim()||null, target_min_temp??null, target_max_temp??null]);
+      return rows[0];
+    }
+
+    case 'update_haccp_equipment': {
+      const { id, name, type, location_id, location_desc, target_min_temp, target_max_temp, is_active } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const validTypes = ['fridge', 'freezer', 'hot_hold', 'display', 'other'];
+      if (!validTypes.includes(type)) return { error: `type must be one of: ${validTypes.join(', ')}` };
+      const { rows } = await pool.query(`
+        UPDATE mcogs_equipment
+        SET name=$1, type=$2, location_id=$3, location_desc=$4,
+            target_min_temp=$5, target_max_temp=$6, is_active=$7, updated_at=NOW()
+        WHERE id=$8 RETURNING *
+      `, [name.trim(), type, location_id||null, location_desc?.trim()||null,
+          target_min_temp??null, target_max_temp??null, is_active!==false, id]);
+      if (!rows.length) return { error: 'Equipment not found' };
+      return rows[0];
+    }
+
+    case 'delete_haccp_equipment': {
+      const { id } = input;
+      const { rowCount } = await pool.query(`DELETE FROM mcogs_equipment WHERE id=$1`, [id]);
+      if (!rowCount) return { error: 'Equipment not found' };
+      return { deleted: true, id };
+    }
+
+    case 'log_temperature': {
+      const { equipment_id, temp_c, logged_by, notes, corrective_action, logged_at } = input;
+      const { rows: [eq] } = await pool.query(
+        `SELECT target_min_temp, target_max_temp FROM mcogs_equipment WHERE id=$1`, [equipment_id]
+      );
+      if (!eq) return { error: 'Equipment not found' };
+      const t = Number(temp_c);
+      const inRange = (eq.target_min_temp == null || t >= Number(eq.target_min_temp)) &&
+                      (eq.target_max_temp == null || t <= Number(eq.target_max_temp));
+      if (!inRange && !corrective_action?.trim()) {
+        return { error: `Temperature ${t}°C is outside target range (${eq.target_min_temp}–${eq.target_max_temp}°C) — corrective_action is required.` };
+      }
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_equipment_temp_logs
+          (equipment_id, temp_c, in_range, corrective_action, logged_by, notes, logged_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
+      `, [equipment_id, t, inRange, corrective_action?.trim()||null,
+          logged_by?.trim()||null, notes?.trim()||null, logged_at||new Date().toISOString()]);
+      return rows[0];
+    }
+
+    case 'list_temp_logs': {
+      const { equipment_id, date_from, date_to, limit = 90 } = input;
+      const vals = [equipment_id];
+      let q = `SELECT * FROM mcogs_equipment_temp_logs WHERE equipment_id=$1`;
+      let p = 2;
+      if (date_from) { q += ` AND logged_at >= $${p++}`; vals.push(date_from); }
+      if (date_to)   { q += ` AND logged_at <= $${p++}`; vals.push(date_to); }
+      q += ` ORDER BY logged_at DESC LIMIT $${p}`;
+      vals.push(Math.min(Number(limit)||90, 500));
+      const { rows } = await pool.query(q, vals);
+      return rows;
+    }
+
+    case 'list_ccp_logs': {
+      const { log_type, location_id, recipe_id, date_from, date_to, limit = 50 } = input;
+      const conditions = [];
+      const vals = [];
+      let p = 1;
+      if (log_type)    { conditions.push(`cl.log_type=$${p++}`);    vals.push(log_type); }
+      if (recipe_id)   { conditions.push(`cl.recipe_id=$${p++}`);   vals.push(recipe_id); }
+      if (location_id) { conditions.push(`cl.location_id=$${p++}`); vals.push(location_id); }
+      if (date_from)   { conditions.push(`cl.logged_at>=$${p++}`);  vals.push(date_from); }
+      if (date_to)     { conditions.push(`cl.logged_at<=$${p++}`);  vals.push(date_to); }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      vals.push(Math.min(Number(limit)||50, 500));
+      const { rows } = await pool.query(`
+        SELECT cl.*, r.name AS recipe_name
+        FROM   mcogs_ccp_logs cl LEFT JOIN mcogs_recipes r ON r.id=cl.recipe_id
+        ${where}
+        ORDER BY cl.logged_at DESC LIMIT $${p}
+      `, vals);
+      return rows;
+    }
+
+    case 'add_ccp_log': {
+      const { log_type, item_name, recipe_id, location_id,
+              target_min_temp, target_max_temp, actual_temp,
+              corrective_action, logged_by, notes, logged_at } = input;
+      const validTypes = ['cooking', 'cooling', 'delivery'];
+      if (!validTypes.includes(log_type)) return { error: `log_type must be one of: ${validTypes.join(', ')}` };
+      if (!item_name?.trim()) return { error: 'item_name is required' };
+      const t = Number(actual_temp);
+      const inRange = t >= Number(target_min_temp) && t <= Number(target_max_temp);
+      if (!inRange && !corrective_action?.trim()) {
+        return { error: `Temperature ${t}°C is outside target (${target_min_temp}–${target_max_temp}°C) — corrective_action is required.` };
+      }
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_ccp_logs
+          (log_type, recipe_id, item_name, target_min_temp, target_max_temp, actual_temp,
+           in_range, corrective_action, logged_by, notes, logged_at, location_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *
+      `, [log_type, recipe_id||null, item_name.trim(), target_min_temp, target_max_temp, t,
+          inRange, corrective_action?.trim()||null, logged_by?.trim()||null,
+          notes?.trim()||null, logged_at||new Date().toISOString(), location_id||null]);
+      return rows[0];
+    }
+
+    // ── Locations ──────────────────────────────────────────────────────────────
+
+    case 'list_locations': {
+      const { market_id, group_id, active } = input;
+      const conditions = [];
+      const vals = [];
+      let p = 1;
+      if (market_id)       { conditions.push(`l.country_id=$${p++}`); vals.push(market_id); }
+      if (group_id)        { conditions.push(`l.group_id=$${p++}`);   vals.push(group_id); }
+      if (active === true)  conditions.push(`l.is_active=TRUE`);
+      if (active === false) conditions.push(`l.is_active=FALSE`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const { rows } = await pool.query(`
+        SELECT l.*, c.name AS market_name, g.name AS group_name
+        FROM   mcogs_locations l
+        LEFT JOIN mcogs_countries c ON c.id = l.country_id
+        LEFT JOIN mcogs_location_groups g ON g.id = l.group_id
+        ${where}
+        ORDER BY l.name ASC
+      `, vals);
+      return rows;
+    }
+
+    case 'create_location': {
+      const { name, country_id, group_id, address, email, phone,
+              contact_name, contact_email, contact_phone, is_active } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_locations
+          (name, country_id, group_id, address, email, phone, contact_name, contact_email, contact_phone, is_active)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *
+      `, [
+        name.trim(), country_id||null, group_id||null,
+        address?.trim()||null, email?.trim()||null, phone?.trim()||null,
+        contact_name?.trim()||null, contact_email?.trim()||null, contact_phone?.trim()||null,
+        is_active !== false,
+      ]);
+      return rows[0];
+    }
+
+    case 'update_location': {
+      const { id, name, country_id, group_id, address, email, phone,
+              contact_name, contact_email, contact_phone, is_active } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        UPDATE mcogs_locations
+        SET name=$1, country_id=$2, group_id=$3, address=$4, email=$5, phone=$6,
+            contact_name=$7, contact_email=$8, contact_phone=$9, is_active=$10, updated_at=NOW()
+        WHERE id=$11 RETURNING *
+      `, [
+        name.trim(), country_id||null, group_id||null,
+        address?.trim()||null, email?.trim()||null, phone?.trim()||null,
+        contact_name?.trim()||null, contact_email?.trim()||null, contact_phone?.trim()||null,
+        is_active !== false, id,
+      ]);
+      if (!rows.length) return { error: 'Location not found' };
+      return rows[0];
+    }
+
+    case 'delete_location': {
+      const { id } = input;
+      try {
+        const { rowCount } = await pool.query(`DELETE FROM mcogs_locations WHERE id=$1`, [id]);
+        if (!rowCount) return { error: 'Location not found' };
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') return { error: 'Cannot delete location that has equipment assigned — remove the equipment first.' };
+        throw err;
+      }
+    }
+
+    case 'list_location_groups': {
+      const { rows } = await pool.query(`
+        SELECT g.*, COUNT(l.id)::int AS location_count
+        FROM mcogs_location_groups g
+        LEFT JOIN mcogs_locations l ON l.group_id = g.id
+        GROUP BY g.id ORDER BY g.name ASC
+      `);
+      return rows;
+    }
+
+    case 'create_location_group': {
+      const { name, description } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(
+        `INSERT INTO mcogs_location_groups (name, description) VALUES ($1,$2) RETURNING *`,
+        [name.trim(), description?.trim()||null]
+      );
+      return rows[0];
+    }
+
+    case 'update_location_group': {
+      const { id, name, description } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(
+        `UPDATE mcogs_location_groups SET name=$1, description=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
+        [name.trim(), description?.trim()||null, id]
+      );
+      if (!rows.length) return { error: 'Location group not found' };
+      return rows[0];
+    }
+
+    case 'delete_location_group': {
+      const { id } = input;
+      const { rowCount } = await pool.query(`DELETE FROM mcogs_location_groups WHERE id=$1`, [id]);
+      if (!rowCount) return { error: 'Location group not found' };
+      return { deleted: true, id };
+    }
+
+    // ── Allergens ──────────────────────────────────────────────────────────────
+
+    case 'list_allergens': {
+      const { rows } = await pool.query(`SELECT * FROM mcogs_allergens ORDER BY sort_order ASC`);
+      return rows;
+    }
+
+    case 'get_ingredient_allergens': {
+      const { ingredient_id } = input;
+      const { rows } = await pool.query(`
+        SELECT ia.allergen_id, ia.status, a.name, a.code, a.sort_order
+        FROM   mcogs_ingredient_allergens ia
+        JOIN   mcogs_allergens a ON a.id = ia.allergen_id
+        WHERE  ia.ingredient_id = $1
+        ORDER BY a.sort_order ASC
+      `, [ingredient_id]);
+      return rows;
+    }
+
+    case 'set_ingredient_allergens': {
+      const { ingredient_id, allergens } = input;
+      if (!Array.isArray(allergens)) return { error: 'allergens must be an array' };
+      const valid = ['contains', 'may_contain', 'free_from'];
+      for (const a of allergens) {
+        if (!a.allergen_id) return { error: 'Each allergen entry must have allergen_id' };
+        if (!valid.includes(a.status)) return { error: `Invalid status "${a.status}" — must be contains, may_contain, or free_from` };
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`DELETE FROM mcogs_ingredient_allergens WHERE ingredient_id=$1`, [ingredient_id]);
+        for (const a of allergens) {
+          await client.query(
+            `INSERT INTO mcogs_ingredient_allergens (ingredient_id, allergen_id, status) VALUES ($1,$2,$3)`,
+            [ingredient_id, a.allergen_id, a.status]
+          );
+        }
+        await client.query('COMMIT');
+        const { rows } = await pool.query(`
+          SELECT ia.allergen_id, ia.status, a.name, a.code
+          FROM   mcogs_ingredient_allergens ia
+          JOIN   mcogs_allergens a ON a.id = ia.allergen_id
+          WHERE  ia.ingredient_id=$1 ORDER BY a.sort_order ASC
+        `, [ingredient_id]);
+        return rows;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    case 'get_menu_allergens': {
+      const { menu_id } = input;
+      // Reuse the same logic as GET /allergens/menu/:id
+      const { rows: allAllergens } = await pool.query(`SELECT * FROM mcogs_allergens ORDER BY sort_order ASC`);
+      const { rows: menuItems } = await pool.query(`
+        SELECT mi.id, mi.display_name, mi.item_type, mi.recipe_id, mi.ingredient_id
+        FROM   mcogs_menu_items mi WHERE mi.menu_id=$1 ORDER BY mi.sort_order ASC
+      `, [menu_id]);
+      if (!menuItems.length) return { allergens: allAllergens, items: [] };
+
+      const recipeIds    = [...new Set(menuItems.filter(i => i.recipe_id).map(i => i.recipe_id))];
+      const directIngIds = menuItems.filter(i => i.ingredient_id).map(i => i.ingredient_id);
+
+      let recipeIngMap = {};
+      if (recipeIds.length) {
+        const { rows: riRows } = await pool.query(`
+          SELECT recipe_id, ingredient_id FROM mcogs_recipe_items
+          WHERE recipe_id = ANY($1::int[]) AND item_type='ingredient'
+        `, [recipeIds]);
+        for (const ri of riRows) {
+          if (!recipeIngMap[ri.recipe_id]) recipeIngMap[ri.recipe_id] = [];
+          recipeIngMap[ri.recipe_id].push(ri.ingredient_id);
+        }
+      }
+
+      const allIngIds = [...new Set([...directIngIds, ...Object.values(recipeIngMap).flat()])];
+      let ingAllergenMap = {};
+      if (allIngIds.length) {
+        const { rows: iaRows } = await pool.query(`
+          SELECT ia.ingredient_id, ia.allergen_id, ia.status, a.code
+          FROM   mcogs_ingredient_allergens ia
+          JOIN   mcogs_allergens a ON a.id = ia.allergen_id
+          WHERE  ia.ingredient_id = ANY($1::int[])
+        `, [allIngIds]);
+        for (const ia of iaRows) {
+          if (!ingAllergenMap[ia.ingredient_id]) ingAllergenMap[ia.ingredient_id] = {};
+          ingAllergenMap[ia.ingredient_id][ia.allergen_id] = { status: ia.status, code: ia.code };
+        }
+      }
+
+      const rank = { contains: 3, may_contain: 2, free_from: 1 };
+      const items = menuItems.map(mi => {
+        let ingIds = mi.item_type === 'ingredient' && mi.ingredient_id
+          ? [mi.ingredient_id]
+          : (recipeIngMap[mi.recipe_id] || []);
+        const agg = {};
+        for (const ingId of ingIds) {
+          for (const [allergenId, { status, code }] of Object.entries(ingAllergenMap[ingId] || {})) {
+            if (!agg[allergenId] || rank[status] > rank[agg[allergenId].status]) {
+              agg[allergenId] = { status, code };
+            }
+          }
+        }
+        const allergenStatus = {};
+        for (const a of allAllergens) {
+          const found = Object.values(agg).find(v => v.code === a.code);
+          allergenStatus[a.code] = found ? found.status : null;
+        }
+        return { menu_item_id: mi.id, display_name: mi.display_name, item_type: mi.item_type, allergens: allergenStatus };
+      });
+      return { allergens: allAllergens, items };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -1292,7 +2254,10 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Wait for explicit user confirmation (yes/ok/proceed/confirm) before executing write operations
 - For BATCH operations (>3 records from a CSV or list): describe the full import plan once, ask once, then execute all records after confirmation
 - delete_menu: ALWAYS warn "This will also delete all menu items and prices for this menu" before confirming
+- delete_market: warn that associated vendors, menus, and tax rates will also be removed
 - delete_ingredient / delete_vendor: warn that FK dependencies may block deletion; offer to resolve them first
+- delete_location: warn if equipment is assigned — it must be removed first
+- set_ingredient_allergens: this REPLACES the full allergen profile — warn the user if they have existing entries
 - Never chain confirmations — one confirm per distinct action or batch
 
 ## WORKFLOW
@@ -1307,7 +2272,7 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Never create records from a file without user confirmation
 
 ## TOOLS AVAILABLE
-You have 44 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets (create/update/delete), brand partners (create/update/delete/assign), feedback, and **start_import**.
+You have 73 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, and **start_import**.
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
