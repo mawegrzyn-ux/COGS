@@ -9,6 +9,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const pool      = require('../db/pool');
 const rag       = require('../helpers/rag');
 const aiConfig  = require('../helpers/aiConfig');
+const { agenticStream } = require('../helpers/agenticStream');
 
 // Client is created per-request so it always picks up the latest key
 function getClient() {
@@ -20,6 +21,7 @@ function getClient() {
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
+  // ── Read / Lookup (existing) ─────────────────────────────────────────────────
   {
     name: 'get_dashboard_stats',
     description: 'Returns high-level counts: total ingredients, recipes, menus, vendors, markets, price quote coverage.',
@@ -27,7 +29,7 @@ const TOOLS = [
   },
   {
     name: 'list_ingredients',
-    description: 'Lists all ingredients with id, name, and category. Use before get_ingredient to find an ID.',
+    description: 'Lists all ingredients with id, name, category, waste_pct, and base unit. Use before write operations to find IDs.',
     input_schema: {
       type: 'object',
       properties: {
@@ -38,7 +40,7 @@ const TOOLS = [
   },
   {
     name: 'get_ingredient',
-    description: 'Returns full details for a single ingredient including nutrition, allergens, and price quotes.',
+    description: 'Returns full details for a single ingredient including allergens and price quotes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -112,12 +114,379 @@ const TOOLS = [
       required: ['type', 'title'],
     },
   },
+
+  // ── New Lookup / Read ────────────────────────────────────────────────────────
+  {
+    name: 'list_vendors',
+    description: 'Lists all vendors with id, name, and country. Call this to resolve vendor names to IDs before write operations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        country_id: { type: 'integer', description: 'Optional: filter by country ID' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_markets',
+    description: 'Lists all markets (countries) with id, name, currency_code, currency_symbol, and exchange_rate.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'list_categories',
+    description: 'Lists all categories with id, name, type (ingredient/recipe), and group_name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['ingredient', 'recipe'], description: 'Optional: filter by category type' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_units',
+    description: 'Lists all measurement units with id, name, abbreviation, and type. Call before creating ingredients or recipes.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'list_price_levels',
+    description: 'Lists all price levels (e.g. Eat-in, Takeout, Delivery) with id, name, and is_default.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'list_price_quotes',
+    description: 'Lists price quotes with vendor name, ingredient name, purchase price, and computed price per base unit.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ingredient_id: { type: 'integer', description: 'Optional: filter by ingredient' },
+        vendor_id:     { type: 'integer', description: 'Optional: filter by vendor' },
+        is_active:     { type: 'boolean', description: 'Optional: filter active/inactive quotes' },
+      },
+      required: [],
+    },
+  },
+
+  // ── Create ───────────────────────────────────────────────────────────────────
+  {
+    name: 'create_ingredient',
+    description: 'Creates a new ingredient. If the category name does not exist it will be auto-created. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:                         { type: 'string' },
+        category:                     { type: 'string', description: 'Category name (auto-created if missing)' },
+        base_unit_id:                 { type: 'integer', description: 'ID from list_units' },
+        waste_pct:                    { type: 'number', description: 'Waste percentage 0-100' },
+        default_prep_unit:            { type: 'string' },
+        default_prep_to_base_conversion: { type: 'number', description: 'Conversion factor (default 1)' },
+        notes:                        { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_vendor',
+    description: 'Creates a new vendor/supplier. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:       { type: 'string' },
+        country_id: { type: 'integer', description: 'Market/country ID from list_markets' },
+        contact:    { type: 'string' },
+        email:      { type: 'string' },
+        phone:      { type: 'string' },
+        notes:      { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_price_quote',
+    description: 'Creates a new price quote linking an ingredient to a vendor. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ingredient_id:     { type: 'integer' },
+        vendor_id:         { type: 'integer' },
+        purchase_price:    { type: 'number', description: 'Price paid for the purchase quantity' },
+        qty_in_base_units: { type: 'number', description: 'How many base units does the purchase quantity represent' },
+        purchase_unit:     { type: 'string', description: 'Description of the purchase unit (e.g. "5kg bag")' },
+        is_active:         { type: 'boolean', description: 'Default true' },
+        vendor_product_code: { type: 'string' },
+      },
+      required: ['ingredient_id', 'vendor_id', 'purchase_price', 'qty_in_base_units'],
+    },
+  },
+  {
+    name: 'set_preferred_vendor',
+    description: 'Sets (or replaces) the preferred vendor+quote for an ingredient in a specific market. One record per ingredient×country. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ingredient_id: { type: 'integer' },
+        country_id:    { type: 'integer' },
+        vendor_id:     { type: 'integer' },
+        quote_id:      { type: 'integer' },
+      },
+      required: ['ingredient_id', 'country_id', 'vendor_id', 'quote_id'],
+    },
+  },
+  {
+    name: 'create_recipe',
+    description: 'Creates a new recipe. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:          { type: 'string' },
+        category:      { type: 'string' },
+        description:   { type: 'string' },
+        yield_qty:     { type: 'number' },
+        yield_unit_id: { type: 'integer', description: 'Unit ID from list_units' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'add_recipe_item',
+    description: 'Adds an ingredient or sub-recipe line to a recipe. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        recipe_id:               { type: 'integer' },
+        item_type:               { type: 'string', enum: ['ingredient', 'recipe'] },
+        ingredient_id:           { type: 'integer', description: 'Required when item_type = ingredient' },
+        recipe_item_id:          { type: 'integer', description: 'Required when item_type = recipe (sub-recipe ID)' },
+        prep_qty:                { type: 'number' },
+        prep_unit:               { type: 'string' },
+        prep_to_base_conversion: { type: 'number', description: 'Conversion factor (default 1)' },
+      },
+      required: ['recipe_id', 'item_type', 'prep_qty'],
+    },
+  },
+  {
+    name: 'create_menu',
+    description: 'Creates a new menu for a specific market/country. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string' },
+        country_id:  { type: 'integer', description: 'Market ID from list_markets' },
+        description: { type: 'string' },
+      },
+      required: ['name', 'country_id'],
+    },
+  },
+  {
+    name: 'add_menu_item',
+    description: 'Adds a recipe or ingredient line to a menu. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_id:       { type: 'integer' },
+        item_type:     { type: 'string', enum: ['recipe', 'ingredient'] },
+        display_name:  { type: 'string' },
+        recipe_id:     { type: 'integer', description: 'Required when item_type = recipe' },
+        ingredient_id: { type: 'integer', description: 'Required when item_type = ingredient' },
+        qty:           { type: 'number', description: 'Default 1' },
+        sell_price:    { type: 'number', description: 'Default sell price in USD base' },
+      },
+      required: ['menu_id', 'item_type', 'display_name'],
+    },
+  },
+  {
+    name: 'set_menu_item_price',
+    description: 'Upserts the sell price for a menu item at a specific price level. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_item_id:   { type: 'integer' },
+        price_level_id: { type: 'integer', description: 'From list_price_levels' },
+        sell_price:     { type: 'number' },
+        tax_rate_id:    { type: 'integer', description: 'Optional tax rate ID' },
+      },
+      required: ['menu_item_id', 'price_level_id', 'sell_price'],
+    },
+  },
+  {
+    name: 'create_category',
+    description: 'Creates a new ingredient or recipe category. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name:       { type: 'string' },
+        type:       { type: 'string', enum: ['ingredient', 'recipe'] },
+        group_name: { type: 'string' },
+        sort_order: { type: 'integer' },
+      },
+      required: ['name', 'type'],
+    },
+  },
+
+  // ── Update ───────────────────────────────────────────────────────────────────
+  {
+    name: 'update_ingredient',
+    description: 'Updates an existing ingredient. Only supply fields you want to change (plus id and name). CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                           { type: 'integer' },
+        name:                         { type: 'string' },
+        category:                     { type: 'string' },
+        base_unit_id:                 { type: 'integer' },
+        waste_pct:                    { type: 'number' },
+        default_prep_unit:            { type: 'string' },
+        default_prep_to_base_conversion: { type: 'number' },
+        notes:                        { type: 'string' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'update_vendor',
+    description: 'Updates an existing vendor. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:         { type: 'integer' },
+        name:       { type: 'string' },
+        country_id: { type: 'integer' },
+        contact:    { type: 'string' },
+        email:      { type: 'string' },
+        phone:      { type: 'string' },
+        notes:      { type: 'string' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'update_price_quote',
+    description: 'Updates a price quote. Fetches existing row first so you only need to supply the fields that change. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                { type: 'integer' },
+        purchase_price:    { type: 'number' },
+        qty_in_base_units: { type: 'number' },
+        purchase_unit:     { type: 'string' },
+        is_active:         { type: 'boolean' },
+        vendor_product_code: { type: 'string' },
+      },
+      required: ['id', 'purchase_price', 'qty_in_base_units'],
+    },
+  },
+  {
+    name: 'update_recipe',
+    description: 'Updates an existing recipe header (not its items). CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:            { type: 'integer' },
+        name:          { type: 'string' },
+        category:      { type: 'string' },
+        description:   { type: 'string' },
+        yield_qty:     { type: 'number' },
+        yield_unit_id: { type: 'integer' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  {
+    name: 'update_recipe_item',
+    description: 'Updates the qty/unit/conversion of a recipe line item. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        recipe_id:               { type: 'integer' },
+        item_id:                 { type: 'integer', description: 'ID of the mcogs_recipe_items row' },
+        prep_qty:                { type: 'number' },
+        prep_unit:               { type: 'string' },
+        prep_to_base_conversion: { type: 'number' },
+      },
+      required: ['recipe_id', 'item_id', 'prep_qty'],
+    },
+  },
+
+  // ── Delete ───────────────────────────────────────────────────────────────────
+  {
+    name: 'delete_ingredient',
+    description: 'Deletes an ingredient. Will fail with a FK error if price quotes or recipe usage exist — resolve those first. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_vendor',
+    description: 'Deletes a vendor. Will fail with a FK error if price quotes exist — remove quotes first. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_price_quote',
+    description: 'Deletes a price quote. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_recipe_item',
+    description: 'Removes one ingredient/sub-recipe line from a recipe. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        recipe_id: { type: 'integer' },
+        item_id:   { type: 'integer', description: 'ID of the mcogs_recipe_items row' },
+      },
+      required: ['recipe_id', 'item_id'],
+    },
+  },
+  {
+    name: 'delete_menu',
+    description: 'Deletes a menu AND all its items and prices (cascade). Always warn the user about cascade deletion before calling. CONFIRMATION REQUIRED.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
 
+// Helper: ensure category name exists in mcogs_categories (mirrors ingredients.js)
+async function ensureCategory(name, type = 'ingredient') {
+  if (!name) return;
+  const { rows } = await pool.query(
+    `SELECT id FROM mcogs_categories WHERE name = $1 AND type = $2 LIMIT 1`,
+    [name.trim(), type]
+  );
+  if (!rows.length) {
+    await pool.query(
+      `INSERT INTO mcogs_categories (name, type, group_name) VALUES ($1, $2, 'Unassigned')`,
+      [name.trim(), type]
+    );
+  }
+}
+
 async function executeTool(name, input) {
   switch (name) {
+
+    // ── Read / Lookup (existing) ───────────────────────────────────────────────
 
     case 'get_dashboard_stats': {
       const queries = [
@@ -130,15 +499,15 @@ async function executeTool(name, input) {
         pool.query('SELECT COUNT(*) FROM mcogs_ingredients WHERE id IN (SELECT ingredient_id FROM mcogs_price_quotes)'),
       ];
       const [ing, rec, men, ven, mkt, pq, covIng] = await Promise.all(queries);
-      const total = parseInt(ing.rows[0].count, 10);
+      const total   = parseInt(ing.rows[0].count, 10);
       const covered = parseInt(covIng.rows[0].count, 10);
       return {
-        ingredients: total,
-        recipes:     parseInt(rec.rows[0].count, 10),
-        menus:       parseInt(men.rows[0].count, 10),
-        vendors:     parseInt(ven.rows[0].count, 10),
-        markets:     parseInt(mkt.rows[0].count, 10),
-        price_quotes: parseInt(pq.rows[0].count, 10),
+        ingredients:        total,
+        recipes:            parseInt(rec.rows[0].count, 10),
+        menus:              parseInt(men.rows[0].count, 10),
+        vendors:            parseInt(ven.rows[0].count, 10),
+        markets:            parseInt(mkt.rows[0].count, 10),
+        price_quotes:       parseInt(pq.rows[0].count, 10),
         quote_coverage_pct: total ? Math.round((covered / total) * 100) : 0,
       };
     }
@@ -146,19 +515,31 @@ async function executeTool(name, input) {
     case 'list_ingredients': {
       const { search } = input;
       const q = search
-        ? `SELECT i.id, i.name, c.name as category FROM mcogs_ingredients i LEFT JOIN mcogs_categories c ON c.id = i.category_id WHERE i.name ILIKE $1 ORDER BY i.name LIMIT 100`
-        : `SELECT i.id, i.name, c.name as category FROM mcogs_ingredients i LEFT JOIN mcogs_categories c ON c.id = i.category_id ORDER BY i.name LIMIT 100`;
-      const vals = search ? [`%${search}%`] : [];
-      const { rows } = await pool.query(q, vals);
+        ? `SELECT id, name, category, waste_pct, base_unit_id FROM mcogs_ingredients WHERE name ILIKE $1 ORDER BY name LIMIT 100`
+        : `SELECT id, name, category, waste_pct, base_unit_id FROM mcogs_ingredients ORDER BY name LIMIT 100`;
+      const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
       return rows;
     }
 
     case 'get_ingredient': {
       const { id } = input;
       const [ing, quotes, allergens] = await Promise.all([
-        pool.query(`SELECT i.*, c.name as category FROM mcogs_ingredients i LEFT JOIN mcogs_categories c ON c.id = i.category_id WHERE i.id = $1`, [id]),
-        pool.query(`SELECT pq.*, v.name as vendor_name, co.name as country_name, co.currency_symbol FROM mcogs_price_quotes pq JOIN mcogs_vendors v ON v.id = pq.vendor_id LEFT JOIN mcogs_countries co ON co.id = pq.country_id WHERE pq.ingredient_id = $1 ORDER BY co.name`, [id]),
-        pool.query(`SELECT a.name, a.code, ia.status FROM mcogs_ingredient_allergens ia JOIN mcogs_allergens a ON a.id = ia.allergen_id WHERE ia.ingredient_id = $1`, [id]),
+        pool.query(`
+          SELECT i.*, u.name as base_unit_name, u.abbreviation as base_unit_abbr
+          FROM mcogs_ingredients i
+          LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
+          WHERE i.id = $1`, [id]),
+        pool.query(`
+          SELECT pq.*, v.name as vendor_name, co.name as country_name, co.currency_symbol
+          FROM mcogs_price_quotes pq
+          JOIN mcogs_vendors v ON v.id = pq.vendor_id
+          LEFT JOIN mcogs_countries co ON co.id = v.country_id
+          WHERE pq.ingredient_id = $1 ORDER BY v.name`, [id]),
+        pool.query(`
+          SELECT a.name, a.code, ia.status
+          FROM mcogs_ingredient_allergens ia
+          JOIN mcogs_allergens a ON a.id = ia.allergen_id
+          WHERE ia.ingredient_id = $1`, [id]),
       ]);
       if (!ing.rows.length) return { error: 'Ingredient not found' };
       return { ...ing.rows[0], price_quotes: quotes.rows, allergens: allergens.rows };
@@ -176,27 +557,20 @@ async function executeTool(name, input) {
     case 'get_recipe': {
       const { id } = input;
       const [rec, items] = await Promise.all([
-        pool.query(`SELECT r.*, c.name as category FROM mcogs_recipes r LEFT JOIN mcogs_categories c ON c.id = r.category_id WHERE r.id = $1`, [id]),
+        pool.query(`
+          SELECT r.*, u.abbreviation as yield_unit_abbr
+          FROM mcogs_recipes r
+          LEFT JOIN mcogs_units u ON u.id = r.yield_unit_id
+          WHERE r.id = $1`, [id]),
         pool.query(`
           SELECT ri.*, i.name as ingredient_name, u.abbreviation as unit_abbr,
-                 pq.unit_price, pq.currency_code,
-                 co.name as country_name, co.currency_symbol
+                 sr.name as sub_recipe_name
           FROM mcogs_recipe_items ri
           LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
-          LEFT JOIN mcogs_units u ON u.id = ri.unit_id
-          LEFT JOIN LATERAL (
-            SELECT pq2.unit_price, pq2.currency_code, pq2.country_id
-            FROM mcogs_price_quotes pq2
-            JOIN mcogs_ingredient_preferred_vendor ipv
-              ON ipv.vendor_id = pq2.vendor_id
-             AND ipv.ingredient_id = ri.ingredient_id
-             AND ipv.country_id = pq2.country_id
-            LIMIT 1
-          ) pq ON TRUE
-          LEFT JOIN mcogs_countries co ON co.id = pq.country_id
+          LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
+          LEFT JOIN mcogs_recipes sr ON sr.id = ri.recipe_item_id
           WHERE ri.recipe_id = $1
-          ORDER BY ri.sort_order
-        `, [id]),
+          ORDER BY ri.id ASC`, [id]),
       ]);
       if (!rec.rows.length) return { error: 'Recipe not found' };
       return { ...rec.rows[0], items: items.rows };
@@ -252,6 +626,391 @@ async function executeTool(name, input) {
       return rows[0];
     }
 
+    // ── New Lookup / Read ──────────────────────────────────────────────────────
+
+    case 'list_vendors': {
+      const { country_id } = input;
+      const q = country_id
+        ? `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id WHERE v.country_id = $1 ORDER BY v.name`
+        : `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id ORDER BY v.name`;
+      const { rows } = await pool.query(q, country_id ? [country_id] : []);
+      return rows;
+    }
+
+    case 'list_markets': {
+      const { rows } = await pool.query(`
+        SELECT id, name, currency_code, currency_symbol, exchange_rate
+        FROM mcogs_countries ORDER BY name
+      `);
+      return rows;
+    }
+
+    case 'list_categories': {
+      const { type } = input;
+      const q = type
+        ? `SELECT id, name, type, group_name, sort_order FROM mcogs_categories WHERE type = $1 ORDER BY name`
+        : `SELECT id, name, type, group_name, sort_order FROM mcogs_categories ORDER BY type, name`;
+      const { rows } = await pool.query(q, type ? [type] : []);
+      return rows;
+    }
+
+    case 'list_units': {
+      const { rows } = await pool.query(`
+        SELECT id, name, abbreviation, type FROM mcogs_units ORDER BY type, name
+      `);
+      return rows;
+    }
+
+    case 'list_price_levels': {
+      const { rows } = await pool.query(`
+        SELECT id, name, description, is_default FROM mcogs_price_levels ORDER BY name
+      `);
+      return rows;
+    }
+
+    case 'list_price_quotes': {
+      const { ingredient_id, vendor_id, is_active } = input;
+      const conditions = [];
+      const vals = [];
+      if (ingredient_id !== undefined) conditions.push(`pq.ingredient_id = $${vals.push(ingredient_id)}`);
+      if (vendor_id     !== undefined) conditions.push(`pq.vendor_id = $${vals.push(vendor_id)}`);
+      if (is_active     !== undefined) conditions.push(`pq.is_active = $${vals.push(is_active)}`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const { rows } = await pool.query(`
+        SELECT pq.id, pq.ingredient_id, pq.vendor_id,
+               i.name as ingredient_name, v.name as vendor_name,
+               pq.purchase_price, pq.qty_in_base_units, pq.purchase_unit,
+               pq.is_active, pq.vendor_product_code,
+               ROUND((pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))::numeric, 4) as price_per_base_unit
+        FROM mcogs_price_quotes pq
+        JOIN mcogs_ingredients i ON i.id = pq.ingredient_id
+        JOIN mcogs_vendors v ON v.id = pq.vendor_id
+        ${where}
+        ORDER BY i.name, v.name
+        LIMIT 200
+      `, vals);
+      return rows;
+    }
+
+    // ── Ingredient CRUD ────────────────────────────────────────────────────────
+
+    case 'create_ingredient': {
+      const { name, category, base_unit_id, waste_pct, default_prep_unit,
+              default_prep_to_base_conversion, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      await ensureCategory(category, 'ingredient');
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_ingredients
+          (name, category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, name, category, waste_pct
+      `, [
+        name.trim(),
+        category?.trim()                  || null,
+        base_unit_id                      || null,
+        waste_pct                         ?? 0,
+        default_prep_unit?.trim()         || null,
+        default_prep_to_base_conversion   ?? 1,
+        notes?.trim()                     || null,
+      ]);
+      return rows[0];
+    }
+
+    case 'update_ingredient': {
+      const { id, name, category, base_unit_id, waste_pct, default_prep_unit,
+              default_prep_to_base_conversion, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      await ensureCategory(category, 'ingredient');
+      const { rows } = await pool.query(`
+        UPDATE mcogs_ingredients SET
+          name = $1, category = $2, base_unit_id = $3, waste_pct = $4,
+          default_prep_unit = $5, default_prep_to_base_conversion = $6, notes = $7
+        WHERE id = $8 RETURNING id, name, category, waste_pct
+      `, [
+        name.trim(),
+        category?.trim()                  || null,
+        base_unit_id                      || null,
+        waste_pct                         ?? 0,
+        default_prep_unit?.trim()         || null,
+        default_prep_to_base_conversion   ?? 1,
+        notes?.trim()                     || null,
+        id,
+      ]);
+      if (!rows.length) return { error: 'Ingredient not found' };
+      return rows[0];
+    }
+
+    case 'delete_ingredient': {
+      const { id } = input;
+      try {
+        await pool.query(`DELETE FROM mcogs_ingredients WHERE id = $1`, [id]);
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') {
+          return { error: 'FK violation — this ingredient is referenced by price quotes or recipes. Remove those first, then delete.' };
+        }
+        throw err;
+      }
+    }
+
+    // ── Vendor CRUD ────────────────────────────────────────────────────────────
+
+    case 'create_vendor': {
+      const { name, country_id, contact, email, phone, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_vendors (name, country_id, contact, email, phone, notes)
+        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, name
+      `, [
+        name.trim(),
+        country_id  || null,
+        contact?.trim() || null,
+        email?.trim()   || null,
+        phone?.trim()   || null,
+        notes?.trim()   || null,
+      ]);
+      return rows[0];
+    }
+
+    case 'update_vendor': {
+      const { id, name, country_id, contact, email, phone, notes } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        UPDATE mcogs_vendors SET name=$1, country_id=$2, contact=$3, email=$4, phone=$5, notes=$6
+        WHERE id=$7 RETURNING id, name
+      `, [
+        name.trim(),
+        country_id  || null,
+        contact?.trim() || null,
+        email?.trim()   || null,
+        phone?.trim()   || null,
+        notes?.trim()   || null,
+        id,
+      ]);
+      if (!rows.length) return { error: 'Vendor not found' };
+      return rows[0];
+    }
+
+    case 'delete_vendor': {
+      const { id } = input;
+      try {
+        await pool.query(`DELETE FROM mcogs_vendors WHERE id = $1`, [id]);
+        return { deleted: true, id };
+      } catch (err) {
+        if (err.code === '23503') {
+          return { error: 'FK violation — this vendor has price quotes. Remove the quotes first, then delete the vendor.' };
+        }
+        throw err;
+      }
+    }
+
+    // ── Price Quote CRUD ───────────────────────────────────────────────────────
+
+    case 'create_price_quote': {
+      const { ingredient_id, vendor_id, purchase_price, qty_in_base_units,
+              purchase_unit, is_active = true, vendor_product_code } = input;
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_price_quotes
+          (ingredient_id, vendor_id, purchase_price, qty_in_base_units, purchase_unit, is_active, vendor_product_code)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING id, ingredient_id, vendor_id, purchase_price, qty_in_base_units, is_active
+      `, [ingredient_id, vendor_id, purchase_price, qty_in_base_units,
+          purchase_unit || null, is_active, vendor_product_code || null]);
+      return rows[0];
+    }
+
+    case 'update_price_quote': {
+      // Fetch existing row first so caller only needs to supply changed fields
+      const existing = await pool.query(`SELECT * FROM mcogs_price_quotes WHERE id = $1`, [input.id]);
+      if (!existing.rows.length) return { error: 'Price quote not found' };
+      const row = existing.rows[0];
+      const { rows } = await pool.query(`
+        UPDATE mcogs_price_quotes SET
+          purchase_price    = $1,
+          qty_in_base_units = $2,
+          purchase_unit     = $3,
+          is_active         = $4,
+          vendor_product_code = $5
+        WHERE id = $6
+        RETURNING id, ingredient_id, vendor_id, purchase_price, qty_in_base_units, is_active
+      `, [
+        input.purchase_price    ?? row.purchase_price,
+        input.qty_in_base_units ?? row.qty_in_base_units,
+        input.purchase_unit     !== undefined ? input.purchase_unit    : row.purchase_unit,
+        input.is_active         !== undefined ? input.is_active        : row.is_active,
+        input.vendor_product_code !== undefined ? input.vendor_product_code : row.vendor_product_code,
+        input.id,
+      ]);
+      return rows[0];
+    }
+
+    case 'delete_price_quote': {
+      const { id } = input;
+      await pool.query(`DELETE FROM mcogs_price_quotes WHERE id = $1`, [id]);
+      return { deleted: true, id };
+    }
+
+    case 'set_preferred_vendor': {
+      const { ingredient_id, country_id, vendor_id, quote_id } = input;
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_ingredient_preferred_vendor
+          (ingredient_id, country_id, vendor_id, quote_id)
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (ingredient_id, country_id)
+        DO UPDATE SET vendor_id = EXCLUDED.vendor_id, quote_id = EXCLUDED.quote_id
+        RETURNING *
+      `, [ingredient_id, country_id, vendor_id, quote_id]);
+      return rows[0];
+    }
+
+    // ── Recipe CRUD ────────────────────────────────────────────────────────────
+
+    case 'create_recipe': {
+      const { name, category, description, yield_qty, yield_unit_id } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_id)
+        VALUES ($1,$2,$3,$4,$5) RETURNING id, name, category
+      `, [
+        name.trim(),
+        category?.trim()    || null,
+        description?.trim() || null,
+        yield_qty           || null,
+        yield_unit_id       || null,
+      ]);
+      return rows[0];
+    }
+
+    case 'update_recipe': {
+      const { id, name, category, description, yield_qty, yield_unit_id } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        UPDATE mcogs_recipes SET name=$1, category=$2, description=$3, yield_qty=$4, yield_unit_id=$5
+        WHERE id=$6 RETURNING id, name, category
+      `, [
+        name.trim(),
+        category?.trim()    || null,
+        description?.trim() || null,
+        yield_qty           || null,
+        yield_unit_id       || null,
+        id,
+      ]);
+      if (!rows.length) return { error: 'Recipe not found' };
+      return rows[0];
+    }
+
+    case 'add_recipe_item': {
+      const { recipe_id, item_type, ingredient_id, recipe_item_id,
+              prep_qty, prep_unit, prep_to_base_conversion = 1 } = input;
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_recipe_items
+          (recipe_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, recipe_id, item_type, prep_qty
+      `, [
+        recipe_id,
+        item_type,
+        item_type === 'ingredient' ? (ingredient_id || null) : null,
+        item_type === 'recipe'     ? (recipe_item_id || null) : null,
+        prep_qty,
+        prep_unit   || null,
+        prep_to_base_conversion,
+      ]);
+      return rows[0];
+    }
+
+    case 'update_recipe_item': {
+      const { recipe_id, item_id, prep_qty, prep_unit, prep_to_base_conversion } = input;
+      const { rows } = await pool.query(`
+        UPDATE mcogs_recipe_items
+        SET prep_qty=$1, prep_unit=$2, prep_to_base_conversion=$3
+        WHERE id=$4 AND recipe_id=$5
+        RETURNING id, recipe_id, prep_qty, prep_unit
+      `, [
+        prep_qty,
+        prep_unit               || null,
+        prep_to_base_conversion ?? 1,
+        item_id,
+        recipe_id,
+      ]);
+      if (!rows.length) return { error: 'Recipe item not found' };
+      return rows[0];
+    }
+
+    case 'delete_recipe_item': {
+      const { recipe_id, item_id } = input;
+      const result = await pool.query(
+        `DELETE FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2`, [item_id, recipe_id]
+      );
+      return { deleted: result.rowCount > 0, item_id, recipe_id };
+    }
+
+    // ── Menu CRUD ──────────────────────────────────────────────────────────────
+
+    case 'create_menu': {
+      const { name, country_id, description } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_menus (name, country_id, description)
+        VALUES ($1,$2,$3) RETURNING id, name
+      `, [name.trim(), country_id, description?.trim() || null]);
+      return rows[0];
+    }
+
+    case 'delete_menu': {
+      const { id } = input;
+      // mcogs_menu_items and mcogs_menu_item_prices cascade on menu delete
+      await pool.query(`DELETE FROM mcogs_menus WHERE id = $1`, [id]);
+      return { deleted: true, id };
+    }
+
+    case 'add_menu_item': {
+      const { menu_id, item_type, display_name, recipe_id, ingredient_id,
+              qty = 1, sell_price = 0 } = input;
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_menu_items
+          (menu_id, item_type, display_name, recipe_id, ingredient_id, qty, sell_price)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING id, menu_id, display_name, item_type
+      `, [
+        menu_id,
+        item_type,
+        display_name?.trim() || '',
+        item_type === 'recipe'     ? (recipe_id     || null) : null,
+        item_type === 'ingredient' ? (ingredient_id || null) : null,
+        qty,
+        sell_price,
+      ]);
+      return rows[0];
+    }
+
+    case 'set_menu_item_price': {
+      const { menu_item_id, price_level_id, sell_price, tax_rate_id } = input;
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_menu_item_prices (menu_item_id, price_level_id, sell_price, tax_rate_id)
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (menu_item_id, price_level_id)
+        DO UPDATE SET sell_price = EXCLUDED.sell_price, tax_rate_id = EXCLUDED.tax_rate_id
+        RETURNING id, menu_item_id, price_level_id, sell_price
+      `, [menu_item_id, price_level_id, sell_price, tax_rate_id || null]);
+      return rows[0];
+    }
+
+    // ── Category CRUD ──────────────────────────────────────────────────────────
+
+    case 'create_category': {
+      const { name, type, group_name, sort_order } = input;
+      if (!name?.trim()) return { error: 'name is required' };
+      const { rows } = await pool.query(`
+        INSERT INTO mcogs_categories (name, type, group_name, sort_order)
+        VALUES ($1,$2,$3,$4) RETURNING id, name, type, group_name
+      `, [
+        name.trim(),
+        type,
+        group_name?.trim() || 'Unassigned',
+        sort_order         || 0,
+      ]);
+      return rows[0];
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -263,17 +1022,31 @@ function buildSystemPrompt(context, helpContext) {
   const page = context?.currentPage || 'unknown';
   return `You are the COGS Assistant — an AI helper embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
-You help users:
-- Understand their ingredient costs, recipe COGS, and menu profitability
-- Navigate the platform and explain how features work
-- Surface feedback and submit bug reports or feature requests
-- Answer questions using live data from the COGS database
+You can both READ and WRITE to the database — you are a full sysadmin assistant with the ability to create, update, and delete records across all entities.
 
-Your tools give you read access to ingredients, recipes, menus, vendors, markets, and feedback. You can also submit new feedback entries.
+## CONFIRMATION RULES (mandatory — no exceptions)
+- Before ANY create, update, or delete tool call: describe exactly what you are about to do and ask "Shall I proceed?"
+- Wait for explicit user confirmation (yes/ok/proceed/confirm) before executing write operations
+- For BATCH operations (>3 records from a CSV or list): describe the full import plan once, ask once, then execute all records after confirmation
+- delete_menu: ALWAYS warn "This will also delete all menu items and prices for this menu" before confirming
+- delete_ingredient / delete_vendor: warn that FK dependencies may block deletion; offer to resolve them first
+- Never chain confirmations — one confirm per distinct action or batch
 
-Always use tools to retrieve live data rather than guessing. If you do not have a tool for something, say so clearly.
+## WORKFLOW
+1. Always call list_* tools first to resolve names → IDs before any write operation. Never guess IDs.
+2. To add an ingredient to a recipe: list_ingredients → get ID → add_recipe_item
+3. To set a preferred vendor: list_vendors + list_price_quotes → set_preferred_vendor
+4. For new ingredients without a category, use create_category first or let create_ingredient auto-create it
 
-Be concise and practical. For numbers, include currency symbols and units. Format data as readable lists or tables where appropriate.
+## FILE UPLOADS (when images or CSV text is provided)
+- CSV: parse all rows, summarise the full import plan (count, fields, sample rows), confirm once, then create records
+- Image (invoice / label / recipe card): describe all fields you can read, confirm extraction, then create records
+- Never create records from a file without user confirmation
+
+## TOOLS AVAILABLE
+You have 35 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories, units, price levels, markets, and feedback.
+
+Be concise and practical. For numbers include currency symbols and units. Format data as readable lists or tables where appropriate.
 
 ${helpContext ? `## Relevant COGS Documentation\n\n${helpContext}` : ''}
 
@@ -298,133 +1071,32 @@ router.post('/', async (req, res) => {
   res.setHeader('Connection',    'keep-alive');
   res.flushHeaders();
 
-  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  const keepalive = setInterval(() => res.write(': ping\n\n'), 10000);
+  // RAG — retrieve relevant help context
+  const helpContext  = await rag.retrieve(message);
+  const systemPrompt = buildSystemPrompt(context, helpContext);
 
-  let fullResponse = '';
-  const toolsCalled = [];
-  let tokensIn = 0, tokensOut = 0;
-  let errorMsg = null;
+  // Build messages array (enforce max 20 history items)
+  const messages = [
+    ...history.slice(-20),
+    { role: 'user', content: message.trim() },
+  ];
 
-  try {
-    // RAG — retrieve relevant help context
-    const helpContext = await rag.retrieve(message);
-    const systemPrompt = buildSystemPrompt(context, helpContext);
+  const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool, res });
 
-    // Build messages array (enforce max 20 history items)
-    const messages = [
-      ...history.slice(-20),
-      { role: 'user', content: message.trim() },
-    ];
-
-    // Agentic loop
-    while (true) {
-      const stream = anthropic.messages.stream({
-        model:      'claude-haiku-4-5-20251001',
-        max_tokens: 4096,
-        system:     systemPrompt,
-        tools:      TOOLS,
-        messages,
-      });
-
-      let assistantContent = [];
-      let currentBlock = null;
-
-      for await (const event of stream) {
-        if (event.type === 'content_block_start') {
-          currentBlock = { ...event.content_block, input_str: '' };
-          if (currentBlock.type === 'tool_use') {
-            send({ type: 'tool', name: currentBlock.name });
-            toolsCalled.push(currentBlock.name);
-          }
-        }
-
-        if (event.type === 'content_block_delta') {
-          if (event.delta.type === 'text_delta') {
-            send({ type: 'text', text: event.delta.text });
-            fullResponse += event.delta.text;
-            if (currentBlock) currentBlock.text = (currentBlock.text || '') + event.delta.text;
-          }
-          if (event.delta.type === 'input_json_delta' && currentBlock) {
-            currentBlock.input_str = (currentBlock.input_str || '') + event.delta.partial_json;
-          }
-        }
-
-        if (event.type === 'content_block_stop' && currentBlock) {
-          if (currentBlock.type === 'tool_use' && currentBlock.input_str) {
-            try { currentBlock.input = JSON.parse(currentBlock.input_str); } catch { currentBlock.input = {}; }
-          }
-          assistantContent.push(currentBlock);
-          currentBlock = null;
-        }
-
-        if (event.type === 'message_delta' && event.usage) {
-          tokensOut += event.usage.output_tokens || 0;
-        }
-        if (event.type === 'message_start' && event.message?.usage) {
-          tokensIn += event.message.usage.input_tokens || 0;
-        }
-      }
-
-      const finalMsg = await stream.finalMessage();
-
-      if (finalMsg.stop_reason === 'end_turn') {
-        messages.push({ role: 'assistant', content: assistantContent });
-        break;
-      }
-
-      if (finalMsg.stop_reason === 'tool_use') {
-        messages.push({ role: 'assistant', content: assistantContent });
-
-        const toolBlocks = assistantContent.filter(b => b.type === 'tool_use');
-        const toolResults = await Promise.all(
-          toolBlocks.map(async (b) => {
-            let result;
-            try {
-              result = await executeTool(b.name, b.input || {});
-            } catch (err) {
-              result = { error: err.message };
-            }
-            return {
-              type:        'tool_result',
-              tool_use_id: b.id,
-              content:     JSON.stringify(result),
-            };
-          })
-        );
-        messages.push({ role: 'user', content: toolResults });
-        continue;
-      }
-
-      break;
-    }
-
-  } catch (err) {
-    errorMsg = err.message;
-    if (err.status === 429) {
-      send({ type: 'error', message: 'Rate limit reached. Please wait a moment before trying again.', retryAfter: 60 });
-    } else {
-      send({ type: 'error', message: err.message });
-    }
-  }
-
-  // Log to DB (best-effort, don't block response)
+  // Log to DB (best-effort)
   pool.query(
     `INSERT INTO mcogs_ai_chat_log (user_message, response, tools_called, context, tokens_in, tokens_out, error)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [message, fullResponse, JSON.stringify(toolsCalled), JSON.stringify(context), tokensIn, tokensOut, errorMsg]
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [message, responseText, JSON.stringify(toolsCalled), JSON.stringify(context), tokensIn, tokensOut, errorMsg]
   ).catch(e => console.error('[ai-chat] log error:', e.message));
-
-  clearInterval(keepalive);
-  send({ type: 'done' });
-  res.end();
 });
 
 // ── GET /ai-chat-log ──────────────────────────────────────────────────────────
 
 router.get('/log', async (req, res) => {
-  const page  = Math.max(1, parseInt(req.query.page,  10) || 1);
-  const limit = Math.min(100, parseInt(req.query.limit, 10) || 50);
+  const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
+  const limit  = Math.min(100, parseInt(req.query.limit, 10) || 50);
   const offset = (page - 1) * limit;
   try {
     const [rows, total] = await Promise.all([
@@ -441,4 +1113,4 @@ router.get('/log', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = { router, TOOLS, executeTool, buildSystemPrompt };
