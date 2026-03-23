@@ -111,7 +111,7 @@ const SECTIONS = [
   { id: 'allergen-matrix',  icon: '⚠️', label: 'Allergen Matrix' },
   { id: 'haccp',            icon: '🛡️', label: 'HACCP' },
   { id: 'settings',         icon: '⚙️', label: 'Settings' },
-  { id: 'ai-assistant',     icon: '🤖', label: 'AI Assistant' },
+  { id: 'ai-assistant',     icon: '🤖', label: 'McFry (AI)' },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
   { id: 'api-reference',    icon: '📡', label: 'API Reference' },
   { id: 'security',         icon: '🔒', label: 'Security' },
@@ -645,11 +645,12 @@ export default function HelpPage() {
         </InfoBox>
 
         {/* ═══════════════════════════════════ AI ASSISTANT */}
-        <H2 id="ai-assistant" icon="🤖" title="AI Assistant" />
+        <H2 id="ai-assistant" icon="🤖" title="McFry — AI Assistant" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The COGS Assistant is a floating AI chat widget (bottom-right of every page) powered by{' '}
+          <strong>McFry</strong> is a floating AI chat widget (bottom-right of every page) powered by{' '}
           <strong>Claude Haiku 4.5</strong>. It combines two complementary knowledge sources —
           vectorised documentation and live database queries — to answer questions in natural language.
+          McFry can also create, update, and delete records as a full sysadmin assistant.
         </p>
 
         <H3 id="ai-how-it-works">How It Works — Two Knowledge Layers</H3>

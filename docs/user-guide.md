@@ -319,9 +319,9 @@ If an item shows amber or red, options are: (1) raise the sell price in PLT, (2)
 
 ---
 
-## AI Assistant: What It Can and Cannot Do
+## McFry AI Assistant: What It Can and Cannot Do
 
-The COGS Assistant is a floating AI chat widget at the bottom-right of every page. It is powered by Claude Haiku 4.5 and uses two knowledge layers: vectorised documentation (RAG) and live database tools.
+McFry is a floating AI chat widget at the bottom-right of every page. It is powered by Claude Haiku 4.5 and uses two knowledge layers: vectorised documentation (RAG) and live database tools.
 
 The AI can answer questions about:
 - Ingredient costs, recipe COGS%, and menu performance — using live database tools

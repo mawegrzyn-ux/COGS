@@ -42,7 +42,7 @@ function renderMd(text: string): string {
     .replace(/\n/g, '<br>')
 }
 
-const ACCEPTED_TYPES = '.csv,.txt,image/png,image/jpeg,image/webp'
+const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 
 export default function AiChat() {
   const [open,         setOpen]         = useState(false)
@@ -208,7 +208,7 @@ export default function AiChat() {
         onClick={() => setOpen(o => !o)}
         className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
         style={{ background: 'var(--accent)', color: '#fff' }}
-        title="COGS Assistant"
+        title="McFry"
         aria-label="Toggle AI chat"
       >
         {open
@@ -236,7 +236,7 @@ export default function AiChat() {
             <div className="flex items-center gap-2.5">
               <CogIcon size={28} color="#fff" />
               <div>
-                <div className="font-semibold text-sm leading-tight">COGS Assistant</div>
+                <div className="font-semibold text-sm leading-tight">McFry</div>
                 <div className="text-xs opacity-75">Powered by Claude</div>
               </div>
             </div>
@@ -258,8 +258,9 @@ export default function AiChat() {
                     <CogIcon size={28} color="var(--accent)" />
                   </div>
                 </div>
+                <p className="text-sm font-semibold mb-1" style={{ color: 'var(--accent)' }}>Hi, I'm McFry!</p>
                 <p className="text-sm">Ask me about your ingredients, recipes, COGS, or how to use the platform. I can also create and edit records — just ask!</p>
-                <p className="text-xs mt-2 opacity-70">📎 Attach a CSV or image to import data</p>
+                <p className="text-xs mt-2 opacity-70">📎 Attach CSV, Excel, Word, PPTX, PDF or images to import data</p>
               </div>
             )}
             {messages.map((msg, i) => (
@@ -392,7 +393,7 @@ export default function AiChat() {
               </button>
             </div>
             <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-3)' }}>
-              Shift+Enter for new line · 📎 CSV or image up to 5 MB
+              Shift+Enter for new line · 📎 CSV, Excel, Word, PPTX, PDF or image · 10 MB max
             </p>
           </div>
         </div>

@@ -1020,7 +1020,9 @@ async function executeTool(name, input) {
 
 function buildSystemPrompt(context, helpContext) {
   const page = context?.currentPage || 'unknown';
-  return `You are the COGS Assistant — an AI helper embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
+  return `You are McFry — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
+
+Your name is McFry. When users greet you or ask your name, introduce yourself as McFry.
 
 You can both READ and WRITE to the database — you are a full sysadmin assistant with the ability to create, update, and delete records across all entities.
 
