@@ -30,7 +30,7 @@ export default function Sidebar() {
 
   return (
     <aside
-      className="flex flex-col bg-surface border-r border-border transition-all duration-200 shrink-0"
+      className="h-full flex flex-col bg-surface border-r border-border transition-all duration-200 shrink-0"
       style={{ width: collapsed ? '64px' : '220px' }}
     >
       {/* Logo + collapse toggle */}

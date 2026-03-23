@@ -526,7 +526,7 @@ export default function AiChat() {
 
           {/* Body — either chat or history */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            {view === 'history' ? <HistoryPanel /> : <ChatPanel />}
+            {view === 'history' ? HistoryPanel() : ChatPanel()}
           </div>
         </div>
       )}

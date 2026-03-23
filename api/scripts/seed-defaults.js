@@ -45,7 +45,7 @@ async function seedDefaults(client, push) {
   // ── 1. Units ────────────────────────────────────────────────────────────────
   push('Creating units…');
   const unitDefs = [
-    { name: 'Kilogram', abbreviation: 'kg', type: 'weight' },
+    { name: 'Kilogram', abbreviation: 'kg', type: 'mass'   },
     { name: 'Litre',    abbreviation: 'L',  type: 'volume' },
     { name: 'Each',     abbreviation: 'ea', type: 'count'  },
   ];
