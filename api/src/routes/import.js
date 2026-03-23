@@ -187,9 +187,11 @@ router.get('/template', (_req, res) => {
     ['1. Fill in each sheet with your data. Do not change column headers.'],
     ['2. Country names must match what is already in COGS (e.g. "United Kingdom").'],
     ['3. Unit abbreviations must match existing units (e.g. "kg", "L", "ea").'],
-    ['4. For Recipes: repeat the recipe_name on each row for each ingredient.'],
-    ['5. Leave optional columns blank — do not delete them.'],
-    ['6. Delete these instructions before uploading, or leave them — the importer ignores non-data rows.'],
+    ['4. For Recipes: repeat the recipe_name on each row for each ingredient. Leave ingredient columns blank for recipe-name-only rows.'],
+    ['5. prep_unit + prep_to_base: prep unit used in recipes and how many base units it equals (e.g. portion → 0.15 kg).'],
+    ['6. For Menus: list menu name + country in "Menus" sheet. List items in "Menu Items" sheet.'],
+    ['7. Leave optional columns blank — do not delete them.'],
+    ['8. Delete these instructions before uploading, or leave them — the importer ignores non-data rows.'],
   ]), 'Instructions');
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -198,9 +200,9 @@ router.get('/template', (_req, res) => {
   ]), 'Vendors');
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ['name', 'category', 'unit', 'waste_pct', 'notes'],
-    ['Chicken Breast', 'Protein', 'kg', '2', ''],
-    ['Wing Gold Sauce', 'Sauce', 'L', '5', 'House sauce'],
+    ['name', 'category', 'unit', 'waste_pct', 'prep_unit', 'prep_to_base', 'notes'],
+    ['Chicken Breast', 'Protein', 'kg', '2', 'kg', '1', ''],
+    ['Wing Gold Sauce', 'Sauce', 'L', '5', 'L', '1', 'House sauce'],
   ]), 'Ingredients');
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -215,6 +217,19 @@ router.get('/template', (_req, res) => {
     ['Lemon Pepper Wings', '',    '',  '',   'Wing Gold Sauce',  '0.05', 'L'],
     ['Garlic Parm Wings',  'Food', '1', 'ea', 'Chicken Breast',  '0.30', 'kg'],
   ]), 'Recipes');
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['menu_name', 'country', 'description'],
+    ['Lunch Menu', 'United Kingdom', 'Weekday lunch'],
+    ['Dinner Menu', 'United Kingdom', ''],
+  ]), 'Menus');
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['menu_name', 'item_type', 'item_name', 'display_name', 'sort_order'],
+    ['Lunch Menu', 'recipe',     'Lemon Pepper Wings', 'Lemon Pepper Wings', '1'],
+    ['Lunch Menu', 'recipe',     'Garlic Parm Wings',  'Garlic Parm Wings',  '2'],
+    ['Dinner Menu','recipe',     'Lemon Pepper Wings', 'Lemon Pepper Wings', '1'],
+  ]), 'Menu Items');
 
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Disposition', 'attachment; filename="cogs-import-template.xlsx"');
@@ -238,11 +253,13 @@ function parseTemplateFile(buffer) {
   const ingredients = getSheet('Ingredients')
     .filter(r => r.name)
     .map(r => blankRow({
-      name:            String(r.name).trim(),
-      source_category: String(r.category || '').trim(),
-      unit:            String(r.unit || '').trim(),
-      waste_pct:       parseFloat(r.waste_pct) || 0,
-      notes:           String(r.notes || '').trim(),
+      name:                     String(r.name).trim(),
+      source_category:          String(r.category || '').trim(),
+      unit:                     String(r.unit || '').trim(),
+      waste_pct:                parseFloat(r.waste_pct) || 0,
+      prep_unit:                String(r.prep_unit || '').trim(),
+      prep_to_base_conversion:  parseFloat(r.prep_to_base || r.prep_to_base_conversion) || 1,
+      notes:                    String(r.notes || '').trim(),
     }));
 
   const price_quotes = getSheet('Price Quotes')
@@ -278,7 +295,38 @@ function parseTemplateFile(buffer) {
     }
   }
 
-  return { vendors, ingredients, price_quotes, recipes: Array.from(recipeMap.values()) };
+  // Menus: group rows by menu_name using both sheets
+  const menuMap = new Map();
+  for (const r of getSheet('Menus')) {
+    const name = String(r.menu_name || '').trim();
+    if (!name) continue;
+    if (!menuMap.has(name)) {
+      menuMap.set(name, blankRow({
+        name,
+        country:     String(r.country     || '').trim(),
+        description: String(r.description || '').trim(),
+        items:       [],
+      }));
+    }
+  }
+  for (const r of getSheet('Menu Items')) {
+    const mname = String(r.menu_name || '').trim();
+    if (!mname) continue;
+    if (!menuMap.has(mname)) {
+      menuMap.set(mname, blankRow({ name: mname, country: '', description: '', items: [] }));
+    }
+    const iname = String(r.item_name || '').trim();
+    if (iname) {
+      menuMap.get(mname).items.push({
+        item_type:    String(r.item_type    || 'recipe').trim(),
+        item_name:    iname,
+        display_name: String(r.display_name || iname).trim(),
+        sort_order:   parseInt(r.sort_order) || 0,
+      });
+    }
+  }
+
+  return { vendors, ingredients, price_quotes, recipes: Array.from(recipeMap.values()), menus: Array.from(menuMap.values()) };
 }
 
 // ── AI extraction tool ────────────────────────────────────────────────────────
@@ -305,11 +353,13 @@ const EXTRACT_TOOL = {
         items: {
           type: 'object',
           properties: {
-            name:            { type: 'string' },
-            source_category: { type: 'string', description: 'Category exactly as in source — do not normalise' },
-            unit:            { type: 'string', description: 'Unit abbreviation: kg, g, L, ml, ea, etc.' },
-            waste_pct:       { type: 'number', description: 'Waste % as a number 0-100 (e.g. 2 not 0.02)' },
-            notes:           { type: 'string' },
+            name:                    { type: 'string' },
+            source_category:         { type: 'string', description: 'Category exactly as in source — do not normalise' },
+            unit:                    { type: 'string', description: 'Base unit abbreviation: kg, g, L, ml, ea, etc.' },
+            waste_pct:               { type: 'number', description: 'Waste % as a number 0-100 (e.g. 2 not 0.02)' },
+            prep_unit:               { type: 'string', description: 'Prep unit used in recipes (e.g. "portion", "slice"). Leave blank if same as base unit.' },
+            prep_to_base_conversion: { type: 'number', description: 'How many base units equal one prep unit (e.g. 1 portion = 0.15 kg → 0.15). Default 1.' },
+            notes:                   { type: 'string' },
           },
           required: ['name'],
         },
@@ -347,6 +397,32 @@ const EXTRACT_TOOL = {
                     description: 'Use "recipe" when this line is itself a sub-recipe or assembled component (sauce, side, dip, etc.)' },
                   qty:       { type: 'number' },
                   unit:      { type: 'string' },
+                },
+                required: ['item_name'],
+              },
+            },
+          },
+          required: ['name'],
+        },
+      },
+      menus: {
+        type: 'array',
+        description: 'Only extract menus if the file explicitly contains a menu/price-list structure (menu name + items). Do not invent menus from recipe lists.',
+        items: {
+          type: 'object',
+          properties: {
+            name:        { type: 'string', description: 'Menu name' },
+            country:     { type: 'string', description: 'Country/market name as written in file' },
+            description: { type: 'string' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  item_type:    { type: 'string', enum: ['recipe', 'ingredient'], description: 'Usually "recipe"' },
+                  item_name:    { type: 'string', description: 'Exact name of the recipe or ingredient' },
+                  display_name: { type: 'string', description: 'Display name on menu (may differ from item_name)' },
+                  sort_order:   { type: 'integer' },
                 },
                 required: ['item_name'],
               },
@@ -397,23 +473,26 @@ MULTI-TIER RECIPE STRUCTURES (important)
   const raw = tool.input;
   return {
     vendors:      (raw.vendors      || []).map(v => blankRow({ name: String(v.name||'').trim(), country: String(v.country||'').trim() })),
-    ingredients:  (raw.ingredients  || []).map(i => blankRow({ name: String(i.name||'').trim(), source_category: String(i.source_category||'').trim(), unit: String(i.unit||'').trim(), waste_pct: parseFloat(i.waste_pct)||0, notes: String(i.notes||'').trim() })),
+    ingredients:  (raw.ingredients  || []).map(i => blankRow({ name: String(i.name||'').trim(), source_category: String(i.source_category||'').trim(), unit: String(i.unit||'').trim(), waste_pct: parseFloat(i.waste_pct)||0, prep_unit: String(i.prep_unit||'').trim(), prep_to_base_conversion: parseFloat(i.prep_to_base_conversion)||1, notes: String(i.notes||'').trim() })),
     price_quotes: (raw.price_quotes || []).map(p => blankRow({ ingredient_name: String(p.ingredient_name||'').trim(), vendor_name: String(p.vendor_name||'').trim(), purchase_price: parseFloat(p.purchase_price)||0, purchase_unit: String(p.purchase_unit||'').trim(), qty_in_base_units: parseFloat(p.qty_in_base_units)||1 })),
     recipes:      (raw.recipes      || []).map(r => blankRow({ name: String(r.name||'').trim(), source_category: String(r.source_category||'').trim(), yield_qty: parseFloat(r.yield_qty)||1, yield_unit: String(r.yield_unit||'').trim(), items: (r.items||[]).map(i => ({ item_name: String(i.item_name || i.ingredient_name || '').trim(), item_type: i.item_type === 'recipe' ? 'recipe' : 'ingredient', qty: parseFloat(i.qty)||0, unit: String(i.unit||'').trim() })) })),
+    menus:        (raw.menus        || []).map(m => blankRow({ name: String(m.name||'').trim(), country: String(m.country||'').trim(), description: String(m.description||'').trim(), items: (m.items||[]).map(i => ({ item_type: i.item_type === 'ingredient' ? 'ingredient' : 'recipe', item_name: String(i.item_name||'').trim(), display_name: String(i.display_name || i.item_name || '').trim(), sort_order: parseInt(i.sort_order)||0 })) })),
   };
 }
 
 // ── Duplicate detection ───────────────────────────────────────────────────────
 
 async function detectDuplicates(staged) {
-  const [{ rows: exI }, { rows: exR }, { rows: exV }] = await Promise.all([
+  const [{ rows: exI }, { rows: exR }, { rows: exV }, { rows: exM }] = await Promise.all([
     pool.query('SELECT id, LOWER(name) AS n FROM mcogs_ingredients'),
     pool.query('SELECT id, LOWER(name) AS n FROM mcogs_recipes'),
     pool.query('SELECT id, LOWER(name) AS n FROM mcogs_vendors'),
+    pool.query('SELECT id, LOWER(name) AS n FROM mcogs_menus'),
   ]);
   const iMap = new Map(exI.map(r => [r.n, r.id]));
   const rMap = new Map(exR.map(r => [r.n, r.id]));
   const vMap = new Map(exV.map(r => [r.n, r.id]));
+  const mMap = new Map(exM.map(r => [r.n, r.id]));
 
   const check = (name, map) => {
     const l = name.toLowerCase().trim();
@@ -427,6 +506,7 @@ async function detectDuplicates(staged) {
   for (const r of staged.ingredients  || []) { const d = check(r.name, iMap); if (d) { r._duplicate_of = d; r._action = 'skip'; r._status = 'warning'; r._issues = [`Possible duplicate of existing ingredient "${d.name}"`]; } }
   for (const r of staged.recipes      || []) { const d = check(r.name, rMap); if (d) { r._duplicate_of = d; r._action = 'skip'; r._status = 'warning'; r._issues = [`Possible duplicate of existing recipe "${d.name}"`]; } }
   for (const r of staged.vendors      || []) { const d = check(r.name, vMap); if (d) { r._duplicate_of = d; r._action = 'skip'; r._status = 'warning'; r._issues = [`Vendor "${d.name}" already exists`]; } }
+  for (const r of staged.menus        || []) { const d = check(r.name, mMap); if (d) { r._duplicate_of = d; r._action = 'skip'; r._status = 'warning'; r._issues = [`Menu "${d.name}" already exists`]; } }
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -435,7 +515,8 @@ function validateStaged(staged) {
   for (const r of staged.vendors      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } }
   for (const r of staged.ingredients  || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.source_category) r._issues.push('No category — will remain uncategorised'); }
   for (const r of staged.price_quotes || []) { if (!r.ingredient_name) { r._status = 'error'; r._issues.push('Ingredient name required'); } if (!(r.purchase_price > 0)) { r._status = r._status === 'error' ? 'error' : 'warning'; r._issues.push('Purchase price is zero'); } }
-  for (const r of staged.recipes      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.items?.length) r._issues.push('Recipe has no ingredients'); }
+  for (const r of staged.recipes      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.items?.length) r._issues.push('No ingredient lines — recipe name only (you can add ingredients later in the Recipes page)'); }
+  for (const r of staged.menus        || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.country) { r._status = r._status === 'error' ? 'error' : 'warning'; r._issues.push('No country — menu will be skipped (country is required)'); } if (!r.items?.length) r._issues.push('No items — menu will be created empty'); }
 }
 
 // ── Prerequisites detection + unit resolution ─────────────────────────────────
@@ -558,6 +639,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       // Enrichment for template path
       await detectDuplicates(staged);
       validateStaged(staged);
+      staged.menus            = staged.menus || [];
       staged.prerequisites    = await detectPrerequisites(staged);
       staged.category_mapping = {};
       const key = aiConfig.get('ANTHROPIC_API_KEY');
@@ -648,10 +730,12 @@ router.post('/:id/execute', async (req, res) => {
     const catMap = staged.category_mapping || {};
 
     const results = {
-      categories: 0, vendors: 0, vendors_skipped: 0,
-      ingredients: 0, ingredients_skipped: 0,
+      categories: 0,
+      vendors: 0, vendors_skipped: 0, vendors_updated: 0,
+      ingredients: 0, ingredients_skipped: 0, ingredients_updated: 0,
       price_quotes: 0, price_quotes_skipped: 0,
-      recipes: 0, recipes_skipped: 0, recipe_items: 0,
+      recipes: 0, recipes_skipped: 0, recipes_updated: 0, recipe_items: 0,
+      menus: 0, menus_skipped: 0, menu_items: 0,
       errors: [],
     };
 
@@ -694,6 +778,12 @@ router.post('/:id/execute', async (req, res) => {
         if (row._action === 'skip') { results.vendors_skipped++; continue; }
         if (!row.name) continue;
         const cid = row.country ? countryLookup[row.country.toLowerCase()] || null : null;
+        if (row._action === 'override' && row._duplicate_of?.id) {
+          await client.query('UPDATE mcogs_vendors SET name=$1,country_id=$2,updated_at=NOW() WHERE id=$3', [row.name, cid, row._duplicate_of.id]);
+          vendorLookup[row.name.toLowerCase()] = row._duplicate_of.id;
+          results.vendors_updated++;
+          continue;
+        }
         const { rows } = await client.query('INSERT INTO mcogs_vendors (name,country_id) VALUES ($1,$2) RETURNING id', [row.name, cid]);
         vendorLookup[row.name.toLowerCase()] = rows[0].id;
         results.vendors++;
@@ -708,9 +798,18 @@ router.post('/:id/execute', async (req, res) => {
         if (row._action === 'skip') { results.ingredients_skipped++; continue; }
         if (!row.name) continue;
         const uid = row.unit ? unitLookup[row.unit.toLowerCase()] || null : null;
+        if (row._action === 'override' && row._duplicate_of?.id) {
+          await client.query(
+            'UPDATE mcogs_ingredients SET name=$1,category=$2,base_unit_id=$3,waste_pct=$4,notes=$5,default_prep_unit=$6,default_prep_to_base_conversion=$7,updated_at=NOW() WHERE id=$8',
+            [row.name, catName(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1, row._duplicate_of.id]
+          );
+          ingLookup[row.name.toLowerCase()] = row._duplicate_of.id;
+          results.ingredients_updated++;
+          continue;
+        }
         const { rows } = await client.query(
-          'INSERT INTO mcogs_ingredients (name,category,base_unit_id,waste_pct,notes) VALUES ($1,$2,$3,$4,$5) RETURNING id',
-          [row.name, catName(row.source_category), uid, row.waste_pct || 0, row.notes || null]
+          'INSERT INTO mcogs_ingredients (name,category,base_unit_id,waste_pct,notes,default_prep_unit,default_prep_to_base_conversion) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          [row.name, catName(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1]
         );
         ingLookup[row.name.toLowerCase()] = rows[0].id;
         results.ingredients++;
@@ -739,6 +838,19 @@ router.post('/:id/execute', async (req, res) => {
         if (row._action === 'skip') { results.recipes_skipped++; continue; }
         if (!row.name) continue;
         const yuid = row.yield_unit ? unitLookup[row.yield_unit.toLowerCase()] || null : null;
+        if (row._action === 'override' && row._duplicate_of?.id) {
+          const existingRid = row._duplicate_of.id;
+          await client.query(
+            'UPDATE mcogs_recipes SET name=$1,category=$2,yield_qty=$3,yield_unit_id=$4,updated_at=NOW() WHERE id=$5',
+            [row.name, catName(row.source_category), row.yield_qty||1, yuid, existingRid]
+          );
+          // Remove existing items so they get re-added in pass 2
+          await client.query('DELETE FROM mcogs_recipe_items WHERE recipe_id=$1', [existingRid]);
+          recipeLookup[row.name.toLowerCase()] = existingRid;
+          recipeRows.push({ row, rid: existingRid });
+          results.recipes_updated++;
+          continue;
+        }
         const { rows: ins } = await client.query(
           'INSERT INTO mcogs_recipes (name,category,yield_qty,yield_unit_id) VALUES ($1,$2,$3,$4) RETURNING id',
           [row.name, catName(row.source_category), row.yield_qty || 1, yuid]
@@ -751,7 +863,6 @@ router.post('/:id/execute', async (req, res) => {
 
       // 6b. Recipes — second pass: add items (ingredients or sub-recipe refs)
       for (const { row, rid } of recipeRows) {
-        let sort = 1;
         for (const item of row.items || []) {
           const name = (item.item_name || item.ingredient_name || '').toLowerCase().trim();
           if (!name) continue;
@@ -760,19 +871,62 @@ router.post('/:id/execute', async (req, res) => {
             const subId = recipeLookup[name] || null;
             if (!subId) { results.errors.push(`Recipe item skipped: sub-recipe "${name}" not found in this import`); continue; }
             await client.query(
-              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,recipe_item_id,qty,prep_unit,sort_order) VALUES ($1,\'recipe\',$2,$3,$4,$5)',
-              [rid, subId, item.qty || 0, item.unit || '', sort++]
+              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,recipe_item_id,prep_qty,prep_unit) VALUES ($1,\'recipe\',$2,$3,$4)',
+              [rid, subId, item.qty || 0, item.unit || '']
             );
           } else {
             const iid = ingLookup[name] || null;
             if (!iid) { results.errors.push(`Recipe item skipped: ingredient "${name}" not found`); continue; }
             await client.query(
-              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,qty,prep_unit,sort_order) VALUES ($1,\'ingredient\',$2,$3,$4,$5)',
-              [rid, iid, item.qty || 0, item.unit || '', sort++]
+              'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,prep_qty,prep_unit) VALUES ($1,\'ingredient\',$2,$3,$4)',
+              [rid, iid, item.qty || 0, item.unit || '']
             );
           }
           results.recipe_items++;
         }
+      }
+
+      // 7. Menus
+      const menuLookup = {};
+      const { rows: exMn } = await client.query('SELECT id, LOWER(name) AS n FROM mcogs_menus');
+      for (const m of exMn) menuLookup[m.n] = m.id;
+
+      for (const row of staged.menus || []) {
+        if (row._action === 'skip') { results.menus_skipped++; continue; }
+        if (!row.name) continue;
+        const cid = row.country ? countryLookup[row.country.toLowerCase()] || null : null;
+        if (!cid) {
+          results.errors.push(`Menu "${row.name}" skipped: country "${row.country}" not found — create the market first`);
+          continue;
+        }
+        const { rows: ins } = await client.query(
+          'INSERT INTO mcogs_menus (name,country_id,description) VALUES ($1,$2,$3) RETURNING id',
+          [row.name, cid, row.description || null]
+        );
+        const mid = ins[0].id;
+        menuLookup[row.name.toLowerCase()] = mid;
+        let sortIdx = 1;
+        for (const item of row.items || []) {
+          const iname = (item.item_name || '').toLowerCase().trim();
+          if (!iname) continue;
+          const displayName = item.display_name || item.item_name || iname;
+          let recipe_id = null, ingredient_id = null, itemType = item.item_type || 'recipe';
+          if (itemType === 'ingredient') {
+            ingredient_id = ingLookup[iname] || null;
+            if (!ingredient_id) { results.errors.push(`Menu item skipped: ingredient "${iname}" not found`); continue; }
+          } else {
+            recipe_id = recipeLookup[iname] || null;
+            if (!recipe_id) { results.errors.push(`Menu item skipped: recipe "${iname}" not found (import recipes first or check spelling)`); continue; }
+          }
+          const so = item.sort_order || sortIdx;
+          await client.query(
+            'INSERT INTO mcogs_menu_items (menu_id,item_type,recipe_id,ingredient_id,display_name,sort_order) VALUES ($1,$2,$3,$4,$5,$6)',
+            [mid, itemType, recipe_id, ingredient_id, String(displayName).trim(), so]
+          );
+          results.menu_items++;
+          sortIdx++;
+        }
+        results.menus++;
       }
 
       await client.query('COMMIT');

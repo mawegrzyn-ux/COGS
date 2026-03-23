@@ -42,7 +42,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 16 tables (all prefixed `mcogs_`) |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 25 tables (all prefixed `mcogs_`) |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -146,7 +146,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # McFry AI chat (44 tools)
+│           ├── ai-chat.js          # McFry AI chat (74 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── feedback.js
@@ -262,7 +262,7 @@ VITE_API_URL=http://localhost:3001/api
 
 ```bash
 cd api && npm run migrate
-# Creates all 16 mcogs_ tables — safe to run multiple times
+# Creates all mcogs_ tables — safe to run multiple times
 ```
 
 ### Start Development Servers
@@ -355,7 +355,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 9 | `mcogs_price_quotes` | Vendor pricing per ingredient: purchase price, qty, unit, active flag |
 | 10 | `mcogs_ingredient_preferred_vendor` | Per ingredient+country: which vendor+quote is preferred |
 | 11 | `mcogs_recipes` | Recipe definitions with yield qty and yield unit |
-| 12 | `mcogs_recipe_items` | Recipe line items: ingredient or sub-recipe, qty, prep unit, conversion |
+| 12 | `mcogs_recipe_items` | Recipe line items: ingredient or sub-recipe, `prep_qty`, prep unit, conversion |
 | 13 | `mcogs_menus` | Menu definitions, linked to a country |
 | 14 | `mcogs_menu_items` | Menu line items: recipe or ingredient, display name, sort order |
 | 15 | `mcogs_menu_item_prices` | Sell prices per menu item per price level, with tax rate |
@@ -464,7 +464,7 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
 | `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by McFry) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming McFry chat with 44 tools |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming McFry chat with 74 tools (includes web search) |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
 
@@ -711,16 +711,28 @@ AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and
 
 **5-step wizard:**
 1. **Upload** — drag-and-drop file or initiate from McFry chatbot (`?job=<id>` URL param auto-skips to step 2)
-2. **Review** — AI-extracted data shown in tabbed tables (Ingredients, Price Quotes, Recipes)
-3. **Categories** — map each "Imported Category" to an existing COGS category (or create new)
+2. **Review** — AI-extracted data shown in tabbed tables (Ingredients, Price Quotes, Recipes, Menus)
+3. **Categories** — map each "Imported Category" to an existing COGS category (or create new inline via dropdown)
 4. **Vendors** — map imported vendor names to existing vendors (or create new)
 5. **Execute** — write all staged data to the database
 
 **Key features:**
 - Unit fuzzy-matching: auto-resolves imported unit strings (e.g. "pound" → `kg`) via `UNIT_ALIASES` map; shows amber `was: <original>` badge when auto-resolved
-- Price Quotes table: "Conv. to Base" column (renamed from "Qty") shows base unit from matched ingredient
+- Price Quotes table: "Conv. to Base" column shows base unit from matched ingredient
 - Sub-recipe recognition: three-tier recipe hierarchies (raw ingredient → sub-recipe → main recipe); sub-recipe items show 📋 icon + green badge
+- **Override action**: rows with duplicates offer Create / Skip / Override; Override updates the existing record in place instead of inserting a new one
+- **Prep unit import**: Ingredients sheet supports `prep_unit` and `prep_to_base` columns — maps to `default_prep_unit` / `default_prep_to_base_conversion` on `mcogs_ingredients`
+- **Menu import**: Menus sheet (`menu_name`, `country`, `description`) + Menu Items sheet (`menu_name`, `item_type`, `item_name`, `display_name`, `sort_order`) — creates menus and links items from imported recipes/ingredients
+- **Category inline create**: In the Categories mapping step, selecting "+ Create new category" from the COGS Category dropdown auto-switches the row action to "create" and pre-fills the suggested name — no need to use the Action column separately
 - Chatbot integration: McFry can trigger an import job with `start_import` tool; ImportPage reads `?job` param on mount
+
+**Template sheets** (download via Import page → "Download template"):
+- `Ingredients` — name, category, base_unit, waste_pct, prep_unit, prep_to_base, notes
+- `Vendors` — name, country
+- `Price Quotes` — ingredient_name, vendor_name, purchase_price, qty_in_base_units, purchase_unit
+- `Recipes` — recipe_name, category, yield_qty, yield_unit, item_type, item_name, qty, unit
+- `Menus` — menu_name, country, description
+- `Menu Items` — menu_name, item_type, item_name, display_name, sort_order
 
 ---
 
@@ -754,8 +766,9 @@ McFry is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears a
 - **Shared agentic loop:** `api/src/helpers/agenticStream.js` — SSE helper, keepalive ping, `while(true)` tool loop, token counting
 - **Logging:** all sessions logged to `mcogs_ai_chat_log` (messages, tools_called JSONB, token counts)
 - **File support:** CSV/text (injected as text block), PNG/JPEG/WEBP (injected as base64 vision block); max 5MB; PDF not supported
+- **Web search config:** `BRAVE_SEARCH_API_KEY` stored via `GET/PUT /api/ai-config` — if set, `search_web` tool uses Brave Search; otherwise DuckDuckGo instant answer fallback
 
-### Tool Count: 44
+### Tool Count: 74
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -770,14 +783,43 @@ McFry is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears a
 `delete_ingredient`, `delete_vendor`, `delete_price_quote`, `delete_recipe_item`, `delete_menu`
 
 **Market / Brand (9):**
-`create_market`, `update_market`, `delete_market`, `assign_brand_partner`, `list_brand_partners`, `create_brand_partner`, `update_brand_partner`, `delete_brand_partner`
+`create_market`, `update_market`, `delete_market`, `assign_brand_partner`, `list_brand_partners`, `create_brand_partner`, `update_brand_partner`, `delete_brand_partner`, `unassign_brand_partner`
+
+**Categories (2):**
+`update_category`, `delete_category`
+
+**Tax Rates (5):**
+`list_tax_rates`, `create_tax_rate`, `update_tax_rate`, `set_default_tax_rate`, `delete_tax_rate`
+
+**Price Levels (3):**
+`create_price_level`, `update_price_level`, `delete_price_level`
+
+**Settings (2):**
+`get_settings`, `update_settings`
+
+**HACCP (8):**
+`list_haccp_equipment`, `create_haccp_equipment`, `update_haccp_equipment`, `delete_haccp_equipment`, `log_temperature`, `list_temp_logs`, `list_ccp_logs`, `add_ccp_log`
+
+**Locations (8):**
+`list_locations`, `create_location`, `update_location`, `delete_location`, `list_location_groups`, `create_location_group`, `update_location_group`, `delete_location_group`
+
+**Allergens (4):**
+`list_allergens`, `get_ingredient_allergens`, `set_ingredient_allergens`, `get_menu_allergens`
 
 **Import (1):**
 `start_import` — accepts file text content already in conversation, calls `stageFileContent()`, returns `{ job_id, url: '/import?job=<id>', summary }` so the user can click through to the Import Wizard
 
+**Web Search (1):**
+`search_web` — uses Brave Search API if `BRAVE_SEARCH_API_KEY` is configured in Settings → AI; falls back to DuckDuckGo Instant Answer API (free, no key, limited coverage). **Only invoked when the user explicitly asks to search the internet.** System prompt restricts autonomous use.
+
 ### Confirmation Safety
 
-Enforced via system prompt: Claude must verbally describe any create/update/delete action and ask "Shall I proceed?" before calling write tools. Batch operations (>3 records) get one plan + one confirm. `delete_menu` always warns about cascade. FK violations on delete return a friendly error string rather than throwing.
+Enforced via system prompt: Claude must verbally describe any create/update/delete action and ask "Shall I proceed?" before calling write tools. Batch operations (>3 records) get one plan + one confirm. Additional safety rules:
+- `delete_menu` — always warns that all menu items and prices will also be deleted (cascade)
+- `delete_market` — warns that associated vendors, menus, and tax rates will also be removed
+- `delete_location` — warns if equipment is assigned and must be removed first
+- `set_ingredient_allergens` — warns that this REPLACES the full allergen profile for the ingredient
+- FK violations on `delete_ingredient` / `delete_vendor` return a friendly error string rather than throwing (catches PG error 23503)
 
 ### Chatbot → Import Wizard Flow
 
@@ -915,6 +957,31 @@ router.use('/import', require('./import').router);
 
 ---
 
+### Fix 8 — Recipe Import Silently Failing (Wrong Column Names)
+
+**Symptom:** Recipes never appeared in the database after running the import wizard, even when using the built-in template file. No visible error — the wizard reported success.
+
+**Root Cause:** The `execute` function in `import.js` was inserting recipe items with two wrong column names:
+1. `qty` — the actual column is `prep_qty` (a `NUMERIC(18,8)` column defined in `migrate.js`)
+2. `sort_order` — this column does not exist in `mcogs_recipe_items` at all
+
+Both invalid column names caused PostgreSQL to throw inside the transaction, which rolled back silently, leaving zero recipe items (and therefore zero recipe shells due to dependent logic).
+
+**Fix:**
+```js
+// BEFORE (broken):
+'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,qty,prep_unit,sort_order) VALUES ...'
+[rid, iid, item.qty || 0, item.unit || '', sort++]
+
+// AFTER (correct):
+'INSERT INTO mcogs_recipe_items (recipe_id,item_type,ingredient_id,prep_qty,prep_unit) VALUES ($1,\'ingredient\',$2,$3,$4)'
+[rid, iid, item.qty || 0, item.unit || '']
+```
+
+**File:** `api/src/routes/import.js`
+
+---
+
 ## 16. Critical Gotchas & Lessons Learned
 
 ### Server User Context
@@ -996,6 +1063,18 @@ When requiring `stageFileContent` from `ai-chat.js`:
 const { stageFileContent } = require('./import');
 ```
 
+### `mcogs_recipe_items` Column is `prep_qty`, Not `qty`
+
+The quantity column in `mcogs_recipe_items` is named **`prep_qty`** (not `qty`). This is easy to get wrong because the template CSV uses the header `qty` and the JavaScript objects carry a `qty` property. Always map to `prep_qty` when inserting into this table. The table also has **no `sort_order` column** — do not attempt to insert one.
+
+```js
+// CORRECT
+INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, prep_qty, prep_unit)
+
+// WRONG — fails silently, transaction rolls back, no records saved
+INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, qty, prep_unit, sort_order)
+```
+
 ### Local Dev Server Not Required
 
 This project deploys via GitHub Actions to Lightsail. There is no local dev server workflow. Claude Code hooks that require a running local server (e.g., the Claude Preview plugin Stop hook) are suppressed via `"disableAllHooks": true` in `.claude/settings.local.json`.
@@ -1059,4 +1138,4 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-*README last updated: March 2026 (session: import wizard, McFry AI tools, market/brand CRUD)*
+*README last updated: March 2026 (session: McFry expanded to 74 tools — HACCP, locations, allergens, categories, tax rates, price levels, settings, web search; import wizard — menu import, override action, prep unit columns, recipe import bug fix, category inline create)*

@@ -10,8 +10,8 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
 type Step        = 'upload' | 'parsing' | 'mapping' | 'review' | 'confirm' | 'executing' | 'done'
 type ImportPath  = 'template' | 'ai'
-type ReviewTab   = 'ingredients' | 'vendors' | 'price_quotes' | 'recipes'
-type RowAction   = 'create' | 'skip'
+type ReviewTab   = 'ingredients' | 'vendors' | 'price_quotes' | 'recipes' | 'menus'
+type RowAction   = 'create' | 'skip' | 'override'
 type RowStatus   = 'valid' | 'warning' | 'error'
 
 interface StagedRow {
@@ -39,15 +39,18 @@ interface StagedData {
   ingredients:      StagedRow[]
   price_quotes:     StagedRow[]
   recipes:          StagedRow[]
+  menus:            StagedRow[]
   category_mapping: Record<string, CatMapping>
   prerequisites:    { missing_units: string[]; missing_countries: string[] }
 }
 
 interface ImportResults {
-  categories: number; vendors: number; vendors_skipped: number
-  ingredients: number; ingredients_skipped: number
+  categories: number
+  vendors: number; vendors_skipped: number; vendors_updated: number
+  ingredients: number; ingredients_skipped: number; ingredients_updated: number
   price_quotes: number; price_quotes_skipped: number
-  recipes: number; recipes_skipped: number; recipe_items: number
+  recipes: number; recipes_skipped: number; recipes_updated: number; recipe_items: number
+  menus: number; menus_skipped: number; menu_items: number
   errors: string[]
 }
 
@@ -75,9 +78,10 @@ function statusColor(s: RowStatus) {
 }
 
 function countByAction(rows: StagedRow[]) {
-  const create = rows.filter(r => r._action === 'create').length
-  const skip   = rows.filter(r => r._action === 'skip').length
-  return { create, skip }
+  const create   = rows.filter(r => r._action === 'create').length
+  const skip     = rows.filter(r => r._action === 'skip').length
+  const override = rows.filter(r => r._action === 'override').length
+  return { create, skip, override }
 }
 
 // ── Step Indicator ────────────────────────────────────────────────────────────
@@ -113,16 +117,20 @@ function StepBar({ step }: { step: Step }) {
 
 // ── Action Badge ─────────────────────────────────────────────────────────────
 
-function ActionToggle({ value, onChange, disabled }: { value: RowAction; onChange: (v: RowAction) => void; disabled?: boolean }) {
+function ActionToggle({ value, onChange, disabled, hasDuplicate }: {
+  value: RowAction; onChange: (v: RowAction) => void; disabled?: boolean; hasDuplicate?: boolean
+}) {
+  const color = value === 'create' ? 'var(--accent)' : value === 'override' ? '#D97706' : 'var(--text-3)'
   return (
     <select
       value={value}
       onChange={e => onChange(e.target.value as RowAction)}
       disabled={disabled}
       className="text-xs rounded px-1.5 py-0.5 border border-border bg-white font-medium"
-      style={{ color: value === 'create' ? 'var(--accent)' : 'var(--text-3)' }}>
+      style={{ color }}>
       <option value="create">Create</option>
       <option value="skip">Skip</option>
+      {hasDuplicate && <option value="override">Override</option>}
     </select>
   )
 }
@@ -519,6 +527,7 @@ export default function ImportPage() {
       { key: 'ingredients',  label: 'Ingredients'  },
       { key: 'vendors',      label: 'Vendors'       },
       { key: 'price_quotes', label: 'Price Quotes'  },
+      { key: 'menus',        label: 'Menus'         },
       { key: 'recipes',      label: 'Recipes'       },
     ]
 
@@ -579,6 +588,7 @@ export default function ImportPage() {
           {reviewTab === 'vendors'     && <VendorsTable     rows={filtered} updateRow={updateRow} />}
           {reviewTab === 'price_quotes'&& <QuotesTable      rows={filtered} updateRow={updateRow} staged={staged!} />}
           {reviewTab === 'recipes'     && <RecipesTable     rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} />}
+          {reviewTab === 'menus'       && <MenusTable       rows={filtered} updateRow={updateRow} />}
         </div>
 
         <div className="mt-6 flex justify-between">
@@ -598,6 +608,7 @@ export default function ImportPage() {
       { key: 'ingredients',  label: 'Ingredients'  },
       { key: 'price_quotes', label: 'Price Quotes' },
       { key: 'recipes',      label: 'Recipes'      },
+      { key: 'menus',        label: 'Menus'        },
     ]
     return (
       <div className="max-w-xl">
@@ -616,14 +627,15 @@ export default function ImportPage() {
               </div>
             )}
             {entities.map(e => {
-              const { create, skip } = countByAction(staged[e.key] as StagedRow[])
+              const { create, skip, override } = countByAction((staged[e.key] as StagedRow[]) || [])
               return (
                 <div key={e.key} className="flex items-center justify-between text-sm py-1.5 border-b" style={{ borderColor: 'var(--border)' }}>
                   <span style={{ color: 'var(--text-2)' }}>{e.label}</span>
                   <div className="flex gap-2">
-                    {create > 0 && <span className="badge-green">{create} new</span>}
-                    {skip   > 0 && <span className="badge-neutral">{skip} skip</span>}
-                    {create === 0 && skip === 0 && <span className="text-xs text-text-3">nothing to import</span>}
+                    {create   > 0 && <span className="badge-green">{create} new</span>}
+                    {override > 0 && <span className="badge-yellow">{override} override</span>}
+                    {skip     > 0 && <span className="badge-neutral">{skip} skip</span>}
+                    {create === 0 && override === 0 && skip === 0 && <span className="text-xs text-text-3">nothing to import</span>}
                   </div>
                 </div>
               )
@@ -659,14 +671,20 @@ export default function ImportPage() {
     const rows = [
       { label: 'Categories created',    value: results.categories          },
       { label: 'Vendors imported',      value: results.vendors             },
+      { label: 'Vendors updated',       value: results.vendors_updated     },
       { label: 'Vendors skipped',       value: results.vendors_skipped,    muted: true },
       { label: 'Ingredients imported',  value: results.ingredients         },
+      { label: 'Ingredients updated',   value: results.ingredients_updated },
       { label: 'Ingredients skipped',   value: results.ingredients_skipped,muted: true },
       { label: 'Price quotes imported', value: results.price_quotes        },
       { label: 'Recipe quotes skipped', value: results.price_quotes_skipped,muted: true },
       { label: 'Recipes imported',      value: results.recipes             },
+      { label: 'Recipes updated',       value: results.recipes_updated     },
       { label: 'Recipes skipped',       value: results.recipes_skipped,    muted: true },
       { label: 'Recipe items created',  value: results.recipe_items        },
+      { label: 'Menus imported',        value: results.menus               },
+      { label: 'Menus skipped',         value: results.menus_skipped,      muted: true },
+      { label: 'Menu items created',    value: results.menu_items          },
     ]
     return (
       <div className="max-w-xl">
@@ -764,12 +782,12 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
   const catOptions = [...new Set((dbCats||[]).map(c => c.name))]
   if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No ingredients found.</div>
   return (
-    <table className="w-full min-w-[700px]">
-      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Base Unit</TH><TH>Waste %</TH></tr></thead>
+    <table className="w-full min-w-[900px]">
+      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Base Unit</TH><TH>Prep Unit</TH><TH>Conv. to Base</TH><TH>Waste %</TH></tr></thead>
       <tbody>
         {rows.map(row => (
           <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
-            <TD><ActionToggle value={row._action} onChange={v => updateRow('ingredients', row._id, { _action: v })} /></TD>
+            <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('ingredients', row._id, { _action: v })} /></TD>
             <TD><RowStatusBadge row={row} /></TD>
             <TD><EditCell value={String(row.name||'')}          onChange={v => updateRow('ingredients', row._id, { name: v })} /></TD>
             <TD><EditCell value={resolvedCat!(String(row.source_category||''))} onChange={v => updateRow('ingredients', row._id, { source_category: v })} type="select" options={catOptions} /></TD>
@@ -786,6 +804,8 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
                 )}
               </div>
             </TD>
+            <TD><EditCell value={String(row.prep_unit||'')} onChange={v => updateRow('ingredients', row._id, { prep_unit: v })} placeholder="e.g. portion" /></TD>
+            <TD><EditCell value={String(row.prep_to_base_conversion||1)} onChange={v => updateRow('ingredients', row._id, { prep_to_base_conversion: parseFloat(v)||1 })} type="number" /></TD>
             <TD><EditCell value={String(row.waste_pct||0)}      onChange={v => updateRow('ingredients', row._id, { waste_pct: parseFloat(v)||0 })} type="number" /></TD>
           </tr>
         ))}
@@ -802,7 +822,7 @@ function VendorsTable({ rows, updateRow }: TableProps) {
       <tbody>
         {rows.map(row => (
           <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
-            <TD><ActionToggle value={row._action} onChange={v => updateRow('vendors', row._id, { _action: v })} /></TD>
+            <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('vendors', row._id, { _action: v })} /></TD>
             <TD><RowStatusBadge row={row} /></TD>
             <TD><EditCell value={String(row.name||'')}    onChange={v => updateRow('vendors', row._id, { name: v })} /></TD>
             <TD><EditCell value={String(row.country||'')} onChange={v => updateRow('vendors', row._id, { country: v })} placeholder="e.g. United Kingdom" /></TD>
@@ -840,7 +860,7 @@ function QuotesTable({ rows, updateRow, staged }: TableProps) {
           const baseUnit = ingBaseUnit.get(String(row.ingredient_name || '').toLowerCase()) || ''
           return (
             <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
-              <TD><ActionToggle value={row._action} onChange={v => updateRow('price_quotes', row._id, { _action: v })} /></TD>
+              <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('price_quotes', row._id, { _action: v })} /></TD>
               <TD><RowStatusBadge row={row} /></TD>
               <TD><EditCell value={String(row.ingredient_name||'')} onChange={v => updateRow('price_quotes', row._id, { ingredient_name: v })} /></TD>
               <TD><EditCell value={String(row.vendor_name||'')}     onChange={v => updateRow('price_quotes', row._id, { vendor_name: v })} /></TD>
@@ -880,7 +900,7 @@ function RecipesTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) {
           const isExpanded = expanded.has(row._id)
           return [
             <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
-              <TD><ActionToggle value={row._action} onChange={v => updateRow('recipes', row._id, { _action: v })} /></TD>
+              <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('recipes', row._id, { _action: v })} /></TD>
               <TD><RowStatusBadge row={row} /></TD>
               <TD><EditCell value={String(row.name||'')} onChange={v => updateRow('recipes', row._id, { name: v })} /></TD>
               <TD><EditCell value={resolvedCat!(String(row.source_category||''))} onChange={v => updateRow('recipes', row._id, { source_category: v })} type="select" options={catOptions} /></TD>
@@ -917,6 +937,58 @@ function RecipesTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) {
                 </tr>
               )
             }) : []),
+          ]
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+function MenusTable({ rows, updateRow }: TableProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const toggle = (id: string) => setExpanded(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No menus found.</div>
+  return (
+    <table className="w-full min-w-[700px]">
+      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Menu Name</TH><TH>Country</TH><TH>Description</TH><TH>Items</TH></tr></thead>
+      <tbody>
+        {rows.flatMap(row => {
+          const items      = (row.items as { item_type?: string; item_name?: string; display_name?: string; sort_order?: number }[]) || []
+          const isExpanded = expanded.has(row._id)
+          return [
+            <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
+              <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('menus', row._id, { _action: v })} /></TD>
+              <TD><RowStatusBadge row={row} /></TD>
+              <TD><EditCell value={String(row.name||'')}        onChange={v => updateRow('menus', row._id, { name: v })} /></TD>
+              <TD><EditCell value={String(row.country||'')}     onChange={v => updateRow('menus', row._id, { country: v })} placeholder="e.g. United Kingdom" /></TD>
+              <TD><EditCell value={String(row.description||'')} onChange={v => updateRow('menus', row._id, { description: v })} placeholder="optional" /></TD>
+              <TD>
+                <button onClick={() => toggle(row._id)} className="text-xs underline decoration-dotted" style={{ color: 'var(--accent)' }}>
+                  {items.length} item{items.length !== 1 ? 's' : ''} {isExpanded ? '▲' : '▼'}
+                </button>
+              </TD>
+            </tr>,
+            ...(isExpanded ? items.map((item, j) => (
+              <tr key={`${row._id}-mi-${j}`} style={{ background: 'var(--surface-2)' }}>
+                <TD /><TD />
+                <TD className="pl-8">
+                  <span className="italic text-text-3">
+                    ↳ {item.display_name || item.item_name || '—'}
+                    {item.item_type === 'ingredient' && (
+                      <span className="ml-1 text-xs px-1 rounded" style={{ background: '#E0E7FF', color: '#4338CA' }}>ingredient</span>
+                    )}
+                  </span>
+                </TD>
+                <TD /><TD />
+                <TD><span className="text-xs text-text-3">#{item.sort_order || j + 1}</span></TD>
+              </tr>
+            )) : []),
           ]
         })}
       </tbody>

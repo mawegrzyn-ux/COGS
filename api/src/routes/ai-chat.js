@@ -588,6 +588,20 @@ Do NOT use this for small single-record requests; use the individual create_* to
     },
   },
 
+  // ── Web search ───────────────────────────────────────────────────────────────
+  {
+    name: 'search_web',
+    description: `Searches the internet for current information. ONLY use this tool when the user EXPLICITLY asks to search the web, look something up online, or asks about current prices/news/data that you could not know. Do NOT use proactively.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:       { type: 'string', description: 'Search query' },
+        max_results: { type: 'integer', description: 'Max results to return (default 5, max 10)' },
+      },
+      required: ['query'],
+    },
+  },
+
   // ── Category update / delete ──────────────────────────────────────────────────
   {
     name: 'update_category',
@@ -1704,6 +1718,45 @@ async function executeTool(name, input) {
       };
     }
 
+    case 'search_web': {
+      const { query, max_results = 5 } = input;
+      if (!query?.trim()) return { error: 'query is required' };
+      const braveKey = aiConfig.get('BRAVE_SEARCH_API_KEY');
+      if (braveKey) {
+        try {
+          const resp = await fetch(
+            `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(max_results, 10)}`,
+            { headers: { 'Accept': 'application/json', 'X-Subscription-Token': braveKey } }
+          );
+          if (!resp.ok) throw new Error(`Brave Search API returned ${resp.status}`);
+          const data = await resp.json();
+          const hits  = (data.web?.results || []).slice(0, max_results);
+          return hits.map(r => ({ title: r.title, url: r.url, description: r.description }));
+        } catch (err) {
+          return { error: `Search failed: ${err.message}` };
+        }
+      }
+      // Fallback: DuckDuckGo Instant Answer (no key needed, limited coverage)
+      try {
+        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const resp   = await fetch(ddgUrl, { headers: { 'Accept': 'application/json' } });
+        const data   = await resp.json();
+        const results = [];
+        if (data.AbstractText) {
+          results.push({ title: data.Heading || query, url: data.AbstractURL, description: data.AbstractText });
+        }
+        for (const r of (data.RelatedTopics || []).slice(0, max_results - 1)) {
+          if (r.Text && r.FirstURL) results.push({ title: r.Text.split(' - ')[0], url: r.FirstURL, description: r.Text });
+        }
+        if (!results.length) {
+          return { message: `No instant answer found for "${query}". For full web search add a Brave Search API key in Settings → AI → BRAVE_SEARCH_API_KEY.` };
+        }
+        return results;
+      } catch (err) {
+        return { error: `Search failed: ${err.message}. Add a Brave Search API key in Settings → AI for reliable web search.` };
+      }
+    }
+
     // ── Category update / delete ───────────────────────────────────────────────
 
     case 'update_category': {
@@ -2272,7 +2325,7 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Never create records from a file without user confirmation
 
 ## TOOLS AVAILABLE
-You have 73 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, and **start_import**.
+You have 74 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, and **search_web** (only when explicitly asked).
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
