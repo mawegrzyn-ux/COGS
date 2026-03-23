@@ -12,26 +12,44 @@ const aiConfig = require('./aiConfig');
 const _chunks   = [];  // [{ key, text, vector }]
 let   _ready    = false;
 
-// ── Load & split claude.md into sections ──────────────────────────────────────
+// ── Source files to index ─────────────────────────────────────────────────────
+// All files are split by ## headings into individual chunks.
+// Add paths here to extend the RAG knowledge base.
 
-function _loadChunks() {
-  const mdPath = path.join(__dirname, '..', '..', '..', 'claude.md');
-  if (!fs.existsSync(mdPath)) return [];
-  const content = fs.readFileSync(mdPath, 'utf8');
+const SOURCE_FILES = [
+  path.join(__dirname, '..', '..', '..', 'claude.md'),        // Technical/developer docs
+  path.join(__dirname, '..', '..', '..', 'docs', 'user-guide.md'), // User tutorials & workflows
+];
+
+// ── Load & split markdown files into sections ──────────────────────────────────
+
+function _parseMd(content, fileLabel) {
   const sections = [];
   let current = null;
   for (const line of content.split('\n')) {
     if (line.startsWith('## ')) {
       if (current) sections.push(current);
-      current = { key: line.replace(/^##\s+/, '').trim(), lines: [line] };
+      current = { key: `[${fileLabel}] ${line.replace(/^##\s+/, '').trim()}`, lines: [line] };
     } else if (line.startsWith('# ') && !current) {
-      current = { key: line.replace(/^#\s+/, '').trim(), lines: [line] };
+      current = { key: `[${fileLabel}] ${line.replace(/^#\s+/, '').trim()}`, lines: [line] };
     } else if (current) {
       current.lines.push(line);
     }
   }
   if (current) sections.push(current);
   return sections.map(s => ({ key: s.key, text: s.lines.join('\n').trim() }));
+}
+
+function _loadChunks() {
+  const all = [];
+  for (const mdPath of SOURCE_FILES) {
+    if (!fs.existsSync(mdPath)) continue;
+    const content  = fs.readFileSync(mdPath, 'utf8');
+    const label    = path.basename(mdPath, '.md'); // e.g. 'claude' or 'user-guide'
+    const sections = _parseMd(content, label);
+    all.push(...sections);
+  }
+  return all;
 }
 
 // ── Voyage AI embedding ────────────────────────────────────────────────────────
@@ -80,12 +98,12 @@ function _keywordSearch(query, k) {
 
 async function init() {
   const raw = _loadChunks();
-  if (!raw.length) { console.log('[rag] claude.md not found — RAG disabled'); return; }
+  if (!raw.length) { console.log('[rag] No source files found — RAG disabled'); return; }
 
   if (!aiConfig.get('VOYAGE_API_KEY')) {
     for (const c of raw) _chunks.push({ key: c.key, text: c.text, vector: null });
     _ready = true;
-    console.log(`[rag] Loaded ${_chunks.length} sections (keyword fallback — no VOYAGE_API_KEY)`);
+    console.log(`[rag] Loaded ${_chunks.length} sections from ${SOURCE_FILES.length} file(s) (keyword fallback — no VOYAGE_API_KEY)`);
     return;
   }
 
@@ -98,7 +116,7 @@ async function init() {
       batch.forEach((c, j) => _chunks.push({ key: c.key, text: c.text, vector: vecs[j] }));
     }
     _ready = true;
-    console.log(`[rag] Embedded ${_chunks.length} sections via Voyage AI`);
+    console.log(`[rag] Embedded ${_chunks.length} sections from ${SOURCE_FILES.length} file(s) via Voyage AI`);
   } catch (err) {
     for (const c of raw) _chunks.push({ key: c.key, text: c.text, vector: null });
     _ready = true;

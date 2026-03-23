@@ -154,12 +154,12 @@ export default function HelpPage() {
   )
 
   return (
-    <div className="flex items-start min-h-full">
+    <div className="flex">
 
       {/* ── TOC sidebar ─────────────────────────────────────────────────────── */}
       <aside
         className="w-52 shrink-0 border-r border-[#D8E6DD] bg-white overflow-y-auto"
-        style={{ position: 'sticky', top: 0, height: '100vh' }}
+        style={{ position: 'sticky', top: 0, height: '100vh', alignSelf: 'flex-start' }}
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
@@ -648,60 +648,160 @@ export default function HelpPage() {
         <H2 id="ai-assistant" icon="🤖" title="AI Assistant" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           The COGS Assistant is a floating AI chat widget (bottom-right of every page) powered by{' '}
-          <strong>Claude Haiku 4.5</strong>. Ask questions about your data in natural language — it
-          queries the live database and streams its answer in real time.
+          <strong>Claude Haiku 4.5</strong>. It combines two complementary knowledge sources —
+          vectorised documentation and live database queries — to answer questions in natural language.
         </p>
 
-        <H3 id="ai-how-it-works">How It Works</H3>
+        <H3 id="ai-how-it-works">How It Works — Two Knowledge Layers</H3>
         <ProcessFlow steps={[
           { label: 'Your question', sub: 'Natural language' },
-          { label: 'RAG retrieval', sub: 'Finds relevant docs' },
+          { label: 'Layer 1: RAG', sub: 'Docs context injected' },
           { label: 'Claude Haiku', sub: 'Interprets request' },
-          { label: 'Tool calls', sub: 'Queries live DB' },
-          { label: 'Streamed reply', sub: 'Real-time response' },
+          { label: 'Layer 2: Tools', sub: 'Queries live DB' },
+          { label: 'SSE stream', sub: 'Response in real time' },
         ]} />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The assistant uses <strong>RAG</strong> (Retrieval-Augmented Generation) to find relevant
-          sections of the COGS documentation and include them as context. It then uses{' '}
-          <strong>function/tool calling</strong> to query live data from your database before answering.
-          Responses are streamed via Server-Sent Events (SSE) — you see text appearing as Claude writes it.
-          Up to 10 messages of conversation history are maintained per chat session.
+          Every request automatically uses both layers simultaneously — Claude receives documentation
+          context <em>and</em> can call tools to fetch live data before constructing its answer.
+          Responses stream via Server-Sent Events so you see text appear as Claude writes it.
+          Up to 10 messages of conversation history are passed per request.
         </p>
 
-        <H3 id="ai-tools">Available Tools</H3>
+        <H3 id="ai-rag">Layer 1 — What Is Vectorised (RAG)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          RAG stands for <strong>Retrieval-Augmented Generation</strong>. At API startup, the system
+          reads a single source file — <Mono>CLAUDE.md</Mono> (the project documentation at the repo
+          root) — splits it into sections by <Mono>##</Mono> heading, and embeds each section using
+          Voyage AI's <Mono>voyage-3-lite</Mono> model.
+        </p>
+
+        <div className="border border-[#D8E6DD] rounded-lg overflow-hidden my-3">
+          <div className="bg-[#F7F9F8] px-3 py-2 border-b border-[#D8E6DD]">
+            <p className="text-xs font-bold text-[#0F1F17]">Source vectorised</p>
+          </div>
+          <div className="p-3">
+            <div className="flex items-start gap-2 mb-2">
+              <span className="text-lg shrink-0">📄</span>
+              <div>
+                <p className="text-sm font-semibold text-[#0F1F17]">CLAUDE.md — Project documentation</p>
+                <p className="text-xs text-[#6B7F74] mt-0.5">~17 sections split by ## headings, each embedded as a separate vector</p>
+              </div>
+            </div>
+            <p className="text-xs text-[#2D4A38] leading-relaxed">
+              Sections include: Project Overview · Tech Stack · Repository Structure · Infrastructure ·
+              Local Dev Setup · CI/CD Pipeline · Auth0 Config · Database Schema · API Routes ·
+              Frontend Architecture · Design System · Pages Built · Known Bugs Fixed · Gotchas &amp;
+              Lessons Learned · Backlog
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          When you ask a question, the query is also embedded and compared to the stored section
+          vectors using <strong>cosine similarity</strong>. The top 4 most relevant sections are
+          retrieved and injected into Claude's system prompt as documentation context — before Claude
+          sees your question.
+        </p>
+        <InfoBox type="info" title="Fallback behaviour">
+          If no <strong>Voyage AI key</strong> is configured, the system falls back to{' '}
+          <strong>keyword search</strong> (simple word-frequency scoring over CLAUDE.md sections).
+          This is less accurate but still functional. Configure your Voyage key in Settings → AI
+          for semantic search quality.
+        </InfoBox>
+        <InfoBox type="warning" title="What RAG does NOT cover">
+          RAG only covers the static <Mono>CLAUDE.md</Mono> documentation. It does not index your
+          live data (ingredients, recipes, prices, etc.) — that is handled by Layer 2 (tools).
+          It also does not index this Help page or any other runtime content.
+        </InfoBox>
+
+        <H3 id="ai-tools">Layer 2 — What the AI Can Query Live (Tools)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Claude has 9 tools that execute real PostgreSQL queries against your live{' '}
+          <Mono>mcogs</Mono> database. Tool calls happen automatically when Claude determines
+          it needs data to answer your question.
+        </p>
         <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
-          <thead><tr><Th>Tool</Th><Th>What It Does</Th></tr></thead>
+          <thead><tr><Th>Tool</Th><Th>DB tables queried</Th><Th>What it returns</Th></tr></thead>
           <tbody>
             {[
-              ['get_dashboard_stats', 'Returns overall counts: ingredients, recipes, menus, vendors, coverage %'],
-              ['list_ingredients',   'Lists all ingredients, filterable by name keyword'],
-              ['get_ingredient',     'Full ingredient details including all price quotes and allergens'],
-              ['list_recipes',       'Lists all recipes, optionally filtered by name keyword'],
-              ['get_recipe',         'Recipe details + all ingredient lines + cost breakdown per country'],
-              ['list_menus',         'Lists all menus, optionally filtered by country'],
-              ['get_menu_cogs',      'Full menu with sell prices and COGS% per item per price level'],
-              ['get_feedback',       'Query submitted feedback tickets by type/status'],
-              ['submit_feedback',    'Create a new bug report, feature request, or general note'],
-            ].map(([tool, desc]) => (
-              <tr key={tool}><Td mono>{tool}</Td><Td>{desc}</Td></tr>
+              ['get_dashboard_stats', 'All mcogs_ tables (COUNT queries)', 'Totals: ingredients, recipes, menus, vendors, markets, coverage %'],
+              ['list_ingredients',   'mcogs_ingredients', 'All ingredients with id, name, category — filterable by name keyword'],
+              ['get_ingredient',     'mcogs_ingredients + mcogs_price_quotes + mcogs_ingredient_allergens', 'Full ingredient: nutrition, all vendor quotes, allergen statuses'],
+              ['list_recipes',       'mcogs_recipes', 'All recipes with id, name — filterable by name keyword'],
+              ['get_recipe',         'mcogs_recipes + mcogs_recipe_items + mcogs_price_quotes (via preferred vendor logic)', 'Recipe header + all ingredient lines + cost per country'],
+              ['list_menus',         'mcogs_menus + mcogs_countries', 'All menus with market name'],
+              ['get_menu_cogs',      'mcogs_menu_items + mcogs_menu_item_prices + cogs calculation', 'Full menu: sell prices + COGS% per item per price level'],
+              ['get_feedback',       'mcogs_feedback', 'Feedback tickets — filterable by type (bug/feature/general) and status'],
+              ['submit_feedback',    'mcogs_feedback (INSERT)', 'Creates a new feedback record — the only write operation available'],
+            ].map(([tool, tables, returns]) => (
+              <tr key={tool}>
+                <Td mono>{tool}</Td>
+                <Td mono>{tables}</Td>
+                <Td>{returns}</Td>
+              </tr>
             ))}
           </tbody>
         </table>
 
-        <H3 id="example-questions">Example Questions</H3>
-        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc">
-          <li>"What is the COGS% for the Classic Burger on the UK menu at eat-in prices?"</li>
-          <li>"Which ingredients have no active price quote?"</li>
-          <li>"List all recipes that contain chicken breast"</li>
-          <li>"What vendors do we have in Germany?"</li>
-          <li>"Show me the allergen status of the Caesar Salad recipe"</li>
-          <li>"What's our total ingredient coverage across all markets?"</li>
-          <li>"Submit a bug report: the PLT isn't saving prices for the France menu"</li>
-        </ul>
-        <InfoBox type="tip">
-          The assistant can <strong>read</strong> all your live data but cannot modify records (except
-          submitting feedback). For data changes, use the relevant pages directly.
+        <H3 id="ai-no-access">What the AI Cannot Access Directly</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The following data is <strong>not exposed via tools</strong>. The AI can discuss these topics
+          using its RAG documentation context (general knowledge about the system), but it cannot
+          query live records for these areas:
+        </p>
+        <div className="grid grid-cols-2 gap-2 my-3">
+          {[
+            { label: 'Markets / Countries', note: 'Can describe the data model but not list your live markets' },
+            { label: 'Vendors', note: 'Can explain vendors but cannot list your actual vendor records' },
+            { label: 'Categories', note: 'Cannot list your ingredient/recipe categories' },
+            { label: 'Tax rates', note: 'Cannot query your configured tax rates' },
+            { label: 'Price levels', note: 'Cannot list your eat-in/takeout/delivery configuration' },
+            { label: 'Settings / Thresholds', note: 'Cannot read your COGS target thresholds or units' },
+            { label: 'HACCP data', note: 'No access to equipment registers, temp logs, or CCP logs' },
+            { label: 'Locations', note: 'Cannot list your store locations or groups' },
+            { label: 'Allergen matrix (menu level)', note: 'Can access allergens via get_ingredient but not menu-level matrix' },
+            { label: 'AI chat logs', note: 'Cannot access its own previous conversation history beyond the current session' },
+          ].map(({ label, note }) => (
+            <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
+              <p className="text-xs font-semibold text-[#0F1F17]">{label}</p>
+              <p className="text-[10px] text-[#6B7F74] mt-0.5 leading-snug">{note}</p>
+            </div>
+          ))}
+        </div>
+        <InfoBox type="tip" title="Getting the best answers">
+          For questions about markets, vendors, categories, or settings — navigate to the relevant page
+          directly. For questions about <strong>ingredient costs, recipe COGS, or menu performance</strong>,
+          the AI can give full answers with live numbers.
         </InfoBox>
+
+        <H3 id="example-questions">Example Questions</H3>
+        <div className="space-y-1.5 my-3">
+          {[
+            { q: '"What is the COGS% for the Classic Burger on the UK menu at eat-in prices?"', layer: 'Tools' },
+            { q: '"Which ingredients have no active price quote?"',                             layer: 'Tools' },
+            { q: '"List all recipes that contain chicken breast"',                              layer: 'Tools' },
+            { q: '"Show me the allergen status of the Caesar Salad recipe"',                   layer: 'Tools' },
+            { q: '"What\'s our total ingredient coverage across all markets?"',                layer: 'Tools' },
+            { q: '"How do I set a preferred vendor for an ingredient?"',                       layer: 'RAG' },
+            { q: '"What does waste % do to the COGS calculation?"',                           layer: 'RAG' },
+            { q: '"Submit a bug report: the PLT isn\'t saving prices for the France menu"',   layer: 'Tools' },
+            { q: '"What is the recommended setup order for a new instance?"',                 layer: 'RAG' },
+          ].map(({ q, layer }) => (
+            <div key={q} className="flex items-start gap-2 text-sm">
+              <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded mt-0.5
+                ${layer === 'Tools' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                {layer}
+              </span>
+              <span className="text-[#2D4A38] italic">{q}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-[#6B7F74] mt-1">
+          <span className="inline-block bg-green-100 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded">Tools</span>
+          {' '}= answered from live DB data &nbsp;·&nbsp;
+          <span className="inline-block bg-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded">RAG</span>
+          {' '}= answered from vectorised CLAUDE.md documentation
+        </p>
 
         {/* ═══════════════════════════════════ ARCHITECTURE */}
         <H2 id="architecture" icon="🏗️" title="System Architecture" />
