@@ -447,20 +447,32 @@ export default function ImportPage() {
                         <select
                           value={m.maps_to_name || ''}
                           onChange={e => {
-                            const found = dbCats.find(c => c.name === e.target.value)
-                            updateMapping(src, { maps_to_name: e.target.value, maps_to_id: found?.id })
+                            if (e.target.value === '__create__') {
+                              updateMapping(src, { action: 'create', suggested_name: src })
+                            } else {
+                              const found = dbCats.find(c => c.name === e.target.value)
+                              updateMapping(src, { maps_to_name: e.target.value, maps_to_id: found?.id })
+                            }
                           }}
-                          className="text-xs rounded px-2 py-1 border border-border bg-white w-full max-w-[180px]">
+                          className="text-xs rounded px-2 py-1 border border-border bg-white w-full max-w-[200px]">
                           <option value="">— select —</option>
                           {[...dbIngCats, ...dbRecCats.filter(c => !dbIngCats.includes(c))].map(c => (
                             <option key={c} value={c}>{c}</option>
                           ))}
+                          <option disabled style={{ borderTop: '1px solid var(--border)' }}>──────────</option>
+                          <option value="__create__">+ Create new category</option>
                         </select>
                       ) : (
-                        <input
-                          type="text" value={m.suggested_name || src}
-                          onChange={e => updateMapping(src, { suggested_name: e.target.value })}
-                          className="text-xs rounded px-2 py-1 border border-border bg-white w-full max-w-[180px] outline-none focus:border-accent" />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text" value={m.suggested_name || src}
+                            onChange={e => updateMapping(src, { suggested_name: e.target.value })}
+                            className="text-xs rounded px-2 py-1 border border-border bg-white w-full max-w-[150px] outline-none focus:border-accent" />
+                          <button
+                            title="Switch back to map existing"
+                            onClick={() => updateMapping(src, { action: 'map', suggested_name: undefined })}
+                            className="text-text-3 hover:text-accent text-xs leading-none px-1">✕</button>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-2.5">
