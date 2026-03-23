@@ -194,6 +194,9 @@ router.post('/', (req, res, next) => {
   let history = [];
   try { context = JSON.parse(req.body.context || '{}'); } catch {}
   try { history = JSON.parse(req.body.history || '[]'); } catch {}
+  const sessionId  = req.body.sessionId  || null;
+  const userEmail  = req.body.userEmail  || null;
+  const userSub    = req.body.userSub    || null;
 
   // SSE headers
   res.setHeader('Content-Type',  'text/event-stream');
@@ -297,8 +300,9 @@ router.post('/', (req, res, next) => {
     await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool, res });
 
   pool.query(
-    `INSERT INTO mcogs_ai_chat_log (user_message, response, tools_called, context, tokens_in, tokens_out, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO mcogs_ai_chat_log
+       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       message || `[file: ${file?.originalname}]`,
       responseText,
@@ -307,6 +311,9 @@ router.post('/', (req, res, next) => {
       tokensIn,
       tokensOut,
       errorMsg,
+      userEmail,
+      userSub,
+      sessionId,
     ]
   ).catch(e => console.error('[ai-upload] log error:', e.message));
 });

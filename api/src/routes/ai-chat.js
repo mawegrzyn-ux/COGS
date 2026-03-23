@@ -1064,7 +1064,7 @@ router.post('/', async (req, res) => {
     return res.status(503).json({ error: { message: 'Anthropic API key is not configured. Add it in Settings → AI.' } });
   }
 
-  const { message, context = {}, history = [] } = req.body;
+  const { message, context = {}, history = [], sessionId, userEmail, userSub } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: { message: 'message is required' } });
 
   // SSE headers
@@ -1088,9 +1088,12 @@ router.post('/', async (req, res) => {
 
   // Log to DB (best-effort)
   pool.query(
-    `INSERT INTO mcogs_ai_chat_log (user_message, response, tools_called, context, tokens_in, tokens_out, error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [message, responseText, JSON.stringify(toolsCalled), JSON.stringify(context), tokensIn, tokensOut, errorMsg]
+    `INSERT INTO mcogs_ai_chat_log
+       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [message, responseText, JSON.stringify(toolsCalled), JSON.stringify(context),
+     tokensIn, tokensOut, errorMsg,
+     userEmail || null, userSub || null, sessionId || null]
   ).catch(e => console.error('[ai-chat] log error:', e.message));
 });
 
@@ -1112,6 +1115,57 @@ router.get('/log', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch chat log' } });
+  }
+});
+
+// ── GET /ai-chat/sessions — list sessions for a user ─────────────────────────
+// Returns sessions grouped by session_id, newest first.
+// Query params: user_sub (required), limit (default 30)
+
+router.get('/sessions', async (req, res) => {
+  const { user_sub, limit = 30 } = req.query;
+  if (!user_sub) return res.status(400).json({ error: { message: 'user_sub is required' } });
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        session_id,
+        MIN(created_at)                                         AS started_at,
+        MAX(created_at)                                         AS last_active_at,
+        COUNT(*)::int                                           AS turns,
+        (array_agg(user_message ORDER BY created_at ASC))[1]   AS first_message,
+        (array_agg(user_message ORDER BY created_at DESC))[1]  AS last_message
+      FROM mcogs_ai_chat_log
+      WHERE user_sub = $1 AND session_id IS NOT NULL
+      GROUP BY session_id
+      ORDER BY MAX(created_at) DESC
+      LIMIT $2
+    `, [user_sub, parseInt(limit, 10)]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch sessions' } });
+  }
+});
+
+// ── GET /ai-chat/sessions/:session_id — load all turns in a session ───────────
+// Returns rows ordered by created_at ASC so the frontend can reconstruct the
+// message array as alternating user/assistant bubbles.
+
+router.get('/sessions/:session_id', async (req, res) => {
+  const { session_id } = req.params;
+  const { user_sub }   = req.query;
+  if (!user_sub) return res.status(400).json({ error: { message: 'user_sub is required' } });
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, created_at, user_message, response, tools_called, tokens_in, tokens_out
+      FROM mcogs_ai_chat_log
+      WHERE session_id = $1 AND user_sub = $2
+      ORDER BY created_at ASC
+    `, [session_id, user_sub]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch session' } });
   }
 });
 

@@ -321,21 +321,28 @@ If an item shows amber or red, options are: (1) raise the sell price in PLT, (2)
 
 ## McFry AI Assistant: What It Can and Cannot Do
 
-McFry is a floating AI chat widget at the bottom-right of every page. It is powered by Claude Haiku 4.5 and uses two knowledge layers: vectorised documentation (RAG) and live database tools.
+McFry is a floating AI chat widget at the bottom-right of every page. It is powered by Claude Haiku 4.5 and uses two knowledge layers: vectorised documentation (RAG) and 35 live database tools that cover every entity in the system.
 
-The AI can answer questions about:
-- Ingredient costs, recipe COGS%, and menu performance — using live database tools
-- How features work, setup instructions, process explanations — using documentation RAG
-- Troubleshooting guidance — using documentation RAG
-- Feedback submission (bug reports, feature requests) — using live database tool
+McFry can read AND write to the database. It acts as a full AI system administrator — not just answering questions but creating, updating, and deleting records on your behalf.
 
-The AI cannot directly query:
-- Markets, vendors, categories, settings, tax rates — no live tools for these
-- HACCP equipment and logs — no live tools for these
-- Locations and location groups — no live tools for these
-- Its own previous conversation history beyond the current chat session
+What McFry can do:
+- Answer questions about live data: ingredients, recipes, menus, vendors, price quotes, markets, categories, units, and price levels
+- Create new records: ingredients, vendors, price quotes, preferred vendor assignments, recipes, recipe items, menus, menu items, menu item prices, and categories
+- Update existing records: edit ingredient details, vendor info, price quotes, recipes, and recipe line items
+- Delete records: remove ingredients, vendors, price quotes, recipe items, and entire menus (with cascade warning)
+- Analyse uploaded files: read CSV/Excel data and import records row by row; extract structured data from Word documents, PowerPoints, PDF invoices/recipe cards; identify data from images of labels, menus, and invoices
+- Submit and retrieve feedback tickets
+- Explain how any feature works using the documentation knowledge base
 
-For the best results, ask about ingredient costs, recipe costs, menu COGS%, or coverage stats for live data answers. Ask "how do I..." or "what does X mean?" for documentation-based answers.
+Safety behaviour: McFry always asks for confirmation before creating, updating, or deleting any records. For batch imports (more than 3 rows from a file), it describes the full plan once and asks once before proceeding. For delete_menu, McFry will explicitly warn that all menu items and prices will also be deleted.
+
+What McFry cannot do:
+- Write to HACCP records (equipment, temperature logs, CCP logs) — no tools for these
+- Write to market/country tax configuration — use the Markets page for this
+- Update Settings (units, price levels, COGS thresholds) — use the Settings page
+- Access conversation history from a different browser session (though all turns are saved to the database and can be reloaded from the History panel)
+
+For the best results: Ask McFry to "create an ingredient called X", "show me the COGS for recipe Y", "import this CSV of ingredients", or "what does waste percentage mean?" — it will use the right tools automatically.
 
 ---
 
@@ -355,27 +362,139 @@ What RAG does not cover: RAG does not index live data (ingredients, recipes, pri
 
 ---
 
-## AI Assistant: Live Database Tools
+## McFry AI Assistant: Live Database Tools
 
-Claude has 9 tools that run real queries against the live mcogs PostgreSQL database. Tools are called automatically when Claude determines it needs data to answer your question.
+McFry has 35 tools that run against the live mcogs PostgreSQL database. Tools are selected automatically based on your request. McFry always resolves names to IDs using list tools before making any write calls — it never guesses IDs.
 
-get_dashboard_stats: Returns total counts of ingredients, recipes, menus, vendors, markets, and the price quote coverage percentage. Queries all mcogs_ tables.
+Read and lookup tools (15):
 
-list_ingredients: Lists all ingredients with id, name, and category. Accepts an optional name search filter (case-insensitive partial match). Use this before get_ingredient to find an ID.
+get_dashboard_stats: Returns total counts of ingredients, recipes, menus, vendors, markets, and the price quote coverage percentage.
 
-get_ingredient: Returns full details for a single ingredient including nutrition data, all vendor price quotes (active and inactive), and allergen statuses for all 14 EU FIC allergens. Requires ingredient ID.
+list_ingredients: Lists all ingredients with id, name, and category. Accepts an optional name search filter (case-insensitive partial match).
+
+get_ingredient: Returns full details for a single ingredient including nutrition, all vendor price quotes, and allergen statuses for all 14 EU FIC allergens.
 
 list_recipes: Lists all recipes with id and name. Accepts an optional name search filter.
 
-get_recipe: Returns a recipe with all its ingredient lines, quantities, units, and the cost breakdown per country. Uses preferred vendor pricing per market. Requires recipe ID.
+get_recipe: Returns a recipe with all ingredient lines, quantities, units, and cost breakdown per country using preferred vendor pricing.
 
-list_menus: Lists all menus with id, name, and market (country) name.
+list_menus: Lists all menus with id, name, and market.
 
-get_menu_cogs: Returns all menu items for a specific menu with their sell prices per price level and the calculated COGS% per item per price level. Requires menu ID.
+get_menu_cogs: Returns menu items with sell prices per price level and calculated COGS% per item.
 
-get_feedback: Returns submitted feedback tickets. Filterable by type (bug, feature, general) and status (open, in_progress, resolved).
+get_feedback: Returns submitted feedback tickets, filterable by type and status.
 
-submit_feedback: Creates a new feedback record in the database. This is the only write operation the AI can perform. Requires type and title. Submitting feedback through the AI is equivalent to submitting via the app UI.
+list_vendors: Lists all vendors with id, name, and country. Accepts optional country_id filter.
+
+list_markets: Lists all markets (countries) with id, name, currency code, currency symbol, and exchange rate.
+
+list_categories: Lists ingredient and recipe categories. Accepts optional type filter (ingredient or recipe).
+
+list_units: Lists all units of measurement with id, name, abbreviation, and type.
+
+list_price_levels: Lists all price levels with id, name, description, and default flag.
+
+list_price_quotes: Lists price quotes with optional filters for ingredient_id, vendor_id, and is_active. Returns computed price per base unit.
+
+submit_feedback: Creates a new feedback record. Requires type (bug, feature, or general) and title.
+
+Create tools (10):
+
+create_ingredient: Creates a new ingredient. Required: name. Optional: category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes. If the category name does not exist, it is created automatically.
+
+create_vendor: Creates a new vendor. Required: name. Optional: country_id, contact, email, phone, notes.
+
+create_price_quote: Creates a price quote linking a vendor to an ingredient at a price. Required: ingredient_id, vendor_id, purchase_price, qty_in_base_units. Optional: purchase_unit, is_active, vendor_product_code.
+
+set_preferred_vendor: Sets (or replaces) the preferred vendor for an ingredient in a specific market. Required: ingredient_id, country_id, vendor_id, quote_id. One preferred vendor is allowed per ingredient per market.
+
+create_recipe: Creates a new recipe. Required: name. Optional: category, description, yield_qty, yield_unit_id.
+
+add_recipe_item: Adds an ingredient or sub-recipe line to a recipe. Required: recipe_id, item_type (ingredient or recipe), prep_qty. Also requires ingredient_id or recipe_item_id depending on type. Optional: prep_unit, prep_to_base_conversion.
+
+create_menu: Creates a new menu for a market. Required: name, country_id. Optional: description.
+
+add_menu_item: Adds an item to a menu. Required: menu_id, item_type (recipe or ingredient), display_name. Also requires recipe_id or ingredient_id. Optional: qty, sell_price.
+
+set_menu_item_price: Sets (or updates) the sell price for a menu item at a specific price level. Required: menu_item_id, price_level_id, sell_price. Optional: tax_rate_id.
+
+create_category: Creates a new ingredient or recipe category. Required: name, type (ingredient or recipe). Optional: group_name, sort_order.
+
+Update tools (5):
+
+update_ingredient: Updates an existing ingredient. Required: id, name. Optional: category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes.
+
+update_vendor: Updates an existing vendor. Required: id, name. Optional: country_id, contact, email, phone, notes.
+
+update_price_quote: Updates price and quantity on an existing quote. Required: id, purchase_price, qty_in_base_units. Optional: purchase_unit, is_active, vendor_product_code. Does not require re-supplying ingredient_id or vendor_id.
+
+update_recipe: Updates recipe header fields. Required: id, name. Optional: category, description, yield_qty, yield_unit_id.
+
+update_recipe_item: Updates a recipe line item's quantity or conversion. Required: recipe_id, item_id, prep_qty. Optional: prep_unit, prep_to_base_conversion.
+
+Delete tools (5):
+
+delete_ingredient: Deletes an ingredient by id. Returns an error if the ingredient is used in recipes or has price quotes (foreign key violation) — McFry will offer to resolve dependencies first.
+
+delete_vendor: Deletes a vendor by id. Returns an error if the vendor has price quotes — McFry will offer to remove those first.
+
+delete_price_quote: Deletes a price quote by id.
+
+delete_recipe_item: Removes a line item from a recipe. Required: recipe_id, item_id.
+
+delete_menu: Deletes a menu and all its items and prices (cascade). McFry will always warn about the cascade before confirming this action.
+
+---
+
+## McFry AI Assistant: File Upload and Document Analysis
+
+McFry accepts file attachments via the paperclip icon in the chat input. Attach a file and optionally add a message to describe what you want done with it.
+
+Supported file types and how they are processed:
+
+CSV (.csv) and plain text (.txt): The file content is read as UTF-8 text and sent directly to McFry. Use this for bulk ingredient imports — prepare a CSV with columns like name, category, waste_pct and McFry will parse every row, show you the full import plan, and ask for confirmation before creating any records.
+
+Excel spreadsheets (.xlsx, .xls, .xlsb, .xlsm): Converted to CSV automatically using SheetJS. All sheets are included, each labelled with the sheet name. Multi-sheet workbooks work — McFry will process each sheet in turn.
+
+Word documents (.docx): Text is extracted using mammoth. Useful for uploading a recipe card, ingredient specification sheet, or supplier document. McFry reads the text and identifies structured data you can import.
+
+PowerPoint presentations (.pptx): Text is extracted from each slide. McFry will summarise the slides and identify any structured data (ingredient lists, pricing tables, recipe details).
+
+PDF files: Sent natively to Claude as a document block. Claude reads the full PDF layout including tables, images, and scanned content. Ideal for vendor invoices, recipe books, nutrition data sheets, and price lists. This is the highest-fidelity file format — no information is lost in conversion.
+
+Images (.png, .jpg, .jpeg, .webp): Sent as vision blocks. McFry analyses the image visually and extracts all relevant data fields — prices, product names, quantities, ingredients, weights. Use this for photos of handwritten recipe cards, printed invoices, product labels, and nutrition panels.
+
+Maximum file size: 10 MB per upload.
+
+How the confirmation workflow works:
+1. Attach your file (and optionally type a message like "import these as ingredients")
+2. McFry reads the file, summarises what it found, and describes the full import plan (number of rows, fields identified, sample data)
+3. McFry asks "Shall I proceed?" — review the plan carefully
+4. Confirm, and McFry creates all records using its create tools
+
+Tip: For a bulk ingredient import from CSV, include columns for name, category, and waste_pct. McFry will map these to the correct fields and create any categories that do not already exist.
+
+---
+
+## McFry AI Assistant: Chat History and Sessions
+
+Every conversation with McFry is automatically saved to the database with a full audit trail. No manual save is required.
+
+What is stored per turn: Your message, McFry's response, the list of tools called (as JSON), token counts, and the timestamp. All turns in a session share a session ID so the conversation can be reassembled.
+
+Session identity: Each time you open a fresh chat, McFry generates a new session ID (a UUID). If you click the history icon (clock) and reload a past session, that session's ID is resumed — new turns are appended to the same session in the database.
+
+User identity: If you are logged in, your email and Auth0 user ID (user_sub) are attached to every turn. This means session history is personal — you see only your own past conversations.
+
+How to access your history:
+1. Click the clock icon in the McFry panel header
+2. The History panel lists all your previous sessions grouped by date: Today, Yesterday, This Week, and Older
+3. Each session shows the first message, when it was active, and how many turns it contains
+4. Click any session to load it — McFry will restore the full conversation and you can continue from where you left off
+
+Starting a new chat: Click the plus (+) icon in the McFry panel header. This clears the current messages and generates a new session ID. Your current session is already saved — you can return to it via History at any time.
+
+How chat history relates to the RAG knowledge base: Chat history is NOT embedded into the Voyage AI vector store. The RAG knowledge base contains only curated documentation (this user guide and the technical project docs). Embedding chat history into RAG would pollute the documentation index with ephemeral, user-specific conversation data. Instead, past sessions are loaded as context — if you resume a session, McFry receives those turns as its conversation history and picks up naturally where it left off. This is the recommended approach: RAG stays clean and general; history loading is personalised and specific.
 
 ---
 
@@ -407,15 +526,21 @@ Cause 3: The target currency selector in PLT is set to the wrong currency. Solut
 
 ---
 
-## Troubleshooting: AI Assistant Not Working
+## Troubleshooting: McFry AI Assistant Not Working
 
-If the AI assistant shows "API key not configured": Go to Settings → AI tab and enter your Anthropic API key (starts with sk-ant-...). Get one at console.anthropic.com. The key is stored securely in the database.
+If McFry shows "API key not configured": Go to Settings → AI tab and enter your Anthropic API key (starts with sk-ant-...). Get one at console.anthropic.com. The key is stored securely in the database.
 
-If the AI assistant is unresponsive or times out: The Anthropic API may be temporarily unavailable. Try again in a few minutes. Check status at status.anthropic.com.
+If McFry is unresponsive or times out: The Anthropic API may be temporarily unavailable. Try again in a few minutes. Check status at status.anthropic.com.
 
-If the AI gives vague or incorrect answers about your data: The AI relies on database tools for live data. If asking about a specific ingredient, recipe, or menu, make sure you're asking clearly (include the name). The AI will call list_ingredients or list_recipes first to find the ID, then fetch details.
+If McFry gives vague or incorrect answers about your data: McFry uses list tools first to resolve names to IDs, then fetches details. Ask clearly — include the ingredient, recipe, or menu name. For example: "Show me the COGS for the Classic Burger recipe" works better than "what does that burger cost?"
 
-If the Voyage AI key is not set, the RAG falls back to keyword search which may retrieve less relevant documentation sections. Configure the Voyage key in Settings → AI for better context quality.
+If a file upload fails with an unsupported type error: Only CSV, TXT, PDF, XLSX, XLS, DOCX, PPTX, PNG, JPG, and WebP are accepted. Files larger than 10 MB will be rejected.
+
+If McFry performs a write operation without asking first: This should not happen — the system prompt requires verbal confirmation before every create, update, or delete call. If it does occur, use Inventory / Recipes / Menus to manually revert the change, and submit feedback via McFry ("submit a bug report about...") so it can be investigated.
+
+If the Voyage AI key is not set: RAG falls back to keyword search, which may retrieve less relevant documentation sections. Configure the Voyage key in Settings → AI for semantic search quality.
+
+If session history is not loading: History requires your Auth0 user sub (the stable user ID) to be present. Ensure you are logged in before trying to view history. If turns are missing, they may have been made before session tracking was enabled.
 
 ---
 
