@@ -1470,15 +1470,6 @@ function KpiCard({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-function CogsKpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-surface-2 rounded-lg p-3">
-      <div className="text-xs text-text-3 mb-1">{label}</div>
-      <div className="text-lg font-bold font-mono text-text-1">{value}</div>
-    </div>
-  )
-}
-
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function PlusIcon({ size = 14 }: { size?: number }) {
