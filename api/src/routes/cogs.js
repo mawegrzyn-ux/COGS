@@ -176,6 +176,7 @@ router.get('/menu/:menu_id', async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT mi.*,
              r.name         AS recipe_name,
+             r.category     AS recipe_category,
              r.yield_qty,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr,
@@ -291,6 +292,7 @@ router.get('/menu/:menu_id', async (req, res) => {
         ingredient_id:   item.ingredient_id || null,
         display_name:    display,
         recipe_name:     display,
+        category:        item.recipe_category || '',
         qty,
         base_unit_abbr:  item.base_unit_abbr || '',
         cost_per_portion: cpp,
@@ -308,7 +310,10 @@ router.get('/menu/:menu_id', async (req, res) => {
     }
 
     res.json({
-      menu_id: menuId,
+      menu_id:         menuId,
+      currency_code:   menu.currency_code   || '',
+      currency_symbol: menu.currency_symbol || '',
+      exchange_rate:   Number(menu.exchange_rate) || 1,
       items: outItems,
       summary: {
         total_cost:         Math.round(totalCost      * 10000) / 10000,

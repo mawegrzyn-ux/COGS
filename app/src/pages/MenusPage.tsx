@@ -52,6 +52,7 @@ interface CogsItem {
   ingredient_id:    number | null
   display_name:     string
   recipe_name:      string
+  category:         string
   qty:              number
   base_unit_abbr:   string
   cost_per_portion: number
@@ -76,9 +77,12 @@ interface CogsSummary {
 }
 
 interface CogsData {
-  menu_id: number
-  items: CogsItem[]
-  summary: CogsSummary
+  menu_id:         number
+  currency_code:   string
+  currency_symbol: string
+  exchange_rate:   number
+  items:           CogsItem[]
+  summary:         CogsSummary
 }
 
 // Price report types
@@ -145,7 +149,7 @@ export default function MenusPage() {
   const [loading,         setLoading]         = useState(true)
 
   // tab
-  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report'>('builder')
+  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report' | 'scenario'>('builder')
 
   // builder state
   const [selectedMenuId,  setSelectedMenuId]  = useState<number | null>(null)
@@ -186,6 +190,13 @@ export default function MenusPage() {
   const [priceSearch,        setPriceSearch]        = useState('')
   const [priceCat,           setPriceCat]           = useState('')
 
+
+  // scenario tool
+  const [scenarioMenuId,  setScenarioMenuId]  = useState<number | null>(null)
+  const [scenarioLevelId, setScenarioLevelId] = useState<number | ''>('')
+  const [scenarioData,    setScenarioData]    = useState<CogsData | null>(null)
+  const [scenarioLoading, setScenarioLoading] = useState(false)
+  const [scenarioQty,     setScenarioQty]     = useState<Record<number, string>>({})
 
   // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
@@ -491,6 +502,18 @@ export default function MenusPage() {
     if (activeTab === 'level-report' && lrCountryId) loadLevelReport(Number(lrCountryId))
   }, [activeTab, lrCountryId]) // eslint-disable-line
 
+  useEffect(() => {
+    if (activeTab !== 'scenario' || !scenarioMenuId) { setScenarioData(null); return }
+    setScenarioLoading(true)
+    const url = scenarioLevelId
+      ? `/cogs/menu/${scenarioMenuId}?price_level_id=${scenarioLevelId}`
+      : `/cogs/menu/${scenarioMenuId}`
+    api.get(url)
+      .then((d: CogsData) => setScenarioData(d))
+      .catch(() => {})
+      .finally(() => setScenarioLoading(false))
+  }, [activeTab, scenarioMenuId, scenarioLevelId, api]) // eslint-disable-line
+
   // saveLrPrice: saves gross price, converting from display currency back to local if needed
   async function saveLrPrice(menuItemId: number, levelId: number, grossInDisplay: number) {
     const key = `${menuItemId}_${levelId}`
@@ -538,6 +561,7 @@ export default function MenusPage() {
           { key: 'builder',      label: '🍽 Menus' },
           { key: 'price-report', label: '📈 Price Level Tool' },
           { key: 'level-report', label: '🏷 Market Price Tool' },
+          { key: 'scenario',     label: '📊 Scenario' },
         ] as const).map(t => (
           <button
             key={t.key}
@@ -679,6 +703,24 @@ export default function MenusPage() {
           onSearch={setLrSearch}
           onSavePrice={saveLrPrice}
           showToast={showToast}
+        />
+      )}
+
+      {/* ══ TAB: SCENARIO ═══════════════════════════════════════════════════ */}
+      {activeTab === 'scenario' && (
+        <ScenarioTool
+          menus={menus}
+          countries={countries}
+          priceLevels={priceLevels}
+          data={scenarioData}
+          loading={scenarioLoading}
+          menuId={scenarioMenuId}
+          levelId={scenarioLevelId}
+          qty={scenarioQty}
+          onMenuChange={id => { setScenarioMenuId(id); setScenarioQty({}) }}
+          onLevelChange={setScenarioLevelId}
+          onQtyChange={(itemId, q) => setScenarioQty(prev => ({ ...prev, [itemId]: q }))}
+          onResetQty={() => setScenarioQty({})}
         />
       )}
 
@@ -1760,6 +1802,369 @@ function MarketPriceTool({
               </table>
             </div>
           </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Scenario Tool ─────────────────────────────────────────────────────────────
+
+interface ScenarioToolProps {
+  menus:       Menu[]
+  countries:   Country[]
+  priceLevels: PriceLevel[]
+  data:        CogsData | null
+  loading:     boolean
+  menuId:      number | null
+  levelId:     number | ''
+  qty:         Record<number, string>
+  onMenuChange(id: number | null): void
+  onLevelChange(id: number | ''): void
+  onQtyChange(itemId: number, q: string): void
+  onResetQty(): void
+}
+
+function ScenarioTool({
+  menus, countries, priceLevels, data, loading, menuId, levelId, qty,
+  onMenuChange, onLevelChange, onQtyChange, onResetQty,
+}: ScenarioToolProps) {
+
+  const [dispCurrCode, setDispCurrCode] = useState<string>('')
+
+  // Reset display currency when menu changes
+  useEffect(() => { setDispCurrCode('') }, [menuId])
+
+  // Currency resolution
+  const menuCountry = useMemo(() => {
+    const menu = menus.find(m => m.id === menuId)
+    return menu ? countries.find(c => c.id === menu.country_id) ?? null : null
+  }, [menus, countries, menuId])
+
+  const marketRate = Number(menuCountry?.exchange_rate ?? 1)
+
+  const currencyOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: { value: string; label: string; sym: string }[] = []
+    if (menuCountry) {
+      opts.push({ value: '', label: `${menuCountry.currency_code} ${menuCountry.currency_symbol} (market)`, sym: menuCountry.currency_symbol })
+      seen.add(menuCountry.currency_code)
+    }
+    for (const c of countries) {
+      if (!seen.has(c.currency_code)) {
+        seen.add(c.currency_code)
+        opts.push({ value: c.currency_code, label: `${c.currency_code} ${c.currency_symbol}`, sym: c.currency_symbol })
+      }
+    }
+    if (!seen.has('USD')) opts.push({ value: '__BASE__', label: 'USD $ (base)', sym: '$' })
+    return opts
+  }, [countries, menuCountry])
+
+  const { dispRate, dispSym } = useMemo(() => {
+    if (!dispCurrCode || !menuCountry) return { dispRate: 1, dispSym: menuCountry?.currency_symbol ?? '' }
+    if (dispCurrCode === '__BASE__') return { dispRate: 1 / marketRate, dispSym: '$' }
+    const t = countries.find(c => c.currency_code === dispCurrCode)
+    return t ? { dispRate: Number(t.exchange_rate) / marketRate, dispSym: t.currency_symbol }
+             : { dispRate: 1, dispSym: menuCountry.currency_symbol }
+  }, [dispCurrCode, menuCountry, marketRate, countries])
+
+  // ── Per-item scenario calculations ────────────────────────────────────────
+
+  interface ScenRow {
+    menu_item_id: number
+    display_name: string
+    category:     string
+    item_type:    string
+    cost:         number
+    price:        number
+    qty:          number
+    revenue:      number
+    total_cost:   number
+    gp:           number
+    cogs_pct:     number | null
+  }
+
+  const rows = useMemo((): ScenRow[] => {
+    if (!data?.items) return []
+    return data.items.map(item => {
+      const q         = Math.max(0, parseFloat(qty[item.menu_item_id] || '0') || 0)
+      const cost      = item.cost_per_portion * dispRate
+      const price     = item.sell_price_gross * dispRate
+      const revenue   = q * price
+      const totalCost = q * cost
+      return {
+        menu_item_id: item.menu_item_id,
+        display_name: item.display_name,
+        category:     item.category || 'Uncategorised',
+        item_type:    item.item_type,
+        cost, price, qty: q, revenue,
+        total_cost:   totalCost,
+        gp:           revenue - totalCost,
+        cogs_pct:     revenue > 0 ? (totalCost / revenue) * 100 : null,
+      }
+    })
+  }, [data, qty, dispRate])
+
+  const totalQty     = rows.reduce((s, r) => s + r.qty, 0)
+  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0)
+  const totalCost    = rows.reduce((s, r) => s + r.total_cost, 0)
+  const totalGP      = totalRevenue - totalCost
+  const overallCogs  = totalRevenue > 0 ? (totalCost / totalRevenue) * 100 : null
+
+  const categorised = useMemo(() => {
+    const map: Record<string, ScenRow[]> = {}
+    for (const r of rows) {
+      if (!map[r.category]) map[r.category] = []
+      map[r.category].push(r)
+    }
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+  }, [rows])
+
+  // ── Formatters ────────────────────────────────────────────────────────────
+
+  const fmtMoney = (n: number) =>
+    `${dispSym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtPct   = (n: number | null) => n != null ? `${n.toFixed(1)}%` : '—'
+  const fmtMix   = (n: number, total: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '—'
+
+  const cogsColour = (pct: number | null) => {
+    if (pct === null) return 'text-gray-300'
+    if (pct <= 28)   return 'text-emerald-600 font-semibold'
+    if (pct <= 35)   return 'text-amber-500 font-semibold'
+    return 'text-red-500 font-semibold'
+  }
+
+  // ── CSV Export ────────────────────────────────────────────────────────────
+
+  function exportCSV() {
+    if (!data) return
+    const header = ['Item', 'Category', 'Type', 'Cost/ptn', 'Sell Price', 'Qty', 'Sales Mix%', 'Revenue', 'Rev Mix%', 'Total Cost', 'COGS%']
+    const csvRows: string[][] = [header]
+    for (const [cat, catRows] of categorised) {
+      const cQ = catRows.reduce((s, r) => s + r.qty, 0)
+      const cR = catRows.reduce((s, r) => s + r.revenue, 0)
+      const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+      const cP = cR > 0 ? (cC / cR) * 100 : null
+      csvRows.push([`── ${cat}`, '', '', '', '', String(cQ), fmtMix(cQ, totalQty), cR.toFixed(2), fmtMix(cR, totalRevenue), cC.toFixed(2), fmtPct(cP)])
+      for (const r of catRows) {
+        csvRows.push([r.display_name, r.category, r.item_type, r.cost.toFixed(2), r.price.toFixed(2), String(r.qty), fmtMix(r.qty, totalQty), r.revenue.toFixed(2), fmtMix(r.revenue, totalRevenue), r.total_cost.toFixed(2), fmtPct(r.cogs_pct)])
+      }
+    }
+    csvRows.push(['TOTAL', '', '', '', '', String(totalQty), '100%', totalRevenue.toFixed(2), '100%', totalCost.toFixed(2), fmtPct(overallCogs)])
+    const csv = csvRows.map(r => r.map(v => `"${v.replace(/"/g, '""')}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'sales-scenario.csv'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const hasQty = rows.some(r => r.qty > 0)
+
+  return (
+    <div className="flex-1 overflow-auto p-6">
+      <div className="bg-white rounded-lg border border-gray-200">
+
+        {/* Toolbar */}
+        <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
+          <span className="font-semibold text-gray-700 text-sm">📊 Sales Mix Scenario</span>
+
+          <div className="flex items-center gap-1.5 ml-2">
+            <span className="text-xs text-gray-400">Menu</span>
+            <select
+              className="select select-sm min-w-[200px]"
+              value={menuId ?? ''}
+              onChange={e => onMenuChange(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">— Select menu —</option>
+              {menus.map(m => <option key={m.id} value={m.id}>{m.name} ({m.country_name})</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">Level</span>
+            <select
+              className="select select-sm"
+              value={levelId}
+              onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}
+            >
+              <option value="">— No level —</option>
+              {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>)}
+            </select>
+          </div>
+
+          {menuCountry && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-gray-400">Display</span>
+              <select
+                className="select select-sm"
+                value={dispCurrCode}
+                onChange={e => setDispCurrCode(e.target.value)}
+              >
+                {currencyOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div className="flex gap-2 ml-auto items-center">
+            {hasQty && (
+              <button className="btn btn-sm btn-outline text-xs" onClick={onResetQty}>Reset Qty</button>
+            )}
+            {data && hasQty && (
+              <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>
+            )}
+          </div>
+        </div>
+
+        {/* KPI Strip */}
+        {data && (
+          <div className="px-4 py-3 border-b border-gray-100 grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {[
+              { label: 'Total Covers',     value: totalQty > 0 ? totalQty.toLocaleString() : '—',        cls: 'text-gray-900' },
+              { label: `Revenue`,          value: hasQty ? fmtMoney(totalRevenue) : '—',                 cls: 'text-blue-700' },
+              { label: `Total Cost`,       value: hasQty ? fmtMoney(totalCost) : '—',                    cls: 'text-gray-700' },
+              { label: `GP`,               value: hasQty ? fmtMoney(totalGP) : '—',                      cls: totalGP >= 0 ? 'text-emerald-600' : 'text-red-600' },
+              { label: 'Overall COGS %',   value: hasQty ? fmtPct(overallCogs) : '—',                    cls: cogsColour(overallCogs) },
+            ].map(kpi => (
+              <div key={kpi.label} className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
+                <div className="text-xs text-gray-400 mb-0.5">{kpi.label}</div>
+                <div className={`text-xl font-bold font-mono ${kpi.cls}`}>{kpi.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!menuId && (
+          <div className="p-16 text-center text-sm text-gray-400">
+            <div className="text-3xl mb-3">📊</div>
+            <p className="font-medium text-gray-500 mb-1">Sales Mix Scenario</p>
+            <p>Select a menu and price level above, then enter sales quantities to model your COGS and revenue.</p>
+          </div>
+        )}
+        {menuId && !levelId && (
+          <div className="px-4 py-2.5 bg-yellow-50 text-yellow-700 text-xs border-b border-yellow-100">
+            Select a price level above to see sell prices and revenue calculations.
+          </div>
+        )}
+        {menuId && loading && <div className="p-12 text-center"><Spinner /></div>}
+
+        {menuId && !loading && data && data.items.length === 0 && (
+          <div className="p-8 text-center text-sm text-gray-400">No items in this menu.</div>
+        )}
+
+        {menuId && !loading && data && data.items.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Item</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Type</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost/ptn</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Price</th>
+                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px]">Qty Sold</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Sales Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Revenue</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Rev Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Total Cost</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">COGS %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {categorised.map(([cat, catRows]) => {
+                  const cQ = catRows.reduce((s, r) => s + r.qty, 0)
+                  const cR = catRows.reduce((s, r) => s + r.revenue, 0)
+                  const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+                  const cP = cR > 0 ? (cC / cR) * 100 : null
+                  return (
+                    <>
+                      {/* ── Category header row ── */}
+                      <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
+                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide" colSpan={4}>
+                          {cat}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                          {cQ > 0 ? cQ.toLocaleString() : '—'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{fmtMix(cQ, totalQty)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                          {cR > 0 ? fmtMoney(cR) : '—'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{cR > 0 ? fmtMix(cR, totalRevenue) : '—'}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                          {cC > 0 ? fmtMoney(cC) : '—'}
+                        </td>
+                        <td className={`px-3 py-1.5 text-right text-xs ${cogsColour(cP)}`}>{fmtPct(cP)}</td>
+                      </tr>
+
+                      {/* ── Item rows ── */}
+                      {catRows.map(row => (
+                        <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
+                          <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
+                          <td className="px-3 py-2.5">
+                            <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
+                          <td className="px-3 py-2.5 text-right font-mono text-xs">
+                            {row.price > 0
+                              ? fmtMoney(row.price)
+                              : <span className="text-gray-300">no price</span>}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={qty[row.menu_item_id] ?? ''}
+                              onChange={e => onQtyChange(row.menu_item_id, e.target.value)}
+                              placeholder="0"
+                              className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-xs text-gray-500">
+                            {row.qty > 0 ? fmtMix(row.qty, totalQty) : <span className="text-gray-200">—</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
+                            {row.revenue > 0 ? fmtMoney(row.revenue) : <span className="text-gray-200">—</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-xs text-gray-500">
+                            {row.revenue > 0 ? fmtMix(row.revenue, totalRevenue) : <span className="text-gray-200">—</span>}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-xs">
+                            {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
+                          </td>
+                          <td className={`px-3 py-2.5 text-right text-xs ${cogsColour(row.cogs_pct)}`}>
+                            {fmtPct(row.cogs_pct)}
+                          </td>
+                        </tr>
+                      ))}
+                    </>
+                  )
+                })}
+              </tbody>
+
+              {/* Grand total footer */}
+              <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                <tr>
+                  <td className="px-3 py-3 font-bold text-gray-900" colSpan={4}>Grand Total</td>
+                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                    {totalQty > 0 ? totalQty.toLocaleString() : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
+                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                    {totalRevenue > 0 ? fmtMoney(totalRevenue) : '—'}
+                  </td>
+                  <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
+                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                    {totalCost > 0 ? fmtMoney(totalCost) : '—'}
+                  </td>
+                  <td className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(overallCogs)}`}>
+                    {fmtPct(overallCogs)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         )}
       </div>
     </div>
