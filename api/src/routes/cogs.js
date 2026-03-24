@@ -662,4 +662,4 @@ function formatLevel(l) {
   return { id: l.id, name: l.name, sort_order: 0 };
 }
 
-module.exports = router;
+module.exports = { router, loadQuoteLookup, calcRecipeCost };

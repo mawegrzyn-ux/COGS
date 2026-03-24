@@ -76,6 +76,72 @@ const TOOLS = [
     description: 'Lists all menus with id, name, and market (country).',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
+  // ── Menu Engineer / Scenario tools ──────────────────────────────────────────
+  {
+    name: 'list_scenarios',
+    description: 'Lists all saved Menu Engineer scenarios with id, name, linked menu, price level, and last updated.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_id: { type: 'integer', description: 'Optional: filter by menu ID' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_scenario_analysis',
+    description: `Returns the full Menu Engineer analysis for a menu: every item's base cost (USD), effective cost (USD, with scenario override if any), price per price-level (USD), tax rate, and COGS%.
+Use this before computing any scenario changes.
+Key fields per item:
+  - nat_key / cost_override_key: e.g. "r_5" or "i_12" — use as cost override key
+  - menu_item_id: integer — use with level_id to build price override key
+  - per_level[].price_override_key: "{menu_item_id}_l{level_id}" — use as price override key
+  - per_level[].tax_rate: decimal (e.g. 0.2 = 20% tax)
+To compute price for a target COGS%: price_gross_usd = (effective_cost_usd / target_cogs_decimal) * (1 + tax_rate)
+All costs and prices are in USD base.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_id:     { type: 'integer', description: 'Menu ID from list_menus' },
+        scenario_id: { type: 'integer', description: 'Optional: apply this scenario\'s overrides to the analysis' },
+      },
+      required: ['menu_id'],
+    },
+  },
+  {
+    name: 'save_scenario',
+    description: `Creates a new Menu Engineer scenario or updates an existing one with price and/or cost overrides.
+All values are in USD base.
+Price override keys: "{menu_item_id}_l{level_id}" (from get_scenario_analysis per_level[].price_override_key).
+Cost override keys: nat_key e.g. "r_{recipe_id}" or "i_{ingredient_id}" (from get_scenario_analysis cost_override_key).
+When updating, new overrides are merged on top of existing ones (existing keys not in the new map are preserved).
+Set a value to null to remove that override.
+CONFIRMATION REQUIRED before calling.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        scenario_id:     { type: 'integer', description: 'Update this scenario (omit to create new)' },
+        menu_id:         { type: 'integer', description: 'Menu ID — required when creating a new scenario' },
+        name:            { type: 'string',  description: 'Scenario name' },
+        price_level_id:  { type: 'integer', description: 'Optional: pin scenario to a specific price level' },
+        price_overrides: { type: 'object',  description: 'Price overrides in USD: { "{menu_item_id}_l{level_id}": price_gross_usd }. Null value removes override.' },
+        cost_overrides:  { type: 'object',  description: 'Cost overrides in USD: { "r_{id}" | "i_{id}": cost_usd }. Null value removes override.' },
+        note:            { type: 'string',  description: 'Summary of changes made (stored in scenario history)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'push_scenario_prices',
+    description: 'Pushes all price overrides from a scenario directly to the live menu (upserts mcogs_menu_item_prices). This makes the scenario prices permanent and visible in the PLT. CONFIRMATION REQUIRED — warn the user this overwrites live menu prices and cannot be undone from here.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        scenario_id: { type: 'integer', description: 'ID of the scenario to push prices from' },
+      },
+      required: ['scenario_id'],
+    },
+  },
   {
     name: 'get_menu_cogs',
     description: 'Returns menu items with sell prices and COGS% for a specific menu. Automatically uses the market\'s default price level if price_level_id is not supplied. Always prefer calling this without price_level_id first — it will resolve the right level automatically.',
@@ -1185,6 +1251,145 @@ async function executeTool(name, input) {
         ORDER BY c.name, m.name
       `);
       return rows;
+    }
+
+    // ── Menu Engineer / Scenario tools ────────────────────────────────────────
+
+    case 'list_scenarios': {
+      const { menu_id } = input;
+      const q = menu_id
+        ? `SELECT s.id, s.name, s.menu_id, s.price_level_id, s.notes, s.updated_at,
+                  m.name AS menu_name, pl.name AS price_level_name
+           FROM   mcogs_menu_scenarios s
+           LEFT JOIN mcogs_menus m ON m.id = s.menu_id
+           LEFT JOIN mcogs_price_levels pl ON pl.id = s.price_level_id
+           WHERE  s.menu_id = $1 ORDER BY s.updated_at DESC`
+        : `SELECT s.id, s.name, s.menu_id, s.price_level_id, s.notes, s.updated_at,
+                  m.name AS menu_name, pl.name AS price_level_name
+           FROM   mcogs_menu_scenarios s
+           LEFT JOIN mcogs_menus m ON m.id = s.menu_id
+           LEFT JOIN mcogs_price_levels pl ON pl.id = s.price_level_id
+           ORDER BY s.updated_at DESC`;
+      const { rows } = await pool.query(q, menu_id ? [menu_id] : []);
+      return rows;
+    }
+
+    case 'get_scenario_analysis': {
+      const { menu_id, scenario_id } = input;
+      const port = process.env.PORT || 3001;
+      const qs   = scenario_id ? `?menu_id=${menu_id}&scenario_id=${scenario_id}` : `?menu_id=${menu_id}`;
+      const resp = await fetch(`http://localhost:${port}/api/scenarios/analysis${qs}`);
+      if (!resp.ok) return { error: `Analysis endpoint returned ${resp.status}` };
+      return await resp.json();
+    }
+
+    case 'save_scenario': {
+      const { scenario_id, menu_id, name, price_level_id, price_overrides, cost_overrides, note } = input;
+      const histEntry = { ts: new Date().toISOString(), action: 'ai_edit', detail: note || 'AI applied changes' };
+
+      if (scenario_id) {
+        // Load existing to merge overrides
+        const { rows: [existing] } = await pool.query(`
+          SELECT price_overrides, cost_overrides, history, name, price_level_id
+          FROM   mcogs_menu_scenarios WHERE id = $1
+        `, [scenario_id]);
+        if (!existing) return { error: 'Scenario not found' };
+
+        // Merge: apply new on top of existing; null values remove the key
+        const merged = (base, updates) => {
+          const out = { ...(base || {}) };
+          for (const [k, v] of Object.entries(updates || {})) {
+            if (v === null) delete out[k]; else out[k] = v;
+          }
+          return out;
+        };
+        const newPrices  = merged(existing.price_overrides, price_overrides);
+        const newCosts   = merged(existing.cost_overrides,  cost_overrides);
+        const newHistory = [...(existing.history || []), histEntry];
+
+        await pool.query(`
+          UPDATE mcogs_menu_scenarios
+          SET name=$1, price_level_id=$2, price_overrides=$3, cost_overrides=$4, history=$5, updated_at=NOW()
+          WHERE id=$6
+        `, [
+          name || existing.name,
+          price_level_id ?? existing.price_level_id,
+          JSON.stringify(newPrices),
+          JSON.stringify(newCosts),
+          JSON.stringify(newHistory),
+          scenario_id,
+        ]);
+        return {
+          scenario_id,
+          name: name || existing.name,
+          price_overrides_count: Object.keys(newPrices).length,
+          cost_overrides_count:  Object.keys(newCosts).length,
+          saved: true,
+        };
+      } else {
+        if (!menu_id) return { error: 'menu_id is required when creating a new scenario' };
+        if (!name?.trim()) return { error: 'name is required' };
+        const { rows: [row] } = await pool.query(`
+          INSERT INTO mcogs_menu_scenarios (name, menu_id, price_level_id, price_overrides, cost_overrides, history)
+          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name
+        `, [
+          name.trim(),
+          menu_id,
+          price_level_id || null,
+          JSON.stringify(price_overrides || {}),
+          JSON.stringify(cost_overrides  || {}),
+          JSON.stringify([histEntry]),
+        ]);
+        return {
+          scenario_id:           row.id,
+          name:                  row.name,
+          price_overrides_count: Object.keys(price_overrides || {}).length,
+          cost_overrides_count:  Object.keys(cost_overrides  || {}).length,
+          saved: true,
+        };
+      }
+    }
+
+    case 'push_scenario_prices': {
+      const { scenario_id } = input;
+      const { rows: [sc] } = await pool.query(
+        `SELECT price_overrides FROM mcogs_menu_scenarios WHERE id = $1`, [scenario_id]
+      );
+      if (!sc) return { error: 'Scenario not found' };
+
+      const overrides = Object.entries(sc.price_overrides || {})
+        .map(([key, val]) => {
+          // key format: "{menu_item_id}_l{level_id}"
+          const under = key.lastIndexOf('_l');
+          if (under < 0) return null;
+          return {
+            menu_item_id:   Number(key.slice(0, under)),
+            price_level_id: Number(key.slice(under + 2)),
+            sell_price:     Number(val),
+          };
+        })
+        .filter(o => o && o.sell_price > 0 && o.menu_item_id && o.price_level_id);
+
+      if (!overrides.length) return { pushed: 0, message: 'No price overrides to push' };
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const { menu_item_id, price_level_id, sell_price } of overrides) {
+          await client.query(`
+            INSERT INTO mcogs_menu_item_prices (menu_item_id, price_level_id, sell_price)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (menu_item_id, price_level_id) DO UPDATE SET sell_price = EXCLUDED.sell_price
+          `, [menu_item_id, price_level_id, sell_price]);
+        }
+        await client.query('COMMIT');
+        return { pushed: overrides.length, message: `${overrides.length} price${overrides.length > 1 ? 's' : ''} pushed to live menu` };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        return { error: err.message };
+      } finally {
+        client.release();
+      }
     }
 
     case 'get_menu_cogs': {
@@ -2518,8 +2723,38 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 - Image (invoice / label / recipe card): describe all fields you can read, confirm extraction, then create records
 - Never create records from a file without user confirmation
 
+## MENU ENGINEER (SCENARIO) TOOLS
+Use these to help users model pricing changes, hit COGS targets, and save/push scenarios.
+
+### Workflow for scenario changes:
+1. `get_scenario_analysis(menu_id)` — get all items with costs, prices, tax rates, COGS% per level
+2. Compute new values (all in USD):
+   - **% price change**: new_price = base_price_usd * (1 + pct/100)
+   - **Target COGS%**: price_gross_usd = (effective_cost_usd / target_cogs_decimal) * (1 + tax_rate)
+   - **% cost change**: new_cost = base_cost_usd * (1 + pct/100)
+   - **Filter by category**: match item.category (case-insensitive contains)
+3. `save_scenario(name, menu_id, price_overrides, cost_overrides, note)` — save with computed values
+4. Optionally `push_scenario_prices(scenario_id)` — make prices live (confirm first, warns user it's permanent)
+
+### Key fields from get_scenario_analysis:
+- `item.cost_override_key` = `item.nat_key` e.g. "r_5" — key for cost_overrides
+- `item.per_level[].price_override_key` e.g. "42_l1" — key for price_overrides
+- `item.per_level[].tax_rate` — decimal tax rate for that level (use in target COGS formula)
+- `item.per_level[].base_price_usd` — current price before any override
+- `item.effective_cost_usd` — current cost (with any cost override applied)
+
+### Example — "raise Wings prices by 10% across all levels":
+- Filter items where category contains "wing"
+- For each such item, for each level: new_price = base_price_usd * 1.10
+- Build price_overrides: { [price_override_key]: new_price, ... }
+- save_scenario with note "Wings prices +10%"
+
+### Example — "set Wings to 25% COGS":
+- Filter Wing items, for each level: price_gross = (effective_cost_usd / 0.25) * (1 + tax_rate)
+- save_scenario with the computed price_overrides
+
 ## TOOLS AVAILABLE
-You have 74 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, and **search_web** (only when explicitly asked).
+You have 78 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), and **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices).
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:

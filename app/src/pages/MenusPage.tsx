@@ -3059,9 +3059,9 @@ ${tableHtml}
         )}
 
         {/* Mix generator modal */}
-        {showMixGen && data && menuId && (
+        {showMixGen && menuId && (data || allLevelsData.length > 0) && (
           <SalesMixGeneratorModal
-            data={data}
+            data={data ?? allLevelsData[0]?.data!}
             priceLevels={priceLevels}
             menuId={menuId}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
