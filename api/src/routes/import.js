@@ -735,6 +735,7 @@ router.post('/:id/execute', async (req, res) => {
       ingredients: 0, ingredients_skipped: 0, ingredients_updated: 0,
       price_quotes: 0, price_quotes_skipped: 0,
       recipes: 0, recipes_skipped: 0, recipes_updated: 0, recipe_items: 0,
+      recipe_ings_created: 0,
       menus: 0, menus_skipped: 0, menu_items: 0,
       errors: [],
     };
@@ -813,6 +814,27 @@ router.post('/:id/execute', async (req, res) => {
         );
         ingLookup[row.name.toLowerCase()] = rows[0].id;
         results.ingredients++;
+      }
+
+      // 4.5 Recipe ingredient mappings — resolve ingredients referenced in recipes
+      // that weren't found in the import. This adds them to ingLookup before recipes are processed.
+      const recipeIngMap = staged.recipe_ingredient_mapping || {};
+      for (const [origName, m] of Object.entries(recipeIngMap)) {
+        const nameLower = origName.toLowerCase();
+        if (ingLookup[nameLower]) continue; // already resolved from import
+        if (m.action === 'skip') continue;
+        if (m.action === 'map' && m.maps_to_id) {
+          ingLookup[nameLower] = m.maps_to_id;
+          continue;
+        }
+        if (m.action === 'create') {
+          const { rows: newIng } = await client.query(
+            'INSERT INTO mcogs_ingredients (name, default_prep_unit) VALUES ($1, $2) RETURNING id',
+            [origName, m.new_prep_unit || null]
+          );
+          ingLookup[nameLower] = newIng[0].id;
+          results.recipe_ings_created++;
+        }
       }
 
       // 5. Price Quotes

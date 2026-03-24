@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Step        = 'upload' | 'parsing' | 'mapping' | 'review' | 'confirm' | 'executing' | 'done'
+type Step        = 'upload' | 'parsing' | 'mapping' | 'review' | 'recipe-ing' | 'confirm' | 'executing' | 'done'
 type ImportPath  = 'template' | 'ai'
 type ReviewTab   = 'ingredients' | 'vendors' | 'price_quotes' | 'recipes' | 'menus'
 type RowAction   = 'create' | 'skip' | 'override'
@@ -34,14 +34,22 @@ interface CatMapping {
   suggested_type?: string
 }
 
+interface RecipeIngMapping {
+  action:        'create' | 'map' | 'skip'
+  maps_to_id?:   number
+  maps_to_name?: string
+  new_prep_unit?: string
+}
+
 interface StagedData {
-  vendors:          StagedRow[]
-  ingredients:      StagedRow[]
-  price_quotes:     StagedRow[]
-  recipes:          StagedRow[]
-  menus:            StagedRow[]
-  category_mapping: Record<string, CatMapping>
-  prerequisites:    { missing_units: string[]; missing_countries: string[] }
+  vendors:                    StagedRow[]
+  ingredients:                StagedRow[]
+  price_quotes:               StagedRow[]
+  recipes:                    StagedRow[]
+  menus:                      StagedRow[]
+  category_mapping:           Record<string, CatMapping>
+  recipe_ingredient_mapping:  Record<string, RecipeIngMapping>
+  prerequisites:              { missing_units: string[]; missing_countries: string[] }
 }
 
 interface ImportResults {
@@ -50,6 +58,7 @@ interface ImportResults {
   ingredients: number; ingredients_skipped: number; ingredients_updated: number
   price_quotes: number; price_quotes_skipped: number
   recipes: number; recipes_skipped: number; recipes_updated: number; recipe_items: number
+  recipe_ings_created: number
   menus: number; menus_skipped: number; menu_items: number
   errors: string[]
 }
@@ -59,11 +68,12 @@ interface DbCategory { id: number; name: string; type: string }
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STEPS: { key: Step; label: string }[] = [
-  { key: 'upload',    label: 'Upload'     },
-  { key: 'mapping',   label: 'Categories' },
-  { key: 'review',    label: 'Review'     },
-  { key: 'confirm',   label: 'Confirm'    },
-  { key: 'done',      label: 'Done'       },
+  { key: 'upload',     label: 'Upload'      },
+  { key: 'mapping',    label: 'Categories'  },
+  { key: 'review',     label: 'Review'      },
+  { key: 'recipe-ing', label: 'Recipe Ing.' },
+  { key: 'confirm',    label: 'Confirm'     },
+  { key: 'done',       label: 'Done'        },
 ]
 const VISIBLE_STEPS = STEPS.map(s => s.key)
 
@@ -194,12 +204,18 @@ export default function ImportPage() {
   const [results,     setResults]     = useState<ImportResults | null>(null)
   const [execError,   setExecError]   = useState<string | null>(null)
   const [dbCats,      setDbCats]      = useState<DbCategory[]>([])
+  const [dbIngredients, setDbIngredients] = useState<{ id: number; name: string; base_unit_abbr?: string }[]>([])
   const [filterDups,  setFilterDups]  = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Load categories
   useEffect(() => {
     api.get('/categories').then((d: DbCategory[]) => setDbCats(d || [])).catch(() => {})
+  }, [api])
+
+  // Load DB ingredients for recipe ingredient resolution
+  useEffect(() => {
+    api.get('/ingredients').then((d: any[]) => setDbIngredients(d || [])).catch(() => {})
   }, [api])
 
   // Load existing job from ?job=<id> URL param (chatbot deep-link)
@@ -240,6 +256,28 @@ export default function ImportPage() {
       return { ...prev, [entity]: (prev[entity] as StagedRow[]).map(r => r._duplicate_of ? { ...r, _action: 'skip' as RowAction } : r) }
     })
   }, [])
+
+  // ── Missing recipe ingredients ───────────────────────────────────────────────
+
+  const getMissingRecipeIngredients = useCallback((): string[] => {
+    if (!staged) return []
+    const allRefNames = new Set<string>()
+    for (const recipe of staged.recipes) {
+      if (recipe._action === 'skip') continue
+      const items = (recipe.items as { item_name?: string; ingredient_name?: string; item_type?: string }[]) || []
+      for (const item of items) {
+        if (item.item_type !== 'recipe') {
+          const n = item.item_name || item.ingredient_name || ''
+          if (n) allRefNames.add(n)
+        }
+      }
+    }
+    const importedLower = new Set(
+      staged.ingredients.filter(i => i._action !== 'skip').map(i => String(i.name || '').toLowerCase())
+    )
+    const dbLower = new Set(dbIngredients.map(i => i.name.toLowerCase()))
+    return [...allRefNames].filter(n => !importedLower.has(n.toLowerCase()) && !dbLower.has(n.toLowerCase()))
+  }, [staged, dbIngredients])
 
   // ── Parse ────────────────────────────────────────────────────────────────────
 
@@ -593,6 +631,152 @@ export default function ImportPage() {
 
         <div className="mt-6 flex justify-between">
           <button onClick={() => setStep(Object.keys(staged.category_mapping||{}).length ? 'mapping' : 'upload')} className="btn-outline px-4">← Back</button>
+          <button onClick={async () => {
+            await saveStaged()
+            const missing = getMissingRecipeIngredients()
+            if (missing.length > 0) {
+              const newMap: Record<string, RecipeIngMapping> = { ...(staged?.recipe_ingredient_mapping || {}) }
+              // Build a lookup: ingredient name (lowercase) → prep unit from first recipe item that references it
+              const prepUnitByName: Record<string, string> = {}
+              for (const recipe of (staged?.recipes || [])) {
+                if (recipe._action === 'skip') continue
+                const items = (recipe.items as { item_name?: string; ingredient_name?: string; item_type?: string; unit?: string }[]) || []
+                for (const item of items) {
+                  if (item.item_type === 'recipe') continue
+                  const n = (item.item_name || item.ingredient_name || '').toLowerCase()
+                  if (n && !prepUnitByName[n] && item.unit) prepUnitByName[n] = item.unit
+                }
+              }
+              for (const name of missing) {
+                if (!newMap[name]) {
+                  const detectedUnit = prepUnitByName[name.toLowerCase()]
+                  newMap[name] = { action: 'create', ...(detectedUnit ? { new_prep_unit: detectedUnit } : {}) }
+                }
+              }
+              setStaged(prev => prev ? { ...prev, recipe_ingredient_mapping: newMap } : prev)
+              setStep('recipe-ing')
+            } else {
+              setStep('confirm')
+            }
+          }} className="btn-primary px-6">Next: Confirm →</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── STEP: Recipe Ingredients ──────────────────────────────────────────────
+
+  const renderRecipeIng = () => {
+    if (!staged) return null
+    const mapping = staged.recipe_ingredient_mapping || {}
+    const entries = Object.entries(mapping)
+
+    const updateRIM = (name: string, changes: Partial<RecipeIngMapping>) => {
+      setStaged(prev => {
+        if (!prev) return prev
+        const cur = prev.recipe_ingredient_mapping?.[name] || { action: 'create' as const }
+        return {
+          ...prev,
+          recipe_ingredient_mapping: {
+            ...(prev.recipe_ingredient_mapping || {}),
+            [name]: { ...cur, ...changes },
+          },
+        }
+      })
+    }
+
+    if (entries.length === 0) {
+      return (
+        <div>
+          <div className="card p-8 text-center mb-6">
+            <div className="text-3xl mb-3">✅</div>
+            <p className="font-semibold" style={{ color: 'var(--accent)' }}>All recipe ingredients resolved</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>Every ingredient referenced in your recipes was found in the import or the database.</p>
+          </div>
+          <div className="flex justify-between">
+            <button onClick={() => setStep('review')} className="btn-outline px-4">← Back</button>
+            <button onClick={() => { saveStaged(); setStep('confirm') }} className="btn-primary px-6">Next: Confirm →</button>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-2)' }}>
+          The following ingredients are referenced in your recipes but were not found in the import or the database.
+          Choose how to handle each one — <strong>Create new</strong> to add a placeholder ingredient,
+          <strong> Map to existing</strong> to link it to a DB ingredient, or <strong>Skip</strong> to drop those recipe lines.
+        </p>
+
+        <div className="card overflow-hidden mb-6">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Ingredient Name (from recipes)</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Action</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Prep Unit</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Map To / Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(([name, m]) => (
+                <tr key={name} style={{ borderBottom: '1px solid var(--border)', opacity: m.action === 'skip' ? 0.5 : 1 }}>
+                  <td className="px-4 py-2.5 font-medium" style={{ color: 'var(--text-1)' }}>{name}</td>
+                  <td className="px-4 py-2.5">
+                    <select
+                      value={m.action}
+                      onChange={e => updateRIM(name, { action: e.target.value as RecipeIngMapping['action'], maps_to_id: undefined, maps_to_name: undefined })}
+                      className="text-xs rounded px-2 py-1 border border-border bg-white"
+                      style={{ color: m.action === 'create' ? 'var(--accent)' : m.action === 'map' ? '#D97706' : 'var(--text-3)' }}>
+                      <option value="create">Create new</option>
+                      <option value="map">Map to existing</option>
+                      <option value="skip">Skip</option>
+                    </select>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {m.action === 'create' ? (
+                      <input
+                        type="text"
+                        value={m.new_prep_unit || ''}
+                        onChange={e => updateRIM(name, { new_prep_unit: e.target.value || undefined })}
+                        placeholder="e.g. g, cup…"
+                        className="text-xs rounded px-2 py-1 border border-border bg-white w-20 outline-none focus:border-accent font-mono"
+                        title="Default prep unit for this ingredient"
+                      />
+                    ) : (
+                      <span className="text-xs text-text-3">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {m.action === 'map' ? (
+                      <select
+                        value={m.maps_to_id || ''}
+                        onChange={e => {
+                          const id = Number(e.target.value) || undefined
+                          const ing = dbIngredients.find(i => i.id === id)
+                          updateRIM(name, { maps_to_id: id, maps_to_name: ing?.name })
+                        }}
+                        className="text-xs rounded px-2 py-1 border border-border bg-white w-full max-w-[240px]">
+                        <option value="">— select ingredient —</option>
+                        {dbIngredients.map(i => (
+                          <option key={i.id} value={i.id}>{i.name}{i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}</option>
+                        ))}
+                      </select>
+                    ) : m.action === 'create' ? (
+                      <span className="text-xs italic" style={{ color: 'var(--text-3)' }}>Placeholder ingredient will be created — edit details in Inventory afterwards</span>
+                    ) : (
+                      <span className="text-xs italic" style={{ color: 'var(--text-3)' }}>Recipe lines referencing this ingredient will be skipped</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-between">
+          <button onClick={() => setStep('review')} className="btn-outline px-4">← Back</button>
           <button onClick={() => { saveStaged(); setStep('confirm') }} className="btn-primary px-6">Next: Confirm →</button>
         </div>
       </div>
@@ -681,7 +865,8 @@ export default function ImportPage() {
       { label: 'Recipes imported',      value: results.recipes             },
       { label: 'Recipes updated',       value: results.recipes_updated     },
       { label: 'Recipes skipped',       value: results.recipes_skipped,    muted: true },
-      { label: 'Recipe items created',  value: results.recipe_items        },
+      { label: 'Recipe items created',    value: results.recipe_items          },
+      { label: 'Placeholder ings created', value: results.recipe_ings_created   },
       { label: 'Menus imported',        value: results.menus               },
       { label: 'Menus skipped',         value: results.menus_skipped,      muted: true },
       { label: 'Menu items created',    value: results.menu_items          },
@@ -732,13 +917,14 @@ export default function ImportPage() {
 
       <StepBar step={step} />
 
-      {step === 'upload'    && renderUpload()}
-      {step === 'parsing'   && renderParsing()}
-      {step === 'mapping'   && renderMapping()}
-      {step === 'review'    && renderReview()}
-      {step === 'confirm'   && renderConfirm()}
-      {step === 'executing' && renderExecuting()}
-      {step === 'done'      && renderDone()}
+      {step === 'upload'     && renderUpload()}
+      {step === 'parsing'    && renderParsing()}
+      {step === 'mapping'    && renderMapping()}
+      {step === 'review'     && renderReview()}
+      {step === 'recipe-ing' && renderRecipeIng()}
+      {step === 'confirm'    && renderConfirm()}
+      {step === 'executing'  && renderExecuting()}
+      {step === 'done'       && renderDone()}
     </div>
   )
 }

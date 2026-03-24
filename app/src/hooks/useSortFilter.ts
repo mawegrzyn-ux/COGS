@@ -5,11 +5,12 @@ export type SortDir = 'asc' | 'desc'
 export function useSortFilter<T>(
   items: T[],
   defaultField: keyof T,
-  defaultDir: SortDir = 'asc'
+  defaultDir: SortDir = 'asc',
+  initialFilters: Record<string, string[]> = {}
 ) {
   const [sortField, setSortField] = useState<keyof T>(defaultField)
   const [sortDir,   setSortDir]   = useState<SortDir>(defaultDir)
-  const [filters,   setFilters]   = useState<Record<string, string[]>>({})
+  const [filters,   setFilters]   = useState<Record<string, string[]>>(initialFilters)
 
   function setSort(field: keyof T, dir: SortDir) {
     setSortField(field)

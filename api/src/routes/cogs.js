@@ -17,9 +17,12 @@ async function loadQuoteLookup() {
              pv.country_id,
              pq.purchase_price,
              pq.qty_in_base_units,
+             vc.exchange_rate AS vendor_exchange_rate,
              true AS is_preferred
       FROM   mcogs_ingredient_preferred_vendor pv
-      JOIN   mcogs_price_quotes pq ON pq.id = pv.quote_id
+      JOIN   mcogs_price_quotes pq ON pq.id  = pv.quote_id
+      JOIN   mcogs_vendors      v  ON v.id   = pq.vendor_id
+      JOIN   mcogs_countries    vc ON vc.id  = v.country_id
       WHERE  pq.is_active = true
     ),
     fallback AS (
@@ -28,9 +31,11 @@ async function loadQuoteLookup() {
              v.country_id,
              pq.purchase_price,
              pq.qty_in_base_units,
+             vc.exchange_rate AS vendor_exchange_rate,
              false AS is_preferred
       FROM   mcogs_price_quotes pq
-      JOIN   mcogs_vendors v ON v.id = pq.vendor_id
+      JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+      JOIN   mcogs_countries    vc ON vc.id = v.country_id
       WHERE  pq.is_active = true
       ORDER  BY pq.ingredient_id, v.country_id,
                 (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
@@ -43,12 +48,15 @@ async function loadQuoteLookup() {
       WHERE p.ingredient_id = f.ingredient_id AND p.country_id = f.country_id
     )
   `);
+  // Divide by vendor_exchange_rate to normalise from vendor's local currency → USD base.
+  // Callers multiply by the target market's exchange_rate to get the correct local display cost.
   const lookup = {};
   for (const q of rows) {
     if (!lookup[q.ingredient_id]) lookup[q.ingredient_id] = {};
+    const vendorRate = Math.max(Number(q.vendor_exchange_rate) || 1, 0.000001);
     lookup[q.ingredient_id][q.country_id] = {
       price_per_base_unit: Number(q.qty_in_base_units) > 0
-        ? Number(q.purchase_price) / Number(q.qty_in_base_units)
+        ? (Number(q.purchase_price) / Number(q.qty_in_base_units)) / vendorRate
         : 0,
       is_preferred: q.is_preferred,
     };
@@ -57,11 +65,38 @@ async function loadQuoteLookup() {
 }
 
 /**
- * Calculate cost-per-portion for one recipe in one country.
- * Uses quoteLookup built by loadQuoteLookup().
- * Returns: { cost: number, coverage: 'fully_preferred'|'fully_quoted'|'partially_quoted'|'not_quoted' }
+ * Load variation items for a set of recipe IDs.
+ * Returns: { [recipe_id]: { [country_id]: [items_with_waste_pct...] } }
  */
-function calcRecipeCost(recipe, items, countryId, quoteLookup) {
+async function loadVariationItemsMap(recipeIds) {
+  if (!recipeIds.length) return {};
+  const { rows } = await pool.query(`
+    SELECT rv.recipe_id,
+           rv.country_id,
+           ri.*,
+           i.waste_pct
+    FROM   mcogs_recipe_variations rv
+    JOIN   mcogs_recipe_items ri ON ri.variation_id = rv.id
+    LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
+    WHERE  rv.recipe_id = ANY($1::int[])
+    ORDER  BY rv.recipe_id, rv.country_id, ri.id ASC
+  `, [recipeIds]);
+
+  const map = {};
+  for (const row of rows) {
+    if (!map[row.recipe_id]) map[row.recipe_id] = {};
+    if (!map[row.recipe_id][row.country_id]) map[row.recipe_id][row.country_id] = [];
+    map[row.recipe_id][row.country_id].push(row);
+  }
+  return map;
+}
+
+/**
+ * Calculate cost-per-portion for one recipe in one country.
+ * If variationMap contains items for this recipe+country, those are used instead of globalItems.
+ */
+function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap) {
+  const items = variationMap?.[recipe.id]?.[countryId] || globalItems;
   const ingItems = items.filter(i => i.item_type === 'ingredient');
   let total = 0, preferredCount = 0, quotedCount = 0;
 
@@ -198,6 +233,8 @@ router.get('/menu/:menu_id', async (req, res) => {
       for (const lp of lpRows) levelPriceMap[lp.menu_item_id] = lp;
     }
 
+    const variationMap = await loadVariationItemsMap(recipeIds);
+
     const taxRateCache = {};
     const outItems = [];
     let totalCost = 0, totalSellNet = 0, totalSellGross = 0;
@@ -215,8 +252,8 @@ router.get('/menu/:menu_id', async (req, res) => {
         if (q) cpp = q.price_per_base_unit * qty;
       } else {
         const rItems = recipeItemsMap[item.recipe_id] || [];
-        const recipe = { yield_qty: item.yield_qty || 1 };
-        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup);
+        const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
+        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap);
         cpp = cost * qty;
       }
       cpp = Math.round(cpp * 10000) / 10000;
@@ -372,6 +409,8 @@ router.get('/report/price-levels', async (req, res) => {
     const taxById = {};
     for (const r of taxRateRows) taxById[r.id] = { rate: Number(r.rate), name: r.name };
 
+    const variationMap = await loadVariationItemsMap(recipeIds);
+
     const report = items.map(item => {
       const itemType = item.item_type || 'recipe';
       const display  = item.display_name?.trim() ||
@@ -385,7 +424,7 @@ router.get('/report/price-levels', async (req, res) => {
         if (q) cpp = q.price_per_base_unit * qty;
       } else {
         const rItems = recipeItemsMap[item.recipe_id] || [];
-        const { cost } = calcRecipeCost({ yield_qty: item.yield_qty || 1 }, rItems, countryId, quoteLookup);
+        const { cost } = calcRecipeCost({ id: item.recipe_id, yield_qty: item.yield_qty || 1 }, rItems, countryId, quoteLookup, variationMap);
         cpp = cost * qty;
       }
       cpp = Math.round(cpp * 10000) / 10000;
@@ -532,6 +571,8 @@ router.get('/report/menu-prices', async (req, res) => {
       for (const t of taxRows) taxById[t.id] = Number(t.rate);
     }
 
+    const variationMap = await loadVariationItemsMap(recipeIds);
+
     // Build report
     const report = recipes.map(recipe => {
       const recipeId = recipe.id;
@@ -553,7 +594,7 @@ router.get('/report/menu-prices', async (req, res) => {
           continue;
         }
 
-        const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup);
+        const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup, variationMap);
         const cppLocal = cost;
         const defaultRate = defaultTaxMap[cid] || 0;
 

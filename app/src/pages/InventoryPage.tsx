@@ -111,6 +111,7 @@ export default function InventoryPage() {
   const [quoteCount,      setQuoteCount]      = useState<number>(0)
   const [vendorCount,     setVendorCount]     = useState<number>(0)
   const [countryCount,    setCountryCount]    = useState<number>(0)
+  const [initialQuoteIngId, setInitialQuoteIngId] = useState<number | undefined>(undefined)
 
   useEffect(() => {
     api.get('/ingredients').then((d: any[]) => setIngredientCount(d?.length || 0)).catch(() => {})
@@ -159,8 +160,8 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'ingredients'   && <IngredientsTab />}
-        {tab === 'quotes'        && <PriceQuotesTab />}
+        {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes') }} />}
+        {tab === 'quotes'        && <PriceQuotesTab initialIngredientId={initialQuoteIngId} />}
         {tab === 'vendors'       && <VendorsTab onCountChange={setVendorCount} />}
         {tab === 'allergen-grid' && <AllergenGridTab />}
       </div>
@@ -361,7 +362,7 @@ function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () =
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
-function IngredientsTab() {
+function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void }) {
   const api = useApi()
 
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -395,6 +396,7 @@ function IngredientsTab() {
   const [nutLoading,   setNutLoading]   = useState(false)
   const [savingNut,    setSavingNut]    = useState(false)
   const [dietaryFlags, setDietaryFlags] = useState<Record<string, boolean>>({})
+  const [ingAllergenMap, setIngAllergenMap] = useState<Map<number, { code: string; status: string }[]>>(new Map())
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
@@ -420,6 +422,17 @@ function IngredientsTab() {
 
   useEffect(() => {
     api.get('/allergens').then((d: Allergen[]) => setAllAllergens(d || [])).catch(() => {})
+  }, [api])
+
+  useEffect(() => {
+    api.get('/allergens/ingredients').then((rows: { ingredient_id: number; code: string; status: string }[]) => {
+      const m = new Map<number, { code: string; status: string }[]>()
+      for (const row of (rows || [])) {
+        if (!m.has(row.ingredient_id)) m.set(row.ingredient_id, [])
+        m.get(row.ingredient_id)!.push({ code: row.code, status: row.status })
+      }
+      setIngAllergenMap(m)
+    }).catch(() => {})
   }, [api])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
@@ -721,6 +734,7 @@ function IngredientsTab() {
                 <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                <th className="px-4 py-3 text-left text-xs font-semibold text-text-3">Allergens</th>
                 <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <th className="w-20" />
               </tr>
@@ -740,10 +754,30 @@ function IngredientsTab() {
                     {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full
-                      ${Number(ing.active_quote_count) > 0 ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
+                    <div className="flex flex-wrap gap-0.5">
+                      {(ingAllergenMap.get(ing.id) || [])
+                        .filter(a => a.status !== 'free_from')
+                        .map(a => (
+                          <span
+                            key={a.code}
+                            title={`${a.code}: ${a.status === 'contains' ? 'Contains' : 'May contain'}`}
+                            className={`text-[10px] font-bold px-1 py-0.5 rounded leading-none
+                              ${a.status === 'contains' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                            {a.code}
+                          </span>
+                        ))}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => onViewQuotes?.(ing.id)}
+                      title="View price quotes for this ingredient"
+                      disabled={!onViewQuotes}
+                      className={`text-xs font-bold px-2 py-0.5 rounded-full transition-colors
+                        ${onViewQuotes ? 'cursor-pointer hover:opacity-70' : 'cursor-default'}
+                        ${Number(ing.active_quote_count) > 0 ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
                       {ing.active_quote_count}/{ing.quote_count}
-                    </span>
+                    </button>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 justify-end">
@@ -894,7 +928,7 @@ function IngredientsTab() {
 
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
-function PriceQuotesTab() {
+function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number }) {
   const api = useApi()
 
   const [quotes,        setQuotes]       = useState<Quote[]>([])
@@ -945,8 +979,12 @@ function PriceQuotesTab() {
     ), [quotes, search]
   )
 
+  const initialQuoteFilters = useMemo(
+    () => initialIngredientId ? { ingredient_id: [String(initialIngredientId)] } : {},
+    [] // eslint-disable-line react-hooks/exhaustive-deps — intentionally only on mount
+  )
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
-    useSortFilter<Quote>(searchFiltered, 'ingredient_name', 'asc')
+    useSortFilter<Quote>(searchFiltered, 'ingredient_name', 'asc', initialQuoteFilters)
 
   const selectedVendor = useMemo(() =>
     vendors.find(v => String(v.id) === form.vendor_id) || null

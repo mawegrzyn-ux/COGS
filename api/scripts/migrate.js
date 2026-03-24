@@ -169,6 +169,24 @@ const migrations = [
     )
   )`,
 
+  // ── 11b. Recipe Variations ────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_recipe_variations (
+    id         SERIAL PRIMARY KEY,
+    recipe_id  INTEGER NOT NULL REFERENCES mcogs_recipes(id) ON DELETE CASCADE,
+    country_id INTEGER NOT NULL REFERENCES mcogs_countries(id) ON DELETE CASCADE,
+    notes      TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(recipe_id, country_id)
+  )`,
+
+  // ── 11c. Add variation_id column to mcogs_recipe_items ────────────────────
+  `ALTER TABLE mcogs_recipe_items
+     ADD COLUMN IF NOT EXISTS variation_id INTEGER REFERENCES mcogs_recipe_variations(id) ON DELETE CASCADE`,
+
+  // ── Index for variation lookup ─────────────────────────────────────────────
+  `CREATE INDEX IF NOT EXISTS idx_recipe_items_variation ON mcogs_recipe_items(variation_id)`,
+
   // ── 13. Menus ─────────────────────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS mcogs_menus (
     id          SERIAL PRIMARY KEY,

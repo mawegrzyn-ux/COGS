@@ -36,11 +36,29 @@ interface CogsByCountry {
   total_cost_local: number
   cost_per_portion: number
   coverage: 'fully_preferred' | 'fully_quoted' | 'partially_quoted' | 'not_quoted'
+  has_variation:    boolean
+  variation_id:     number | null
   lines:            RecipeItem[]
+}
+
+interface RecipeVariation {
+  id:           number
+  country_id:   number
+  country_name: string
+  items:        RecipeItem[]
+}
+
+interface Country {
+  id:             number
+  name:           string
+  currency_code:  string
+  currency_symbol:string
+  exchange_rate:  number
 }
 
 interface RecipeDetail extends Recipe {
   items:            RecipeItem[]
+  variations:       RecipeVariation[]
   cogs_by_country:  CogsByCountry[]
 }
 
@@ -63,12 +81,15 @@ export default function RecipesPage() {
   const [selected,     setSelected]     = useState<RecipeDetail | null>(null)
   const [loadingDetail,setLoadingDetail]= useState(false)
   const [selectedCountryId, setSelectedCountryId] = useState<number | ''>('')
+  const [selectedCurrencyCode, setSelectedCurrencyCode] = useState<string>('')
+  const [countries, setCountries] = useState<Country[]>([])
 
   // modals
   const [recipeModal,  setRecipeModal]  = useState<'new' | Recipe | null>(null)
   const [itemModal,    setItemModal]    = useState(false)
   const [editItemModal,setEditItemModal]= useState<RecipeItem | null>(null)
-  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item'; id: number } | null>(null)
+  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation'; id: number } | null>(null)
+  const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
 
   // search/filter
   const [search,     setSearch]     = useState('')
@@ -79,6 +100,10 @@ export default function RecipesPage() {
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
   const showToast = (msg: string, type?: 'error') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000) }
+
+  useEffect(() => {
+    api.get('/countries').then((d: Country[]) => setCountries(d || [])).catch(() => {})
+  }, [api])
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +133,11 @@ export default function RecipesPage() {
     try {
       const d = await api.get(`/recipes/${id}`)
       setSelected(d)
-      setSelectedCountryId(d.cogs_by_country?.[0]?.country_id ?? '')
+      setSelectedCountryId(prev => {
+        const available = d.cogs_by_country?.map((c: CogsByCountry) => c.country_id) ?? []
+        if (prev !== '' && available.includes(prev)) return prev
+        return d.cogs_by_country?.[0]?.country_id ?? ''
+      })
     } finally {
       setLoadingDetail(false)
     }
@@ -137,6 +166,35 @@ export default function RecipesPage() {
     () => selected?.cogs_by_country.find(c => c.country_id === selectedCountryId) ?? selected?.cogs_by_country[0] ?? null,
     [selected, selectedCountryId]
   )
+
+  // Currency display: use selected override, else country's own currency
+  const displayCurrency = useMemo(() => {
+    if (selectedCurrencyCode) {
+      const c = countries.find(c => c.currency_code === selectedCurrencyCode)
+      if (c) return { code: c.currency_code, symbol: c.currency_symbol, rate: Number(c.exchange_rate) }
+    }
+    if (activeCogs) return { code: activeCogs.currency_code, symbol: activeCogs.currency_symbol, rate: activeCogs.exchange_rate }
+    return { code: '', symbol: '', rate: 1 }
+  }, [selectedCurrencyCode, countries, activeCogs])
+
+  // Active items for display: variation items if a variation exists for selected country, else global
+  const activeVariation = useMemo(() => {
+    if (!selected || selectedCountryId === '') return null
+    return selected.variations?.find(v => v.country_id === selectedCountryId) ?? null
+  }, [selected, selectedCountryId])
+
+  const activeItems = useMemo(() =>
+    activeVariation ? activeVariation.items : (selected?.items ?? [])
+  , [activeVariation, selected])
+
+  // Unique currencies for the selector (deduplicated by code)
+  const currencyOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return countries
+      .filter(c => { if (seen.has(c.currency_code)) return false; seen.add(c.currency_code); return true })
+      .map(c => ({ code: c.currency_code, symbol: c.currency_symbol }))
+      .sort((a, b) => a.code.localeCompare(b.code))
+  }, [countries])
 
   // ── Recipe CRUD ───────────────────────────────────────────────────────────
 
@@ -226,6 +284,64 @@ export default function RecipesPage() {
     } catch (err: any) {
       showToast(err.message || 'Delete failed', 'error')
     }
+  }
+
+  const createVariation = async (countryId: number, copyGlobal: boolean) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/variations`, { country_id: countryId, copy_global: copyGlobal })
+      showToast(`Market variation created`)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Failed to create variation', 'error') }
+  }
+
+  const deleteVariation = async (varId: number) => {
+    if (!selected) return
+    try {
+      await api.delete(`/recipes/${selected.id}/variations/${varId}`)
+      showToast('Variation deleted — reverted to global recipe')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Failed to delete variation', 'error') }
+  }
+
+  const addVariationItem = async (varId: number, form: ItemForm) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/variations/${varId}/items`, {
+        item_type:               form.item_type,
+        ingredient_id:           form.item_type === 'ingredient' ? Number(form.ingredient_id) : null,
+        recipe_item_id:          form.item_type === 'recipe'     ? Number(form.recipe_item_id) : null,
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Ingredient added to variation')
+      setItemModal(false)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Add failed', 'error') }
+  }
+
+  const updateVariationItem = async (varId: number, form: ItemForm) => {
+    if (!selected || !editItemModal) return
+    try {
+      await api.put(`/recipes/${selected.id}/variations/${varId}/items/${editItemModal.id}`, {
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Item updated')
+      setEditItemModal(null)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Update failed', 'error') }
+  }
+
+  const deleteVariationItem = async (varId: number, itemId: number) => {
+    if (!selected) return
+    try {
+      await api.delete(`/recipes/${selected.id}/variations/${varId}/items/${itemId}`)
+      showToast('Item removed from variation')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Delete failed', 'error') }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -358,7 +474,7 @@ export default function RecipesPage() {
                       Yield: <span className="font-mono font-semibold text-text-2">{selected.yield_qty}{selected.yield_unit_abbr ? ' ' + selected.yield_unit_abbr : ''}</span>
                     </span>
                     <span className="text-sm text-text-3">·</span>
-                    <span className="text-sm text-text-3">{selected.items.length} ingredient{selected.items.length !== 1 ? 's' : ''}</span>
+                    <span className="text-sm text-text-3">{activeItems.length} ingredient{activeItems.length !== 1 ? 's' : ''}</span>
                   </div>
                   {selected.description && <p className="mt-2 text-sm text-text-2 leading-relaxed">{selected.description}</p>}
                 </div>
@@ -375,72 +491,145 @@ export default function RecipesPage() {
                 </div>
               </div>
 
-              {/* COGS strip */}
+              {/* ── Country + Currency selectors (above COGS) ── */}
               {selected.cogs_by_country.length > 0 && (
-                <div className="bg-surface border border-border rounded-xl p-4 mb-5">
-                  <div className="flex items-center gap-3 mb-3 flex-wrap">
-                    <span className="text-xs font-semibold text-text-2 uppercase tracking-wide">COGS by Country</span>
+                <div className="flex items-center gap-3 mb-4 flex-wrap">
+                  <select
+                    value={selectedCountryId}
+                    onChange={e => {
+                      const id = Number(e.target.value)
+                      setSelectedCountryId(id)
+                      // Reset currency to country default when country changes
+                      setSelectedCurrencyCode('')
+                    }}
+                    className="input text-sm"
+                    style={{ minWidth: 160 }}
+                  >
+                    {selected.cogs_by_country.map(c => (
+                      <option key={c.country_id} value={c.country_id}>
+                        {c.country_name}{c.has_variation ? ' ✦' : ''}
+                      </option>
+                    ))}
+                  </select>
+
+                  {currencyOptions.length > 0 && (
                     <select
-                      value={selectedCountryId}
-                      onChange={e => setSelectedCountryId(Number(e.target.value))}
-                      className="input text-sm ml-auto"
-                      style={{ maxWidth: 200 }}
+                      value={selectedCurrencyCode || (activeCogs?.currency_code ?? '')}
+                      onChange={e => setSelectedCurrencyCode(e.target.value === (activeCogs?.currency_code ?? '') ? '' : e.target.value)}
+                      className="input text-sm"
+                      style={{ minWidth: 90 }}
+                      title="Display currency"
                     >
-                      {selected.cogs_by_country.map(c => (
-                        <option key={c.country_id} value={c.country_id}>{c.country_name}</option>
+                      {currencyOptions.map(c => (
+                        <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
                       ))}
                     </select>
-                  </div>
-                  {activeCogs ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <CogsKpi
-                        label="Total Cost (base)"
-                        value={fmtCost(activeCogs.total_cost_base)}
-                      />
-                      <CogsKpi
-                        label={`Total Cost (${activeCogs.currency_code})`}
-                        value={`${activeCogs.currency_symbol}${fmtCost(activeCogs.total_cost_local)}`}
-                      />
-                      <CogsKpi
-                        label={`Per Portion (${activeCogs.currency_code})`}
-                        value={`${activeCogs.currency_symbol}${fmtCost(activeCogs.cost_per_portion * activeCogs.exchange_rate)}`}
-                      />
-                      <div className="bg-surface-2 rounded-lg p-3">
-                        <div className="text-xs text-text-3 mb-1">Quote Coverage</div>
-                        {(() => {
-                          const c = activeCogs.coverage
-                          const cfg = {
-                            fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
-                            fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
-                            partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
-                            not_quoted:       { icon: '✕', label: 'Not Quoted',        cls: 'text-red-500',    sub: 'No price quotes found for this country',          subCls: 'text-red-400'     },
-                          }[c] ?? { icon: '?', label: c, cls: 'text-text-3', sub: '', subCls: '' }
-                          return (
-                            <>
-                              <div className={`text-lg font-bold font-mono ${cfg.cls}`}>{cfg.icon} {cfg.label}</div>
-                              {cfg.sub && <div className={`text-xs mt-0.5 ${cfg.subCls}`}>{cfg.sub}</div>}
-                            </>
-                          )
-                        })()}
-                        {(false) && (
-                          <div className="text-xs text-amber-500 mt-0.5">unused</div>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
+                  )}
+
+                  {activeCogs && (
+                    <span className="text-xs text-text-3 ml-auto">
+                      {activeCogs.has_variation
+                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold">✦ Market Variation · {activeCogs.country_name}</span>
+                        : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-2 text-text-3">🌍 Global Recipe</span>
+                      }
+                    </span>
+                  )}
                 </div>
               )}
 
-              {/* Ingredients table */}
-              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                  <span className="font-semibold text-sm text-text-1">Ingredients</span>
-                  <button className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5" onClick={() => setItemModal(true)}>
-                    <PlusIcon size={11} /> Add Ingredient
-                  </button>
+              {/* ── COGS KPIs ── */}
+              {activeCogs && (
+                <div className="bg-surface border border-border rounded-xl p-4 mb-5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <CogsKpi
+                      label="Total Cost (base)"
+                      value={fmtCost(activeCogs.total_cost_base)}
+                    />
+                    <CogsKpi
+                      label={`Total Cost (${displayCurrency.code})`}
+                      value={`${displayCurrency.symbol}${fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}`}
+                    />
+                    <CogsKpi
+                      label={`Per Portion (${displayCurrency.code})`}
+                      value={`${displayCurrency.symbol}${fmtCost(activeCogs.cost_per_portion * displayCurrency.rate)}`}
+                    />
+                    <div className="bg-surface-2 rounded-lg p-3">
+                      <div className="text-xs text-text-3 mb-1">Quote Coverage</div>
+                      {(() => {
+                        const c = activeCogs.coverage
+                        const cfg = {
+                          fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
+                          fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
+                          partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
+                          not_quoted:       { icon: '✕', label: 'Not Quoted',        cls: 'text-red-500',    sub: 'No price quotes found for this country',          subCls: 'text-red-400'     },
+                        }[c] ?? { icon: '?', label: c, cls: 'text-text-3', sub: '', subCls: '' }
+                        return (
+                          <>
+                            <div className={`text-lg font-bold font-mono ${cfg.cls}`}>{cfg.icon} {cfg.label}</div>
+                            {cfg.sub && <div className={`text-xs mt-0.5 ${cfg.subCls}`}>{cfg.sub}</div>}
+                          </>
+                        )
+                      })()}
+                    </div>
+                  </div>
                 </div>
-                {selected.items.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-text-3 text-sm">No ingredients yet. Add your first ingredient.</div>
+              )}
+
+              {/* ── Ingredients table ── */}
+              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
+                    {activeCogs?.has_variation
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Variation</span>
+                      : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
+                    }
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Variation action button */}
+                    {selectedCountryId !== '' && (
+                      activeCogs?.has_variation && activeCogs.variation_id ? (
+                        <button
+                          className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
+                          onClick={() => setConfirmDelete({ type: 'variation', id: activeCogs.variation_id! })}
+                          title="Delete market variation — reverts to global recipe"
+                        >
+                          <TrashIcon size={11} /> Delete Variation
+                        </button>
+                      ) : (
+                        <button
+                          className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                          onClick={() => {
+                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
+                            if (window.confirm(`Create a market variation for ${countryName}?\n\nThis lets you define different ingredients for this market. The global recipe remains unchanged.\n\nCopy global ingredients as a starting point?`)) {
+                              createVariation(selectedCountryId as number, true)
+                            } else if (window.confirm('Create empty variation instead?')) {
+                              createVariation(selectedCountryId as number, false)
+                            }
+                          }}
+                          title="Create a market-specific variation of this recipe"
+                        >
+                          ✦ Create Variation
+                        </button>
+                      )
+                    )}
+                    <button
+                      className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                      onClick={() => {
+                        setItemModalForVariation(activeVariation?.id ?? null)
+                        setItemModal(true)
+                      }}
+                    >
+                      <PlusIcon size={11} /> Add Ingredient
+                    </button>
+                  </div>
+                </div>
+                {activeItems.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-text-3 text-sm">
+                    {activeCogs?.has_variation
+                      ? 'No ingredients in this market variation yet. Add ingredients above.'
+                      : 'No ingredients yet. Add your first ingredient.'}
+                  </div>
                 ) : (
                   <table className="w-full text-sm">
                     <thead>
@@ -448,14 +637,14 @@ export default function RecipesPage() {
                         <th className="px-4 py-2.5 text-left font-semibold">Ingredient</th>
                         <th className="px-4 py-2.5 text-left font-semibold">Qty</th>
                         <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
-                        {activeCogs && <th className="px-4 py-2.5 text-right font-semibold">Cost ({activeCogs.currency_code})</th>}
+                        {activeCogs && <th className="px-4 py-2.5 text-right font-semibold">Cost ({displayCurrency.code})</th>}
                         <th className="w-16" />
                       </tr>
                     </thead>
                     <tbody>
-                      {selected.items.map(item => {
+                      {activeItems.map(item => {
                         const cogLine = activeCogs?.lines.find(l => l.id === item.id)
-                        const localCost = cogLine?.cost != null ? cogLine.cost * (activeCogs?.exchange_rate ?? 1) : null
+                        const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
                         return (
                           <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-2/50 group">
                             <td className="px-4 py-2.5">
@@ -479,7 +668,7 @@ export default function RecipesPage() {
                               <td className="px-4 py-2.5 text-right font-mono">
                                 {localCost != null
                                   ? <div className="flex flex-col items-end">
-                                      <span className="text-text-1">{activeCogs.currency_symbol}{fmtCost(localCost)}</span>
+                                      <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
                                       {cogLine?.quote_is_preferred === false && (
                                         <span className="text-[10px] text-amber-400 leading-none mt-0.5">best available</span>
                                       )}
@@ -504,12 +693,12 @@ export default function RecipesPage() {
                         )
                       })}
                     </tbody>
-                    {activeCogs && activeCogs.total_cost_local > 0 && (
+                    {activeCogs && activeCogs.total_cost_base > 0 && (
                       <tfoot>
                         <tr className="border-t-2 border-border bg-surface-2">
                           <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={3}>Total</td>
                           <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
-                            {activeCogs.currency_symbol}{fmtCost(activeCogs.total_cost_local)}
+                            {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                           </td>
                           <td />
                         </tr>
@@ -541,19 +730,33 @@ export default function RecipesPage() {
           item={editItemModal}
           ingredients={ingredients}
           recipes={recipes.filter(r => r.id !== selected?.id)}
-          onSave={editItemModal ? updateItem : addItem}
-          onClose={() => { setItemModal(false); setEditItemModal(null) }}
+          onSave={form => {
+            if (editItemModal) {
+              if (activeVariation) updateVariationItem(activeVariation.id, form)
+              else                 updateItem(form)
+            } else {
+              if (itemModalForVariation != null) addVariationItem(itemModalForVariation, form)
+              else                               addItem(form)
+            }
+          }}
+          onClose={() => { setItemModal(false); setEditItemModal(null); setItemModalForVariation(null) }}
         />
       )}
 
       {confirmDelete && (
         <ConfirmDialog
-          message={confirmDelete.type === 'recipe'
-            ? 'This will permanently delete the recipe and all its ingredients.'
-            : 'Remove this ingredient from the recipe?'}
+          message={
+            confirmDelete.type === 'recipe'     ? 'This will permanently delete the recipe and all its ingredients.' :
+            confirmDelete.type === 'variation'  ? 'Delete this market variation? The global recipe will be used for this country going forward.' :
+            'Remove this ingredient from the recipe?'
+          }
           onConfirm={() => {
-            if (confirmDelete.type === 'recipe') deleteRecipe(confirmDelete.id)
-            else deleteItem(confirmDelete.id)
+            if (confirmDelete.type === 'recipe')    deleteRecipe(confirmDelete.id)
+            else if (confirmDelete.type === 'variation') deleteVariation(confirmDelete.id)
+            else {
+              if (activeVariation) deleteVariationItem(activeVariation.id, confirmDelete.id)
+              else                 deleteItem(confirmDelete.id)
+            }
             setConfirmDelete(null)
           }}
           onCancel={() => setConfirmDelete(null)}

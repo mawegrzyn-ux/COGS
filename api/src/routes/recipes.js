@@ -6,8 +6,8 @@ router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT r.*,
-             u.abbreviation          AS yield_unit_abbr,
-             COUNT(ri.id)::int       AS item_count
+             u.abbreviation AS yield_unit_abbr,
+             COUNT(ri.id) FILTER (WHERE ri.variation_id IS NULL)::int AS item_count
       FROM   mcogs_recipes r
       LEFT JOIN mcogs_units u        ON u.id = r.yield_unit_id
       LEFT JOIN mcogs_recipe_items ri ON ri.recipe_id = r.id
@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ── GET /recipes/:id  (with full items + COGS per country) ───────────────────
+// ── GET /recipes/:id  (with full items + variations + COGS per country) ──────
 router.get('/:id', async (req, res) => {
   try {
     // Recipe header
@@ -33,8 +33,8 @@ router.get('/:id', async (req, res) => {
     `, [req.params.id]);
     if (!recipe) return res.status(404).json({ error: { message: 'Recipe not found' } });
 
-    // Recipe items (ingredients + sub-recipes)
-    const { rows: items } = await pool.query(`
+    // Global recipe items (variation_id IS NULL)
+    const { rows: globalItems } = await pool.query(`
       SELECT ri.*,
              i.name                           AS ingredient_name,
              i.base_unit_id,
@@ -47,19 +47,83 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN mcogs_ingredients i  ON i.id  = ri.ingredient_id
       LEFT JOIN mcogs_units ub       ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
-      WHERE  ri.recipe_id = $1
+      WHERE  ri.recipe_id = $1 AND ri.variation_id IS NULL
       ORDER BY ri.id ASC
     `, [req.params.id]);
 
-    // COGS per country — for each ingredient line, find preferred vendor quote
+    // Variations with their items
+    const { rows: varRows } = await pool.query(`
+      SELECT rv.id          AS var_id,
+             rv.country_id,
+             c.name         AS country_name,
+             ri.id          AS item_id,
+             ri.recipe_id,
+             ri.item_type,
+             ri.ingredient_id,
+             ri.recipe_item_id,
+             ri.prep_qty,
+             ri.prep_unit,
+             ri.prep_to_base_conversion,
+             ri.created_at  AS item_created_at,
+             ri.updated_at  AS item_updated_at,
+             i.name         AS ingredient_name,
+             i.base_unit_id,
+             i.waste_pct,
+             i.default_prep_unit,
+             ub.abbreviation AS base_unit_abbr,
+             sr.name         AS sub_recipe_name,
+             sr.yield_qty    AS sub_recipe_yield_qty
+      FROM   mcogs_recipe_variations rv
+      JOIN   mcogs_countries c ON c.id = rv.country_id
+      LEFT JOIN mcogs_recipe_items ri ON ri.variation_id = rv.id
+      LEFT JOIN mcogs_ingredients i   ON i.id  = ri.ingredient_id
+      LEFT JOIN mcogs_units ub        ON ub.id = i.base_unit_id
+      LEFT JOIN mcogs_recipes sr      ON sr.id = ri.recipe_item_id
+      WHERE  rv.recipe_id = $1
+      ORDER BY rv.id ASC, ri.id ASC NULLS LAST
+    `, [req.params.id]);
+
+    // Assemble variations map: var_id → { id, country_id, country_name, items[] }
+    const varMap = {};
+    for (const row of varRows) {
+      if (!varMap[row.var_id]) {
+        varMap[row.var_id] = {
+          id:           row.var_id,
+          country_id:   row.country_id,
+          country_name: row.country_name,
+          items:        [],
+        };
+      }
+      if (row.item_id) {
+        varMap[row.var_id].items.push({
+          id:                      row.item_id,
+          recipe_id:               row.recipe_id,
+          item_type:               row.item_type,
+          ingredient_id:           row.ingredient_id,
+          recipe_item_id:          row.recipe_item_id,
+          prep_qty:                row.prep_qty,
+          prep_unit:               row.prep_unit,
+          prep_to_base_conversion: row.prep_to_base_conversion,
+          ingredient_name:         row.ingredient_name,
+          base_unit_abbr:          row.base_unit_abbr,
+          sub_recipe_name:         row.sub_recipe_name,
+          sub_recipe_yield_qty:    row.sub_recipe_yield_qty,
+          waste_pct:               row.waste_pct,
+          default_prep_unit:       row.default_prep_unit,
+        });
+      }
+    }
+    const variations = Object.values(varMap);
+    // Quick lookup by country_id
+    const varByCountry = {};
+    for (const v of variations) varByCountry[v.country_id] = v;
+
+    // COGS per country
     const { rows: countries } = await pool.query(`
       SELECT c.id, c.name, c.currency_code, c.currency_symbol, c.exchange_rate
       FROM   mcogs_countries c ORDER BY c.name ASC
     `);
 
-    // Single query: preferred quote wins; fallback to cheapest active quote in country
-    // is_preferred = true  → preferred vendor set
-    // is_preferred = false → best available fallback, flagged for display
     const { rows: quotes } = await pool.query(`
       WITH preferred AS (
         SELECT pv.ingredient_id,
@@ -67,9 +131,12 @@ router.get('/:id', async (req, res) => {
                pq.purchase_price,
                pq.qty_in_base_units,
                pq.purchase_unit,
+               vc.exchange_rate AS vendor_exchange_rate,
                true AS is_preferred
         FROM   mcogs_ingredient_preferred_vendor pv
-        JOIN   mcogs_price_quotes pq ON pq.id = pv.quote_id
+        JOIN   mcogs_price_quotes pq ON pq.id  = pv.quote_id
+        JOIN   mcogs_vendors      v  ON v.id   = pq.vendor_id
+        JOIN   mcogs_countries    vc ON vc.id  = v.country_id
         WHERE  pq.is_active = true
       ),
       fallback AS (
@@ -79,9 +146,11 @@ router.get('/:id', async (req, res) => {
                pq.purchase_price,
                pq.qty_in_base_units,
                pq.purchase_unit,
+               vc.exchange_rate AS vendor_exchange_rate,
                false AS is_preferred
         FROM   mcogs_price_quotes pq
-        JOIN   mcogs_vendors v ON v.id = pq.vendor_id
+        JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+        JOIN   mcogs_countries    vc ON vc.id = v.country_id
         WHERE  pq.is_active = true
         ORDER  BY pq.ingredient_id, v.country_id,
                   (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
@@ -95,24 +164,30 @@ router.get('/:id', async (req, res) => {
       )
     `);
 
-    // Build quote lookup: ingredient_id -> country_id -> { price_per_base_unit, is_preferred }
     const quoteLookup = {};
     for (const q of quotes) {
       if (!quoteLookup[q.ingredient_id]) quoteLookup[q.ingredient_id] = {};
+      const vendorRate = Math.max(Number(q.vendor_exchange_rate) || 1, 0.000001);
       quoteLookup[q.ingredient_id][q.country_id] = {
-        price_per_base_unit: q.qty_in_base_units > 0 ? Number(q.purchase_price) / Number(q.qty_in_base_units) : 0,
-        purchase_unit:       q.purchase_unit,
-        is_preferred:        q.is_preferred,
+        price_per_base_unit: q.qty_in_base_units > 0
+          ? (Number(q.purchase_price) / Number(q.qty_in_base_units)) / vendorRate
+          : 0,
+        purchase_unit: q.purchase_unit,
+        is_preferred:  q.is_preferred,
       };
     }
 
-    // Calculate COGS per country
     const cogs_by_country = countries.map(country => {
+      // Use variation items for this country if they exist, otherwise global items
+      const variation    = varByCountry[country.id];
+      const itemsForCost = variation ? variation.items : globalItems;
+
       let total_base     = 0;
       let preferredCount = 0;
       let quotedCount    = 0;
-      const ingItems = items.filter(i => i.item_type === 'ingredient');
-      const lines = items.map(item => {
+      const ingItems = itemsForCost.filter(i => i.item_type === 'ingredient');
+
+      const lines = itemsForCost.map(item => {
         if (item.item_type !== 'ingredient') return { ...item, cost: null, quote_is_preferred: null };
         const q = quoteLookup[item.ingredient_id]?.[country.id];
         if (!q) return { ...item, cost: null, quote_is_preferred: null };
@@ -124,6 +199,7 @@ router.get('/:id', async (req, res) => {
         total_base += cost;
         return { ...item, cost: Math.round(cost * 10000) / 10000, quote_is_preferred: q.is_preferred };
       });
+
       const total = ingItems.length;
       let coverage;
       if (total === 0)                         coverage = 'fully_preferred';
@@ -131,22 +207,25 @@ router.get('/:id', async (req, res) => {
       else if (quotedCount    === total)       coverage = 'fully_quoted';
       else if (quotedCount    > 0)             coverage = 'partially_quoted';
       else                                     coverage = 'not_quoted';
+
       const local_rate = Number(country.exchange_rate);
       return {
-        country_id:       country.id,
-        country_name:     country.name,
-        currency_code:    country.currency_code,
-        currency_symbol:  country.currency_symbol,
-        exchange_rate:    local_rate,
-        total_cost_base:  Math.round(total_base * 10000) / 10000,
-        total_cost_local: Math.round(total_base * local_rate * 10000) / 10000,
-        cost_per_portion: Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
+        country_id:        country.id,
+        country_name:      country.name,
+        currency_code:     country.currency_code,
+        currency_symbol:   country.currency_symbol,
+        exchange_rate:     local_rate,
+        has_variation:     !!variation,
+        variation_id:      variation?.id ?? null,
+        total_cost_base:   Math.round(total_base * 10000) / 10000,
+        total_cost_local:  Math.round(total_base * local_rate * 10000) / 10000,
+        cost_per_portion:  Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
         coverage,
         lines,
       };
     });
 
-    res.json({ ...recipe, items, cogs_by_country });
+    res.json({ ...recipe, items: globalItems, variations, cogs_by_country });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch recipe' } });
@@ -225,7 +304,7 @@ router.put('/:id/items/:itemId', async (req, res) => {
   try {
     const { rows: [item] } = await pool.query(`
       UPDATE mcogs_recipe_items SET prep_qty=$1, prep_unit=$2, prep_to_base_conversion=$3, updated_at=NOW()
-      WHERE id=$4 AND recipe_id=$5 RETURNING *
+      WHERE id=$4 AND recipe_id=$5 AND variation_id IS NULL RETURNING *
     `, [prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1, req.params.itemId, req.params.id]);
     if (!item) return res.status(404).json({ error: { message: 'Item not found' } });
     res.json(item);
@@ -238,11 +317,116 @@ router.put('/:id/items/:itemId', async (req, res) => {
 // ── DELETE /recipes/:id/items/:itemId ─────────────────────────────────────────
 router.delete('/:id/items/:itemId', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2`, [req.params.itemId, req.params.id]);
+    await pool.query(`DELETE FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2 AND variation_id IS NULL`, [req.params.itemId, req.params.id]);
     res.status(204).end();
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete item' } });
+  }
+});
+
+// ── POST /recipes/:id/variations ──────────────────────────────────────────────
+// Body: { country_id, copy_global?: boolean }
+router.post('/:id/variations', async (req, res) => {
+  const { country_id, copy_global } = req.body;
+  if (!country_id) return res.status(400).json({ error: { message: 'country_id is required' } });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [v] } = await client.query(`
+      INSERT INTO mcogs_recipe_variations (recipe_id, country_id)
+      VALUES ($1, $2) RETURNING *
+    `, [req.params.id, country_id]);
+
+    if (copy_global) {
+      const { rows: globalItems } = await client.query(
+        `SELECT * FROM mcogs_recipe_items WHERE recipe_id = $1 AND variation_id IS NULL ORDER BY id ASC`,
+        [req.params.id]
+      );
+      for (const item of globalItems) {
+        await client.query(`
+          INSERT INTO mcogs_recipe_items
+            (recipe_id, variation_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        `, [item.recipe_id, v.id, item.item_type, item.ingredient_id, item.recipe_item_id,
+            item.prep_qty, item.prep_unit, item.prep_to_base_conversion]);
+      }
+    }
+    await client.query('COMMIT');
+    res.json(v);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'A variation already exists for this country' } });
+    res.status(500).json({ error: { message: 'Failed to create variation' } });
+  } finally {
+    client.release();
+  }
+});
+
+// ── DELETE /recipes/:id/variations/:varId ─────────────────────────────────────
+router.delete('/:id/variations/:varId', async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM mcogs_recipe_variations WHERE id=$1 AND recipe_id=$2`,
+      [req.params.varId, req.params.id]
+    );
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to delete variation' } });
+  }
+});
+
+// ── POST /recipes/:id/variations/:varId/items ─────────────────────────────────
+router.post('/:id/variations/:varId/items', async (req, res) => {
+  const { item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion } = req.body;
+  if (!['ingredient','recipe'].includes(item_type))
+    return res.status(400).json({ error: { message: 'item_type must be ingredient or recipe' } });
+  if (!prep_qty || Number(prep_qty) <= 0)
+    return res.status(400).json({ error: { message: 'prep_qty must be positive' } });
+  try {
+    const { rows: [item] } = await pool.query(`
+      INSERT INTO mcogs_recipe_items
+        (recipe_id, variation_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
+    `, [req.params.id, req.params.varId, item_type, ingredient_id||null, recipe_item_id||null,
+        prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1]);
+    res.json(item);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to add variation item' } });
+  }
+});
+
+// ── PUT /recipes/:id/variations/:varId/items/:itemId ──────────────────────────
+router.put('/:id/variations/:varId/items/:itemId', async (req, res) => {
+  const { prep_qty, prep_unit, prep_to_base_conversion } = req.body;
+  try {
+    const { rows: [item] } = await pool.query(`
+      UPDATE mcogs_recipe_items SET prep_qty=$1, prep_unit=$2, prep_to_base_conversion=$3, updated_at=NOW()
+      WHERE id=$4 AND recipe_id=$5 AND variation_id=$6 RETURNING *
+    `, [prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1,
+        req.params.itemId, req.params.id, req.params.varId]);
+    if (!item) return res.status(404).json({ error: { message: 'Variation item not found' } });
+    res.json(item);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to update variation item' } });
+  }
+});
+
+// ── DELETE /recipes/:id/variations/:varId/items/:itemId ───────────────────────
+router.delete('/:id/variations/:varId/items/:itemId', async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2 AND variation_id=$3`,
+      [req.params.itemId, req.params.id, req.params.varId]
+    );
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to delete variation item' } });
   }
 });
 
