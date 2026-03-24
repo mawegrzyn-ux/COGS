@@ -1957,24 +1957,6 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
   const revValid   = parseFloat(targetRevenue) > 0
   const canGo      = catValid && levelValid && revValid
 
-  // Helper: distribute remaining % to last editable row
-  function autoBalance<K extends string | number>(
-    pcts: Record<K, string>,
-    changedKey: K,
-    newVal: string,
-    keys: K[]
-  ): Record<K, string> {
-    const next = { ...pcts, [changedKey]: newVal }
-    const others = keys.filter(k => k !== changedKey)
-    const usedByChanged = parseFloat(newVal) || 0
-    const usedByOthers  = others.reduce((s, k) => s + (parseFloat(pcts[k]) || 0), 0)
-    const remaining = Math.max(0, 100 - usedByChanged - usedByOthers)
-    // Apply remainder to last key that is not the changed one
-    const lastOther = others[others.length - 1]
-    if (lastOther !== undefined) (next as Record<string | number, string>)[lastOther] = String(Math.round(remaining * 10) / 10)
-    return next
-  }
-
   async function generate() {
     setGenerating(true); setError(''); setPreview(null)
     try {
@@ -2121,27 +2103,34 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
               </div>
             </div>
             <div className="space-y-2">
-              {categories.map(([cat, count], i) => (
-                <div key={cat} className="flex items-center gap-3">
-                  <div
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ background: `hsl(${(i * 47) % 360},60%,55%)` }}
-                  />
-                  <span className="text-sm text-gray-800 flex-1 min-w-0 truncate">{cat}</span>
-                  <span className="text-xs text-gray-400 shrink-0">{count} item{count !== 1 ? 's' : ''}</span>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <input
-                      className="input text-right w-16 text-sm tabular-nums"
-                      type="number" min="0" max="100" step="1"
-                      value={catPcts[cat] ?? '0'}
-                      onChange={e => setCatPcts(prev =>
-                        autoBalance(prev, cat, e.target.value, categories.map(([c]) => c))
-                      )}
+              {categories.map(([cat, count], i) => {
+                const othersTotal = categories.filter(([c]) => c !== cat).reduce((s, [c]) => s + (parseFloat(catPcts[c]) || 0), 0)
+                const remainder   = Math.max(0, Math.round((100 - othersTotal) * 10) / 10)
+                return (
+                  <div key={cat} className="flex items-center gap-3">
+                    <div
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ background: `hsl(${(i * 47) % 360},60%,55%)` }}
                     />
-                    <span className="text-xs text-gray-400 w-4">%</span>
+                    <span className="text-sm text-gray-800 flex-1 min-w-0 truncate">{cat}</span>
+                    <span className="text-xs text-gray-400 shrink-0">{count} item{count !== 1 ? 's' : ''}</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        className="text-xs text-gray-300 hover:text-accent hover:underline px-1 tabular-nums"
+                        title={`Fill to remainder: ${remainder}%`}
+                        onClick={() => setCatPcts(prev => ({ ...prev, [cat]: String(remainder) }))}
+                      >={remainder}%</button>
+                      <input
+                        className="input text-right w-16 text-sm tabular-nums"
+                        type="number" min="0" max="100" step="1"
+                        value={catPcts[cat] ?? '0'}
+                        onChange={e => setCatPcts(prev => ({ ...prev, [cat]: e.target.value }))}
+                      />
+                      <span className="text-xs text-gray-400 w-4">%</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
             {!catValid && (
               <p className="text-xs text-red-500 mt-2">
@@ -2171,28 +2160,35 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
                 Used to compute a weighted average price per item — higher-level prices affect quantity distribution
               </p>
               <div className="space-y-2">
-                {priceLevels.map((l, i) => (
-                  <div key={l.id} className="flex items-center gap-3">
-                    <div
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ background: `hsl(${220 + i * 30},65%,55%)` }}
-                    />
-                    <span className="text-sm text-gray-800 flex-1">
-                      {l.name}{l.is_default ? ' ★' : ''}
-                    </span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <input
-                        className="input text-right w-16 text-sm tabular-nums"
-                        type="number" min="0" max="100" step="1"
-                        value={levelPcts[l.id] ?? '0'}
-                        onChange={e => setLevelPcts(prev =>
-                          autoBalance(prev as Record<number, string>, l.id, e.target.value, priceLevels.map(x => x.id)) as Record<number, string>
-                        )}
+                {priceLevels.map((l, i) => {
+                  const othersLvl  = priceLevels.filter(x => x.id !== l.id).reduce((s, x) => s + (parseFloat(String(levelPcts[x.id])) || 0), 0)
+                  const remainderL = Math.max(0, Math.round((100 - othersLvl) * 10) / 10)
+                  return (
+                    <div key={l.id} className="flex items-center gap-3">
+                      <div
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ background: `hsl(${220 + i * 30},65%,55%)` }}
                       />
-                      <span className="text-xs text-gray-400 w-4">%</span>
+                      <span className="text-sm text-gray-800 flex-1">
+                        {l.name}{l.is_default ? ' ★' : ''}
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          className="text-xs text-gray-300 hover:text-accent hover:underline px-1 tabular-nums"
+                          title={`Fill to remainder: ${remainderL}%`}
+                          onClick={() => setLevelPcts(prev => ({ ...prev, [l.id]: String(remainderL) }))}
+                        >={remainderL}%</button>
+                        <input
+                          className="input text-right w-16 text-sm tabular-nums"
+                          type="number" min="0" max="100" step="1"
+                          value={levelPcts[l.id] ?? '0'}
+                          onChange={e => setLevelPcts(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        />
+                        <span className="text-xs text-gray-400 w-4">%</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
               {!levelValid && (
                 <p className="text-xs text-red-500 mt-2">
@@ -2314,6 +2310,7 @@ function ScenarioTool({
   // ── All-levels mode ────────────────────────────────────────────────────────
   const [allLevelsData,    setAllLevelsData]    = useState<{ level: PriceLevel; data: CogsData }[]>([])
   const [allLevelsLoading, setAllLevelsLoading] = useState(false)
+  const [allLevelsCompact, setAllLevelsCompact] = useState(false) // hides Qty + Revenue columns
 
   useEffect(() => {
     if (levelId !== 'ALL' || !menuId) { setAllLevelsData([]); return }
@@ -2366,7 +2363,7 @@ function ScenarioTool({
     try {
       const payload = {
         name,
-        price_level_id: levelId || null,
+        price_level_id: (levelId && levelId !== 'ALL') ? levelId : null,
         // qty_data keyed by natural recipe/ingredient keys: "r_123", "i_456"
         qty_data: Object.fromEntries(
           Object.entries(qty)
@@ -2859,6 +2856,13 @@ ${tableHtml}
                 onResetQty(); setSavedId(null); setSavedName(''); setDirty(false); dirtyRef.current = false
               }}>Reset Qty</button>
             )}
+            {levelId === 'ALL' && (
+              <button
+                className={`btn btn-sm text-xs border ${allLevelsCompact ? 'bg-accent text-white border-accent' : 'btn-outline'}`}
+                title={allLevelsCompact ? 'Show qty & revenue columns' : 'Hide qty & revenue columns'}
+                onClick={() => setAllLevelsCompact(v => !v)}
+              >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
+            )}
             {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
               <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
                 <button
@@ -3083,22 +3087,26 @@ ${tableHtml}
               <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Item</th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Type</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn</th>
-                  <th className="px-2 py-2 text-center font-semibold text-gray-500 min-w-[80px]" rowSpan={2}>Qty Sold</th>
+                  {!allLevelsCompact && (
+                    <th className="px-2 py-2 text-center font-semibold text-gray-500 min-w-[80px]" rowSpan={2}>Qty Sold</th>
+                  )}
                   {allLevelsData.map(({ level }) => (
-                    <th key={level.id} colSpan={3}
+                    <th key={level.id} colSpan={allLevelsCompact ? 2 : 3}
                       className="px-3 py-2 text-center font-semibold text-accent border-l border-gray-300 bg-accent-dim/30 whitespace-nowrap">
                       {level.name}{level.is_default ? ' ★' : ''}
                     </th>
                   ))}
                   <th className="px-3 py-2 text-right font-semibold text-gray-500 border-l border-gray-300 whitespace-nowrap" rowSpan={2}>Total Cost</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-500 border-l border-gray-300 whitespace-nowrap" rowSpan={2}>Total COGS%</th>
                 </tr>
                 <tr>
                   {allLevelsData.map(({ level }) => (
                     <>
                       <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 whitespace-nowrap normal-case">Price</th>
-                      <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue (net)</th>
+                      {!allLevelsCompact && (
+                        <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue (net)</th>
+                      )}
                       <th key={`${level.id}-ch`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 normal-case">COGS%</th>
                     </>
                   ))}
@@ -3108,23 +3116,30 @@ ${tableHtml}
                 {allLevelCategorised.map(([cat, catRows]) => {
                   const cQ = catRows.reduce((s, r) => s + r.qty, 0)
                   const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+                  const cSumRevenues = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const cAvgRevenue = allLevelsData.length > 0 ? cSumRevenues / allLevelsData.length : 0
+                  const cTotalCogsPct = cAvgRevenue > 0 ? (cC / cAvgRevenue) * 100 : null
                   return (
                     <>
                       <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
-                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide" colSpan={2}>{cat}</td>
+                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide">{cat}</td>
                         <td />
-                        <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
-                          {cQ > 0 ? cQ.toLocaleString() : '—'}
-                        </td>
+                        {!allLevelsCompact && (
+                          <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                            {cQ > 0 ? cQ.toLocaleString() : '—'}
+                          </td>
+                        )}
                         {allLevelsData.map(({ level }) => {
                           const cR = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
                           const cP = cR > 0 ? (cC / cR) * 100 : null
                           return (
                             <>
                               <td key={`${level.id}-cp`} className="border-l border-gray-200" />
-                              <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
-                                {cR > 0 ? fmtMoney(cR) : '—'}
-                              </td>
+                              {!allLevelsCompact && (
+                                <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
+                                  {cR > 0 ? fmtMoney(cR) : '—'}
+                                </td>
+                              )}
                               <td key={`${level.id}-cc`} className={`px-3 py-1.5 text-right text-xs ${cogsColour(cP)}`}>
                                 {fmtPct(cP)}
                               </td>
@@ -3132,72 +3147,98 @@ ${tableHtml}
                           )
                         })}
                         <td className="border-l border-gray-200" />
+                        <td className={`px-3 py-1.5 text-right text-xs border-l border-gray-200 ${cogsColour(cTotalCogsPct)}`}>
+                          {fmtPct(cTotalCogsPct)}
+                        </td>
                       </tr>
-                      {catRows.map(row => (
-                        <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
-                          <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
-                          <td className="px-3 py-2.5">
-                            <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number" min="0" step="1"
-                              value={qty[row.nat_key] ?? ''}
-                              onChange={e => onQtyChange(row.nat_key, e.target.value)}
-                              placeholder="0"
-                              className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
-                            />
-                          </td>
-                          {row.perLevel.map(p => (
-                            <>
-                              <td key={`${p.level.id}-ip`} className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
-                                {p.price_gross > 0 ? fmtMoney(p.price_gross) : <span className="text-gray-300">—</span>}
+                      {catRows.map(row => {
+                        const sumRevenues = row.perLevel.reduce((s, p) => s + p.revenue, 0)
+                        const avgRevenue = allLevelsData.length > 0 ? sumRevenues / allLevelsData.length : 0
+                        const totalCogsPct = avgRevenue > 0 ? (row.total_cost / avgRevenue) * 100 : null
+                        return (
+                          <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
+                            <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
+                            <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
+                            {!allLevelsCompact && (
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="number" min="0" step="1"
+                                  value={qty[row.nat_key] ?? ''}
+                                  onChange={e => onQtyChange(row.nat_key, e.target.value)}
+                                  placeholder="0"
+                                  className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                                />
                               </td>
-                              <td key={`${p.level.id}-ir`} className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
-                                {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
-                              </td>
-                              <td key={`${p.level.id}-ic`} className={`px-3 py-2.5 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
-                                {fmtPct(p.cogs_pct)}
-                              </td>
-                            </>
-                          ))}
-                          <td className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
-                            {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
-                          </td>
-                        </tr>
-                      ))}
+                            )}
+                            {row.perLevel.map(p => (
+                              <>
+                                <td key={`${p.level.id}-ip`} className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
+                                  {p.price_gross > 0 ? fmtMoney(p.price_gross) : <span className="text-gray-300">—</span>}
+                                </td>
+                                {!allLevelsCompact && (
+                                  <td key={`${p.level.id}-ir`} className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
+                                    {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
+                                  </td>
+                                )}
+                                <td key={`${p.level.id}-ic`} className={`px-3 py-2.5 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
+                                  {fmtPct(p.cogs_pct)}
+                                </td>
+                              </>
+                            ))}
+                            <td className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
+                              {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
+                            </td>
+                            <td className={`px-3 py-2.5 text-right text-xs border-l border-gray-100 ${cogsColour(totalCogsPct)}`}>
+                              {fmtPct(totalCogsPct)}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </>
                   )
                 })}
               </tbody>
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
-                <tr>
-                  <td className="px-3 py-3 font-bold text-gray-900" colSpan={2}>Grand Total</td>
-                  <td />
-                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                    {allLevelRows.reduce((s, r) => s + r.qty, 0).toLocaleString()}
-                  </td>
-                  {allLevelsData.map(({ level }) => {
-                    const tR = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
-                    const tC = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
-                    const tP = tR > 0 ? (tC / tR) * 100 : null
-                    return (
-                      <>
-                        <td key={`${level.id}-fp`} className="border-l border-gray-200" />
-                        <td key={`${level.id}-fr`} className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                          {tR > 0 ? fmtMoney(tR) : '—'}
+                {(() => {
+                  const gtTotalCost = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
+                  const gtSumRevenues = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const gtAvgRevenue = allLevelsData.length > 0 ? gtSumRevenues / allLevelsData.length : 0
+                  const gtTotalCogsPct = gtAvgRevenue > 0 ? (gtTotalCost / gtAvgRevenue) * 100 : null
+                  return (
+                    <tr>
+                      <td className="px-3 py-3 font-bold text-gray-900">Grand Total</td>
+                      <td />
+                      {!allLevelsCompact && (
+                        <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                          {allLevelRows.reduce((s, r) => s + r.qty, 0).toLocaleString()}
                         </td>
-                        <td key={`${level.id}-fc`} className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(tP)}`}>
-                          {fmtPct(tP)}
-                        </td>
-                      </>
-                    )
-                  })}
-                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
-                    {fmtMoney(allLevelRows.reduce((s, r) => s + r.total_cost, 0))}
-                  </td>
-                </tr>
+                      )}
+                      {allLevelsData.map(({ level }) => {
+                        const tR = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
+                        const tP = tR > 0 ? (gtTotalCost / tR) * 100 : null
+                        return (
+                          <>
+                            <td key={`${level.id}-fp`} className="border-l border-gray-200" />
+                            {!allLevelsCompact && (
+                              <td key={`${level.id}-fr`} className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                                {tR > 0 ? fmtMoney(tR) : '—'}
+                              </td>
+                            )}
+                            <td key={`${level.id}-fc`} className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(tP)}`}>
+                              {fmtPct(tP)}
+                            </td>
+                          </>
+                        )
+                      })}
+                      <td className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
+                        {fmtMoney(gtTotalCost)}
+                      </td>
+                      <td className={`px-3 py-3 text-right font-bold text-sm border-l border-gray-200 ${cogsColour(gtTotalCogsPct)}`}>
+                        {fmtPct(gtTotalCogsPct)}
+                      </td>
+                    </tr>
+                  )
+                })()}
               </tfoot>
             </table>
           </div>

@@ -62,6 +62,23 @@ interface RecipeDetail extends Recipe {
   cogs_by_country:  CogsByCountry[]
 }
 
+interface MenuAssignment {
+  menu_id: number
+  menu_name: string
+  menu_item_id: number
+  display_name: string
+  sell_price_gross: number
+  sell_price_net: number
+  cogs_pct_net: number | null
+  tax_name: string
+}
+
+interface SimpleMenu {
+  id: number
+  name: string
+  country_id: number
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt     = (n: number | string | null | undefined, dp = 3) => Number(n ?? 0).toFixed(dp)
@@ -80,7 +97,7 @@ export default function RecipesPage() {
   const [panelWidth,   setPanelWidth]   = useState(288) // px, default w-72
   const [selected,     setSelected]     = useState<RecipeDetail | null>(null)
   const [loadingDetail,setLoadingDetail]= useState(false)
-  const [selectedCountryId, setSelectedCountryId] = useState<number | ''>('')
+  const [selectedCountryId, setSelectedCountryId] = useState<number | '' | 'GLOBAL'>('')
   const [selectedCurrencyCode, setSelectedCurrencyCode] = useState<string>('')
   const [countries, setCountries] = useState<Country[]>([])
 
@@ -91,6 +108,11 @@ export default function RecipesPage() {
   const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [showComparison,        setShowComparison]        = useState(false)
+
+  const [menus,               setMenus]               = useState<SimpleMenu[]>([])
+  const [menuAssignments,     setMenuAssignments]      = useState<MenuAssignment[]>([])
+  const [selectedMenuId,      setSelectedMenuId]       = useState<number | null>(null)
+  const [loadingMenuAssign,   setLoadingMenuAssign]    = useState(false)
 
   // search/filter
   const [search,     setSearch]     = useState('')
@@ -104,6 +126,10 @@ export default function RecipesPage() {
 
   useEffect(() => {
     api.get('/countries').then((d: Country[]) => setCountries(d || [])).catch(() => {})
+  }, [api])
+
+  useEffect(() => {
+    api.get('/menus').then((d: SimpleMenu[]) => setMenus(d || [])).catch(() => {})
   }, [api])
 
   // ── Load ──────────────────────────────────────────────────────────────────
@@ -135,14 +161,55 @@ export default function RecipesPage() {
       const d = await api.get(`/recipes/${id}`)
       setSelected(d)
       setSelectedCountryId(prev => {
+        if (prev === 'GLOBAL') return 'GLOBAL'
         const available = d.cogs_by_country?.map((c: CogsByCountry) => c.country_id) ?? []
-        if (prev !== '' && available.includes(prev)) return prev
+        if (typeof prev === 'number' && available.includes(prev)) return prev
         return d.cogs_by_country?.[0]?.country_id ?? ''
       })
     } finally {
       setLoadingDetail(false)
     }
   }, [api])
+
+  // Fetch menu assignments for this recipe in the selected market
+  useEffect(() => {
+    if (!selected || !selectedCountryId || selectedCountryId === 'GLOBAL') {
+      setMenuAssignments([])
+      setSelectedMenuId(null)
+      return
+    }
+    const countryMenus = menus.filter(m => m.country_id === selectedCountryId)
+    if (!countryMenus.length) { setMenuAssignments([]); setSelectedMenuId(null); return }
+
+    setLoadingMenuAssign(true)
+    Promise.all(
+      countryMenus.map(m =>
+        api.get(`/cogs/menu/${m.id}?market_id=${selectedCountryId}`)
+          .then((res: any) => ({ menu_id: m.id, menu_name: m.name, res }))
+          .catch(() => null)
+      )
+    ).then(results => {
+      const found: MenuAssignment[] = []
+      ;(results as Array<{ menu_id: number; menu_name: string; res: any } | null>).forEach(r => {
+        if (!r) return
+        const item = r.res?.items?.find((it: any) => it.recipe_id === selected.id)
+        if (item) {
+          found.push({
+            menu_id:        r.menu_id,
+            menu_name:      r.menu_name,
+            menu_item_id:   item.menu_item_id,
+            display_name:   item.display_name,
+            sell_price_gross: item.sell_price_gross ?? 0,
+            sell_price_net:   item.sell_price_net   ?? 0,
+            cogs_pct_net:     item.cogs_pct_net     ?? null,
+            tax_name:         item.tax_name         ?? '',
+          })
+        }
+      })
+      setMenuAssignments(found)
+      setSelectedMenuId(found.length > 0 ? found[0].menu_id : null)
+    }).finally(() => setLoadingMenuAssign(false))
+  }, [selected?.id, selectedCountryId, menus, api])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -163,25 +230,26 @@ export default function RecipesPage() {
     return r
   }, [recipes, search, filterCat, sortField, sortDir])
 
-  const activeCogs = useMemo(
-    () => selected?.cogs_by_country.find(c => c.country_id === selectedCountryId) ?? selected?.cogs_by_country[0] ?? null,
-    [selected, selectedCountryId]
-  )
+  const activeCogs = useMemo(() => {
+    if (selectedCountryId === 'GLOBAL') return null
+    return selected?.cogs_by_country.find(c => c.country_id === selectedCountryId) ?? selected?.cogs_by_country[0] ?? null
+  }, [selected, selectedCountryId])
 
-  // Currency display: '__BASE__' sentinel = USD base (rate 1); else use override or country default
+  // Currency display
   const displayCurrency = useMemo(() => {
     if (selectedCurrencyCode === '__BASE__') return { code: 'USD', symbol: '$', rate: 1 }
-    if (selectedCurrencyCode) {
+    if (selectedCurrencyCode && selectedCurrencyCode !== '__MARKET__') {
       const c = countries.find(c => c.currency_code === selectedCurrencyCode)
       if (c) return { code: c.currency_code, symbol: c.currency_symbol, rate: Number(c.exchange_rate) }
     }
+    // __MARKET__ or empty → use market/active country currency
     if (activeCogs) return { code: activeCogs.currency_code, symbol: activeCogs.currency_symbol, rate: Number(activeCogs.exchange_rate) }
     return { code: 'USD', symbol: '$', rate: 1 }
   }, [selectedCurrencyCode, countries, activeCogs])
 
   // Active items for display: variation items if a variation exists for selected country, else global
   const activeVariation = useMemo(() => {
-    if (!selected || selectedCountryId === '') return null
+    if (!selected || selectedCountryId === '' || selectedCountryId === 'GLOBAL') return null
     return selected.variations?.find(v => v.country_id === selectedCountryId) ?? null
   }, [selected, selectedCountryId])
 
@@ -368,6 +436,13 @@ export default function RecipesPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const recipeCogsColour = (pct: number | null): string => {
+    if (pct == null) return 'text-text-3'
+    if (pct <= 30)   return 'text-emerald-600'
+    if (pct <= 40)   return 'text-amber-500'
+    return 'text-red-500'
+  }
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
@@ -522,13 +597,16 @@ export default function RecipesPage() {
                     <select
                       value={selectedCountryId}
                       onChange={e => {
-                        setSelectedCountryId(Number(e.target.value))
+                        const v = e.target.value
+                        if (v === 'GLOBAL') setSelectedCountryId('GLOBAL')
+                        else setSelectedCountryId(Number(v))
                         setSelectedCurrencyCode('')
                         setShowComparison(false)
                       }}
                       className="input text-sm"
                       style={{ minWidth: 160 }}
                     >
+                      <option value="GLOBAL">🌍 Global</option>
                       {selected.cogs_by_country.map(c => (
                         <option key={c.country_id} value={c.country_id}>
                           {c.country_name}{c.has_variation ? ' ✦' : ''}
@@ -537,22 +615,21 @@ export default function RecipesPage() {
                     </select>
                   </div>
 
-                  {currencyOptions.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Currency</span>
-                      <select
-                        value={selectedCurrencyCode || (activeCogs?.currency_code ?? '')}
-                        onChange={e => setSelectedCurrencyCode(e.target.value)}
-                        className="input text-sm"
-                        style={{ minWidth: 120 }}
-                      >
-                        <option value="__BASE__">USD $ (base)</option>
-                        {currencyOptions.map(c => (
-                          <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Currency</span>
+                    <select
+                      value={selectedCurrencyCode || '__MARKET__'}
+                      onChange={e => setSelectedCurrencyCode(e.target.value === '__MARKET__' ? '' : e.target.value)}
+                      className="input text-sm"
+                      style={{ minWidth: 120 }}
+                    >
+                      <option value="__MARKET__">Market Currency</option>
+                      <option value="__BASE__">System (USD $)</option>
+                      {currencyOptions.map(c => (
+                        <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
+                      ))}
+                    </select>
+                  </div>
 
                   {activeCogs && (
                     <div className="flex items-center gap-2 ml-auto">
@@ -575,42 +652,96 @@ export default function RecipesPage() {
               )}
 
               {/* ── COGS KPIs ── */}
-              {activeCogs && (
-                <div className="bg-surface border border-border rounded-xl p-4 mb-5">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <CogsKpi
-                      label="Total Cost (USD)"
-                      value={`$${fmtCost(activeCogs.total_cost_base)}`}
-                    />
-                    <CogsKpi
-                      label={`Total Cost (${displayCurrency.code})`}
-                      value={`${displayCurrency.symbol}${fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}`}
-                    />
-                    <CogsKpi
-                      label={`Per Portion (${displayCurrency.code})`}
-                      value={`${displayCurrency.symbol}${fmtCost(activeCogs.cost_per_portion * displayCurrency.rate)}`}
-                    />
-                    <div className="bg-surface-2 rounded-lg p-3">
-                      <div className="text-xs text-text-3 mb-1">Quote Coverage</div>
-                      {(() => {
-                        const c = activeCogs.coverage
-                        const cfg = {
-                          fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
-                          fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
-                          partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
-                          not_quoted:       { icon: '✕', label: 'Not Quoted',        cls: 'text-red-500',    sub: 'No price quotes found for this country',          subCls: 'text-red-400'     },
-                        }[c] ?? { icon: '?', label: c, cls: 'text-text-3', sub: '', subCls: '' }
-                        return (
+              {activeCogs && (() => {
+                const showBase = displayCurrency.code !== 'USD'
+                const activeMenu = menuAssignments.find(m => m.menu_id === selectedMenuId) ?? menuAssignments[0] ?? null
+                return (
+                  <div className="bg-surface border border-border rounded-xl p-4 mb-5">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {/* Tile 1 — Per Portion */}
+                      <div className="bg-surface-2 rounded-lg p-3">
+                        <div className="text-xs text-text-3 mb-1">Per Portion</div>
+                        <div className="text-lg font-bold font-mono text-text-1">
+                          {displayCurrency.symbol}{fmtCost(activeCogs.cost_per_portion * displayCurrency.rate)}
+                        </div>
+                        {showBase && (
+                          <div className="text-xs font-mono text-text-3 mt-0.5">${fmtCost(activeCogs.cost_per_portion)}</div>
+                        )}
+                      </div>
+
+                      {/* Tile 2 — Total Cost */}
+                      <div className="bg-surface-2 rounded-lg p-3">
+                        <div className="text-xs text-text-3 mb-1">Total Cost</div>
+                        <div className="text-lg font-bold font-mono text-text-1">
+                          {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
+                        </div>
+                        {showBase && (
+                          <div className="text-xs font-mono text-text-3 mt-0.5">${fmtCost(activeCogs.total_cost_base)}</div>
+                        )}
+                      </div>
+
+                      {/* Tile 3 — Menu Price */}
+                      <div className="bg-surface-2 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1 gap-1">
+                          <div className="text-xs text-text-3 shrink-0">Menu Price</div>
+                          {menuAssignments.length > 1 ? (
+                            <select
+                              value={selectedMenuId ?? ''}
+                              onChange={e => setSelectedMenuId(Number(e.target.value))}
+                              className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[100px]"
+                            >
+                              {menuAssignments.map(m => (
+                                <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>
+                              ))}
+                            </select>
+                          ) : menuAssignments.length === 1 ? (
+                            <span className="text-xs text-text-3 truncate max-w-[100px]" title={menuAssignments[0].menu_name}>{menuAssignments[0].menu_name}</span>
+                          ) : null}
+                        </div>
+                        {activeMenu ? (
                           <>
-                            <div className={`text-lg font-bold font-mono ${cfg.cls}`}>{cfg.icon} {cfg.label}</div>
-                            {cfg.sub && <div className={`text-xs mt-0.5 ${cfg.subCls}`}>{cfg.sub}</div>}
+                            <div className="text-lg font-bold font-mono text-text-1">
+                              {displayCurrency.symbol}{fmtCost(activeMenu.sell_price_net * displayCurrency.rate)}
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <span className="text-xs text-text-3">net ex-tax</span>
+                              {activeMenu.cogs_pct_net != null && (
+                                <span className={`text-xs font-semibold ${recipeCogsColour(activeMenu.cogs_pct_net)}`}>
+                                  {activeMenu.cogs_pct_net.toFixed(1)}% COGS
+                                </span>
+                              )}
+                            </div>
                           </>
-                        )
-                      })()}
+                        ) : loadingMenuAssign ? (
+                          <div className="text-xs text-text-3 mt-1">Loading…</div>
+                        ) : (
+                          <div className="text-sm font-mono text-text-3 italic mt-1">Not on menu</div>
+                        )}
+                      </div>
+
+                      {/* Tile 4 — Quote Coverage (unchanged) */}
+                      <div className="bg-surface-2 rounded-lg p-3">
+                        <div className="text-xs text-text-3 mb-1">Quote Coverage</div>
+                        {(() => {
+                          const c = activeCogs.coverage
+                          const cfg = {
+                            fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
+                            fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
+                            partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
+                            not_quoted:       { icon: '✕', label: 'Not Quoted',        cls: 'text-red-500',    sub: 'No price quotes found for this country',          subCls: 'text-red-400'     },
+                          }[c] ?? { icon: '?', label: c, cls: 'text-text-3', sub: '', subCls: '' }
+                          return (
+                            <>
+                              <div className={`text-lg font-bold font-mono ${cfg.cls}`}>{cfg.icon} {cfg.label}</div>
+                              {cfg.sub && <div className={`text-xs mt-0.5 ${cfg.subCls}`}>{cfg.sub}</div>}
+                            </>
+                          )
+                        })()}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* ── Ingredients table ── */}
               <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
@@ -625,7 +756,7 @@ export default function RecipesPage() {
                     }
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {selectedCountryId !== '' && (
+                    {selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && (
                       activeCogs?.has_variation && activeCogs.variation_id ? (
                         <>
                           <button
@@ -864,6 +995,109 @@ export default function RecipesPage() {
                   )
                 )}
               </div>
+
+              {/* ── Menus section ── */}
+              {selectedCountryId !== 'GLOBAL' && selectedCountryId !== '' && (
+                <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <span className="font-semibold text-sm text-text-1">Menus</span>
+                    <span className="text-xs text-text-3">
+                      {loadingMenuAssign ? 'Loading…' : menuAssignments.length === 0 ? 'Not assigned to any menu' : `${menuAssignments.length} menu${menuAssignments.length !== 1 ? 's' : ''}`}
+                    </span>
+                  </div>
+                  {loadingMenuAssign ? (
+                    <div className="p-4 text-center"><Spinner /></div>
+                  ) : menuAssignments.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-text-3 text-sm">
+                      This recipe hasn't been added to any {activeCogs?.country_name ?? ''} menu yet.
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                          <th className="px-4 py-2.5 text-left font-semibold">Menu</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Display Name</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">Price (gross)</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">Price (net)</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">COGS%</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {menuAssignments.map(m => (
+                          <tr key={m.menu_id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
+                            <td className="px-4 py-2.5 font-medium text-text-1">{m.menu_name}</td>
+                            <td className="px-4 py-2.5 text-text-2">{m.display_name}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-text-2">
+                              {m.sell_price_gross > 0 ? `${displayCurrency.symbol}${fmtCost(m.sell_price_gross * displayCurrency.rate)}` : '—'}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-text-1">
+                              {m.sell_price_net > 0 ? `${displayCurrency.symbol}${fmtCost(m.sell_price_net * displayCurrency.rate)}` : '—'}
+                            </td>
+                            <td className={`px-4 py-2.5 text-right font-semibold ${recipeCogsColour(m.cogs_pct_net)}`}>
+                              {m.cogs_pct_net != null ? `${m.cogs_pct_net.toFixed(1)}%` : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {/* ── Global view: Cost by Market ── */}
+              {selectedCountryId === 'GLOBAL' && selected && (
+                <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+                  <div className="px-4 py-3 border-b border-border">
+                    <span className="font-semibold text-sm text-text-1">Cost by Market</span>
+                  </div>
+                  {selected.cogs_by_country.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-text-3 text-sm">No market data available.</div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                          <th className="px-4 py-2.5 text-left font-semibold">Market</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Recipe</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">Per Portion</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">Total Cost</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Coverage</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.cogs_by_country.map(c => (
+                          <tr key={c.country_id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
+                            <td className="px-4 py-2.5 font-medium text-text-1">{c.country_name}</td>
+                            <td className="px-4 py-2.5">
+                              {c.has_variation
+                                ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold">✦ Variation</span>
+                                : <span className="text-xs px-1.5 py-0.5 rounded-full bg-surface-2 text-text-3">🌍 Global</span>
+                              }
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-text-1">
+                              {c.currency_symbol}{fmtCost(c.cost_per_portion)}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono text-text-2">
+                              {c.currency_symbol}{fmtCost(c.total_cost_local)}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {(() => {
+                                const cfg: Record<string, { label: string; cls: string }> = {
+                                  fully_preferred:  { label: '✓ Preferred',  cls: 'text-emerald-600 bg-emerald-50' },
+                                  fully_quoted:     { label: '✓ Quoted',     cls: 'text-blue-600 bg-blue-50'      },
+                                  partially_quoted: { label: '⚠ Partial',    cls: 'text-amber-500 bg-amber-50'    },
+                                  not_quoted:       { label: '✕ No Quotes',  cls: 'text-red-500 bg-red-50'        },
+                                }
+                                const cv = cfg[c.coverage] ?? { label: c.coverage, cls: 'text-text-3 bg-surface-2' }
+                                return <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${cv.cls}`}>{cv.label}</span>
+                              })()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
 
             </div>
           )}
