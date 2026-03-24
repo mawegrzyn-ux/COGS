@@ -36,6 +36,7 @@
   },
   "disableAllHooks": true,
   "enabledPlugins": {
-    "claude-preview@claude-plugins-official": false
+    "claude-preview@claude-plugins-official": false,
+    "claude-preview@builtin": false
   }
 }

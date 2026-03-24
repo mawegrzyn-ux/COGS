@@ -2373,22 +2373,6 @@ function ScenarioTool({
   const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({})
   const [costOverrides,  setCostOverrides]  = useState<Record<string, string>>({})
 
-  // Auto-convert overrides when display rate changes (user switches currency)
-  const prevDispRateRef = useRef<number | null>(null)
-  useEffect(() => {
-    const prev = prevDispRateRef.current
-    prevDispRateRef.current = dispRate
-    if (!prev || prev === dispRate) return
-    const f = dispRate / prev
-    const conv = (r: Record<string, string>) => {
-      const n: Record<string, string> = {}
-      for (const [k, v] of Object.entries(r)) n[k] = String(Math.round(parseFloat(v) * f * 100) / 100)
-      return n
-    }
-    if (Object.keys(priceOverrides).length) setPriceOverrides(prev => conv(prev))
-    if (Object.keys(costOverrides).length)  setCostOverrides(prev => conv(prev))
-  }, [dispRate]) // eslint-disable-line
-
   // ── Change history ─────────────────────────────────────────────────────────
   const [history,     setHistory]     = useState<HistoryEntry[]>([])
   const [showHistory, setShowHistory] = useState(false)
@@ -2565,6 +2549,22 @@ function ScenarioTool({
     return t ? { dispRate: Number(t.exchange_rate) / marketRate, dispSym: t.currency_symbol }
              : { dispRate: 1, dispSym: menuCountry.currency_symbol }
   }, [dispCurrCode, menuCountry, marketRate, countries])
+
+  // Auto-convert overrides when display rate changes (user switches currency)
+  const prevDispRateRef = useRef<number | null>(null)
+  useEffect(() => {
+    const prev = prevDispRateRef.current
+    prevDispRateRef.current = dispRate
+    if (!prev || prev === dispRate) return
+    const f = dispRate / prev
+    const conv = (r: Record<string, string>) => {
+      const n: Record<string, string> = {}
+      for (const [k, v] of Object.entries(r)) n[k] = String(Math.round(parseFloat(v) * f * 100) / 100)
+      return n
+    }
+    if (Object.keys(priceOverrides).length) setPriceOverrides(prev => conv(prev))
+    if (Object.keys(costOverrides).length)  setCostOverrides(prev => conv(prev))
+  }, [dispRate]) // eslint-disable-line
 
   // ── Per-item scenario calculations (revenue on NET price ex-tax) ──────────
 
