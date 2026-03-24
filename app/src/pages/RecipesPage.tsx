@@ -88,7 +88,7 @@ export default function RecipesPage() {
   const [recipeModal,  setRecipeModal]  = useState<'new' | Recipe | null>(null)
   const [itemModal,    setItemModal]    = useState(false)
   const [editItemModal,setEditItemModal]= useState<RecipeItem | null>(null)
-  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation'; id: number } | null>(null)
+  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [showComparison,        setShowComparison]        = useState(false)
 
@@ -315,6 +315,15 @@ export default function RecipesPage() {
       showToast('Variation deleted — reverted to global recipe')
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Failed to delete variation', 'error') }
+  }
+
+  const copyVariationToGlobal = async (varId: number) => {
+    if (!selected) return
+    try {
+      const { copied } = await api.post(`/recipes/${selected.id}/variations/${varId}/copy-to-global`, {})
+      showToast(`Copied ${copied} ingredient${copied !== 1 ? 's' : ''} to global recipe`)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Failed to copy to global', 'error') }
   }
 
   const addVariationItem = async (varId: number, form: ItemForm) => {
@@ -618,13 +627,22 @@ export default function RecipesPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     {selectedCountryId !== '' && (
                       activeCogs?.has_variation && activeCogs.variation_id ? (
-                        <button
-                          className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
-                          onClick={() => setConfirmDelete({ type: 'variation', id: activeCogs.variation_id! })}
-                          title="Delete market variation — reverts to global recipe"
-                        >
-                          <TrashIcon size={11} /> Delete Variation
-                        </button>
+                        <>
+                          <button
+                            className="px-3 py-1.5 text-xs border border-accent text-accent hover:bg-accent-dim rounded-lg transition-colors flex items-center gap-1"
+                            onClick={() => setConfirmDelete({ type: 'copy-to-global', id: activeCogs.variation_id! })}
+                            title="Replace global recipe ingredients with this variation's ingredients"
+                          >
+                            ↑ Copy to Global
+                          </button>
+                          <button
+                            className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
+                            onClick={() => setConfirmDelete({ type: 'variation', id: activeCogs.variation_id! })}
+                            title="Delete market variation — reverts to global recipe"
+                          >
+                            <TrashIcon size={11} /> Delete Variation
+                          </button>
+                        </>
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
@@ -885,13 +903,15 @@ export default function RecipesPage() {
       {confirmDelete && (
         <ConfirmDialog
           message={
-            confirmDelete.type === 'recipe'     ? 'This will permanently delete the recipe and all its ingredients.' :
-            confirmDelete.type === 'variation'  ? 'Delete this market variation? The global recipe will be used for this country going forward.' :
+            confirmDelete.type === 'recipe'          ? 'This will permanently delete the recipe and all its ingredients.' :
+            confirmDelete.type === 'variation'       ? 'Delete this market variation? The global recipe will be used for this country going forward.' :
+            confirmDelete.type === 'copy-to-global'  ? 'Replace all global ingredients with this variation\'s ingredients? The global recipe will be overwritten. All other market variations are unaffected.' :
             'Remove this ingredient from the recipe?'
           }
           onConfirm={() => {
-            if (confirmDelete.type === 'recipe')    deleteRecipe(confirmDelete.id)
-            else if (confirmDelete.type === 'variation') deleteVariation(confirmDelete.id)
+            if (confirmDelete.type === 'recipe')             deleteRecipe(confirmDelete.id)
+            else if (confirmDelete.type === 'variation')     deleteVariation(confirmDelete.id)
+            else if (confirmDelete.type === 'copy-to-global') copyVariationToGlobal(confirmDelete.id)
             else {
               if (activeVariation) deleteVariationItem(activeVariation.id, confirmDelete.id)
               else                 deleteItem(confirmDelete.id)

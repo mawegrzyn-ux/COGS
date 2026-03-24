@@ -1259,7 +1259,7 @@ function PriceLevelTool({
       }
     })
     if (data?.base_currency && !seen.has(data.base_currency.code)) {
-      result.push({ code: data.base_currency.code, symbol: data.base_currency.code })
+      result.push({ code: data.base_currency.code, symbol: data.base_currency.symbol ?? '$' })
     }
     return result.sort((a, b) => a.code.localeCompare(b.code))
   }, [countries, data])
@@ -1269,15 +1269,18 @@ function PriceLevelTool({
   // For "single currency" display: find the rate of the target currency to base
   const targetRate = useMemo(() => {
     if (currencyMode === 'own') return null
+    // Base currency always has rate 1
+    if (singleCurrency === data?.base_currency?.code) return 1
     const c = countries.find(c => c.currency_code === singleCurrency)
-    return c?.exchange_rate ?? 1
-  }, [currencyMode, singleCurrency, countries])
+    return c ? Number(c.exchange_rate) : 1
+  }, [currencyMode, singleCurrency, countries, data])
 
   const displaySym = useMemo(() => {
     if (currencyMode === 'own') return null
-    const c = countries.find(c => c.currency_code === singleCurrency)
-    return c?.currency_symbol ?? singleCurrency
-  }, [currencyMode, singleCurrency, countries])
+    // Look in allCurrencies which includes the base currency entry with correct symbol
+    const c = allCurrencies.find(c => c.code === singleCurrency)
+    return c?.symbol ?? singleCurrency
+  }, [currencyMode, singleCurrency, allCurrencies])
 
   // Get country by id from data
   // Filter data
@@ -1419,7 +1422,7 @@ function PriceLevelTool({
             {currencyMode === 'single' && (
               <select className="select select-sm" value={singleCurrency} onChange={e => onSingleCurrency(e.target.value)}>
                 <option value="">— Pick currency —</option>
-                {allCurrencies.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+                {allCurrencies.map(c => <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>)}
               </select>
             )}
           </div>
@@ -1437,7 +1440,7 @@ function PriceLevelTool({
         {/* Currency mode hint */}
         {currencyMode === 'single' && singleCurrency && (
           <div className="px-4 py-2 bg-blue-50 text-blue-700 text-xs border-b border-blue-100">
-            Prices converted to <strong>{singleCurrency}</strong> using stored exchange rates. Edits will be converted back to each country's local currency before saving.
+            Prices converted to <strong>{displaySym}{singleCurrency}</strong> using stored exchange rates. Edits will be converted back to each country's local currency before saving.
           </div>
         )}
         {!selectedLevel && (
@@ -1548,9 +1551,45 @@ function MarketPriceTool({
   saving, saved, onCountryChange, onSearch, onSavePrice,
 }: MarketPriceToolProps) {
 
-  const levels     = data?.levels ?? []
-  const country    = data?.country
-  const sym        = country?.symbol ?? ''
+  const [dispCurrCode, setDispCurrCode] = useState<string>('')  // '' = market's own currency
+
+  const levels  = data?.levels ?? []
+  const country = data?.country
+
+  // Reset display currency whenever the selected market changes
+  useEffect(() => { setDispCurrCode('') }, [countryId])
+
+  // Deduplicated currency options: market own (default) + all others + USD base
+  const mptCurrencyOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const opts: { value: string; label: string; sym: string; rate: number }[] = []
+    if (country) {
+      opts.push({ value: '', label: `${country.code} ${country.symbol} (market)`, sym: country.symbol, rate: country.rate })
+      seen.add(country.code)
+    }
+    for (const c of countries) {
+      if (!seen.has(c.currency_code)) {
+        seen.add(c.currency_code)
+        opts.push({ value: c.currency_code, label: `${c.currency_code} ${c.currency_symbol}`, sym: c.currency_symbol, rate: Number(c.exchange_rate) })
+      }
+    }
+    if (!seen.has('USD')) {
+      opts.push({ value: '__BASE__', label: 'USD $ (base)', sym: '$', rate: 1 })
+    }
+    return opts
+  }, [countries, country])
+
+  // Compute display rate (market local → chosen currency) and symbol
+  const { dispRate, dispSym, dispCode } = useMemo(() => {
+    const marketRate = country?.rate || 1
+    if (!dispCurrCode || !country) return { dispRate: 1, dispSym: country?.symbol ?? '', dispCode: country?.code ?? '' }
+    if (dispCurrCode === '__BASE__') return { dispRate: 1 / marketRate, dispSym: '$', dispCode: 'USD' }
+    const target = countries.find(c => c.currency_code === dispCurrCode)
+    if (!target) return { dispRate: 1, dispSym: country.symbol, dispCode: country.code }
+    return { dispRate: Number(target.exchange_rate) / marketRate, dispSym: target.currency_symbol, dispCode: target.currency_code }
+  }, [dispCurrCode, country, countries])
+
+  const sym = dispSym
 
   const menuNames = useMemo(() => {
     const s = new Set((data?.items ?? []).map(i => i.menu_name))
@@ -1576,18 +1615,18 @@ function MarketPriceTool({
         item_type:    item.item_type,
         menu_name:    item.menu_name,
         category:     item.category || '',
-        cost:         item.cost,
+        cost:         item.cost * dispRate,
       }
       levels.forEach(l => {
         const ld = item.levels[l.id]
-        row[`lvl_${l.id}_gross`] = ld?.gross ?? null
+        row[`lvl_${l.id}_gross`] = ld?.gross != null ? ld.gross * dispRate : null
         row[`lvl_${l.id}_cogs`]  = ld?.cogs_pct ?? null
-        row[`lvl_${l.id}_net`]   = ld?.net ?? null
+        row[`lvl_${l.id}_net`]   = ld?.net   != null ? ld.net   * dispRate : null
         row[`lvl_${l.id}_set`]   = ld?.set ?? false
       })
       return row
     })
-  }, [data, levels])
+  }, [data, levels, dispRate])
 
   const filteredRows = useMemo(() => {
     if (!search) return flatRows
@@ -1598,8 +1637,8 @@ function MarketPriceTool({
 
   function exportCSV() {
     if (!data) return
-    const header = ['Item', 'Menu', 'Type', `Cost (${country?.code})`,
-      ...levels.flatMap(l => [`${l.name} Gross (${country?.code})`, `${l.name} COGS%`])]
+    const header = ['Item', 'Menu', 'Type', `Cost (${dispCode})`,
+      ...levels.flatMap(l => [`${l.name} Gross (${dispCode})`, `${l.name} COGS%`])]
     const csvRows = [header, ...sortedRows.map(r => [
       r.display_name, r.menu_name, r.item_type, r.cost.toFixed(2),
       ...levels.flatMap(l => [
@@ -1626,6 +1665,14 @@ function MarketPriceTool({
               {countries.map(c => <option key={c.id} value={c.id}>{c.name} ({c.currency_code})</option>)}
             </select>
           </div>
+          {country && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-gray-400">Display</span>
+              <select className="select select-sm min-w-[130px]" value={dispCurrCode} onChange={e => setDispCurrCode(e.target.value)}>
+                {mptCurrencyOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
           <div className="flex gap-2 ml-auto flex-wrap items-center">
             <input className="input input-sm w-40" placeholder="Filter items…" value={search} onChange={e => onSearch(e.target.value)} />
             {data && <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>}
@@ -1638,7 +1685,10 @@ function MarketPriceTool({
         {countryId && !loading && data && (
           <>
             <div className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">
-              Prices in {sym} {country?.code}. Click any gross price cell to edit. COGS% updates after save.
+              {dispCurrCode
+                ? <>Prices converted to <strong className="text-gray-600">{dispSym} {dispCode}</strong> from market local currency. Click any gross cell to edit — saved back in {country?.symbol} {country?.code}.</>
+                : <>Prices in <strong className="text-gray-600">{sym} {country?.code}</strong>. Click any gross price cell to edit. COGS% updates after save.</>
+              }
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1654,7 +1704,7 @@ function MarketPriceTool({
                     <ColumnHeader<MptRow> label="Type"     field="item_type"    sortField={sortField} sortDir={sortDir} onSort={setSort}
                       filterOptions={[{ value: 'recipe', label: 'Recipe' }, { value: 'ingredient', label: 'Ingredient' }]}
                       filterValues={getFilter('item_type')} onFilter={v => setFilter('item_type', v)} />
-                    <ColumnHeader<MptRow> label="Cost"     field="cost"         sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
+                    <ColumnHeader<MptRow> label={`Cost (${dispCode})`} field="cost" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                     {levels.flatMap(l => [
                       <ColumnHeader<MptRow> key={`${l.id}_g`} label={`${l.name} Gross`} field={`lvl_${l.id}_gross` as keyof MptRow} sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />,
                       <th key={`${l.id}_c`} className="px-3 py-2.5 text-xs font-semibold text-gray-500 text-right whitespace-nowrap">COGS %</th>,
@@ -1693,7 +1743,7 @@ function MarketPriceTool({
                                 sym={sym}
                                 saving={saving[key]}
                                 saved={saved[key]}
-                                onCommit={v => { if (v !== null) onSavePrice(row.menu_item_id, l.id, v) }}
+                                onCommit={v => { if (v !== null) onSavePrice(row.menu_item_id, l.id, dispRate !== 0 ? v / dispRate : v) }}
                               />
                             </div>
                           </td>,

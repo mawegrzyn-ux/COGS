@@ -430,4 +430,64 @@ router.delete('/:id/variations/:varId/items/:itemId', async (req, res) => {
   }
 });
 
+// ── POST /recipes/:id/variations/:varId/copy-to-global ────────────────────────
+// Replaces all global items on this recipe with the variation's items (in a transaction).
+router.post('/:id/variations/:varId/copy-to-global', async (req, res) => {
+  const recipeId = req.params.id;
+  const varId    = req.params.varId;
+  const client   = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Verify the variation belongs to this recipe
+    const { rows: [variation] } = await client.query(
+      `SELECT * FROM mcogs_recipe_variations WHERE id=$1 AND recipe_id=$2`,
+      [varId, recipeId]
+    );
+    if (!variation) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'Variation not found' } });
+    }
+
+    // Load variation items
+    const { rows: varItems } = await client.query(
+      `SELECT * FROM mcogs_recipe_items WHERE variation_id=$1 ORDER BY id ASC`,
+      [varId]
+    );
+
+    // Delete existing global items
+    await client.query(
+      `DELETE FROM mcogs_recipe_items WHERE recipe_id=$1 AND variation_id IS NULL`,
+      [recipeId]
+    );
+
+    // Insert variation items as new global items (variation_id = NULL)
+    for (const item of varItems) {
+      await client.query(`
+        INSERT INTO mcogs_recipe_items
+          (recipe_id, variation_id, item_type, ingredient_id, recipe_item_id,
+           prep_qty, prep_unit, prep_to_base_conversion)
+        VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
+      `, [
+        recipeId,
+        item.item_type,
+        item.ingredient_id   || null,
+        item.recipe_item_id  || null,
+        item.prep_qty,
+        item.prep_unit       || null,
+        item.prep_to_base_conversion || 1,
+      ]);
+    }
+
+    await client.query('COMMIT');
+    res.json({ copied: varItems.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to copy variation to global' } });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
