@@ -979,8 +979,8 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     ), [quotes, search]
   )
 
-  const initialQuoteFilters = useMemo<Record<string, string[]>>(
-    () => initialIngredientId ? { ingredient_id: [String(initialIngredientId)] } : {},
+  const initialQuoteFilters = useMemo(
+    () => (initialIngredientId ? { ingredient_id: [String(initialIngredientId)] } : {}) as Record<string, string[]>,
     [] // eslint-disable-line react-hooks/exhaustive-deps — intentionally only on mount
   )
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
