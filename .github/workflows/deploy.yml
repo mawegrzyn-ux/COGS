@@ -54,6 +54,7 @@ jobs:
             cd /var/www/menu-cogs
             git pull origin main
             cd api && npm install --production --silent
+            npm run migrate
             # Inject secrets into .env (add if missing, update if present)
             grep -q "^USDA_API_KEY=" .env \
               && sed -i "s|^USDA_API_KEY=.*|USDA_API_KEY=${{ secrets.USDA_API_KEY }}|" .env \

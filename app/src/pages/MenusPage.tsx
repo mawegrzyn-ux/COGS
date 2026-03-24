@@ -193,7 +193,7 @@ export default function MenusPage() {
 
   // scenario tool
   const [scenarioMenuId,  setScenarioMenuId]  = useState<number | null>(null)
-  const [scenarioLevelId, setScenarioLevelId] = useState<number | ''>('')
+  const [scenarioLevelId, setScenarioLevelId] = useState<number | '' | 'ALL'>('')
   const [scenarioData,    setScenarioData]    = useState<CogsData | null>(null)
   const [scenarioLoading, setScenarioLoading] = useState(false)
   const [scenarioQty,     setScenarioQty]     = useState<Record<string, string>>({})
@@ -504,6 +504,8 @@ export default function MenusPage() {
 
   useEffect(() => {
     if (activeTab !== 'scenario' || !scenarioMenuId) { setScenarioData(null); return }
+    // 'ALL' mode: ScenarioTool fetches per-level data internally; parent doesn't load
+    if (scenarioLevelId === 'ALL') { setScenarioData(null); return }
     setScenarioLoading(true)
     const url = scenarioLevelId
       ? `/cogs/menu/${scenarioMenuId}?price_level_id=${scenarioLevelId}`
@@ -1898,6 +1900,377 @@ function MarketPriceTool({
   )
 }
 
+// ── Sales Mix Generator Modal ─────────────────────────────────────────────────
+
+interface SalesMixGenProps {
+  data:           CogsData
+  priceLevels:    PriceLevel[]
+  menuId:         number
+  currencySymbol: string
+  onGenerate(qMap: Record<string, string>): void
+  onClose(): void
+}
+
+function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onGenerate, onClose }: SalesMixGenProps) {
+  const api = useApi()
+
+  // Derive categories from current menu data
+  const categories = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const item of data.items) {
+      const cat = item.category || 'Uncategorised'
+      map[cat] = (map[cat] || 0) + 1
+    }
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+  }, [data])
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const [targetRevenue, setTargetRevenue] = useState('')
+
+  // Category percentages — initialise with equal split
+  const [catPcts, setCatPcts] = useState<Record<string, string>>(() => {
+    const n   = categories.length
+    if (!n) return {}
+    const eq  = Math.floor(100 / n)
+    const rem = 100 - eq * (n - 1)
+    return Object.fromEntries(categories.map(([cat], i) => [cat, String(i === n - 1 ? rem : eq)]))
+  })
+
+  // Price-level percentages — initialise with equal split
+  const [levelPcts, setLevelPcts] = useState<Record<number, string>>(() => {
+    const n   = priceLevels.length
+    if (!n) return {}
+    const eq  = Math.floor(100 / n)
+    const rem = 100 - eq * (n - 1)
+    return Object.fromEntries(priceLevels.map((l, i) => [l.id, String(i === n - 1 ? rem : eq)]))
+  })
+
+  const [generating, setGenerating] = useState(false)
+  const [error,      setError]      = useState('')
+  const [preview,    setPreview]    = useState<{ label: string; qty: number; price: string }[] | null>(null)
+
+  // Validation
+  const catTotal   = categories.reduce((s, [c]) => s + (parseFloat(catPcts[c])    || 0), 0)
+  const levelTotal = priceLevels.reduce((s, l)   => s + (parseFloat(levelPcts[l.id]) || 0), 0)
+  const catValid   = Math.abs(catTotal   - 100) < 0.5
+  const levelValid = priceLevels.length === 0 || Math.abs(levelTotal - 100) < 0.5
+  const revValid   = parseFloat(targetRevenue) > 0
+  const canGo      = catValid && levelValid && revValid
+
+  // Helper: distribute remaining % to last editable row
+  function autoBalance<K extends string | number>(
+    pcts: Record<K, string>,
+    changedKey: K,
+    newVal: string,
+    keys: K[]
+  ): Record<K, string> {
+    const next = { ...pcts, [changedKey]: newVal }
+    const others = keys.filter(k => k !== changedKey)
+    const usedByChanged = parseFloat(newVal) || 0
+    const usedByOthers  = others.reduce((s, k) => s + (parseFloat(pcts[k]) || 0), 0)
+    const remaining = Math.max(0, 100 - usedByChanged - usedByOthers)
+    // Apply remainder to last key that is not the changed one
+    const lastOther = others[others.length - 1]
+    if (lastOther !== undefined) next[lastOther] = String(Math.round(remaining * 10) / 10)
+    return next
+  }
+
+  async function generate() {
+    setGenerating(true); setError(''); setPreview(null)
+    try {
+      const revenue     = parseFloat(targetRevenue)
+      const activeLevels = priceLevels.filter(l => (parseFloat(String(levelPcts[l.id])) || 0) > 0)
+
+      // Fetch COGS at each active price level to get per-item prices
+      // (If no price levels configured, fall back to current data prices)
+      const levelPriceMap: Record<number, Map<number, number>> = {}  // levelId → menu_item_id → sell_price_gross
+
+      if (activeLevels.length > 0) {
+        await Promise.all(activeLevels.map(async level => {
+          const d: CogsData = await api.get(`/cogs/menu/${menuId}?price_level_id=${level.id}`)
+          const m = new Map<number, number>()
+          for (const item of d.items) m.set(item.menu_item_id, item.sell_price_gross)
+          levelPriceMap[level.id] = m
+        }))
+      } else {
+        // No level split — use current data as-is at level 0 (placeholder)
+        const m = new Map<number, number>()
+        for (const item of data.items) m.set(item.menu_item_id, item.sell_price_gross)
+        levelPriceMap[0] = m
+        activeLevels.push({ id: 0, name: 'default', is_default: true })
+      }
+
+      // Compute weighted effective gross price per menu item
+      const effectivePrice: Record<number, number> = {}
+      for (const item of data.items) {
+        let p = 0
+        for (const level of activeLevels) {
+          const pct   = activeLevels.length === 1 ? 100 : (parseFloat(String(levelPcts[level.id])) || 0)
+          const price = levelPriceMap[level.id]?.get(item.menu_item_id) ?? 0
+          p += price * pct / 100
+        }
+        effectivePrice[item.menu_item_id] = p
+      }
+
+      // Group items by category
+      const catItems: Record<string, CogsItem[]> = {}
+      for (const item of data.items) {
+        const cat = item.category || 'Uncategorised'
+        if (!catItems[cat]) catItems[cat] = []
+        catItems[cat].push(item)
+      }
+
+      // Distribute revenue → quantities
+      // Within each category: equal revenue share per item, qty = rev_share / effective_price
+      const qMap: Record<string, string> = {}
+      const previewRows: { label: string; qty: number; price: string }[] = []
+
+      for (const [cat, items] of Object.entries(catItems)) {
+        const catRevenue  = revenue * (parseFloat(catPcts[cat]) || 0) / 100
+        if (catRevenue <= 0) continue
+
+        // Only items that have a real price set
+        const pricedItems = items.filter(i => effectivePrice[i.menu_item_id] > 0)
+        if (pricedItems.length === 0) continue
+
+        const itemRevShare = catRevenue / pricedItems.length
+
+        for (const item of pricedItems) {
+          const price = effectivePrice[item.menu_item_id]
+          const qty   = Math.max(1, Math.round(itemRevShare / price))
+          const key   = item.item_type === 'recipe'
+            ? `r_${item.recipe_id}`
+            : `i_${item.ingredient_id}`
+          qMap[key]   = String(qty)
+          previewRows.push({
+            label: item.display_name,
+            qty,
+            price: `${currencySymbol}${price.toFixed(2)}`,
+          })
+        }
+      }
+
+      setPreview(previewRows)
+      // Store qMap in a ref so Apply can use it
+      pendingQMap.current = qMap
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate mix')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const pendingQMap = useRef<Record<string, string>>({})
+
+  const sym = currencySymbol
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="font-semibold text-gray-900">⚡ Sales Mix Generator</h3>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Enter revenue target + category &amp; price-level splits to auto-generate item quantities
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+
+        {/* Body — scrollable */}
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
+
+          {/* Revenue target */}
+          <div>
+            <label className="text-sm font-semibold text-gray-700 block mb-2">Revenue Target</label>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 font-medium">{sym}</span>
+              <input
+                autoFocus
+                className="input w-44 text-lg font-semibold"
+                type="number"
+                min="1"
+                step="100"
+                placeholder="10,000"
+                value={targetRevenue}
+                onChange={e => setTargetRevenue(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">Gross sales value — quantities will be generated to match this target</p>
+          </div>
+
+          {/* Category split */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-sm font-semibold text-gray-700">Category Split</label>
+              <div className="flex items-center gap-2">
+                <div className="flex gap-0.5 h-2 w-32 rounded-full overflow-hidden bg-gray-100">
+                  {categories.map(([cat], i) => {
+                    const pct = Math.max(0, parseFloat(catPcts[cat]) || 0)
+                    const hue = (i * 47) % 360
+                    return <div key={cat} style={{ width: `${pct}%`, background: `hsl(${hue},60%,55%)` }} />
+                  })}
+                </div>
+                <span className={`text-xs font-semibold tabular-nums ${catValid ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {catTotal.toFixed(0)}%{catValid ? ' ✓' : ''}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {categories.map(([cat, count], i) => (
+                <div key={cat} className="flex items-center gap-3">
+                  <div
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: `hsl(${(i * 47) % 360},60%,55%)` }}
+                  />
+                  <span className="text-sm text-gray-800 flex-1 min-w-0 truncate">{cat}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{count} item{count !== 1 ? 's' : ''}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <input
+                      className="input text-right w-16 text-sm tabular-nums"
+                      type="number" min="0" max="100" step="1"
+                      value={catPcts[cat] ?? '0'}
+                      onChange={e => setCatPcts(prev =>
+                        autoBalance(prev, cat, e.target.value, categories.map(([c]) => c))
+                      )}
+                    />
+                    <span className="text-xs text-gray-400 w-4">%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!catValid && (
+              <p className="text-xs text-red-500 mt-2">
+                Category percentages must total 100% (currently {catTotal.toFixed(1)}%)
+              </p>
+            )}
+          </div>
+
+          {/* Price level split */}
+          {priceLevels.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-semibold text-gray-700">Price Level Split</label>
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-0.5 h-2 w-32 rounded-full overflow-hidden bg-gray-100">
+                    {priceLevels.map((l, i) => {
+                      const pct = Math.max(0, parseFloat(String(levelPcts[l.id])) || 0)
+                      return <div key={l.id} style={{ width: `${pct}%`, background: `hsl(${220 + i * 30},65%,55%)` }} />
+                    })}
+                  </div>
+                  <span className={`text-xs font-semibold tabular-nums ${levelValid ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {levelTotal.toFixed(0)}%{levelValid ? ' ✓' : ''}
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 mb-2">
+                Used to compute a weighted average price per item — higher-level prices affect quantity distribution
+              </p>
+              <div className="space-y-2">
+                {priceLevels.map((l, i) => (
+                  <div key={l.id} className="flex items-center gap-3">
+                    <div
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ background: `hsl(${220 + i * 30},65%,55%)` }}
+                    />
+                    <span className="text-sm text-gray-800 flex-1">
+                      {l.name}{l.is_default ? ' ★' : ''}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <input
+                        className="input text-right w-16 text-sm tabular-nums"
+                        type="number" min="0" max="100" step="1"
+                        value={levelPcts[l.id] ?? '0'}
+                        onChange={e => setLevelPcts(prev =>
+                          autoBalance(prev as Record<number, string>, l.id, e.target.value, priceLevels.map(x => x.id)) as Record<number, string>
+                        )}
+                      />
+                      <span className="text-xs text-gray-400 w-4">%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {!levelValid && (
+                <p className="text-xs text-red-500 mt-2">
+                  Price level percentages must total 100% (currently {levelTotal.toFixed(1)}%)
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Preview results */}
+          {preview && (
+            <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-emerald-700 font-semibold text-sm">✓ Generated quantities</span>
+                <span className="text-xs text-emerald-600">— click Apply to load into scenario</span>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {preview.map(row => (
+                  <div key={row.label} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-700 truncate flex-1 min-w-0">{row.label}</span>
+                    <span className="text-gray-400 text-xs mx-3">{row.price}/ptn</span>
+                    <span className="font-semibold tabular-nums text-gray-900 shrink-0">
+                      {row.qty.toLocaleString()} sold
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 pt-2 border-t border-emerald-200 text-xs text-emerald-700">
+                Est. gross revenue: {sym}{preview.reduce((s, r) => {
+                  const price = parseFloat(r.price.replace(/[^0-9.]/g, ''))
+                  return s + r.qty * price
+                }, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                {' '}(target: {sym}{parseFloat(targetRevenue).toLocaleString()})
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠ {error}</p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0">
+          <p className="text-xs text-gray-400">
+            Revenue split equally per item within each category — cheaper items receive more units
+          </p>
+          <div className="flex gap-2 items-center">
+            <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
+            {!preview ? (
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={!canGo || generating}
+                onClick={generate}
+              >
+                {generating ? (
+                  <><Spinner /> Calculating…</>
+                ) : '⚡ Generate'}
+              </button>
+            ) : (
+              <>
+                <button
+                  className="btn btn-sm btn-outline"
+                  onClick={() => { setPreview(null); pendingQMap.current = {} }}
+                >← Adjust</button>
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={() => onGenerate(pendingQMap.current)}
+                >✓ Apply to Scenario</button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Scenario Tool ─────────────────────────────────────────────────────────────
 
 interface SavedScenario {
@@ -1919,10 +2292,10 @@ interface ScenarioToolProps {
   data:        CogsData | null
   loading:     boolean
   menuId:      number | null
-  levelId:     number | ''
+  levelId:     number | '' | 'ALL'
   qty:         Record<string, string>
   onMenuChange(id: number | null): void
-  onLevelChange(id: number | ''): void
+  onLevelChange(id: number | '' | 'ALL'): void
   onQtyChange(key: string, q: string): void
   onResetQty(): void
   onReplaceQty(qMap: Record<string, string>): void
@@ -1934,6 +2307,27 @@ function ScenarioTool({
 }: ScenarioToolProps) {
 
   const api = useApi()
+
+  // ── Mix generator ──────────────────────────────────────────────────────────
+  const [showMixGen, setShowMixGen] = useState(false)
+
+  // ── All-levels mode ────────────────────────────────────────────────────────
+  const [allLevelsData,    setAllLevelsData]    = useState<{ level: PriceLevel; data: CogsData }[]>([])
+  const [allLevelsLoading, setAllLevelsLoading] = useState(false)
+
+  useEffect(() => {
+    if (levelId !== 'ALL' || !menuId) { setAllLevelsData([]); return }
+    setAllLevelsLoading(true)
+    Promise.all(
+      priceLevels.map(async level => {
+        const d: CogsData = await api.get(`/cogs/menu/${menuId}?price_level_id=${level.id}`)
+        return { level, data: d }
+      })
+    )
+    .then(results => setAllLevelsData(results))
+    .catch(() => {})
+    .finally(() => setAllLevelsLoading(false))
+  }, [levelId, menuId, priceLevels, api]) // eslint-disable-line
 
   // ── Display currency ───────────────────────────────────────────────────────
   const [dispCurrCode, setDispCurrCode] = useState<string>('')
@@ -2136,7 +2530,71 @@ function ScenarioTool({
     return 'text-red-500 font-semibold'
   }
 
-  // ── CSV Export ────────────────────────────────────────────────────────────
+  // ── All-levels rows (one row per item, prices/revenues per level) ─────────
+
+  interface AllLevelRow {
+    menu_item_id: number
+    nat_key:      string
+    display_name: string
+    category:     string
+    item_type:    string
+    cost:         number
+    qty:          number
+    total_cost:   number
+    perLevel: {
+      level:      PriceLevel
+      price_gross: number
+      price_net:  number
+      revenue:    number    // qty × price_net
+      cogs_pct:   number | null
+    }[]
+  }
+
+  const allLevelRows = useMemo((): AllLevelRow[] => {
+    if (levelId !== 'ALL' || !allLevelsData.length) return []
+    const baseItems = allLevelsData[0]?.data?.items ?? []
+    return baseItems.map(item => {
+      const key  = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const q    = Math.max(0, parseFloat(qty[key] || '0') || 0)
+      const cost = item.cost_per_portion * dispRate
+      return {
+        menu_item_id: item.menu_item_id,
+        nat_key:      key,
+        display_name: item.display_name,
+        category:     item.category || 'Uncategorised',
+        item_type:    item.item_type,
+        cost, qty: q, total_cost: q * cost,
+        perLevel: allLevelsData.map(({ level, data }) => {
+          const li          = data.items.find(i => i.menu_item_id === item.menu_item_id)
+          const price_gross = (li?.sell_price_gross ?? 0) * dispRate
+          const price_net   = (li?.sell_price_net   ?? 0) * dispRate
+          const revenue     = q * price_net
+          return {
+            level, price_gross, price_net, revenue,
+            cogs_pct: revenue > 0 ? (q * cost / revenue) * 100 : null,
+          }
+        }),
+      }
+    })
+  }, [levelId, allLevelsData, qty, dispRate])
+
+  const allLevelCategorised = useMemo(() => {
+    const map: Record<string, AllLevelRow[]> = {}
+    for (const r of allLevelRows) {
+      if (!map[r.category]) map[r.category] = []
+      map[r.category].push(r)
+    }
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+  }, [allLevelRows])
+
+  // ── Export helpers ────────────────────────────────────────────────────────
+
+  const menuName  = menus.find(m => m.id === menuId)?.name ?? 'Scenario'
+  const levelName = levelId === 'ALL'
+    ? 'All levels'
+    : (priceLevels.find(l => l.id === levelId)?.name ?? 'No level')
+
+  // CSV Export ────────────────────────────────────────────────────────────
 
   function exportCSV() {
     if (!data) return
@@ -2158,6 +2616,142 @@ function ScenarioTool({
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
     a.download = 'sales-scenario.csv'
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+
+  // Excel Export — HTML table downloaded as .xls (no external deps required) ─
+
+  function exportExcel() {
+    const dl = (html: string) => {
+      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' })
+      const a    = document.createElement('a')
+      a.href     = URL.createObjectURL(blob)
+      a.download = `${menuName.replace(/[^a-z0-9]/gi, '_')}_scenario.xls`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(a.href)
+    }
+    const css = `<style>
+      body{font-family:Arial,sans-serif;font-size:11px}
+      th{background:#146A34;color:#fff;padding:5px 8px}
+      .cat{background:#E8F5ED;font-weight:bold;color:#146A34}
+      .total{background:#f0f0f0;font-weight:bold;border-top:2px solid #999}
+    </style>`
+
+    if (levelId === 'ALL') {
+      const levelHeaders = allLevelsData.map(({ level }) =>
+        `<th colspan="3">${level.name}</th>`).join('')
+      const levelSubHeaders = allLevelsData.map(() =>
+        `<th>Price (gross)</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
+      let rows = ''
+      for (const [cat, catRows] of allLevelCategorised) {
+        rows += `<tr class="cat"><td colspan="${4 + allLevelsData.length * 3}">${cat}</td></tr>`
+        for (const r of catRows) {
+          const levels = r.perLevel.map(p =>
+            `<td align="right">${p.price_gross > 0 ? p.price_gross.toFixed(2) : ''}</td><td align="right">${p.revenue > 0 ? p.revenue.toFixed(2) : ''}</td><td align="right">${fmtPct(p.cogs_pct)}</td>`
+          ).join('')
+          rows += `<tr><td style="padding-left:12px">${r.display_name}</td><td>${r.item_type}</td><td align="right">${r.cost.toFixed(2)}</td><td align="right">${r.qty > 0 ? r.qty : ''}</td>${levels}</tr>`
+        }
+      }
+      dl(`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>${css}</head><body>
+        <h2>${menuName} — All Price Levels</h2>
+        <table border="1" cellspacing="0" cellpadding="4">
+          <thead><tr><th rowspan="2">Item</th><th rowspan="2">Type</th><th rowspan="2">Cost/ptn</th><th rowspan="2">Qty</th>${levelHeaders}</tr>
+          <tr>${levelSubHeaders}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table></body></html>`)
+    } else {
+      let tableRows = ''
+      for (const [cat, catRows] of categorised) {
+        const cQ = catRows.reduce((s, r) => s + r.qty, 0)
+        const cR = catRows.reduce((s, r) => s + r.net_revenue, 0)
+        const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+        const cP = cR > 0 ? (cC / cR) * 100 : null
+        tableRows += `<tr class="cat"><td colspan="6">${cat}</td><td align="right">${cQ || ''}</td><td align="right">${cQ ? fmtMix(cQ, totalQty) : ''}</td><td align="right">${cR > 0 ? cR.toFixed(2) : ''}</td><td align="right">${cR > 0 ? fmtMix(cR, totalNet) : ''}</td><td align="right">${cC > 0 ? cC.toFixed(2) : ''}</td><td align="right">${fmtPct(cP)}</td></tr>`
+        for (const r of catRows) {
+          tableRows += `<tr><td style="padding-left:12px">${r.display_name}</td><td>${r.category}</td><td>${r.item_type}</td><td align="right">${r.cost.toFixed(2)}</td><td align="right">${r.price_gross > 0 ? r.price_gross.toFixed(2) : ''}</td><td align="right">${r.price_net > 0 ? r.price_net.toFixed(2) : ''}</td><td align="right">${r.qty || ''}</td><td align="right">${r.qty > 0 ? fmtMix(r.qty, totalQty) : ''}</td><td align="right">${r.net_revenue > 0 ? r.net_revenue.toFixed(2) : ''}</td><td align="right">${r.net_revenue > 0 ? fmtMix(r.net_revenue, totalNet) : ''}</td><td align="right">${r.total_cost > 0 ? r.total_cost.toFixed(2) : ''}</td><td align="right">${fmtPct(r.cogs_pct)}</td></tr>`
+        }
+      }
+      dl(`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>${css}</head><body>
+        <h2>${menuName} — ${levelName}</h2>
+        <p>Covers: ${totalQty} · Revenue: ${fmtMoney(totalNet)} · Cost: ${fmtMoney(totalCost)} · GP: ${fmtMoney(totalGP)} · COGS: ${fmtPct(overallCogs)}</p>
+        <table border="1" cellspacing="0" cellpadding="4">
+          <thead><tr><th>Item</th><th>Category</th><th>Type</th><th>Cost/ptn</th><th>Price (gross)</th><th>Price (net)</th><th>Qty Sold</th><th>Sales Mix%</th><th>Revenue (net)</th><th>Rev Mix%</th><th>Total Cost</th><th>COGS%</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+          <tfoot><tr class="total"><td colspan="6">Grand Total</td><td>${totalQty}</td><td>100%</td><td>${totalNet.toFixed(2)}</td><td>100%</td><td>${totalCost.toFixed(2)}</td><td>${fmtPct(overallCogs)}</td></tr></tfoot>
+        </table></body></html>`)
+    }
+  }
+
+  // Print — opens a clean styled window and triggers print dialog ─────────────
+
+  function handlePrint() {
+    const win = window.open('', '_blank', 'width=1050,height=750')
+    if (!win) return
+    const kpiHtml = hasQty ? `
+      <div class="kpi-strip">
+        ${[['Total Covers', totalQty.toLocaleString()], ['Revenue (gross)', fmtMoney(totalGross)], ['Revenue (ex-tax)', fmtMoney(totalNet)], ['Total Cost', fmtMoney(totalCost)], ['GP (net)', fmtMoney(totalGP)], ['Overall COGS%', fmtPct(overallCogs)]].map(([l, v]) => `<div class="kpi"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div></div>`).join('')}
+      </div>` : ''
+
+    let tableHtml = ''
+    if (levelId === 'ALL' && allLevelRows.length) {
+      const lh = allLevelsData.map(({ level }) => `<th colspan="3">${level.name}</th>`).join('')
+      const ls = allLevelsData.map(() => `<th>Price</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
+      let tbody = ''
+      for (const [cat, catRows] of allLevelCategorised) {
+        tbody += `<tr class="cat"><td colspan="${4 + allLevelsData.length * 3}">${cat}</td></tr>`
+        for (const r of catRows) {
+          const lvlCells = r.perLevel.map(p =>
+            `<td>${p.price_gross > 0 ? fmtMoney(p.price_gross) : ''}</td><td>${p.revenue > 0 ? fmtMoney(p.revenue) : ''}</td><td>${fmtPct(p.cogs_pct)}</td>`
+          ).join('')
+          tbody += `<tr><td class="indent">${r.display_name}</td><td>${r.item_type}</td><td>${r.cost > 0 ? fmtMoney(r.cost) : ''}</td><td>${r.qty > 0 ? r.qty : ''}</td>${lvlCells}</tr>`
+        }
+      }
+      tableHtml = `<table><thead><tr><th rowspan="2">Item</th><th rowspan="2">Type</th><th rowspan="2">Cost/ptn</th><th rowspan="2">Qty</th>${lh}</tr><tr>${ls}</tr></thead><tbody>${tbody}</tbody></table>`
+    } else {
+      let tbody = ''
+      for (const [cat, catRows] of categorised) {
+        const cQ = catRows.reduce((s, r) => s + r.qty, 0), cR = catRows.reduce((s, r) => s + r.net_revenue, 0), cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+        const cP = cR > 0 ? (cC / cR) * 100 : null
+        tbody += `<tr class="cat"><td colspan="4">${cat}</td><td>${cQ > 0 ? cQ : ''}</td><td>${cQ > 0 ? fmtMix(cQ, totalQty) : ''}</td><td>${cR > 0 ? fmtMoney(cR) : ''}</td><td>${cR > 0 ? fmtMix(cR, totalNet) : ''}</td><td>${cC > 0 ? fmtMoney(cC) : ''}</td><td class="cogs">${fmtPct(cP)}</td></tr>`
+        for (const r of catRows) {
+          tbody += `<tr><td class="indent">${r.display_name}</td><td>${r.item_type}</td><td>${fmtMoney(r.cost)}</td><td>${r.price_gross > 0 ? fmtMoney(r.price_gross) : ''}</td><td>${r.qty > 0 ? r.qty : ''}</td><td>${r.qty > 0 ? fmtMix(r.qty, totalQty) : ''}</td><td>${r.net_revenue > 0 ? fmtMoney(r.net_revenue) : ''}</td><td>${r.net_revenue > 0 ? fmtMix(r.net_revenue, totalNet) : ''}</td><td>${r.total_cost > 0 ? fmtMoney(r.total_cost) : ''}</td><td class="cogs">${fmtPct(r.cogs_pct)}</td></tr>`
+        }
+      }
+      tableHtml = `<table><thead><tr><th>Item</th><th>Type</th><th>Cost/ptn</th><th>Price (gross)</th><th>Qty Sold</th><th>Sales Mix%</th><th>Revenue (net)</th><th>Rev Mix%</th><th>Total Cost</th><th>COGS%</th></tr></thead><tbody>${tbody}</tbody><tfoot><tr class="total"><td colspan="4">Grand Total</td><td>${totalQty}</td><td>100%</td><td>${fmtMoney(totalNet)}</td><td>100%</td><td>${fmtMoney(totalCost)}</td><td class="cogs">${fmtPct(overallCogs)}</td></tr></tfoot></table>`
+    }
+
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${menuName} Sales Scenario</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:20px}
+  h1{font-size:15px;color:#146A34;margin-bottom:3px}
+  .meta{font-size:10px;color:#888;margin-bottom:14px}
+  .kpi-strip{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  .kpi{background:#f7f9f8;border:1px solid #d8e6dd;padding:7px 12px;border-radius:6px;min-width:110px}
+  .kpi-l{font-size:9px;color:#888;margin-bottom:1px}
+  .kpi-v{font-size:14px;font-weight:700;color:#0f1f17}
+  table{width:100%;border-collapse:collapse;font-size:10px}
+  th{background:#146A34;color:#fff;padding:5px 6px;text-align:right;white-space:nowrap;font-size:9px}
+  th:first-child{text-align:left}
+  td{padding:3px 6px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap}
+  td:first-child,td.indent{text-align:left}
+  td.indent{padding-left:14px}
+  tr.cat td{background:#e8f5ed;font-weight:700;color:#146A34;text-align:left}
+  tr.total td{background:#f0f0f0;font-weight:700;border-top:2px solid #999}
+  .cogs{font-weight:700}
+  .btn{margin-top:16px;padding:8px 16px;background:#146A34;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;margin-right:8px}
+  @media print{.btn{display:none}body{padding:10px}}
+</style></head><body>
+<h1>📊 ${menuName} — ${levelName}</h1>
+<div class="meta">Currency: ${dispSym} · Generated: ${new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}</div>
+${kpiHtml}
+${tableHtml}
+<div style="margin-top:16px">
+  <button class="btn" onclick="window.print()">🖨 Print</button>
+  <button class="btn" style="background:#1e8a44" onclick="window.close()">✕ Close</button>
+</div>
+</body></html>`)
+    win.document.close()
+    win.focus()
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -2227,9 +2821,13 @@ function ScenarioTool({
             <select
               className="select select-sm"
               value={levelId}
-              onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}
+              onChange={e => {
+                const v = e.target.value
+                onLevelChange(v === 'ALL' ? 'ALL' : v ? Number(v) : '')
+              }}
             >
               <option value="">— No level —</option>
+              {priceLevels.length > 1 && <option value="ALL">📊 All levels</option>}
               {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>)}
             </select>
           </div>
@@ -2258,6 +2856,13 @@ function ScenarioTool({
                 ● {savedName ? `${savedName} (unsaved)` : 'unsaved'}
               </span>
             )}
+            {data && menuId && (
+              <button
+                className="btn btn-sm btn-primary text-xs"
+                onClick={() => setShowMixGen(true)}
+                title="Auto-generate sales quantities from a revenue target"
+              >⚡ Generate Mix</button>
+            )}
             <button
               className="btn btn-sm btn-outline text-xs"
               onClick={() => { setSaveNameInput(savedName || ''); setShowSaveDialog(true) }}
@@ -2268,8 +2873,19 @@ function ScenarioTool({
                 onResetQty(); setSavedId(null); setSavedName(''); setDirty(false); dirtyRef.current = false
               }}>Reset Qty</button>
             )}
-            {data && hasQty && (
-              <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>
+            {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
+              <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
+                <button
+                  className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200 flex items-center gap-1"
+                  title="Export to Excel"
+                  onClick={exportExcel}
+                >📊 Excel</button>
+                <button
+                  className="px-2.5 py-1.5 text-xs hover:bg-gray-50"
+                  title="Print"
+                  onClick={handlePrint}
+                >🖨 Print</button>
+              </div>
             )}
           </div>
         </div>
@@ -2304,6 +2920,23 @@ function ScenarioTool({
           </div>
         )}
 
+        {/* Mix generator modal */}
+        {showMixGen && data && menuId && (
+          <SalesMixGeneratorModal
+            data={data}
+            priceLevels={priceLevels}
+            menuId={menuId}
+            currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
+            onGenerate={qMap => {
+              onReplaceQty(qMap)
+              dirtyRef.current = true
+              setDirty(true)
+              setShowMixGen(false)
+            }}
+            onClose={() => setShowMixGen(false)}
+          />
+        )}
+
         {/* KPI Strip */}
         {data && (
           <div className="px-4 py-3 border-b border-gray-100 grid grid-cols-2 sm:grid-cols-6 gap-3">
@@ -2335,7 +2968,9 @@ function ScenarioTool({
             Select a price level above to see sell prices and revenue calculations.
           </div>
         )}
-        {menuId && loading && <div className="p-12 text-center"><Spinner /></div>}
+        {menuId && (loading || (levelId === 'ALL' && allLevelsLoading)) && (
+          <div className="p-12 text-center"><Spinner /></div>
+        )}
 
         {menuId && !loading && data && data.items.length === 0 && (
           <div className="p-8 text-center text-sm text-gray-400">No items in this menu.</div>
@@ -2448,6 +3083,133 @@ function ScenarioTool({
                   </td>
                   <td className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(overallCogs)}`}>
                     {fmtPct(overallCogs)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        {/* ══ ALL LEVELS TABLE ════════════════════════════════════════════════ */}
+        {menuId && levelId === 'ALL' && !allLevelsLoading && allLevelRows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Item</th>
+                  <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Type</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn</th>
+                  <th className="px-2 py-2 text-center font-semibold text-gray-500 min-w-[80px]" rowSpan={2}>Qty Sold</th>
+                  {allLevelsData.map(({ level }) => (
+                    <th key={level.id} colSpan={3}
+                      className="px-3 py-2 text-center font-semibold text-accent border-l border-gray-300 bg-accent-dim/30 whitespace-nowrap">
+                      {level.name}{level.is_default ? ' ★' : ''}
+                    </th>
+                  ))}
+                  <th className="px-3 py-2 text-right font-semibold text-gray-500 border-l border-gray-300 whitespace-nowrap" rowSpan={2}>Total Cost</th>
+                </tr>
+                <tr>
+                  {allLevelsData.map(({ level }) => (
+                    <>
+                      <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 whitespace-nowrap normal-case">Price</th>
+                      <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue (net)</th>
+                      <th key={`${level.id}-ch`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 normal-case">COGS%</th>
+                    </>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {allLevelCategorised.map(([cat, catRows]) => {
+                  const cQ = catRows.reduce((s, r) => s + r.qty, 0)
+                  const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
+                  return (
+                    <>
+                      <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
+                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide" colSpan={2}>{cat}</td>
+                        <td />
+                        <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                          {cQ > 0 ? cQ.toLocaleString() : '—'}
+                        </td>
+                        {allLevelsData.map(({ level }) => {
+                          const cR = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
+                          const cP = cR > 0 ? (cC / cR) * 100 : null
+                          return (
+                            <>
+                              <td key={`${level.id}-cp`} className="border-l border-gray-200" />
+                              <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
+                                {cR > 0 ? fmtMoney(cR) : '—'}
+                              </td>
+                              <td key={`${level.id}-cc`} className={`px-3 py-1.5 text-right text-xs ${cogsColour(cP)}`}>
+                                {fmtPct(cP)}
+                              </td>
+                            </>
+                          )
+                        })}
+                        <td className="border-l border-gray-200" />
+                      </tr>
+                      {catRows.map(row => (
+                        <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
+                          <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
+                          <td className="px-3 py-2.5">
+                            <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="number" min="0" step="1"
+                              value={qty[row.nat_key] ?? ''}
+                              onChange={e => onQtyChange(row.nat_key, e.target.value)}
+                              placeholder="0"
+                              className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                            />
+                          </td>
+                          {row.perLevel.map(p => (
+                            <>
+                              <td key={`${p.level.id}-ip`} className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
+                                {p.price_gross > 0 ? fmtMoney(p.price_gross) : <span className="text-gray-300">—</span>}
+                              </td>
+                              <td key={`${p.level.id}-ir`} className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
+                                {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
+                              </td>
+                              <td key={`${p.level.id}-ic`} className={`px-3 py-2.5 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
+                                {fmtPct(p.cogs_pct)}
+                              </td>
+                            </>
+                          ))}
+                          <td className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
+                            {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </>
+                  )
+                })}
+              </tbody>
+              <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                <tr>
+                  <td className="px-3 py-3 font-bold text-gray-900" colSpan={2}>Grand Total</td>
+                  <td />
+                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                    {allLevelRows.reduce((s, r) => s + r.qty, 0).toLocaleString()}
+                  </td>
+                  {allLevelsData.map(({ level }) => {
+                    const tR = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
+                    const tC = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
+                    const tP = tR > 0 ? (tC / tR) * 100 : null
+                    return (
+                      <>
+                        <td key={`${level.id}-fp`} className="border-l border-gray-200" />
+                        <td key={`${level.id}-fr`} className="px-3 py-3 text-right font-mono font-bold text-gray-900">
+                          {tR > 0 ? fmtMoney(tR) : '—'}
+                        </td>
+                        <td key={`${level.id}-fc`} className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(tP)}`}>
+                          {fmtPct(tP)}
+                        </td>
+                      </>
+                    )
+                  })}
+                  <td className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
+                    {fmtMoney(allLevelRows.reduce((s, r) => s + r.total_cost, 0))}
                   </td>
                 </tr>
               </tfoot>
