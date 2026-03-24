@@ -2343,14 +2343,16 @@ function ScenarioTool({
   const [saveNameInput,    setSaveNameInput]    = useState('')
   const [saving,           setSaving]           = useState(false)
 
-  // Load ALL scenarios once on mount (scenarios are market-agnostic)
-  useEffect(() => {
+  // Load ALL scenarios (market-agnostic) — callable on mount and on manual refresh
+  const loadScenarioList = useCallback(() => {
     setLoadingScenarios(true)
     api.get('/scenarios')
       .then((rows: SavedScenario[]) => setSavedScenarios(rows || []))
       .catch(() => {})
       .finally(() => setLoadingScenarios(false))
-  }, [api]) // eslint-disable-line
+  }, [api])
+
+  useEffect(() => { loadScenarioList() }, [loadScenarioList])
 
   // Mark dirty when qty changes (skip programmatic loads via dirtyRef)
   const dirtyRef = useRef(false)
@@ -2594,30 +2596,6 @@ function ScenarioTool({
     ? 'All levels'
     : (priceLevels.find(l => l.id === levelId)?.name ?? 'No level')
 
-  // CSV Export ────────────────────────────────────────────────────────────
-
-  function exportCSV() {
-    if (!data) return
-    const header = ['Item', 'Category', 'Type', 'Cost/ptn', 'Price (gross)', 'Price (net)', 'Qty', 'Sales Mix%', 'Revenue (net)', 'Rev Mix%', 'Total Cost', 'COGS%']
-    const csvRows: string[][] = [header]
-    for (const [cat, catRows] of categorised) {
-      const cQ = catRows.reduce((s, r) => s + r.qty, 0)
-      const cR = catRows.reduce((s, r) => s + r.net_revenue, 0)
-      const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
-      const cP = cR > 0 ? (cC / cR) * 100 : null
-      csvRows.push([`── ${cat}`, '', '', '', '', '', String(cQ), fmtMix(cQ, totalQty), cR.toFixed(2), fmtMix(cR, totalNet), cC.toFixed(2), fmtPct(cP)])
-      for (const r of catRows) {
-        csvRows.push([r.display_name, r.category, r.item_type, r.cost.toFixed(2), r.price_gross.toFixed(2), r.price_net.toFixed(2), String(r.qty), fmtMix(r.qty, totalQty), r.net_revenue.toFixed(2), fmtMix(r.net_revenue, totalNet), r.total_cost.toFixed(2), fmtPct(r.cogs_pct)])
-      }
-    }
-    csvRows.push(['TOTAL', '', '', '', '', '', String(totalQty), '100%', totalNet.toFixed(2), '100%', totalCost.toFixed(2), fmtPct(overallCogs)])
-    const csv = csvRows.map(r => r.map(v => `"${v.replace(/"/g, '""')}"`).join(',')).join('\n')
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    a.download = 'sales-scenario.csv'
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-  }
-
   // Excel Export — HTML table downloaded as .xls (no external deps required) ─
 
   function exportExcel() {
@@ -2793,6 +2771,12 @@ ${tableHtml}
                 </option>
               ))}
             </select>
+            <button
+              className="text-gray-400 hover:text-accent text-xs px-1"
+              title="Refresh scenario list (e.g. after McFry generates one)"
+              onClick={loadScenarioList}
+              disabled={loadingScenarios}
+            >⟳</button>
             {savedId && (
               <button
                 className="text-red-400 hover:text-red-600 text-xs px-1"
@@ -2823,7 +2807,9 @@ ${tableHtml}
               value={levelId}
               onChange={e => {
                 const v = e.target.value
-                onLevelChange(v === 'ALL' ? 'ALL' : v ? Number(v) : '')
+                if (v === 'ALL') onLevelChange('ALL')
+                else if (v) onLevelChange(Number(v))
+                else onLevelChange('')
               }}
             >
               <option value="">— No level —</option>

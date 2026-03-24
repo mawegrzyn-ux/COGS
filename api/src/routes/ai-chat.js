@@ -1033,6 +1033,38 @@ Do NOT use this for small single-record requests; use the individual create_* to
       required: ['menu_id'],
     },
   },
+
+  // ── Scenario ─────────────────────────────────────────────────────────────────
+  {
+    name: 'generate_scenario_mix',
+    description: `Generates a sales mix scenario for a menu based on a revenue target and category split, then saves it so the user can load it in the Scenario tab.
+Use this when the user asks to "generate a scenario", "model COGS for X revenue", "create a sales mix", or similar.
+Steps: fetches menu COGS data, distributes revenue across categories, computes realistic quantities per item (weighted by price point — cheaper items get more units), saves the scenario, and returns a link for the user.
+Always call list_menus first to resolve the menu ID. No confirmation needed — this is a read+compute+save operation.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        menu_id:       { type: 'integer', description: 'Menu ID from list_menus' },
+        scenario_name: { type: 'string',  description: 'Name for the saved scenario (e.g. "Standard Week", "Christmas Mix")' },
+        total_revenue: { type: 'number',  description: 'Target total gross sales revenue in the menu\'s local currency' },
+        category_pcts: {
+          type: 'object',
+          description: 'Revenue split by recipe category as percentages. Keys = exact category names (use get_menu_cogs to see categories), values = percentage (0–100). Must sum to 100.',
+          additionalProperties: { type: 'number' },
+        },
+        price_level_id: {
+          type: 'integer',
+          description: 'Optional: price level ID to use for pricing. If omitted, uses the first available price level.',
+        },
+        level_pcts: {
+          type: 'object',
+          description: 'Optional: split across multiple price levels as percentages. Keys = price level IDs (as strings), values = percentage. Must sum to 100. If provided, computes a weighted average price per item across levels for more accurate quantity estimation.',
+          additionalProperties: { type: 'number' },
+        },
+      },
+      required: ['menu_id', 'scenario_name', 'total_revenue', 'category_pcts'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -2285,6 +2317,136 @@ async function executeTool(name, input) {
         return { menu_item_id: mi.id, display_name: mi.display_name, item_type: mi.item_type, allergens: allergenStatus };
       });
       return { allergens: allAllergens, items };
+    }
+
+    case 'generate_scenario_mix': {
+      const { menu_id, scenario_name, total_revenue, category_pcts, price_level_id, level_pcts } = input;
+      if (!menu_id)       return { error: 'menu_id is required — call list_menus first' };
+      if (!scenario_name) return { error: 'scenario_name is required' };
+      if (!total_revenue || total_revenue <= 0) return { error: 'total_revenue must be a positive number' };
+      if (!category_pcts || typeof category_pcts !== 'object') return { error: 'category_pcts is required' };
+
+      const catTotal = Object.values(category_pcts).reduce((s, v) => s + Number(v), 0);
+      if (Math.abs(catTotal - 100) > 1) return { error: `category_pcts must sum to 100 (got ${catTotal.toFixed(1)})` };
+
+      const port = process.env.PORT || 3001;
+      const baseUrl = `http://localhost:${port}/api`;
+
+      // ── Fetch price levels if multi-level mode requested ─────────────────
+      let levelWeights = {}; // { levelId: pct }
+      const activeLevelIds = [];
+
+      if (level_pcts && Object.keys(level_pcts).length > 0) {
+        const lvlTotal = Object.values(level_pcts).reduce((s, v) => s + Number(v), 0);
+        if (Math.abs(lvlTotal - 100) > 1) return { error: `level_pcts must sum to 100 (got ${lvlTotal.toFixed(1)})` };
+        for (const [id, pct] of Object.entries(level_pcts)) {
+          if (Number(pct) > 0) { levelWeights[id] = Number(pct); activeLevelIds.push(Number(id)); }
+        }
+      } else if (price_level_id) {
+        levelWeights[price_level_id] = 100;
+        activeLevelIds.push(price_level_id);
+      } else {
+        // Fall back to the default/first price level
+        const { rows: levels } = await pool.query(
+          `SELECT id FROM mcogs_price_levels ORDER BY is_default DESC, id ASC LIMIT 1`
+        );
+        if (levels.length) { levelWeights[levels[0].id] = 100; activeLevelIds.push(levels[0].id); }
+      }
+
+      // ── Fetch COGS per level ─────────────────────────────────────────────
+      // effectivePrices[menu_item_id] = weighted average gross price
+      const effectivePrices = {};
+      const itemMeta = {};  // menu_item_id → { display_name, category, item_type, recipe_id, ingredient_id }
+
+      const levelDataArr = await Promise.all(
+        activeLevelIds.map(async lid => {
+          const resp = await fetch(`${baseUrl}/cogs/menu/${menu_id}?price_level_id=${lid}`);
+          if (!resp.ok) throw new Error(`COGS fetch failed for level ${lid}: ${resp.status}`);
+          return { lid, data: await resp.json() };
+        })
+      );
+
+      for (const { lid, data } of levelDataArr) {
+        const pct = (levelWeights[lid] ?? 0) / 100;
+        for (const item of (data.items || [])) {
+          if (!itemMeta[item.menu_item_id]) {
+            itemMeta[item.menu_item_id] = {
+              display_name:  item.display_name,
+              category:      item.category || 'Uncategorised',
+              item_type:     item.item_type,
+              recipe_id:     item.recipe_id,
+              ingredient_id: item.ingredient_id,
+            };
+            effectivePrices[item.menu_item_id] = 0;
+          }
+          effectivePrices[item.menu_item_id] += (item.sell_price_gross || 0) * pct;
+        }
+      }
+
+      if (!Object.keys(itemMeta).length) return { error: `No COGS data found for menu ${menu_id}. Ensure prices are set.` };
+
+      // ── Group items by category ──────────────────────────────────────────
+      const catItems = {};
+      for (const [miId, meta] of Object.entries(itemMeta)) {
+        const cat = meta.category;
+        if (!catItems[cat]) catItems[cat] = [];
+        catItems[cat].push({ miId: Number(miId), ...meta });
+      }
+
+      // Warn about unknown categories (in category_pcts but not in menu)
+      const unknownCats = Object.keys(category_pcts).filter(c => !catItems[c]);
+      if (unknownCats.length) {
+        const available = Object.keys(catItems).join(', ');
+        return { error: `Category not found in menu: ${unknownCats.join(', ')}. Available categories: ${available}` };
+      }
+
+      // ── Compute quantities ────────────────────────────────────────────────
+      // qty_data keyed by natural key: "r_{recipe_id}" or "i_{ingredient_id}"
+      const qty_data = {};
+      const breakdown = [];
+
+      for (const [cat, pct] of Object.entries(category_pcts)) {
+        const catRevenue = total_revenue * Number(pct) / 100;
+        const items = catItems[cat] || [];
+        const pricedItems = items.filter(it => effectivePrices[it.miId] > 0);
+        if (!pricedItems.length) continue;
+
+        // Equal revenue share per item within category; qty = revenue / price
+        const revenuePerItem = catRevenue / pricedItems.length;
+        const catQtys = [];
+        for (const item of pricedItems) {
+          const price = effectivePrices[item.miId];
+          const qty   = Math.max(1, Math.round(revenuePerItem / price));
+          const key   = item.item_type === 'recipe'
+            ? `r_${item.recipe_id}`
+            : `i_${item.ingredient_id}`;
+          qty_data[key] = qty;
+          catQtys.push({ name: item.display_name, qty, price: price.toFixed(2) });
+        }
+        breakdown.push({ category: cat, pct, revenue: catRevenue.toFixed(2), items: catQtys });
+      }
+
+      // ── Save scenario ─────────────────────────────────────────────────────
+      const { rows: [saved] } = await pool.query(`
+        INSERT INTO mcogs_menu_scenarios (name, price_level_id, qty_data, notes)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name
+      `, [
+        scenario_name.trim(),
+        activeLevelIds.length === 1 ? activeLevelIds[0] : null,
+        JSON.stringify(qty_data),
+        `Auto-generated by McFry — target revenue: ${total_revenue}`,
+      ]);
+
+      const totalItems = Object.keys(qty_data).length;
+      return {
+        scenario_id:   saved.id,
+        scenario_name: saved.name,
+        total_items:   totalItems,
+        url:           '/menus',
+        message:       `Scenario "${saved.name}" saved with ${totalItems} items. Go to **Menus → Scenario tab** and select it from the Scenario dropdown to review.`,
+        breakdown,
+      };
     }
 
     default:
