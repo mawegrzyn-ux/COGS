@@ -27,8 +27,15 @@
       "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\api && node -e \"\"const f=require\\(''./src/routes/ai-chat.js''\\); console.log\\(''loaded OK''\\)\"\" 2>&1\")",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit --skipLibCheck 2>&1\")",
+      "Bash(cmd /c \"git status\")",
+      "Bash(git -C \"C:/GitHubReps/COGS\" status)",
+      "Bash(powershell.exe -Command \"git -C ''C:/GitHubReps/COGS'' status\")"
     ]
   },
-  "disableAllHooks": true
+  "disableAllHooks": true,
+  "enabledPlugins": {
+    "claude-preview@claude-plugins-official": false
+  }
 }

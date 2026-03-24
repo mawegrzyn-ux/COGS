@@ -56,6 +56,12 @@ interface Country {
   exchange_rate:  number
 }
 
+interface PriceLevel {
+  id:         number
+  name:       string
+  is_default: boolean
+}
+
 interface RecipeDetail extends Recipe {
   items:            RecipeItem[]
   variations:       RecipeVariation[]
@@ -113,6 +119,8 @@ export default function RecipesPage() {
   const [menuAssignments,     setMenuAssignments]      = useState<MenuAssignment[]>([])
   const [selectedMenuId,      setSelectedMenuId]       = useState<number | null>(null)
   const [loadingMenuAssign,   setLoadingMenuAssign]    = useState(false)
+  const [priceLevels,         setPriceLevels]         = useState<PriceLevel[]>([])
+  const [selectedPriceLevelId,setSelectedPriceLevelId]= useState<number | null>(null)
 
   // search/filter
   const [search,     setSearch]     = useState('')
@@ -130,6 +138,16 @@ export default function RecipesPage() {
 
   useEffect(() => {
     api.get('/menus').then((d: SimpleMenu[]) => setMenus(d || [])).catch(() => {})
+  }, [api])
+
+  useEffect(() => {
+    api.get('/price-levels').then((d: PriceLevel[]) => {
+      const levels = d || []
+      setPriceLevels(levels)
+      // Default to the is_default level
+      const def = levels.find(l => l.is_default)
+      if (def) setSelectedPriceLevelId(def.id)
+    }).catch(() => {})
   }, [api])
 
   // ── Load ──────────────────────────────────────────────────────────────────
@@ -171,7 +189,7 @@ export default function RecipesPage() {
     }
   }, [api])
 
-  // Fetch menu assignments for this recipe in the selected market
+  // Fetch menu assignments for this recipe in the selected market + price level
   useEffect(() => {
     if (!selected || !selectedCountryId || selectedCountryId === 'GLOBAL') {
       setMenuAssignments([])
@@ -182,9 +200,10 @@ export default function RecipesPage() {
     if (!countryMenus.length) { setMenuAssignments([]); setSelectedMenuId(null); return }
 
     setLoadingMenuAssign(true)
+    const lvlParam = selectedPriceLevelId ? `&price_level_id=${selectedPriceLevelId}` : ''
     Promise.all(
       countryMenus.map(m =>
-        api.get(`/cogs/menu/${m.id}?market_id=${selectedCountryId}`)
+        api.get(`/cogs/menu/${m.id}?market_id=${selectedCountryId}${lvlParam}`)
           .then((res: any) => ({ menu_id: m.id, menu_name: m.name, res }))
           .catch(() => null)
       )
@@ -209,7 +228,7 @@ export default function RecipesPage() {
       setMenuAssignments(found)
       setSelectedMenuId(found.length > 0 ? found[0].menu_id : null)
     }).finally(() => setLoadingMenuAssign(false))
-  }, [selected?.id, selectedCountryId, menus, api])
+  }, [selected?.id, selectedCountryId, selectedPriceLevelId, menus, api])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -682,21 +701,38 @@ export default function RecipesPage() {
 
                       {/* Tile 3 — Menu Price */}
                       <div className="bg-surface-2 rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-1 gap-1">
+                        <div className="flex items-center justify-between mb-1 gap-1 flex-wrap">
                           <div className="text-xs text-text-3 shrink-0">Menu Price</div>
-                          {menuAssignments.length > 1 ? (
-                            <select
-                              value={selectedMenuId ?? ''}
-                              onChange={e => setSelectedMenuId(Number(e.target.value))}
-                              className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[100px]"
-                            >
-                              {menuAssignments.map(m => (
-                                <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>
-                              ))}
-                            </select>
-                          ) : menuAssignments.length === 1 ? (
-                            <span className="text-xs text-text-3 truncate max-w-[100px]" title={menuAssignments[0].menu_name}>{menuAssignments[0].menu_name}</span>
-                          ) : null}
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {/* Price level selector */}
+                            {priceLevels.length > 1 && (
+                              <select
+                                value={selectedPriceLevelId ?? ''}
+                                onChange={e => setSelectedPriceLevelId(e.target.value ? Number(e.target.value) : null)}
+                                className="text-xs text-accent bg-transparent border border-accent/30 rounded px-1 py-0 max-w-[90px]"
+                                title="Price level"
+                              >
+                                <option value="">— level —</option>
+                                {priceLevels.map(l => (
+                                  <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>
+                                ))}
+                              </select>
+                            )}
+                            {/* Menu selector */}
+                            {menuAssignments.length > 1 ? (
+                              <select
+                                value={selectedMenuId ?? ''}
+                                onChange={e => setSelectedMenuId(Number(e.target.value))}
+                                className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[90px]"
+                              >
+                                {menuAssignments.map(m => (
+                                  <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>
+                                ))}
+                              </select>
+                            ) : menuAssignments.length === 1 ? (
+                              <span className="text-xs text-text-3 truncate max-w-[90px]" title={menuAssignments[0].menu_name}>{menuAssignments[0].menu_name}</span>
+                            ) : null}
+                          </div>
                         </div>
                         {activeMenu ? (
                           <>

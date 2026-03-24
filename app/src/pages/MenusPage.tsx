@@ -561,9 +561,9 @@ export default function MenusPage() {
       <div className="flex gap-1 px-6 border-b border-gray-200 mb-0">
         {([
           { key: 'builder',      label: '🍽 Menus' },
-          { key: 'price-report', label: '📈 Price Level Tool' },
+          { key: 'price-report', label: '📈 Compare Markets' },
           { key: 'level-report', label: '🏷 Market Price Tool' },
-          { key: 'scenario',     label: '📊 Scenario' },
+          { key: 'scenario',     label: '📊 Menu Engineer' },
         ] as const).map(t => (
           <button
             key={t.key}
@@ -2269,12 +2269,21 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
 
 // ── Scenario Tool ─────────────────────────────────────────────────────────────
 
+interface HistoryEntry {
+  ts:     string   // ISO timestamp
+  action: string   // short code e.g. 'price' | 'cost' | 'whatif' | 'reset_prices' | 'reset_costs' | 'reset_qty'
+  detail: string   // human-readable description
+}
+
 interface SavedScenario {
   id:               number
   name:             string
   menu_id:          number | null
   price_level_id:   number | null
-  qty_data:         Record<string, number>   // keys: "r_{recipe_id}" | "i_{ingredient_id}"
+  qty_data:         Record<string, number>   // "r_{recipe_id}" | "i_{ingredient_id}[__l{level_id}]"
+  price_overrides:  Record<string, number>   // USD: "${menu_item_id}_l${level_id}" → sell_price
+  cost_overrides:   Record<string, number>   // USD: nat_key → cost_per_portion
+  history:          HistoryEntry[]
   notes:            string | null
   updated_at:       string
   menu_name:        string | null
@@ -2303,6 +2312,8 @@ function ScenarioTool({
 }: ScenarioToolProps) {
 
   const api = useApi()
+  const [scToast, setScToast] = useState<{ msg: string; type?: 'error' } | null>(null)
+  const showToast = (msg: string, type?: 'error') => { setScToast({ msg, type }); setTimeout(() => setScToast(null), 3000) }
 
   // ── Mix generator ──────────────────────────────────────────────────────────
   const [showMixGen, setShowMixGen] = useState(false)
@@ -2336,8 +2347,6 @@ function ScenarioTool({
   const [savedId,          setSavedId]          = useState<number | null>(null)
   const [savedName,        setSavedName]        = useState('')
   const [dirty,            setDirty]            = useState(false)
-  const [showSaveDialog,   setShowSaveDialog]   = useState(false)
-  const [saveNameInput,    setSaveNameInput]    = useState('')
   const [saving,           setSaving]           = useState(false)
 
   // Load ALL scenarios (market-agnostic) — callable on mount and on manual refresh
@@ -2358,18 +2367,116 @@ function ScenarioTool({
     else dirtyRef.current = true
   }, [qty])
 
+  // ── Price / cost overrides ─────────────────────────────────────────────────
+  // Stored in display currency strings (same pattern as qty).
+  // Converted to USD on save, back to display on load.
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({})
+  const [costOverrides,  setCostOverrides]  = useState<Record<string, string>>({})
+
+  // Auto-convert overrides when display rate changes (user switches currency)
+  const prevDispRateRef = useRef<number | null>(null)
+  useEffect(() => {
+    const prev = prevDispRateRef.current
+    prevDispRateRef.current = dispRate
+    if (!prev || prev === dispRate) return
+    const f = dispRate / prev
+    const conv = (r: Record<string, string>) => {
+      const n: Record<string, string> = {}
+      for (const [k, v] of Object.entries(r)) n[k] = String(Math.round(parseFloat(v) * f * 100) / 100)
+      return n
+    }
+    if (Object.keys(priceOverrides).length) setPriceOverrides(prev => conv(prev))
+    if (Object.keys(costOverrides).length)  setCostOverrides(prev => conv(prev))
+  }, [dispRate]) // eslint-disable-line
+
+  // ── Change history ─────────────────────────────────────────────────────────
+  const [history,     setHistory]     = useState<HistoryEntry[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+
+  function addHistoryEntry(action: string, detail: string) {
+    setHistory(prev => [...prev, { ts: new Date().toISOString(), action, detail }])
+  }
+
+  function markDirty() { dirtyRef.current = true; setDirty(true) }
+
+  // ── Modals ─────────────────────────────────────────────────────────────────
+  const [showWhatIf,       setShowWhatIf]       = useState(false)
+  const [showScenarioModal, setShowScenarioModal] = useState(false)
+
+  // ── Reset helpers ──────────────────────────────────────────────────────────
+  function resetPrices() {
+    setPriceOverrides({})
+    addHistoryEntry('reset_prices', 'All price overrides reset to menu prices')
+    markDirty()
+  }
+
+  function resetCosts() {
+    setCostOverrides({})
+    addHistoryEntry('reset_costs', 'All cost overrides reset to recipe costs')
+    markDirty()
+  }
+
+  // ── What If ────────────────────────────────────────────────────────────────
+  function applyWhatIf(pricePct: number, costPct: number) {
+    if (pricePct !== 0 && allLevelRows.length) {
+      const f = 1 + pricePct / 100
+      const next: Record<string, string> = {}
+      for (const row of allLevelRows) {
+        for (const p of row.perLevel) {
+          const base = p.is_price_overridden ? (parseFloat(priceOverrides[p.price_override_key]) || p.base_price_gross) : p.base_price_gross
+          if (base > 0) next[p.price_override_key] = String(Math.round(base * f * 100) / 100)
+        }
+      }
+      setPriceOverrides(next)
+      addHistoryEntry('whatif', `Prices ${pricePct > 0 ? '+' : ''}${pricePct}%`)
+    }
+    if (costPct !== 0 && allLevelRows.length) {
+      const f = 1 + costPct / 100
+      const next: Record<string, string> = {}
+      for (const row of allLevelRows) {
+        const base = row.is_cost_overridden ? (parseFloat(costOverrides[row.cost_override_key]) || row.base_cost_display) : row.base_cost_display
+        if (base > 0) next[row.cost_override_key] = String(Math.round(base * f * 100) / 100)
+      }
+      setCostOverrides(next)
+      addHistoryEntry('whatif', `Costs ${costPct > 0 ? '+' : ''}${costPct}%`)
+    }
+    markDirty()
+  }
+
+  // ── Push prices to live menu ───────────────────────────────────────────────
+  async function handlePushPrices() {
+    const keys = Object.keys(priceOverrides)
+    if (!keys.length) return
+    if (!confirm(`Push ${keys.length} price override${keys.length > 1 ? 's' : ''} to the live menu? This will overwrite current menu prices.`)) return
+    try {
+      const safeDispRate = dispRate || 1
+      const overrides = keys.map(key => {
+        const [mid, lid] = key.replace('_l', '__l').split('__l')
+        return { menu_item_id: Number(mid), price_level_id: Number(lid), sell_price: (parseFloat(priceOverrides[key]) || 0) / safeDispRate }
+      }).filter(o => o.sell_price > 0 && o.menu_item_id && o.price_level_id)
+      await api.post('/scenarios/push-prices', { overrides })
+      addHistoryEntry('push_prices', `${overrides.length} prices pushed to live menu`)
+      showToast('Prices pushed to menu ✓')
+    } catch (err: any) {
+      alert(err.message || 'Failed to push prices')
+    }
+  }
+
   async function saveScenario(name: string) {
     setSaving(true)
+    const safeRate = dispRate || 1
     try {
+      const toUsd = (displayVals: Record<string, string>) =>
+        Object.fromEntries(Object.entries(displayVals).map(([k, v]) => [k, (parseFloat(v) || 0) / safeRate]).filter(([, v]) => (v as number) > 0))
       const payload = {
         name,
         price_level_id: (levelId && levelId !== 'ALL') ? levelId : null,
-        // qty_data keyed by natural recipe/ingredient keys: "r_123", "i_456"
         qty_data: Object.fromEntries(
-          Object.entries(qty)
-            .map(([k, v]) => [k, parseFloat(v) || 0])
-            .filter(([, v]) => (v as number) > 0)
+          Object.entries(qty).map(([k, v]) => [k, parseFloat(v) || 0]).filter(([, v]) => (v as number) > 0)
         ),
+        price_overrides: toUsd(priceOverrides),
+        cost_overrides:  toUsd(costOverrides),
+        history,
       }
       let row: SavedScenario
       if (savedId) {
@@ -2378,11 +2485,12 @@ function ScenarioTool({
         row = await api.post('/scenarios', payload)
       }
       setSavedId(row.id); setSavedName(row.name); setDirty(false)
+      dirtyRef.current = false
       setSavedScenarios(prev => {
         const idx = prev.findIndex(s => s.id === row.id)
         return idx >= 0 ? prev.map(s => s.id === row.id ? row : s) : [row, ...prev]
       })
-      setShowSaveDialog(false)
+      setShowScenarioModal(false)
     } catch (err: any) {
       alert(err.message || 'Failed to save')
     } finally { setSaving(false) }
@@ -2390,17 +2498,28 @@ function ScenarioTool({
 
   function loadScenario(s: SavedScenario) {
     dirtyRef.current = false
-    // Scenarios are market-agnostic — do NOT change the selected market.
-    // Restore price level if stored with the scenario.
     if (s.price_level_id) onLevelChange(s.price_level_id)
-    // Build qty map keyed by natural key strings (e.g. "r_12", "i_34")
+    // Qty
     const qMap: Record<string, string> = {}
     for (const [k, v] of Object.entries(s.qty_data || {})) {
       if (Number(v) > 0) qMap[k] = String(v)
     }
-    // Replace all qty atomically (single parent state update)
     onReplaceQty(qMap)
-    // After React state settles, mark as clean and record which scenario is active
+    // Price overrides — convert from USD to display currency
+    const safeRate = dispRate || 1
+    const pOv: Record<string, string> = {}
+    for (const [k, v] of Object.entries(s.price_overrides || {})) {
+      const d = (v as number) * safeRate
+      if (d > 0) pOv[k] = String(Math.round(d * 100) / 100)
+    }
+    setPriceOverrides(pOv)
+    const cOv: Record<string, string> = {}
+    for (const [k, v] of Object.entries(s.cost_overrides || {})) {
+      const d = (v as number) * safeRate
+      if (d > 0) cOv[k] = String(Math.round(d * 100) / 100)
+    }
+    setCostOverrides(cOv)
+    setHistory(s.history || [])
     setTimeout(() => {
       setSavedId(s.id); setSavedName(s.name); setDirty(false)
       dirtyRef.current = false
@@ -2450,54 +2569,67 @@ function ScenarioTool({
   // ── Per-item scenario calculations (revenue on NET price ex-tax) ──────────
 
   interface ScenRow {
-    menu_item_id:  number
-    nat_key:       string   // "r_{recipe_id}" | "i_{ingredient_id}" — market-agnostic key
-    display_name:  string
-    category:      string
-    item_type:     string
-    cost:          number   // cost per portion (display currency)
-    price_gross:   number   // sell price inc. tax (display currency)
-    price_net:     number   // sell price ex. tax  (display currency)
-    tax_pct:       number
-    qty:           number
-    gross_revenue: number   // qty × price_gross — what customer pays
-    net_revenue:   number   // qty × price_net   — revenue ex-tax (basis for COGS%)
-    total_cost:    number   // qty × cost
-    gp:            number   // net_revenue - total_cost
-    cogs_pct:      number | null  // total_cost / net_revenue × 100
+    menu_item_id:       number
+    nat_key:            string   // "r_{recipe_id}" | "i_{ingredient_id}" — market-agnostic key
+    display_name:       string
+    category:           string
+    item_type:          string
+    cost:               number   // cost per portion (display currency, after override)
+    base_cost_display:  number   // unoverridden cost (display currency)
+    price_gross:        number   // sell price inc. tax (display currency, after override)
+    base_price_gross:   number   // unoverridden price (display currency)
+    price_net:          number   // sell price ex. tax  (display currency)
+    tax_pct:            number
+    qty:                number
+    gross_revenue:      number   // qty × price_gross — what customer pays
+    net_revenue:        number   // qty × price_net   — revenue ex-tax (basis for COGS%)
+    total_cost:         number   // qty × cost
+    gp:                 number   // net_revenue - total_cost
+    cogs_pct:           number | null  // total_cost / net_revenue × 100
   }
 
   const rows = useMemo((): ScenRow[] => {
     if (!data?.items) return []
     return data.items.map(item => {
       // Natural key matches across markets — same recipe appears in all market menus
-      const key         = item.item_type === 'recipe'
+      const key          = item.item_type === 'recipe'
         ? `r_${item.recipe_id}`
         : `i_${item.ingredient_id}`
-      const q           = Math.max(0, parseFloat(qty[key] || '0') || 0)
-      const cost        = item.cost_per_portion * dispRate
-      const price_gross = item.sell_price_gross * dispRate
-      const price_net   = item.sell_price_net   * dispRate
+      const q            = Math.max(0, parseFloat(qty[key] || '0') || 0)
+      const baseCost     = item.cost_per_portion * dispRate
+      const costOvStr    = costOverrides[key]
+      const cost         = costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost
+
+      const basePriceGross = item.sell_price_gross * dispRate
+      const basePriceNet   = item.sell_price_net   * dispRate
+      const taxRatio       = basePriceGross > 0 ? basePriceNet / basePriceGross : 1
+      const priceKey       = `${item.menu_item_id}_l${typeof levelId === 'number' ? levelId : ''}`
+      const priceOvStr     = priceOverrides[priceKey]
+      const price_gross    = priceOvStr !== undefined ? (parseFloat(priceOvStr) || 0) : basePriceGross
+      const price_net      = priceOvStr !== undefined ? price_gross * taxRatio : basePriceNet
+
       const gross_rev   = q * price_gross
       const net_rev     = q * price_net
       const totalCost   = q * cost
       return {
-        menu_item_id:  item.menu_item_id,
-        nat_key:       key,
-        display_name:  item.display_name,
-        category:      item.category || 'Uncategorised',
-        item_type:     item.item_type,
-        cost, price_gross, price_net,
-        tax_pct:       item.tax_rate_pct,
-        qty:           q,
-        gross_revenue: gross_rev,
-        net_revenue:   net_rev,
-        total_cost:    totalCost,
-        gp:            net_rev - totalCost,
-        cogs_pct:      net_rev > 0 ? (totalCost / net_rev) * 100 : null,
+        menu_item_id:      item.menu_item_id,
+        nat_key:           key,
+        display_name:      item.display_name,
+        category:          item.category || 'Uncategorised',
+        item_type:         item.item_type,
+        cost, base_cost_display: baseCost,
+        price_gross, base_price_gross: basePriceGross,
+        price_net,
+        tax_pct:           item.tax_rate_pct,
+        qty:               q,
+        gross_revenue:     gross_rev,
+        net_revenue:       net_rev,
+        total_cost:        totalCost,
+        gp:                net_rev - totalCost,
+        cogs_pct:          net_rev > 0 ? (totalCost / net_rev) * 100 : null,
       }
     })
-  }, [data, qty, dispRate])
+  }, [data, qty, dispRate, costOverrides, priceOverrides, levelId])
 
   const totalQty     = rows.reduce((s, r) => s + r.qty, 0)
   const totalGross   = rows.reduce((s, r) => s + r.gross_revenue, 0)
@@ -2532,20 +2664,28 @@ function ScenarioTool({
   // ── All-levels rows (one row per item, prices/revenues per level) ─────────
 
   interface AllLevelRow {
-    menu_item_id: number
-    nat_key:      string
-    display_name: string
-    category:     string
-    item_type:    string
-    cost:         number
-    qty:          number
-    total_cost:   number
+    menu_item_id:       number
+    nat_key:            string
+    display_name:       string
+    category:           string
+    item_type:          string
+    cost:               number   // display currency (may be overridden)
+    base_cost_display:  number   // original recipe cost in display currency
+    cost_override_key:  string   // = nat_key
+    is_cost_overridden: boolean
+    total_qty:          number   // sum of per-level qtys
+    total_cost:         number   // total_qty × cost
     perLevel: {
-      level:      PriceLevel
-      price_gross: number
-      price_net:  number
-      revenue:    number    // qty × price_net
-      cogs_pct:   number | null
+      level:               PriceLevel
+      qty:                 number
+      qty_key:             string   // e.g. "r_1__l2"
+      price_gross:         number   // display currency (may be overridden)
+      price_net:           number
+      base_price_gross:    number   // original menu price in display currency
+      price_override_key:  string   // "${menu_item_id}_l${level_id}"
+      is_price_overridden: boolean
+      revenue:             number
+      cogs_pct:            number | null
     }[]
   }
 
@@ -2553,29 +2693,46 @@ function ScenarioTool({
     if (levelId !== 'ALL' || !allLevelsData.length) return []
     const baseItems = allLevelsData[0]?.data?.items ?? []
     return baseItems.map(item => {
-      const key  = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
-      const q    = Math.max(0, parseFloat(qty[key] || '0') || 0)
-      const cost = item.cost_per_portion * dispRate
+      const natKey         = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const baseCostDisp   = item.cost_per_portion * dispRate
+      const costOvKey      = natKey
+      const costOvVal      = costOverrides[costOvKey]
+      const cost           = costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp
+      const isCostOv       = costOvKey in costOverrides
+      const perLevel = allLevelsData.map(({ level, data }) => {
+        const li             = data.items.find(i => i.menu_item_id === item.menu_item_id)
+        const qty_key        = `${natKey}__l${level.id}`
+        const q              = Math.max(0, parseFloat(qty[qty_key] || '0') || 0)
+        const basePriceGross = (li?.sell_price_gross ?? 0) * dispRate
+        const basePriceNet   = (li?.sell_price_net   ?? 0) * dispRate
+        const taxRatio       = basePriceGross > 0 ? basePriceNet / basePriceGross : 1
+        const priceOvKey     = `${item.menu_item_id}_l${level.id}`
+        const priceOvVal     = priceOverrides[priceOvKey]
+        const price_gross    = priceOvVal !== undefined ? (parseFloat(priceOvVal) || 0) : basePriceGross
+        const price_net      = priceOvVal !== undefined ? price_gross * taxRatio        : basePriceNet
+        const revenue        = q * price_net
+        return {
+          level, qty: q, qty_key,
+          price_gross, price_net, base_price_gross: basePriceGross,
+          price_override_key: priceOvKey, is_price_overridden: priceOvKey in priceOverrides,
+          revenue,
+          cogs_pct: revenue > 0 ? (q * cost / revenue) * 100 : null,
+        }
+      })
+      const total_qty = perLevel.reduce((s, p) => s + p.qty, 0)
       return {
         menu_item_id: item.menu_item_id,
-        nat_key:      key,
+        nat_key:      natKey,
         display_name: item.display_name,
         category:     item.category || 'Uncategorised',
         item_type:    item.item_type,
-        cost, qty: q, total_cost: q * cost,
-        perLevel: allLevelsData.map(({ level, data }) => {
-          const li          = data.items.find(i => i.menu_item_id === item.menu_item_id)
-          const price_gross = (li?.sell_price_gross ?? 0) * dispRate
-          const price_net   = (li?.sell_price_net   ?? 0) * dispRate
-          const revenue     = q * price_net
-          return {
-            level, price_gross, price_net, revenue,
-            cogs_pct: revenue > 0 ? (q * cost / revenue) * 100 : null,
-          }
-        }),
+        cost, base_cost_display: baseCostDisp,
+        cost_override_key: costOvKey, is_cost_overridden: isCostOv,
+        total_qty, total_cost: total_qty * cost,
+        perLevel,
       }
     })
-  }, [levelId, allLevelsData, qty, dispRate])
+  }, [levelId, allLevelsData, qty, dispRate, priceOverrides, costOverrides])
 
   const allLevelCategorised = useMemo(() => {
     const map: Record<string, AllLevelRow[]> = {}
@@ -2612,24 +2769,26 @@ function ScenarioTool({
     </style>`
 
     if (levelId === 'ALL') {
-      const levelHeaders = allLevelsData.map(({ level }) =>
-        `<th colspan="3">${level.name}</th>`).join('')
-      const levelSubHeaders = allLevelsData.map(() =>
-        `<th>Price (gross)</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
+      // 4 cols per level: Qty | Price | Revenue | COGS%
+      const levelHeaders    = allLevelsData.map(({ level }) => `<th colspan="4">${level.name}</th>`).join('')
+      const levelSubHeaders = allLevelsData.map(() => `<th>Qty</th><th>Price</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
       let rows = ''
       for (const [cat, catRows] of allLevelCategorised) {
-        rows += `<tr class="cat"><td colspan="${4 + allLevelsData.length * 3}">${cat}</td></tr>`
+        const catCols = 2 + allLevelsData.length * 4 + 1 // Item + Cost/ptn + per-level×4 + Total COGS%
+        rows += `<tr class="cat"><td colspan="${catCols}">${cat}</td></tr>`
         for (const r of catRows) {
-          const levels = r.perLevel.map(p =>
-            `<td align="right">${p.price_gross > 0 ? p.price_gross.toFixed(2) : ''}</td><td align="right">${p.revenue > 0 ? p.revenue.toFixed(2) : ''}</td><td align="right">${fmtPct(p.cogs_pct)}</td>`
+          const totalRev = r.perLevel.reduce((s, p) => s + p.revenue, 0)
+          const totalCogsPct = totalRev > 0 ? (r.total_cost / totalRev) * 100 : null
+          const lvlCols = r.perLevel.map(p =>
+            `<td align="right">${p.qty > 0 ? p.qty : ''}</td><td align="right">${p.price_gross > 0 ? p.price_gross.toFixed(2) : ''}</td><td align="right">${p.revenue > 0 ? p.revenue.toFixed(2) : ''}</td><td align="right">${fmtPct(p.cogs_pct)}</td>`
           ).join('')
-          rows += `<tr><td style="padding-left:12px">${r.display_name}</td><td>${r.item_type}</td><td align="right">${r.cost.toFixed(2)}</td><td align="right">${r.qty > 0 ? r.qty : ''}</td>${levels}</tr>`
+          rows += `<tr><td style="padding-left:12px">${r.display_name}</td><td align="right">${r.cost.toFixed(2)}</td>${lvlCols}<td align="right">${fmtPct(totalCogsPct)}</td></tr>`
         }
       }
       dl(`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>${css}</head><body>
         <h2>${menuName} — All Price Levels</h2>
         <table border="1" cellspacing="0" cellpadding="4">
-          <thead><tr><th rowspan="2">Item</th><th rowspan="2">Type</th><th rowspan="2">Cost/ptn</th><th rowspan="2">Qty</th>${levelHeaders}</tr>
+          <thead><tr><th rowspan="2">Item</th><th rowspan="2">Cost/ptn</th>${levelHeaders}<th rowspan="2">Total COGS%</th></tr>
           <tr>${levelSubHeaders}</tr></thead>
           <tbody>${rows}</tbody>
         </table></body></html>`)
@@ -2668,19 +2827,22 @@ function ScenarioTool({
 
     let tableHtml = ''
     if (levelId === 'ALL' && allLevelRows.length) {
-      const lh = allLevelsData.map(({ level }) => `<th colspan="3">${level.name}</th>`).join('')
-      const ls = allLevelsData.map(() => `<th>Price</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
+      const lh = allLevelsData.map(({ level }) => `<th colspan="4">${level.name}</th>`).join('')
+      const ls = allLevelsData.map(() => `<th>Qty</th><th>Price</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
       let tbody = ''
       for (const [cat, catRows] of allLevelCategorised) {
-        tbody += `<tr class="cat"><td colspan="${4 + allLevelsData.length * 3}">${cat}</td></tr>`
+        const catCols = 2 + allLevelsData.length * 4 + 1
+        tbody += `<tr class="cat"><td colspan="${catCols}">${cat}</td></tr>`
         for (const r of catRows) {
+          const totalRev = r.perLevel.reduce((s, p) => s + p.revenue, 0)
+          const totalCogsPct = totalRev > 0 ? (r.total_cost / totalRev) * 100 : null
           const lvlCells = r.perLevel.map(p =>
-            `<td>${p.price_gross > 0 ? fmtMoney(p.price_gross) : ''}</td><td>${p.revenue > 0 ? fmtMoney(p.revenue) : ''}</td><td>${fmtPct(p.cogs_pct)}</td>`
+            `<td>${p.qty > 0 ? p.qty : ''}</td><td>${p.price_gross > 0 ? fmtMoney(p.price_gross) : ''}</td><td>${p.revenue > 0 ? fmtMoney(p.revenue) : ''}</td><td class="cogs">${fmtPct(p.cogs_pct)}</td>`
           ).join('')
-          tbody += `<tr><td class="indent">${r.display_name}</td><td>${r.item_type}</td><td>${r.cost > 0 ? fmtMoney(r.cost) : ''}</td><td>${r.qty > 0 ? r.qty : ''}</td>${lvlCells}</tr>`
+          tbody += `<tr><td class="indent">${r.display_name}</td><td>${r.cost > 0 ? fmtMoney(r.cost) : ''}</td>${lvlCells}<td class="cogs">${fmtPct(totalCogsPct)}</td></tr>`
         }
       }
-      tableHtml = `<table><thead><tr><th rowspan="2">Item</th><th rowspan="2">Type</th><th rowspan="2">Cost/ptn</th><th rowspan="2">Qty</th>${lh}</tr><tr>${ls}</tr></thead><tbody>${tbody}</tbody></table>`
+      tableHtml = `<table><thead><tr><th rowspan="2">Item</th><th rowspan="2">Cost/ptn</th>${lh}<th rowspan="2">Total COGS%</th></tr><tr>${ls}</tr></thead><tbody>${tbody}</tbody></table>`
     } else {
       let tbody = ''
       for (const [cat, catRows] of categorised) {
@@ -2735,57 +2897,28 @@ ${tableHtml}
 
   return (
     <div className="flex-1 overflow-auto p-6">
+      {scToast && <Toast message={scToast.msg} type={scToast.type === 'error' ? 'error' : 'success'} onClose={() => setScToast(null)} />}
       <div className="bg-white rounded-lg border border-gray-200">
 
         {/* Toolbar */}
         <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
           <span className="font-semibold text-gray-700 text-sm shrink-0">📊 Scenario</span>
 
-          {/* ① Scenario selector — first, market-agnostic */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400 shrink-0">Scenario</span>
-            <select
-              className="select select-sm min-w-[180px]"
-              value={savedId ?? ''}
-              disabled={loadingScenarios}
-              onChange={e => {
-                const id = e.target.value ? Number(e.target.value) : null
-                if (!id) {
-                  // Clear to new scenario
-                  onResetQty()
-                  setSavedId(null); setSavedName(''); setDirty(false)
-                  dirtyRef.current = false
-                } else {
-                  const s = savedScenarios.find(x => x.id === id)
-                  if (s) loadScenario(s)
-                }
-              }}
-            >
-              <option value="">— New scenario —</option>
-              {savedScenarios.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name}{s.price_level_name ? ` · ${s.price_level_name}` : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              className="text-gray-400 hover:text-accent text-xs px-1"
-              title="Refresh scenario list (e.g. after McFry generates one)"
-              onClick={loadScenarioList}
-              disabled={loadingScenarios}
-            >⟳</button>
-            {savedId && (
-              <button
-                className="text-red-400 hover:text-red-600 text-xs px-1"
-                title="Delete this scenario"
-                onClick={() => deleteScenario(savedId)}
-              >🗑</button>
-            )}
-          </div>
+          {/* ① Scenario — button opens modal */}
+          <button
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium
+              ${savedId ? 'border-accent bg-accent-dim text-accent' : 'border-gray-200 bg-white text-gray-600'} hover:border-accent`}
+            onClick={() => setShowScenarioModal(true)}
+            disabled={loadingScenarios}
+          >
+            <span className="truncate max-w-[180px]">{savedName || '— New scenario —'}</span>
+            {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />}
+            <span className="text-gray-400 text-xs">▾</span>
+          </button>
 
-          {/* ② Market */}
+          {/* ② Menu (was "Market") */}
           <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400">Market</span>
+            <span className="text-xs text-gray-400">Menu</span>
             <select
               className="select select-sm min-w-[200px]"
               value={menuId ?? ''}
@@ -2830,84 +2963,99 @@ ${tableHtml}
           )}
 
           {/* Actions */}
-          <div className="flex gap-2 ml-auto items-center">
-            {savedName && !dirty && (
-              <span className="text-xs text-emerald-600 font-medium">✓ {savedName}</span>
+          <div className="flex gap-1.5 ml-auto items-center flex-wrap">
+
+            {/* What If — always shown when menu loaded */}
+            {menuId && (
+              <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
             )}
-            {dirty && (
-              <span className="text-xs text-amber-500 font-medium">
-                ● {savedName ? `${savedName} (unsaved)` : 'unsaved'}
-              </span>
+
+            {/* Override reset buttons */}
+            {Object.keys(priceOverrides).length > 0 && (
+              <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
             )}
-            {data && menuId && (
-              <button
-                className="btn btn-sm btn-primary text-xs"
-                onClick={() => setShowMixGen(true)}
-                title="Auto-generate sales quantities from a revenue target"
-              >⚡ Generate Mix</button>
+            {Object.keys(costOverrides).length > 0 && (
+              <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
             )}
-            <button
-              className="btn btn-sm btn-outline text-xs"
-              onClick={() => { setSaveNameInput(savedName || ''); setShowSaveDialog(true) }}
-              title="Save scenario"
-            >💾 {savedId ? 'Update' : 'Save'}</button>
-            {hasQty && (
+
+            {/* Push prices to live menu */}
+            {Object.keys(priceOverrides).length > 0 && (
+              <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
+            )}
+
+            {/* History */}
+            {history.length > 0 && (
+              <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
+            )}
+
+            {/* Generate Mix + Reset Qty — always shown when menu loaded */}
+            {menuId && (
+              <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Generate Mix</button>
+            )}
+            {(hasQty || Object.values(qty).some(v => parseFloat(v) > 0)) && (
               <button className="btn btn-sm btn-outline text-xs" onClick={() => {
-                onResetQty(); setSavedId(null); setSavedName(''); setDirty(false); dirtyRef.current = false
-              }}>Reset Qty</button>
+                onResetQty()
+                addHistoryEntry('reset_qty', 'Quantities reset')
+                markDirty()
+              }}>↺ Qty</button>
             )}
+
+            {/* Save */}
+            <button
+              className="btn btn-sm btn-primary text-xs"
+              onClick={() => setShowScenarioModal(true)}
+              title="Save or update scenario"
+            >💾 {savedId ? 'Update' : 'Save'}</button>
+
+            {/* Compact toggle (All Levels only) */}
             {levelId === 'ALL' && (
               <button
                 className={`btn btn-sm text-xs border ${allLevelsCompact ? 'bg-accent text-white border-accent' : 'btn-outline'}`}
-                title={allLevelsCompact ? 'Show qty & revenue columns' : 'Hide qty & revenue columns'}
                 onClick={() => setAllLevelsCompact(v => !v)}
               >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
             )}
+
+            {/* Excel / Print */}
             {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
               <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
-                <button
-                  className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200 flex items-center gap-1"
-                  title="Export to Excel"
-                  onClick={exportExcel}
-                >📊 Excel</button>
-                <button
-                  className="px-2.5 py-1.5 text-xs hover:bg-gray-50"
-                  title="Print"
-                  onClick={handlePrint}
-                >🖨 Print</button>
+                <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200" onClick={exportExcel}>📊 Excel</button>
+                <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50" onClick={handlePrint}>🖨 Print</button>
               </div>
             )}
           </div>
         </div>
 
-        {/* Save dialog */}
-        {showSaveDialog && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowSaveDialog(false)}>
-            <div className="bg-white rounded-xl shadow-xl p-6 w-80" onClick={e => e.stopPropagation()}>
-              <h3 className="font-semibold text-gray-800 mb-3">{savedId ? 'Update Scenario' : 'Save Scenario'}</h3>
-              <input
-                autoFocus
-                className="input w-full mb-4"
-                placeholder="Scenario name…"
-                value={saveNameInput}
-                onChange={e => setSaveNameInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && saveNameInput.trim()) saveScenario(saveNameInput.trim()) }}
-              />
-              <div className="flex gap-2 justify-end">
-                <button className="btn btn-sm btn-outline" onClick={() => setShowSaveDialog(false)}>Cancel</button>
-                <button
-                  className="btn btn-sm btn-primary"
-                  disabled={!saveNameInput.trim() || saving}
-                  onClick={() => saveScenario(saveNameInput.trim())}
-                >{saving ? 'Saving…' : savedId ? 'Update' : 'Save'}</button>
-              </div>
-              {savedId && (
-                <p className="text-xs text-gray-400 mt-2 text-center">
-                  Updates "{savedName}" — or change name to save as new
-                </p>
-              )}
-            </div>
-          </div>
+        {/* ── Scenario Modal ─────────────────────────────────────────────── */}
+        {showScenarioModal && (
+          <ScenarioModal
+            scenarios={savedScenarios}
+            loading={loadingScenarios}
+            saving={saving}
+            currentId={savedId}
+            currentName={savedName}
+            onLoad={s => { loadScenario(s); setShowScenarioModal(false) }}
+            onDelete={deleteScenario}
+            onSave={saveScenario}
+            onNew={() => { setSavedId(null); setSavedName(''); setDirty(false); setShowScenarioModal(false) }}
+            onClose={() => setShowScenarioModal(false)}
+          />
+        )}
+
+        {/* ── What If Modal ──────────────────────────────────────────────── */}
+        {showWhatIf && (
+          <WhatIfModal
+            onApply={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
+            onClose={() => setShowWhatIf(false)}
+          />
+        )}
+
+        {/* ── History Modal ──────────────────────────────────────────────── */}
+        {showHistory && (
+          <HistoryModal
+            entries={history}
+            onClear={() => { setHistory([]); markDirty() }}
+            onClose={() => setShowHistory(false)}
+          />
         )}
 
         {/* Mix generator modal */}
@@ -3017,11 +3165,57 @@ ${tableHtml}
                           <td className="px-3 py-2.5">
                             <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
-                          <td className="px-3 py-2.5 text-right font-mono text-xs">
-                            {row.price_gross > 0
-                              ? <span title={`ex-tax: ${fmtMoney(row.price_net)}`}>{fmtMoney(row.price_gross)}</span>
-                              : <span className="text-gray-300">no price</span>}
+                          {/* Cost/ptn — editable */}
+                          <td className="px-1.5 py-1.5 text-right">
+                            <div className="relative inline-flex items-center">
+                              <input
+                                type="number" min="0" step="0.01"
+                                value={costOverrides[row.nat_key] ?? ''}
+                                onChange={e => {
+                                  const v = e.target.value
+                                  setCostOverrides(prev => v === '' ? (({ [row.nat_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.nat_key]: v })
+                                  markDirty()
+                                }}
+                                placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
+                                className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                  ${row.nat_key in costOverrides
+                                    ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                    : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                              />
+                              {row.nat_key in costOverrides && (
+                                <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to recipe cost"
+                                  onClick={() => { setCostOverrides(prev => (({ [row.nat_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                              )}
+                            </div>
+                          </td>
+                          {/* Price (gross) — editable via single-level price_override_key */}
+                          <td className="px-1.5 py-1.5 text-right">
+                            {(() => {
+                              const priceKey = `${row.menu_item_id}_l${typeof levelId === 'number' ? levelId : ''}`
+                              const isOv = priceKey in priceOverrides
+                              return (
+                                <div className="relative inline-flex items-center">
+                                  <input
+                                    type="number" min="0" step="0.01"
+                                    value={priceOverrides[priceKey] ?? ''}
+                                    onChange={e => {
+                                      const v = e.target.value
+                                      setPriceOverrides(prev => v === '' ? (({ [priceKey]: _, ...rest }) => rest)(prev) : { ...prev, [priceKey]: v })
+                                      markDirty()
+                                    }}
+                                    placeholder={row.base_price_gross > 0 ? String(Math.round(row.base_price_gross * 100) / 100) : '—'}
+                                    className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                      ${isOv
+                                        ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                        : 'border border-transparent bg-transparent text-gray-700 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                  />
+                                  {isOv && (
+                                    <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to menu price"
+                                      onClick={() => { setPriceOverrides(prev => (({ [priceKey]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                  )}
+                                </div>
+                              )
+                            })()}
                           </td>
                           <td className="px-2 py-1.5">
                             <input
@@ -3031,7 +3225,7 @@ ${tableHtml}
                               value={qty[row.nat_key] ?? ''}
                               onChange={e => onQtyChange(row.nat_key, e.target.value)}
                               placeholder="0"
-                              className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                              className="w-16 text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
                             />
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
@@ -3088,22 +3282,19 @@ ${tableHtml}
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Item</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn</th>
-                  {!allLevelsCompact && (
-                    <th className="px-2 py-2 text-center font-semibold text-gray-500 min-w-[80px]" rowSpan={2}>Qty Sold</th>
-                  )}
                   {allLevelsData.map(({ level }) => (
-                    <th key={level.id} colSpan={allLevelsCompact ? 2 : 3}
+                    <th key={level.id} colSpan={allLevelsCompact ? 3 : 4}
                       className="px-3 py-2 text-center font-semibold text-accent border-l border-gray-300 bg-accent-dim/30 whitespace-nowrap">
                       {level.name}{level.is_default ? ' ★' : ''}
                     </th>
                   ))}
-                  <th className="px-3 py-2 text-right font-semibold text-gray-500 border-l border-gray-300 whitespace-nowrap" rowSpan={2}>Total Cost</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-500 border-l border-gray-300 whitespace-nowrap" rowSpan={2}>Total COGS%</th>
                 </tr>
                 <tr>
                   {allLevelsData.map(({ level }) => (
                     <>
-                      <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 whitespace-nowrap normal-case">Price</th>
+                      <th key={`${level.id}-qh`} className="px-2 py-1.5 text-center font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
+                      <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Price</th>
                       {!allLevelsCompact && (
                         <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue (net)</th>
                       )}
@@ -3114,27 +3305,25 @@ ${tableHtml}
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {allLevelCategorised.map(([cat, catRows]) => {
-                  const cQ = catRows.reduce((s, r) => s + r.qty, 0)
-                  const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
-                  const cSumRevenues = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
-                  const cAvgRevenue = allLevelsData.length > 0 ? cSumRevenues / allLevelsData.length : 0
-                  const cTotalCogsPct = cAvgRevenue > 0 ? (cC / cAvgRevenue) * 100 : null
+                  const cC           = catRows.reduce((s, r) => s + r.total_cost, 0)
+                  const cTotalRev    = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const cTotalCogsPct = cTotalRev > 0 ? (cC / cTotalRev) * 100 : null
                   return (
                     <>
                       <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
                         <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide">{cat}</td>
                         <td />
-                        {!allLevelsCompact && (
-                          <td className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
-                            {cQ > 0 ? cQ.toLocaleString() : '—'}
-                          </td>
-                        )}
                         {allLevelsData.map(({ level }) => {
-                          const cR = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
-                          const cP = cR > 0 ? (cC / cR) * 100 : null
+                          const cLvlQ = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
+                          const cR    = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
+                          const cCost = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0) * r.cost, 0)
+                          const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
-                              <td key={`${level.id}-cp`} className="border-l border-gray-200" />
+                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
+                                {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
+                              </td>
+                              <td key={`${level.id}-cp`} className="border-gray-200" />
                               {!allLevelsCompact && (
                                 <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
                                   {cR > 0 ? fmtMoney(cR) : '—'}
@@ -3146,49 +3335,85 @@ ${tableHtml}
                             </>
                           )
                         })}
-                        <td className="border-l border-gray-200" />
                         <td className={`px-3 py-1.5 text-right text-xs border-l border-gray-200 ${cogsColour(cTotalCogsPct)}`}>
                           {fmtPct(cTotalCogsPct)}
                         </td>
                       </tr>
                       {catRows.map(row => {
-                        const sumRevenues = row.perLevel.reduce((s, p) => s + p.revenue, 0)
-                        const avgRevenue = allLevelsData.length > 0 ? sumRevenues / allLevelsData.length : 0
-                        const totalCogsPct = avgRevenue > 0 ? (row.total_cost / avgRevenue) * 100 : null
+                        const totalRev     = row.perLevel.reduce((s, p) => s + p.revenue, 0)
+                        const totalCogsPct = totalRev > 0 ? (row.total_cost / totalRev) * 100 : null
                         return (
                           <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
-                            <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
-                            <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
-                            {!allLevelsCompact && (
-                              <td className="px-2 py-1.5">
+                            <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
+                            {/* Cost/ptn — editable */}
+                            <td className="px-1 py-1 text-right">
+                              <div className="inline-flex items-center">
                                 <input
-                                  type="number" min="0" step="1"
-                                  value={qty[row.nat_key] ?? ''}
-                                  onChange={e => onQtyChange(row.nat_key, e.target.value)}
-                                  placeholder="0"
-                                  className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                                  type="number" min="0" step="0.01"
+                                  value={costOverrides[row.cost_override_key] ?? ''}
+                                  onChange={e => {
+                                    const v = e.target.value
+                                    setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
+                                    markDirty()
+                                  }}
+                                  placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
+                                  className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
+                                    ${row.is_cost_overridden
+                                      ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                      : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                 />
-                              </td>
-                            )}
+                                {row.is_cost_overridden && (
+                                  <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
+                                    onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                )}
+                              </div>
+                            </td>
                             {row.perLevel.map(p => (
                               <>
-                                <td key={`${p.level.id}-ip`} className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
-                                  {p.price_gross > 0 ? fmtMoney(p.price_gross) : <span className="text-gray-300">—</span>}
+                                {/* Qty per level */}
+                                <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
+                                  <input
+                                    type="number" min="0" step="1"
+                                    value={qty[p.qty_key] ?? ''}
+                                    onChange={e => onQtyChange(p.qty_key, e.target.value)}
+                                    placeholder="0"
+                                    className="w-12 text-right font-mono text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                                  />
+                                </td>
+                                {/* Price — editable */}
+                                <td key={`${p.level.id}-ip`} className="px-1 py-1">
+                                  <div className="inline-flex items-center">
+                                    <input
+                                      type="number" min="0" step="0.01"
+                                      value={priceOverrides[p.price_override_key] ?? ''}
+                                      onChange={e => {
+                                        const v = e.target.value
+                                        setPriceOverrides(prev => v === '' ? (({ [p.price_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [p.price_override_key]: v })
+                                        markDirty()
+                                      }}
+                                      placeholder={p.base_price_gross > 0 ? String(Math.round(p.base_price_gross * 100) / 100) : ''}
+                                      className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
+                                        ${p.is_price_overridden
+                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                          : 'border border-transparent bg-transparent text-gray-700 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                    />
+                                    {p.is_price_overridden && (
+                                      <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset price"
+                                        onClick={() => { setPriceOverrides(prev => (({ [p.price_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                    )}
+                                  </div>
                                 </td>
                                 {!allLevelsCompact && (
-                                  <td key={`${p.level.id}-ir`} className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
+                                  <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold">
                                     {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
                                   </td>
                                 )}
-                                <td key={`${p.level.id}-ic`} className={`px-3 py-2.5 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
+                                <td key={`${p.level.id}-ic`} className={`px-3 py-2 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
                                   {fmtPct(p.cogs_pct)}
                                 </td>
                               </>
                             ))}
-                            <td className="px-3 py-2.5 text-right font-mono text-xs border-l border-gray-100">
-                              {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
-                            </td>
-                            <td className={`px-3 py-2.5 text-right text-xs border-l border-gray-100 ${cogsColour(totalCogsPct)}`}>
+                            <td className={`px-3 py-2 text-right text-xs border-l border-gray-100 ${cogsColour(totalCogsPct)}`}>
                               {fmtPct(totalCogsPct)}
                             </td>
                           </tr>
@@ -3200,25 +3425,24 @@ ${tableHtml}
               </tbody>
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                 {(() => {
-                  const gtTotalCost = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
-                  const gtSumRevenues = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
-                  const gtAvgRevenue = allLevelsData.length > 0 ? gtSumRevenues / allLevelsData.length : 0
-                  const gtTotalCogsPct = gtAvgRevenue > 0 ? (gtTotalCost / gtAvgRevenue) * 100 : null
+                  const gtTotalCost    = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
+                  const gtTotalRev     = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const gtTotalCogsPct = gtTotalRev > 0 ? (gtTotalCost / gtTotalRev) * 100 : null
                   return (
                     <tr>
                       <td className="px-3 py-3 font-bold text-gray-900">Grand Total</td>
                       <td />
-                      {!allLevelsCompact && (
-                        <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                          {allLevelRows.reduce((s, r) => s + r.qty, 0).toLocaleString()}
-                        </td>
-                      )}
                       {allLevelsData.map(({ level }) => {
+                        const tQ = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
                         const tR = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
-                        const tP = tR > 0 ? (gtTotalCost / tR) * 100 : null
+                        const tC = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0) * r.cost, 0)
+                        const tP = tR > 0 ? (tC / tR) * 100 : null
                         return (
                           <>
-                            <td key={`${level.id}-fp`} className="border-l border-gray-200" />
+                            <td key={`${level.id}-fq`} className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
+                              {tQ > 0 ? tQ.toLocaleString() : '—'}
+                            </td>
+                            <td key={`${level.id}-fp`} className="border-gray-200" />
                             {!allLevelsCompact && (
                               <td key={`${level.id}-fr`} className="px-3 py-3 text-right font-mono font-bold text-gray-900">
                                 {tR > 0 ? fmtMoney(tR) : '—'}
@@ -3230,9 +3454,6 @@ ${tableHtml}
                           </>
                         )
                       })}
-                      <td className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
-                        {fmtMoney(gtTotalCost)}
-                      </td>
                       <td className={`px-3 py-3 text-right font-bold text-sm border-l border-gray-200 ${cogsColour(gtTotalCogsPct)}`}>
                         {fmtPct(gtTotalCogsPct)}
                       </td>
@@ -3243,6 +3464,235 @@ ${tableHtml}
             </table>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── ScenarioModal ──────────────────────────────────────────────────────────────
+
+interface ScenarioModalProps {
+  scenarios:   SavedScenario[]
+  loading:     boolean
+  saving:      boolean
+  currentId:   number | null
+  currentName: string
+  onLoad(s: SavedScenario): void
+  onDelete(id: number): void
+  onSave(name: string): void
+  onNew(): void
+  onClose(): void
+}
+
+function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onLoad, onDelete, onSave, onNew, onClose }: ScenarioModalProps) {
+  const [nameInput, setNameInput] = useState(currentName || '')
+  const [search,    setSearch]    = useState('')
+
+  const filtered = scenarios.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()))
+
+  function fmt(iso: string) {
+    try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800 text-base">Scenarios</h3>
+          <button className="text-gray-400 hover:text-gray-600 text-lg leading-none" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Saved list */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="p-8 text-center"><Spinner /></div>
+          ) : (
+            <>
+              {/* Search */}
+              {scenarios.length > 5 && (
+                <div className="px-4 pt-3 pb-1">
+                  <input
+                    className="input w-full text-sm"
+                    placeholder="Search scenarios…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+              )}
+
+              {filtered.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-gray-400">
+                  {scenarios.length === 0 ? 'No saved scenarios yet.' : 'No matches.'}
+                </div>
+              ) : (
+                <ul className="divide-y divide-gray-50 px-2 py-2">
+                  {filtered.map(s => (
+                    <li key={s.id} className={`flex items-center gap-2 px-3 py-2.5 rounded-lg group
+                      ${s.id === currentId ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className={`font-medium text-sm truncate ${s.id === currentId ? 'text-accent' : 'text-gray-800'}`}>
+                          {s.name}{s.id === currentId && <span className="ml-1.5 text-xs font-normal opacity-70">● loaded</span>}
+                        </div>
+                        <div className="text-xs text-gray-400 mt-0.5 flex gap-2 flex-wrap">
+                          {s.menu_name && <span>📋 {s.menu_name}</span>}
+                          {s.price_level_name && <span>💰 {s.price_level_name}</span>}
+                          <span>{fmt(s.updated_at)}</span>
+                        </div>
+                      </div>
+                      <button
+                        className="btn btn-sm btn-outline text-xs opacity-0 group-hover:opacity-100 shrink-0"
+                        onClick={() => onLoad(s)}
+                      >Load</button>
+                      <button
+                        className="text-gray-300 hover:text-red-500 text-xs opacity-0 group-hover:opacity-100 shrink-0 px-1"
+                        onClick={() => onDelete(s.id)}
+                        title="Delete scenario"
+                      >🗑</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Save form */}
+        <div className="border-t border-gray-100 px-5 py-4 bg-gray-50/50 rounded-b-xl space-y-3">
+          <div className="flex gap-2 items-center">
+            <input
+              className="input flex-1 text-sm"
+              placeholder="Scenario name…"
+              value={nameInput}
+              onChange={e => setNameInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && nameInput.trim()) onSave(nameInput.trim()) }}
+              autoFocus={scenarios.length === 0}
+            />
+            <button
+              className="btn btn-sm btn-primary shrink-0"
+              disabled={!nameInput.trim() || saving}
+              onClick={() => onSave(nameInput.trim())}
+            >{saving ? 'Saving…' : currentId ? 'Update' : 'Save'}</button>
+          </div>
+          {currentId && nameInput === currentName && (
+            <p className="text-xs text-gray-400">Updates "{currentName}" — or change name to save as new</p>
+          )}
+          <div className="flex gap-2 justify-between">
+            <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={onNew}>+ New scenario</button>
+            <button className="btn btn-sm btn-outline text-xs" onClick={onClose}>Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── WhatIfModal ────────────────────────────────────────────────────────────────
+
+function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: number): void; onClose(): void }) {
+  const [pricePct, setPricePct] = useState('')
+  const [costPct,  setCostPct]  = useState('')
+
+  const pN = parseFloat(pricePct) || 0
+  const cN = parseFloat(costPct)  || 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-80" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800">⚡ What If…</h3>
+          <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          <p className="text-xs text-gray-500">Apply a percentage shift to all prices and/or costs across the scenario.</p>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Price change (%)</label>
+            <div className="flex gap-2 items-center">
+              <input type="number" step="0.5" className="input flex-1 text-sm"
+                placeholder="e.g. +5 or -10"
+                value={pricePct} onChange={e => setPricePct(e.target.value)} autoFocus />
+              <div className="flex gap-1">
+                {[-10, -5, +5, +10].map(v => (
+                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                    onClick={() => setPricePct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Cost change (%)</label>
+            <div className="flex gap-2 items-center">
+              <input type="number" step="0.5" className="input flex-1 text-sm"
+                placeholder="e.g. +3 or -5"
+                value={costPct} onChange={e => setCostPct(e.target.value)} />
+              <div className="flex gap-1">
+                {[-10, -5, +5, +10].map(v => (
+                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                    onClick={() => setCostPct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
+          <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={pN === 0 && cN === 0}
+            onClick={() => { if (pN !== 0 || cN !== 0) onApply(pN, cN) }}
+          >Apply</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── HistoryModal ───────────────────────────────────────────────────────────────
+
+function HistoryModal({ entries, onClear, onClose }: { entries: HistoryEntry[]; onClear(): void; onClose(): void }) {
+  function fmtAction(a: string) {
+    const map: Record<string, string> = {
+      reset_prices: '↺ Prices reset',
+      reset_costs:  '↺ Costs reset',
+      reset_qty:    '↺ Qty reset',
+      push_prices:  '→ Pushed to menu',
+      whatif:       '⚡ What If',
+    }
+    return map[a] ?? a
+  }
+  function fmt(iso: string) {
+    try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) } catch { return iso }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-[440px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800">🕐 Change History</h3>
+          <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          {entries.length === 0 ? (
+            <div className="text-center text-sm text-gray-400 py-8">No history yet.</div>
+          ) : (
+            <ul className="space-y-1">
+              {[...entries].reverse().map((e, i) => (
+                <li key={i} className="flex gap-3 text-sm py-1.5 border-b border-gray-50 last:border-0">
+                  <span className="text-gray-400 text-xs shrink-0 mt-0.5 w-28">{fmt(e.ts)}</span>
+                  <div>
+                    <span className="font-medium text-gray-700">{fmtAction(e.action)}</span>
+                    {e.detail && <span className="text-gray-500 ml-1.5 text-xs">{e.detail}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-between">
+          <button className="btn btn-sm btn-ghost text-xs text-red-400 hover:text-red-600" onClick={onClear}>Clear history</button>
+          <button className="btn btn-sm btn-outline" onClick={onClose}>Close</button>
+        </div>
       </div>
     </div>
   )

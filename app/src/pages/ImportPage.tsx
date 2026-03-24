@@ -188,7 +188,7 @@ function EditCell({
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function ImportPage() {
+export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}) {
   const api            = useApi()
   const navigate       = useNavigate()
   const [searchParams] = useSearchParams()
@@ -906,14 +906,21 @@ export default function ImportPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-6">
-      <div className="flex items-center justify-between mb-6">
-        <PageHeader
-          title="Import Data"
-          subtitle="Upload a spreadsheet and review before importing to your live database." />
-        {step !== 'upload' && step !== 'parsing' && step !== 'done' && (
+      {!hideHeader && (
+        <div className="flex items-center justify-between mb-6">
+          <PageHeader
+            title="Import Data"
+            subtitle="Upload a spreadsheet and review before importing to your live database." />
+          {step !== 'upload' && step !== 'parsing' && step !== 'done' && (
+            <button onClick={handleDiscard} className="btn-ghost text-sm" style={{ color: 'var(--text-3)' }}>✕ Discard</button>
+          )}
+        </div>
+      )}
+      {hideHeader && step !== 'upload' && step !== 'parsing' && step !== 'done' && (
+        <div className="flex justify-end mb-4">
           <button onClick={handleDiscard} className="btn-ghost text-sm" style={{ color: 'var(--text-3)' }}>✕ Discard</button>
-        )}
-      </div>
+        </div>
+      )}
 
       <StepBar step={step} />
 

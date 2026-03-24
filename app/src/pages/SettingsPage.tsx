@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import ImportPage from './ImportPage'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai'
+type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai' | 'import'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -36,6 +37,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'thresholds':     'COGS Thresholds',
   'test-data':      'Test Data',
   'ai':             'AI',
+  'import':         'Import',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -51,7 +53,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
-        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai'] as Tab[]).map(t => (
+        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -66,7 +68,7 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className={tab === 'import' ? 'flex-1 overflow-y-auto' : 'flex-1 overflow-y-auto p-6'}>
         {tab === 'units'          && <UnitsTab />}
         {tab === 'price-levels'   && <PriceLevelsTab />}
         {tab === 'exchange-rates' && <ExchangeRatesTab />}
@@ -74,6 +76,7 @@ export default function SettingsPage() {
         {tab === 'thresholds'     && <ThresholdsTab />}
         {tab === 'test-data'      && <TestDataTab />}
         {tab === 'ai'             && <AiTab />}
+        {tab === 'import'         && <ImportPage hideHeader />}
       </div>
     </div>
   )

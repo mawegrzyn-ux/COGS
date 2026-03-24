@@ -78,11 +78,12 @@ const TOOLS = [
   },
   {
     name: 'get_menu_cogs',
-    description: 'Returns menu items with sell prices and COGS for a specific menu.',
+    description: 'Returns menu items with sell prices and COGS% for a specific menu. Automatically uses the market\'s default price level if price_level_id is not supplied. Always prefer calling this without price_level_id first — it will resolve the right level automatically.',
     input_schema: {
       type: 'object',
       properties: {
-        menu_id: { type: 'integer', description: 'Menu ID' },
+        menu_id:        { type: 'integer', description: 'Menu ID from list_menus' },
+        price_level_id: { type: 'integer', description: 'Optional: specific price level ID. Omit to use the market\'s default price level.' },
       },
       required: ['menu_id'],
     },
@@ -129,7 +130,7 @@ const TOOLS = [
   },
   {
     name: 'list_markets',
-    description: 'Lists all markets (countries) with id, name, currency_code, currency_symbol, and exchange_rate.',
+    description: 'Lists all markets (countries) with id, name, currency_code, currency_symbol, exchange_rate, and default_price_level_id/name.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -1187,20 +1188,48 @@ async function executeTool(name, input) {
     }
 
     case 'get_menu_cogs': {
-      const { menu_id } = input;
-      const { rows } = await pool.query(`
-        SELECT mi.id, mi.display_name, mi.sell_price, mi.qty,
-               r.name as recipe_name, i.name as ingredient_name,
-               co.currency_symbol, co.name as market
-        FROM mcogs_menu_items mi
-        LEFT JOIN mcogs_menus m ON m.id = mi.menu_id
-        LEFT JOIN mcogs_countries co ON co.id = m.country_id
-        LEFT JOIN mcogs_recipes r ON r.id = mi.recipe_id
-        LEFT JOIN mcogs_ingredients i ON i.id = mi.ingredient_id
-        WHERE mi.menu_id = $1
-        ORDER BY mi.display_name
+      const { menu_id, price_level_id } = input;
+      // Resolve effective price level: use provided or fall back to market default
+      const { rows: [menuRow] } = await pool.query(`
+        SELECT co.default_price_level_id, pl.name AS default_pl_name
+        FROM   mcogs_menus m
+        JOIN   mcogs_countries co ON co.id = m.country_id
+        LEFT JOIN mcogs_price_levels pl ON pl.id = co.default_price_level_id
+        WHERE  m.id = $1
       `, [menu_id]);
-      return rows;
+      const effectivePlId = price_level_id || menuRow?.default_price_level_id || null;
+      // Call the full COGS calculation endpoint internally
+      const port = process.env.PORT || 3001;
+      const qs   = effectivePlId ? `?price_level_id=${effectivePlId}` : '';
+      const resp = await fetch(`http://localhost:${port}/api/cogs/menu/${menu_id}${qs}`);
+      if (!resp.ok) return { error: `COGS endpoint returned ${resp.status}` };
+      const data = await resp.json();
+      if (!data.items?.length) return { error: 'Menu not found or has no items' };
+      const plName = effectivePlId
+        ? (data.items[0] && menuRow?.default_pl_name) || `price level ${effectivePlId}`
+        : 'default price level';
+      return {
+        currency_symbol: data.currency_symbol,
+        currency_code:   data.currency_code,
+        price_level:     plName,
+        summary:         data.summary,
+        items: data.items.map(item => ({
+          display_name:     item.display_name,
+          item_type:        item.item_type,
+          cost_per_portion: item.cost_per_portion,
+          sell_price_gross: item.sell_price_gross,
+          sell_price_net:   item.sell_price_net,
+          tax_rate_pct:     item.tax_rate_pct,
+          cogs_pct_net:     item.cogs_pct_net,
+          cogs_pct_gross:   item.cogs_pct_gross,
+          gp_net:           item.gp_net,
+          note: item.sell_price_gross === 0
+            ? `No sell price set — add via Menus → PLT tab`
+            : item.cost_per_portion === 0
+            ? `No vendor price quotes found for this item's ingredients`
+            : null,
+        })),
+      };
     }
 
     case 'get_feedback': {
@@ -1240,8 +1269,11 @@ async function executeTool(name, input) {
 
     case 'list_markets': {
       const { rows } = await pool.query(`
-        SELECT id, name, currency_code, currency_symbol, exchange_rate
-        FROM mcogs_countries ORDER BY name
+        SELECT c.id, c.name, c.currency_code, c.currency_symbol, c.exchange_rate,
+               c.default_price_level_id, pl.name AS default_price_level_name
+        FROM   mcogs_countries c
+        LEFT JOIN mcogs_price_levels pl ON pl.id = c.default_price_level_id
+        ORDER BY c.name
       `);
       return rows;
     }
