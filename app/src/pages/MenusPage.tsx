@@ -1971,7 +1971,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
     const remaining = Math.max(0, 100 - usedByChanged - usedByOthers)
     // Apply remainder to last key that is not the changed one
     const lastOther = others[others.length - 1]
-    if (lastOther !== undefined) next[lastOther] = String(Math.round(remaining * 10) / 10)
+    if (lastOther !== undefined) (next as Record<string | number, string>)[lastOther] = String(Math.round(remaining * 10) / 10)
     return next
   }
 
