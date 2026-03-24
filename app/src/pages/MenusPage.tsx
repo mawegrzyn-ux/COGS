@@ -1324,10 +1324,10 @@ function PriceLevelTool({
 
         // Convert to display currency
         // stored prices are in country local currency
+        // local → target = local ÷ c.rate × targetRate  →  dispRate = targetRate / c.rate
         let dispRate = 1
         if (currencyMode === 'single' && targetRate) {
-          // country local → base = * c.rate; base → target single = / targetRate
-          dispRate = c.rate / (targetRate || 1)
+          dispRate = targetRate / (c.rate || 1)
         }
 
         const costLocal    = cd.cost ?? 0

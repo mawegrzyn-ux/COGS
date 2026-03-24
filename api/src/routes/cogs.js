@@ -245,7 +245,7 @@ router.get('/menu/:menu_id', async (req, res) => {
       const display   = item.display_name?.trim() ||
                         (itemType === 'ingredient' ? item.ingredient_name : item.recipe_name) || '—';
 
-      // Cost per portion
+      // Cost per portion — calcRecipeCost returns USD base; convert to local currency
       let cpp = 0;
       if (itemType === 'ingredient') {
         const q = quoteLookup[item.ingredient_id]?.[countryId];
@@ -256,7 +256,7 @@ router.get('/menu/:menu_id', async (req, res) => {
         const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap);
         cpp = cost * qty;
       }
-      cpp = Math.round(cpp * 10000) / 10000;
+      cpp = Math.round(cpp * Number(menu.exchange_rate) * 10000) / 10000;
 
       // Resolve sell price
       const lp = levelPriceMap[item.id];
@@ -417,7 +417,7 @@ router.get('/report/price-levels', async (req, res) => {
                        (itemType === 'ingredient' ? item.ingredient_name : item.recipe_name) || '—';
       const qty      = Number(item.qty || 1);
 
-      // Cost per portion
+      // Cost per portion — calcRecipeCost returns USD base; convert to local currency
       let cpp = 0;
       if (itemType === 'ingredient') {
         const q = quoteLookup[item.ingredient_id]?.[countryId];
@@ -427,7 +427,7 @@ router.get('/report/price-levels', async (req, res) => {
         const { cost } = calcRecipeCost({ id: item.recipe_id, yield_qty: item.yield_qty || 1 }, rItems, countryId, quoteLookup, variationMap);
         cpp = cost * qty;
       }
-      cpp = Math.round(cpp * 10000) / 10000;
+      cpp = Math.round(cpp * Number(country.exchange_rate) * 10000) / 10000;
 
       // Helper: resolve effective tax rate for a price level
       function getEffectiveTax(taxRateId, levelId) {
@@ -595,7 +595,7 @@ router.get('/report/menu-prices', async (req, res) => {
         }
 
         const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup, variationMap);
-        const cppLocal = cost;
+        const cppLocal = cost * Number(country.exchange_rate); // USD base → local currency
         const defaultRate = defaultTaxMap[cid] || 0;
 
         const grosses = [], nets = [];
