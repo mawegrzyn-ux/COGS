@@ -64,8 +64,8 @@ interface RecipeDetail extends Recipe {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const fmt = (n: number | string | null | undefined, dp = 4) => Number(n ?? 0).toFixed(dp)
-const fmtCost = (n: number | string | null | undefined) => { const v = Number(n ?? 0); return v < 0.01 ? v.toFixed(4) : v.toFixed(2) }
+const fmt     = (n: number | string | null | undefined, dp = 3) => Number(n ?? 0).toFixed(dp)
+const fmtCost = (n: number | string | null | undefined) => Number(n ?? 0).toFixed(2)
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -90,6 +90,7 @@ export default function RecipesPage() {
   const [editItemModal,setEditItemModal]= useState<RecipeItem | null>(null)
   const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
+  const [showComparison,        setShowComparison]        = useState(false)
 
   // search/filter
   const [search,     setSearch]     = useState('')
@@ -167,14 +168,15 @@ export default function RecipesPage() {
     [selected, selectedCountryId]
   )
 
-  // Currency display: use selected override, else country's own currency
+  // Currency display: '__BASE__' sentinel = USD base (rate 1); else use override or country default
   const displayCurrency = useMemo(() => {
+    if (selectedCurrencyCode === '__BASE__') return { code: 'USD', symbol: '$', rate: 1 }
     if (selectedCurrencyCode) {
       const c = countries.find(c => c.currency_code === selectedCurrencyCode)
       if (c) return { code: c.currency_code, symbol: c.currency_symbol, rate: Number(c.exchange_rate) }
     }
-    if (activeCogs) return { code: activeCogs.currency_code, symbol: activeCogs.currency_symbol, rate: activeCogs.exchange_rate }
-    return { code: '', symbol: '', rate: 1 }
+    if (activeCogs) return { code: activeCogs.currency_code, symbol: activeCogs.currency_symbol, rate: Number(activeCogs.exchange_rate) }
+    return { code: 'USD', symbol: '$', rate: 1 }
   }, [selectedCurrencyCode, countries, activeCogs])
 
   // Active items for display: variation items if a variation exists for selected country, else global
@@ -195,6 +197,17 @@ export default function RecipesPage() {
       .map(c => ({ code: c.currency_code, symbol: c.currency_symbol }))
       .sort((a, b) => a.code.localeCompare(b.code))
   }, [countries])
+
+  // Comparison data: ingredient diff between global and active variation
+  const comparisonData = useMemo(() => {
+    if (!showComparison || !activeVariation || !selected) return null
+    const globalItems = selected.items
+    const varItems    = activeVariation.items
+    const getName     = (i: RecipeItem) => i.ingredient_name || i.sub_recipe_name || String(i.id)
+    const globalNames = new Set(globalItems.map(getName))
+    const varNames    = new Set(varItems.map(getName))
+    return { globalItems, varItems, globalNames, varNames }
+  }, [showComparison, activeVariation, selected])
 
   // ── Recipe CRUD ───────────────────────────────────────────────────────────
 
@@ -491,48 +504,63 @@ export default function RecipesPage() {
                 </div>
               </div>
 
-              {/* ── Country + Currency selectors (above COGS) ── */}
+              {/* ── Market + Currency selectors ── */}
               {selected.cogs_by_country.length > 0 && (
-                <div className="flex items-center gap-3 mb-4 flex-wrap">
-                  <select
-                    value={selectedCountryId}
-                    onChange={e => {
-                      const id = Number(e.target.value)
-                      setSelectedCountryId(id)
-                      // Reset currency to country default when country changes
-                      setSelectedCurrencyCode('')
-                    }}
-                    className="input text-sm"
-                    style={{ minWidth: 160 }}
-                  >
-                    {selected.cogs_by_country.map(c => (
-                      <option key={c.country_id} value={c.country_id}>
-                        {c.country_name}{c.has_variation ? ' ✦' : ''}
-                      </option>
-                    ))}
-                  </select>
+                <div className="flex items-center gap-4 mb-4 flex-wrap">
 
-                  {currencyOptions.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Market</span>
                     <select
-                      value={selectedCurrencyCode || (activeCogs?.currency_code ?? '')}
-                      onChange={e => setSelectedCurrencyCode(e.target.value === (activeCogs?.currency_code ?? '') ? '' : e.target.value)}
+                      value={selectedCountryId}
+                      onChange={e => {
+                        setSelectedCountryId(Number(e.target.value))
+                        setSelectedCurrencyCode('')
+                        setShowComparison(false)
+                      }}
                       className="input text-sm"
-                      style={{ minWidth: 90 }}
-                      title="Display currency"
+                      style={{ minWidth: 160 }}
                     >
-                      {currencyOptions.map(c => (
-                        <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
+                      {selected.cogs_by_country.map(c => (
+                        <option key={c.country_id} value={c.country_id}>
+                          {c.country_name}{c.has_variation ? ' ✦' : ''}
+                        </option>
                       ))}
                     </select>
+                  </div>
+
+                  {currencyOptions.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Currency</span>
+                      <select
+                        value={selectedCurrencyCode || (activeCogs?.currency_code ?? '')}
+                        onChange={e => setSelectedCurrencyCode(e.target.value)}
+                        className="input text-sm"
+                        style={{ minWidth: 120 }}
+                      >
+                        <option value="__BASE__">USD $ (base)</option>
+                        {currencyOptions.map(c => (
+                          <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
+                        ))}
+                      </select>
+                    </div>
                   )}
 
                   {activeCogs && (
-                    <span className="text-xs text-text-3 ml-auto">
+                    <div className="flex items-center gap-2 ml-auto">
                       {activeCogs.has_variation
-                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold">✦ Market Variation · {activeCogs.country_name}</span>
-                        : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-2 text-text-3">🌍 Global Recipe</span>
+                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold">✦ Market Variation</span>
+                        : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-2 text-text-3 text-xs">🌍 Global Recipe</span>
                       }
-                    </span>
+                      {activeVariation && (
+                        <button
+                          onClick={() => setShowComparison(p => !p)}
+                          className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${showComparison ? 'border-accent bg-accent text-white' : 'border-border text-text-2 hover:border-accent hover:text-accent bg-surface'}`}
+                          title="Side-by-side comparison of global vs market variation ingredients"
+                        >
+                          ⇄ Compare
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -542,8 +570,8 @@ export default function RecipesPage() {
                 <div className="bg-surface border border-border rounded-xl p-4 mb-5">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <CogsKpi
-                      label="Total Cost (base)"
-                      value={fmtCost(activeCogs.total_cost_base)}
+                      label="Total Cost (USD)"
+                      value={`$${fmtCost(activeCogs.total_cost_base)}`}
                     />
                     <CogsKpi
                       label={`Total Cost (${displayCurrency.code})`}
@@ -577,6 +605,8 @@ export default function RecipesPage() {
 
               {/* ── Ingredients table ── */}
               <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+
+                {/* Table header bar */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
@@ -586,7 +616,6 @@ export default function RecipesPage() {
                     }
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {/* Variation action button */}
                     {selectedCountryId !== '' && (
                       activeCogs?.has_variation && activeCogs.variation_id ? (
                         <button
@@ -615,96 +644,206 @@ export default function RecipesPage() {
                     )}
                     <button
                       className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                      onClick={() => {
-                        setItemModalForVariation(activeVariation?.id ?? null)
-                        setItemModal(true)
-                      }}
+                      onClick={() => { setItemModalForVariation(activeVariation?.id ?? null); setItemModal(true) }}
                     >
                       <PlusIcon size={11} /> Add Ingredient
                     </button>
                   </div>
                 </div>
-                {activeItems.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-text-3 text-sm">
-                    {activeCogs?.has_variation
-                      ? 'No ingredients in this market variation yet. Add ingredients above.'
-                      : 'No ingredients yet. Add your first ingredient.'}
-                  </div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
-                        <th className="px-4 py-2.5 text-left font-semibold">Ingredient</th>
-                        <th className="px-4 py-2.5 text-left font-semibold">Qty</th>
-                        <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
-                        {activeCogs && <th className="px-4 py-2.5 text-right font-semibold">Cost ({displayCurrency.code})</th>}
-                        <th className="w-16" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeItems.map(item => {
-                        const cogLine = activeCogs?.lines.find(l => l.id === item.id)
-                        const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
-                        return (
-                          <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-2/50 group">
-                            <td className="px-4 py-2.5">
-                              <div className="font-medium text-text-1">
-                                {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
-                              </div>
-                              {item.item_type === 'ingredient' && item.base_unit_abbr && (
-                                <div className="text-xs text-text-3">base unit: {item.base_unit_abbr}</div>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5 font-mono text-text-2">
-                              {fmt(item.prep_qty, 4)} {item.prep_unit || item.base_unit_abbr || '—'}
-                            </td>
-                            <td className="px-4 py-2.5 font-mono text-text-3 text-xs">
-                              {item.item_type === 'ingredient'
-                                ? `× ${fmt(item.prep_to_base_conversion, 6)} → ${fmt(Number(item.prep_qty) * Number(item.prep_to_base_conversion), 4)} ${item.base_unit_abbr || ''}`
-                                : `${fmt(item.prep_qty, 4)} portion${Number(item.prep_qty) !== 1 ? 's' : ''}`
-                              }
-                            </td>
-                            {activeCogs && (
-                              <td className="px-4 py-2.5 text-right font-mono">
-                                {localCost != null
-                                  ? <div className="flex flex-col items-end">
-                                      <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
-                                      {cogLine?.quote_is_preferred === false && (
-                                        <span className="text-[10px] text-amber-400 leading-none mt-0.5">best available</span>
-                                      )}
+
+                {/* ── Comparison view ── */}
+                {comparisonData ? (
+                  <div className="grid grid-cols-2 divide-x divide-border">
+
+                    {/* Left — Global */}
+                    <div>
+                      <div className="px-3 py-2 bg-surface-2 border-b border-border text-xs font-semibold text-text-3 uppercase tracking-wide">
+                        🌍 Global
+                      </div>
+                      {comparisonData.globalItems.length === 0 ? (
+                        <div className="p-6 text-center text-text-3 text-xs">No global ingredients</div>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-border text-xs text-text-2 uppercase tracking-wide bg-surface-2/50">
+                              <th className="px-3 py-2 text-left font-semibold">Ingredient</th>
+                              <th className="px-3 py-2 text-left font-semibold">Qty</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {comparisonData.globalItems.map(item => {
+                              const name    = item.ingredient_name || item.sub_recipe_name || ''
+                              const removed = !comparisonData.varNames.has(name)
+                              return (
+                                <tr key={item.id} className={`border-b border-border last:border-0 ${removed ? 'bg-amber-50' : 'hover:bg-surface-2/40'}`}>
+                                  <td className="px-3 py-2.5">
+                                    <div className={`font-medium ${removed ? 'text-amber-700' : 'text-text-1'}`}>
+                                      {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                      {removed && <span className="ml-1.5 text-[10px] bg-amber-100 text-amber-600 px-1 rounded">removed</span>}
                                     </div>
-                                  : <span className="text-red-400 text-xs">no quote</span>
+                                    {item.item_type === 'ingredient' && item.base_unit_abbr && (
+                                      <div className="text-xs text-text-3">{item.base_unit_abbr}</div>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
+                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+
+                    {/* Right — Variation */}
+                    <div>
+                      <div className="px-3 py-2 bg-blue-50 border-b border-border text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                        ✦ {activeCogs?.country_name}
+                      </div>
+                      {comparisonData.varItems.length === 0 ? (
+                        <div className="p-6 text-center text-text-3 text-xs">No variation ingredients</div>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-border text-xs text-text-2 uppercase tracking-wide bg-blue-50/40">
+                              <th className="px-3 py-2 text-left font-semibold">Ingredient</th>
+                              <th className="px-3 py-2 text-left font-semibold">Qty</th>
+                              <th className="px-3 py-2 text-right font-semibold">Cost ({displayCurrency.code})</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {comparisonData.varItems.map(item => {
+                              const name     = item.ingredient_name || item.sub_recipe_name || ''
+                              const added    = !comparisonData.globalNames.has(name)
+                              const cogLine  = activeCogs?.lines.find(l => l.id === item.id)
+                              const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
+                              return (
+                                <tr key={item.id} className={`border-b border-border last:border-0 ${added ? 'bg-emerald-50' : 'hover:bg-surface-2/40'}`}>
+                                  <td className="px-3 py-2.5">
+                                    <div className={`font-medium ${added ? 'text-emerald-700' : 'text-text-1'}`}>
+                                      {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                      {added && <span className="ml-1.5 text-[10px] bg-emerald-100 text-emerald-600 px-1 rounded">added</span>}
+                                    </div>
+                                    {item.item_type === 'ingredient' && item.base_unit_abbr && (
+                                      <div className="text-xs text-text-3">{item.base_unit_abbr}</div>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
+                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right font-mono text-xs">
+                                    {localCost != null
+                                      ? <div className="flex flex-col items-end">
+                                          <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
+                                          {cogLine?.quote_is_preferred === false && <span className="text-[10px] text-amber-400 mt-0.5">best avail.</span>}
+                                        </div>
+                                      : <span className="text-red-400">—</span>
+                                    }
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                          {activeCogs && activeCogs.total_cost_base > 0 && (
+                            <tfoot>
+                              <tr className="border-t-2 border-border bg-blue-50/30">
+                                <td className="px-3 py-2 font-semibold text-text-2 text-xs" colSpan={2}>Total</td>
+                                <td className="px-3 py-2 text-right font-mono font-bold text-text-1 text-xs">
+                                  {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      )}
+                    </div>
+                  </div>
+
+                ) : (
+                  /* ── Normal single-panel view ── */
+                  activeItems.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-text-3 text-sm">
+                      {activeCogs?.has_variation
+                        ? 'No ingredients in this market variation yet. Add ingredients above.'
+                        : 'No ingredients yet. Add your first ingredient.'}
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                          <th className="px-4 py-2.5 text-left font-semibold">Ingredient</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Qty</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
+                          {activeCogs && <th className="px-4 py-2.5 text-right font-semibold">Cost ({displayCurrency.code})</th>}
+                          <th className="w-16" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activeItems.map(item => {
+                          const cogLine   = activeCogs?.lines.find(l => l.id === item.id)
+                          const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
+                          return (
+                            <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-2/50 group">
+                              <td className="px-4 py-2.5">
+                                <div className="font-medium text-text-1">
+                                  {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                </div>
+                                {item.item_type === 'ingredient' && item.base_unit_abbr && (
+                                  <div className="text-xs text-text-3">base unit: {item.base_unit_abbr}</div>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-text-2">
+                                {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-text-3 text-xs">
+                                {item.item_type === 'ingredient'
+                                  ? `× ${fmt(item.prep_to_base_conversion, 6)} → ${fmt(Number(item.prep_qty) * Number(item.prep_to_base_conversion))} ${item.base_unit_abbr || ''}`
+                                  : `${fmt(item.prep_qty)} portion${Number(item.prep_qty) !== 1 ? 's' : ''}`
                                 }
                               </td>
-                            )}
-                            <td className="px-2 py-1">
-                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button
-                                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent"
-                                  onClick={() => setEditItemModal(item)}
-                                ><EditIcon size={11}/></button>
-                                <button
-                                  className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50"
-                                  onClick={() => setConfirmDelete({ type: 'item', id: item.id })}
-                                ><TrashIcon size={11}/></button>
-                              </div>
+                              {activeCogs && (
+                                <td className="px-4 py-2.5 text-right font-mono">
+                                  {localCost != null
+                                    ? <div className="flex flex-col items-end">
+                                        <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
+                                        {cogLine?.quote_is_preferred === false && (
+                                          <span className="text-[10px] text-amber-400 leading-none mt-0.5">best available</span>
+                                        )}
+                                      </div>
+                                    : <span className="text-red-400 text-xs">no quote</span>
+                                  }
+                                </td>
+                              )}
+                              <td className="px-2 py-1">
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent"
+                                    onClick={() => setEditItemModal(item)}
+                                  ><EditIcon size={11}/></button>
+                                  <button
+                                    className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50"
+                                    onClick={() => setConfirmDelete({ type: 'item', id: item.id })}
+                                  ><TrashIcon size={11}/></button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      {activeCogs && activeCogs.total_cost_base > 0 && (
+                        <tfoot>
+                          <tr className="border-t-2 border-border bg-surface-2">
+                            <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={3}>Total</td>
+                            <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
+                              {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                             </td>
+                            <td />
                           </tr>
-                        )
-                      })}
-                    </tbody>
-                    {activeCogs && activeCogs.total_cost_base > 0 && (
-                      <tfoot>
-                        <tr className="border-t-2 border-border bg-surface-2">
-                          <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={3}>Total</td>
-                          <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
-                            {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
-                          </td>
-                          <td />
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
+                        </tfoot>
+                      )}
+                    </table>
+                  )
                 )}
               </div>
 
@@ -1003,9 +1142,9 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
             {baseEquiv !== null && selIngredient && (
               <div className="bg-accent-dim border border-accent/20 rounded-lg px-4 py-3 text-sm">
                 <span className="font-semibold text-accent">= </span>
-                <span className="font-mono text-text-1 font-bold">{fmt(baseEquiv, 4)} {baseUnit}</span>
+                <span className="font-mono text-text-1 font-bold">{fmt(baseEquiv, 3)} {baseUnit}</span>
                 {Number(selIngredient.waste_pct) > 0 && (
-                  <span className="text-text-3 ml-2">(+{selIngredient.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + Number(selIngredient.waste_pct)/100), 4)} {baseUnit}</span>)</span>
+                  <span className="text-text-3 ml-2">(+{selIngredient.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + Number(selIngredient.waste_pct)/100), 3)} {baseUnit}</span>)</span>
                 )}
               </div>
             )}
