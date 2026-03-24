@@ -196,7 +196,7 @@ export default function MenusPage() {
   const [scenarioLevelId, setScenarioLevelId] = useState<number | ''>('')
   const [scenarioData,    setScenarioData]    = useState<CogsData | null>(null)
   const [scenarioLoading, setScenarioLoading] = useState(false)
-  const [scenarioQty,     setScenarioQty]     = useState<Record<number, string>>({})
+  const [scenarioQty,     setScenarioQty]     = useState<Record<string, string>>({})
 
   // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
@@ -717,10 +717,11 @@ export default function MenusPage() {
           menuId={scenarioMenuId}
           levelId={scenarioLevelId}
           qty={scenarioQty}
-          onMenuChange={id => { setScenarioMenuId(id); setScenarioQty({}) }}
+          onMenuChange={id => setScenarioMenuId(id)}
           onLevelChange={setScenarioLevelId}
-          onQtyChange={(itemId, q) => setScenarioQty(prev => ({ ...prev, [itemId]: q }))}
+          onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
           onResetQty={() => setScenarioQty({})}
+          onReplaceQty={(qMap) => setScenarioQty(qMap)}
         />
       )}
 
@@ -1902,12 +1903,12 @@ function MarketPriceTool({
 interface SavedScenario {
   id:               number
   name:             string
-  menu_id:          number
+  menu_id:          number | null
   price_level_id:   number | null
-  qty_data:         Record<string, number>
+  qty_data:         Record<string, number>   // keys: "r_{recipe_id}" | "i_{ingredient_id}"
   notes:            string | null
   updated_at:       string
-  menu_name:        string
+  menu_name:        string | null
   price_level_name: string | null
 }
 
@@ -1919,16 +1920,17 @@ interface ScenarioToolProps {
   loading:     boolean
   menuId:      number | null
   levelId:     number | ''
-  qty:         Record<number, string>
+  qty:         Record<string, string>
   onMenuChange(id: number | null): void
   onLevelChange(id: number | ''): void
-  onQtyChange(itemId: number, q: string): void
+  onQtyChange(key: string, q: string): void
   onResetQty(): void
+  onReplaceQty(qMap: Record<string, string>): void
 }
 
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
-  onMenuChange, onLevelChange, onQtyChange, onResetQty,
+  onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
 }: ScenarioToolProps) {
 
   const api = useApi()
@@ -1940,26 +1942,23 @@ function ScenarioTool({
   // ── Save / Load state ──────────────────────────────────────────────────────
   const [savedScenarios,   setSavedScenarios]   = useState<SavedScenario[]>([])
   const [loadingScenarios, setLoadingScenarios] = useState(false)
-  const [savedId,          setSavedId]          = useState<number | null>(null)   // currently loaded scenario
-  const [savedName,        setSavedName]        = useState('')                    // name of loaded scenario
-  const [dirty,            setDirty]            = useState(false)                 // unsaved changes
+  const [savedId,          setSavedId]          = useState<number | null>(null)
+  const [savedName,        setSavedName]        = useState('')
+  const [dirty,            setDirty]            = useState(false)
   const [showSaveDialog,   setShowSaveDialog]   = useState(false)
-  const [showLoadPanel,    setShowLoadPanel]    = useState(false)
   const [saveNameInput,    setSaveNameInput]    = useState('')
   const [saving,           setSaving]           = useState(false)
 
-  // Load saved scenarios whenever the menu changes
+  // Load ALL scenarios once on mount (scenarios are market-agnostic)
   useEffect(() => {
-    setSavedId(null); setSavedName(''); setDirty(false)
-    if (!menuId) { setSavedScenarios([]); return }
     setLoadingScenarios(true)
-    api.get(`/scenarios?menu_id=${menuId}`)
+    api.get('/scenarios')
       .then((rows: SavedScenario[]) => setSavedScenarios(rows || []))
       .catch(() => {})
       .finally(() => setLoadingScenarios(false))
-  }, [menuId, api]) // eslint-disable-line
+  }, [api]) // eslint-disable-line
 
-  // Mark dirty when qty changes (but not on initial load from a scenario)
+  // Mark dirty when qty changes (skip programmatic loads via dirtyRef)
   const dirtyRef = useRef(false)
   useEffect(() => {
     if (dirtyRef.current) setDirty(true)
@@ -1967,13 +1966,17 @@ function ScenarioTool({
   }, [qty])
 
   async function saveScenario(name: string) {
-    if (!menuId) return
     setSaving(true)
     try {
       const payload = {
-        name, menu_id: menuId,
+        name,
         price_level_id: levelId || null,
-        qty_data: Object.fromEntries(Object.entries(qty).map(([k, v]) => [k, parseFloat(v) || 0])),
+        // qty_data keyed by natural recipe/ingredient keys: "r_123", "i_456"
+        qty_data: Object.fromEntries(
+          Object.entries(qty)
+            .map(([k, v]) => [k, parseFloat(v) || 0])
+            .filter(([, v]) => (v as number) > 0)
+        ),
       }
       let row: SavedScenario
       if (savedId) {
@@ -1994,24 +1997,21 @@ function ScenarioTool({
 
   function loadScenario(s: SavedScenario) {
     dirtyRef.current = false
-    onMenuChange(s.menu_id)
-    onLevelChange(s.price_level_id ?? '')
-    // qty_data keys are string; convert to Record<number, string>
-    const qMap: Record<number, string> = {}
+    // Scenarios are market-agnostic — do NOT change the selected market.
+    // Restore price level if stored with the scenario.
+    if (s.price_level_id) onLevelChange(s.price_level_id)
+    // Build qty map keyed by natural key strings (e.g. "r_12", "i_34")
+    const qMap: Record<string, string> = {}
     for (const [k, v] of Object.entries(s.qty_data || {})) {
-      if (Number(v) > 0) qMap[Number(k)] = String(v)
+      if (Number(v) > 0) qMap[k] = String(v)
     }
-    // Batch-update via multiple onQtyChange calls — we need to replace all at once
-    // Use a trick: call onResetQty first then rebuild; but onResetQty doesn't accept new values.
-    // Instead we rely on the parent setState to merge: call each key individually.
-    onResetQty()
-    // Delay to let reset propagate, then set all keys
+    // Replace all qty atomically (single parent state update)
+    onReplaceQty(qMap)
+    // After React state settles, mark as clean and record which scenario is active
     setTimeout(() => {
-      for (const [k, v] of Object.entries(qMap)) onQtyChange(Number(k), v)
       setSavedId(s.id); setSavedName(s.name); setDirty(false)
       dirtyRef.current = false
     }, 0)
-    setShowLoadPanel(false)
   }
 
   async function deleteScenario(id: number) {
@@ -2058,6 +2058,7 @@ function ScenarioTool({
 
   interface ScenRow {
     menu_item_id:  number
+    nat_key:       string   // "r_{recipe_id}" | "i_{ingredient_id}" — market-agnostic key
     display_name:  string
     category:      string
     item_type:     string
@@ -2076,7 +2077,11 @@ function ScenarioTool({
   const rows = useMemo((): ScenRow[] => {
     if (!data?.items) return []
     return data.items.map(item => {
-      const q           = Math.max(0, parseFloat(qty[item.menu_item_id] || '0') || 0)
+      // Natural key matches across markets — same recipe appears in all market menus
+      const key         = item.item_type === 'recipe'
+        ? `r_${item.recipe_id}`
+        : `i_${item.ingredient_id}`
+      const q           = Math.max(0, parseFloat(qty[key] || '0') || 0)
       const cost        = item.cost_per_portion * dispRate
       const price_gross = item.sell_price_gross * dispRate
       const price_net   = item.sell_price_net   * dispRate
@@ -2085,6 +2090,7 @@ function ScenarioTool({
       const totalCost   = q * cost
       return {
         menu_item_id:  item.menu_item_id,
+        nat_key:       key,
         display_name:  item.display_name,
         category:      item.category || 'Uncategorised',
         item_type:     item.item_type,
@@ -2164,10 +2170,47 @@ function ScenarioTool({
 
         {/* Toolbar */}
         <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
-          <span className="font-semibold text-gray-700 text-sm">📊 Sales Mix Scenario</span>
+          <span className="font-semibold text-gray-700 text-sm shrink-0">📊 Scenario</span>
 
-          <div className="flex items-center gap-1.5 ml-2">
-            <span className="text-xs text-gray-400">Menu</span>
+          {/* ① Scenario selector — first, market-agnostic */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400 shrink-0">Scenario</span>
+            <select
+              className="select select-sm min-w-[180px]"
+              value={savedId ?? ''}
+              disabled={loadingScenarios}
+              onChange={e => {
+                const id = e.target.value ? Number(e.target.value) : null
+                if (!id) {
+                  // Clear to new scenario
+                  onResetQty()
+                  setSavedId(null); setSavedName(''); setDirty(false)
+                  dirtyRef.current = false
+                } else {
+                  const s = savedScenarios.find(x => x.id === id)
+                  if (s) loadScenario(s)
+                }
+              }}
+            >
+              <option value="">— New scenario —</option>
+              {savedScenarios.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.price_level_name ? ` · ${s.price_level_name}` : ''}
+                </option>
+              ))}
+            </select>
+            {savedId && (
+              <button
+                className="text-red-400 hover:text-red-600 text-xs px-1"
+                title="Delete this scenario"
+                onClick={() => deleteScenario(savedId)}
+              >🗑</button>
+            )}
+          </div>
+
+          {/* ② Market */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">Market</span>
             <select
               className="select select-sm min-w-[200px]"
               value={menuId ?? ''}
@@ -2178,6 +2221,7 @@ function ScenarioTool({
             </select>
           </div>
 
+          {/* ③ Price level */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400">Level</span>
             <select
@@ -2190,6 +2234,7 @@ function ScenarioTool({
             </select>
           </div>
 
+          {/* ④ Display currency */}
           {menuCountry && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-gray-400">Display</span>
@@ -2203,77 +2248,31 @@ function ScenarioTool({
             </div>
           )}
 
+          {/* Actions */}
           <div className="flex gap-2 ml-auto items-center">
             {savedName && !dirty && (
               <span className="text-xs text-emerald-600 font-medium">✓ {savedName}</span>
             )}
-            {savedName && dirty && (
-              <span className="text-xs text-amber-500 font-medium">● {savedName} (unsaved)</span>
+            {dirty && (
+              <span className="text-xs text-amber-500 font-medium">
+                ● {savedName ? `${savedName} (unsaved)` : 'unsaved'}
+              </span>
             )}
-            {!savedName && dirty && (
-              <span className="text-xs text-amber-500 font-medium">● unsaved</span>
-            )}
-            {menuId && (
-              <button
-                className="btn btn-sm btn-outline text-xs"
-                onClick={() => { setSaveNameInput(savedName || ''); setShowSaveDialog(true) }}
-                title="Save scenario"
-              >💾 Save</button>
-            )}
-            {menuId && (
-              <button
-                className="btn btn-sm btn-outline text-xs relative"
-                onClick={() => setShowLoadPanel(v => !v)}
-                title="Load saved scenario"
-              >
-                📂 Load{savedScenarios.length > 0 ? ` (${savedScenarios.length})` : ''}
-              </button>
-            )}
+            <button
+              className="btn btn-sm btn-outline text-xs"
+              onClick={() => { setSaveNameInput(savedName || ''); setShowSaveDialog(true) }}
+              title="Save scenario"
+            >💾 {savedId ? 'Update' : 'Save'}</button>
             {hasQty && (
-              <button className="btn btn-sm btn-outline text-xs" onClick={onResetQty}>Reset Qty</button>
+              <button className="btn btn-sm btn-outline text-xs" onClick={() => {
+                onResetQty(); setSavedId(null); setSavedName(''); setDirty(false); dirtyRef.current = false
+              }}>Reset Qty</button>
             )}
             {data && hasQty && (
               <button className="btn btn-sm btn-outline" onClick={exportCSV}>⬇ CSV</button>
             )}
           </div>
         </div>
-
-        {/* Load panel */}
-        {showLoadPanel && menuId && (
-          <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Saved Scenarios</span>
-              <button onClick={() => setShowLoadPanel(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕ Close</button>
-            </div>
-            {loadingScenarios && <div className="py-4 text-center"><Spinner /></div>}
-            {!loadingScenarios && savedScenarios.length === 0 && (
-              <p className="text-xs text-gray-400 py-2">No saved scenarios for this menu.</p>
-            )}
-            {!loadingScenarios && savedScenarios.length > 0 && (
-              <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
-                {savedScenarios.map(s => (
-                  <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${savedId === s.id ? 'border-accent bg-accent-dim' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-gray-800 truncate block">{s.name}</span>
-                      <span className="text-xs text-gray-400">
-                        {s.price_level_name ?? 'No level'} · {new Date(s.updated_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                    <button
-                      className="btn btn-xs btn-outline text-xs shrink-0"
-                      onClick={() => loadScenario(s)}
-                    >Load</button>
-                    <button
-                      className="text-red-400 hover:text-red-600 text-xs shrink-0 px-1"
-                      onClick={() => deleteScenario(s.id)}
-                      title="Delete scenario"
-                    >🗑</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Save dialog */}
         {showSaveDialog && (
@@ -2404,8 +2403,8 @@ function ScenarioTool({
                               type="number"
                               min="0"
                               step="1"
-                              value={qty[row.menu_item_id] ?? ''}
-                              onChange={e => onQtyChange(row.menu_item_id, e.target.value)}
+                              value={qty[row.nat_key] ?? ''}
+                              onChange={e => onQtyChange(row.nat_key, e.target.value)}
                               placeholder="0"
                               className="w-full text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
                             />

@@ -1,12 +1,26 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 
-// ── GET /scenarios?menu_id=X ──────────────────────────────────────────────────
+// Helper: fetch a single scenario with joined name fields
+async function fetchScenario(id) {
+  const { rows: [row] } = await pool.query(`
+    SELECT s.id, s.name, s.menu_id, s.price_level_id, s.qty_data, s.notes,
+           s.created_at, s.updated_at,
+           m.name  AS menu_name,
+           pl.name AS price_level_name
+    FROM   mcogs_menu_scenarios s
+    LEFT JOIN mcogs_menus        m  ON m.id  = s.menu_id
+    LEFT JOIN mcogs_price_levels pl ON pl.id = s.price_level_id
+    WHERE  s.id = $1
+  `, [id]);
+  return row || null;
+}
+
+// ── GET /scenarios ─────────────────────────────────────────────────────────────
+// Returns ALL scenarios (market-agnostic).
+// qty_data keys are natural recipe/ingredient keys: "r_123", "i_456"
 router.get('/', async (req, res) => {
-  const menuId = req.query.menu_id ? Number(req.query.menu_id) : null;
   try {
-    const where  = menuId ? 'WHERE s.menu_id = $1' : '';
-    const params = menuId ? [menuId] : [];
     const { rows } = await pool.query(`
       SELECT s.id, s.name, s.menu_id, s.price_level_id, s.qty_data, s.notes,
              s.created_at, s.updated_at,
@@ -15,9 +29,8 @@ router.get('/', async (req, res) => {
       FROM   mcogs_menu_scenarios s
       LEFT JOIN mcogs_menus        m  ON m.id  = s.menu_id
       LEFT JOIN mcogs_price_levels pl ON pl.id = s.price_level_id
-      ${where}
       ORDER BY s.updated_at DESC
-    `, params);
+    `);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -27,16 +40,16 @@ router.get('/', async (req, res) => {
 
 // ── POST /scenarios ───────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, menu_id, price_level_id, qty_data, notes } = req.body;
-  if (!name?.trim())  return res.status(400).json({ error: { message: 'Name is required' } });
-  if (!menu_id)       return res.status(400).json({ error: { message: 'menu_id is required' } });
+  const { name, price_level_id, qty_data, notes } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: { message: 'Name is required' } });
   try {
-    const { rows: [row] } = await pool.query(`
-      INSERT INTO mcogs_menu_scenarios (name, menu_id, price_level_id, qty_data, notes)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `, [name.trim(), menu_id, price_level_id || null,
+    const { rows: [inserted] } = await pool.query(`
+      INSERT INTO mcogs_menu_scenarios (name, price_level_id, qty_data, notes)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id
+    `, [name.trim(), price_level_id || null,
         JSON.stringify(qty_data || {}), notes?.trim() || null]);
+    const row = await fetchScenario(inserted.id);
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -46,17 +59,17 @@ router.post('/', async (req, res) => {
 
 // ── PUT /scenarios/:id ────────────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
-  const { name, menu_id, price_level_id, qty_data, notes } = req.body;
+  const { name, price_level_id, qty_data, notes } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'Name is required' } });
   try {
-    const { rows: [row] } = await pool.query(`
+    const { rowCount } = await pool.query(`
       UPDATE mcogs_menu_scenarios
-      SET    name=$1, menu_id=$2, price_level_id=$3, qty_data=$4, notes=$5, updated_at=NOW()
-      WHERE  id=$6
-      RETURNING *
-    `, [name.trim(), menu_id, price_level_id || null,
+      SET    name=$1, price_level_id=$2, qty_data=$3, notes=$4, updated_at=NOW()
+      WHERE  id=$5
+    `, [name.trim(), price_level_id || null,
         JSON.stringify(qty_data || {}), notes?.trim() || null, req.params.id]);
-    if (!row) return res.status(404).json({ error: { message: 'Scenario not found' } });
+    if (!rowCount) return res.status(404).json({ error: { message: 'Scenario not found' } });
+    const row = await fetchScenario(req.params.id);
     res.json(row);
   } catch (err) {
     console.error(err);

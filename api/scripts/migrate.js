@@ -489,7 +489,7 @@ const migrations = [
   `CREATE TABLE IF NOT EXISTS mcogs_menu_scenarios (
     id             SERIAL PRIMARY KEY,
     name           VARCHAR(200) NOT NULL,
-    menu_id        INTEGER NOT NULL REFERENCES mcogs_menus(id) ON DELETE CASCADE,
+    menu_id        INTEGER REFERENCES mcogs_menus(id) ON DELETE SET NULL,
     price_level_id INTEGER REFERENCES mcogs_price_levels(id) ON DELETE SET NULL,
     qty_data       JSONB NOT NULL DEFAULT '{}',
     notes          TEXT,
@@ -497,6 +497,21 @@ const migrations = [
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_menu_scenarios_menu ON mcogs_menu_scenarios(menu_id)`,
+
+  // ── 27b. Scenarios v2 — make menu_id nullable (market-agnostic) ───────────
+  // qty_data is now keyed by recipe/ingredient natural keys (r_123, i_456)
+  // allowing a single scenario to apply across any market
+  `DO $$ BEGIN
+    ALTER TABLE mcogs_menu_scenarios ALTER COLUMN menu_id DROP NOT NULL;
+  EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE mcogs_menu_scenarios DROP CONSTRAINT mcogs_menu_scenarios_menu_id_fkey;
+  EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+  `DO $$ BEGIN
+    ALTER TABLE mcogs_menu_scenarios
+      ADD CONSTRAINT mcogs_menu_scenarios_menu_id_fkey
+      FOREIGN KEY (menu_id) REFERENCES mcogs_menus(id) ON DELETE SET NULL;
+  EXCEPTION WHEN OTHERS THEN NULL; END $$`,
 
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
