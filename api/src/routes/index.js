@@ -16,6 +16,7 @@ router.use('/price-quotes',        require('./price-quotes'));
 router.use('/preferred-vendors',   require('./preferred-vendors'));
 router.use('/recipes',             require('./recipes'));
 router.use('/menus',               require('./menus'));
+router.use('/scenarios',           require('./scenarios'));
 router.use('/menu-items',          require('./menu-items'));
 router.use('/menu-item-prices',    require('./menu-item-prices'));
 router.use('/cogs',                require('./cogs'));

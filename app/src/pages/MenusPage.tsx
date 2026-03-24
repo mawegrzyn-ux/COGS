@@ -1084,6 +1084,43 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
 
   const selectedIng = ingredients.find(i => i.id === miIngId)
 
+  // ── Searchable combobox state ──────────────────────────────────────────────
+  const selectedRecipeName = recipes.find(r => r.id === miRecipeId)?.name ?? ''
+  const selectedIngName    = ingredients.find(i => i.id === miIngId)
+    ? `${ingredients.find(i => i.id === miIngId)!.name}${ingredients.find(i => i.id === miIngId)!.base_unit_abbr ? ` (${ingredients.find(i => i.id === miIngId)!.base_unit_abbr})` : ''}`
+    : ''
+
+  const [recipeSearch, setRecipeSearch] = useState(selectedRecipeName)
+  const [recipeOpen,   setRecipeOpen]   = useState(false)
+  const [ingSearch,    setIngSearch]    = useState(selectedIngName)
+  const [ingOpen,      setIngOpen]      = useState(false)
+
+  // Sync search text when parent changes the selection (e.g. when editing an existing item)
+  useEffect(() => { setRecipeSearch(selectedRecipeName) }, [selectedRecipeName])
+  useEffect(() => { setIngSearch(selectedIngName) }, [selectedIngName])
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.toLowerCase()
+    return recipes.filter(r => r.name.toLowerCase().includes(q))
+  }, [recipes, recipeSearch])
+
+  const filteredIngredients = useMemo(() => {
+    const q = ingSearch.toLowerCase()
+    return ingredients.filter(i => i.name.toLowerCase().includes(q))
+  }, [ingredients, ingSearch])
+
+  function selectRecipe(r: Recipe) {
+    onRecipeChange(r.id)
+    setRecipeSearch(r.name)
+    setRecipeOpen(false)
+  }
+
+  function selectIngredient(i: Ingredient) {
+    onIngChange(i.id)
+    setIngSearch(`${i.name}${i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}`)
+    setIngOpen(false)
+  }
+
   return (
     <Modal title={isEdit ? 'Edit Menu Item' : 'Add Item to Menu'} onClose={onClose}>
       <div className="space-y-4">
@@ -1092,11 +1129,11 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
           <div className="flex gap-2">
             <button
               className={`btn btn-sm flex-1 ${miType === 'recipe' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onTypeChange('recipe')}
+              onClick={() => { onTypeChange('recipe'); setRecipeSearch(''); setRecipeOpen(false) }}
             >📖 Recipe</button>
             <button
               className={`btn btn-sm flex-1 ${miType === 'ingredient' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onTypeChange('ingredient')}
+              onClick={() => { onTypeChange('ingredient'); setIngSearch(''); setIngOpen(false) }}
             >📦 Ingredient</button>
           </div>
         </Field>
@@ -1104,17 +1141,69 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
         {/* Selection */}
         {miType === 'recipe' ? (
           <Field label="Recipe *">
-            <select className="select w-full" value={miRecipeId} onChange={e => onRecipeChange(Number(e.target.value))}>
-              <option value="">— Select Recipe —</option>
-              {recipes.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                className="input w-full"
+                placeholder="Search recipes…"
+                value={recipeSearch}
+                onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true) }}
+                onFocus={() => setRecipeOpen(true)}
+                onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
+                autoComplete="off"
+              />
+              {recipeOpen && (
+                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                  {filteredRecipes.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-gray-400">No recipes match "{recipeSearch}"</div>
+                  ) : filteredRecipes.map(r => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${miRecipeId === r.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => selectRecipe(r)}
+                    >
+                      {miRecipeId === r.id && <span className="text-accent text-xs">✓</span>}
+                      <span>{r.name}</span>
+                      {r.category && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </Field>
         ) : (
           <Field label="Ingredient *">
-            <select className="select w-full" value={miIngId} onChange={e => onIngChange(Number(e.target.value))}>
-              <option value="">— Select Ingredient —</option>
-              {ingredients.map(i => <option key={i.id} value={i.id}>{i.name}{i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                className="input w-full"
+                placeholder="Search ingredients…"
+                value={ingSearch}
+                onChange={e => { setIngSearch(e.target.value); setIngOpen(true) }}
+                onFocus={() => setIngOpen(true)}
+                onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                autoComplete="off"
+              />
+              {ingOpen && (
+                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                  {filteredIngredients.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-gray-400">No ingredients match "{ingSearch}"</div>
+                  ) : filteredIngredients.map(i => (
+                    <button
+                      key={i.id}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${miIngId === i.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => selectIngredient(i)}
+                    >
+                      {miIngId === i.id && <span className="text-accent text-xs">✓</span>}
+                      <span>{i.name}</span>
+                      {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </Field>
         )}
 
@@ -1810,6 +1899,18 @@ function MarketPriceTool({
 
 // ── Scenario Tool ─────────────────────────────────────────────────────────────
 
+interface SavedScenario {
+  id:               number
+  name:             string
+  menu_id:          number
+  price_level_id:   number | null
+  qty_data:         Record<string, number>
+  notes:            string | null
+  updated_at:       string
+  menu_name:        string
+  price_level_name: string | null
+}
+
 interface ScenarioToolProps {
   menus:       Menu[]
   countries:   Country[]
@@ -1830,10 +1931,95 @@ function ScenarioTool({
   onMenuChange, onLevelChange, onQtyChange, onResetQty,
 }: ScenarioToolProps) {
 
-  const [dispCurrCode, setDispCurrCode] = useState<string>('')
+  const api = useApi()
 
-  // Reset display currency when menu changes
+  // ── Display currency ───────────────────────────────────────────────────────
+  const [dispCurrCode, setDispCurrCode] = useState<string>('')
   useEffect(() => { setDispCurrCode('') }, [menuId])
+
+  // ── Save / Load state ──────────────────────────────────────────────────────
+  const [savedScenarios,   setSavedScenarios]   = useState<SavedScenario[]>([])
+  const [loadingScenarios, setLoadingScenarios] = useState(false)
+  const [savedId,          setSavedId]          = useState<number | null>(null)   // currently loaded scenario
+  const [savedName,        setSavedName]        = useState('')                    // name of loaded scenario
+  const [dirty,            setDirty]            = useState(false)                 // unsaved changes
+  const [showSaveDialog,   setShowSaveDialog]   = useState(false)
+  const [showLoadPanel,    setShowLoadPanel]    = useState(false)
+  const [saveNameInput,    setSaveNameInput]    = useState('')
+  const [saving,           setSaving]           = useState(false)
+
+  // Load saved scenarios whenever the menu changes
+  useEffect(() => {
+    setSavedId(null); setSavedName(''); setDirty(false)
+    if (!menuId) { setSavedScenarios([]); return }
+    setLoadingScenarios(true)
+    api.get(`/scenarios?menu_id=${menuId}`)
+      .then((rows: SavedScenario[]) => setSavedScenarios(rows || []))
+      .catch(() => {})
+      .finally(() => setLoadingScenarios(false))
+  }, [menuId, api]) // eslint-disable-line
+
+  // Mark dirty when qty changes (but not on initial load from a scenario)
+  const dirtyRef = useRef(false)
+  useEffect(() => {
+    if (dirtyRef.current) setDirty(true)
+    else dirtyRef.current = true
+  }, [qty])
+
+  async function saveScenario(name: string) {
+    if (!menuId) return
+    setSaving(true)
+    try {
+      const payload = {
+        name, menu_id: menuId,
+        price_level_id: levelId || null,
+        qty_data: Object.fromEntries(Object.entries(qty).map(([k, v]) => [k, parseFloat(v) || 0])),
+      }
+      let row: SavedScenario
+      if (savedId) {
+        row = await api.put(`/scenarios/${savedId}`, payload)
+      } else {
+        row = await api.post('/scenarios', payload)
+      }
+      setSavedId(row.id); setSavedName(row.name); setDirty(false)
+      setSavedScenarios(prev => {
+        const idx = prev.findIndex(s => s.id === row.id)
+        return idx >= 0 ? prev.map(s => s.id === row.id ? row : s) : [row, ...prev]
+      })
+      setShowSaveDialog(false)
+    } catch (err: any) {
+      alert(err.message || 'Failed to save')
+    } finally { setSaving(false) }
+  }
+
+  function loadScenario(s: SavedScenario) {
+    dirtyRef.current = false
+    onMenuChange(s.menu_id)
+    onLevelChange(s.price_level_id ?? '')
+    // qty_data keys are string; convert to Record<number, string>
+    const qMap: Record<number, string> = {}
+    for (const [k, v] of Object.entries(s.qty_data || {})) {
+      if (Number(v) > 0) qMap[Number(k)] = String(v)
+    }
+    // Batch-update via multiple onQtyChange calls — we need to replace all at once
+    // Use a trick: call onResetQty first then rebuild; but onResetQty doesn't accept new values.
+    // Instead we rely on the parent setState to merge: call each key individually.
+    onResetQty()
+    // Delay to let reset propagate, then set all keys
+    setTimeout(() => {
+      for (const [k, v] of Object.entries(qMap)) onQtyChange(Number(k), v)
+      setSavedId(s.id); setSavedName(s.name); setDirty(false)
+      dirtyRef.current = false
+    }, 0)
+    setShowLoadPanel(false)
+  }
+
+  async function deleteScenario(id: number) {
+    if (!window.confirm('Delete this saved scenario?')) return
+    await api.delete(`/scenarios/${id}`)
+    setSavedScenarios(prev => prev.filter(s => s.id !== id))
+    if (savedId === id) { setSavedId(null); setSavedName(''); setDirty(false) }
+  }
 
   // Currency resolution
   const menuCountry = useMemo(() => {
@@ -1868,48 +2054,58 @@ function ScenarioTool({
              : { dispRate: 1, dispSym: menuCountry.currency_symbol }
   }, [dispCurrCode, menuCountry, marketRate, countries])
 
-  // ── Per-item scenario calculations ────────────────────────────────────────
+  // ── Per-item scenario calculations (revenue on NET price ex-tax) ──────────
 
   interface ScenRow {
-    menu_item_id: number
-    display_name: string
-    category:     string
-    item_type:    string
-    cost:         number
-    price:        number
-    qty:          number
-    revenue:      number
-    total_cost:   number
-    gp:           number
-    cogs_pct:     number | null
+    menu_item_id:  number
+    display_name:  string
+    category:      string
+    item_type:     string
+    cost:          number   // cost per portion (display currency)
+    price_gross:   number   // sell price inc. tax (display currency)
+    price_net:     number   // sell price ex. tax  (display currency)
+    tax_pct:       number
+    qty:           number
+    gross_revenue: number   // qty × price_gross — what customer pays
+    net_revenue:   number   // qty × price_net   — revenue ex-tax (basis for COGS%)
+    total_cost:    number   // qty × cost
+    gp:            number   // net_revenue - total_cost
+    cogs_pct:      number | null  // total_cost / net_revenue × 100
   }
 
   const rows = useMemo((): ScenRow[] => {
     if (!data?.items) return []
     return data.items.map(item => {
-      const q         = Math.max(0, parseFloat(qty[item.menu_item_id] || '0') || 0)
-      const cost      = item.cost_per_portion * dispRate
-      const price     = item.sell_price_gross * dispRate
-      const revenue   = q * price
-      const totalCost = q * cost
+      const q           = Math.max(0, parseFloat(qty[item.menu_item_id] || '0') || 0)
+      const cost        = item.cost_per_portion * dispRate
+      const price_gross = item.sell_price_gross * dispRate
+      const price_net   = item.sell_price_net   * dispRate
+      const gross_rev   = q * price_gross
+      const net_rev     = q * price_net
+      const totalCost   = q * cost
       return {
-        menu_item_id: item.menu_item_id,
-        display_name: item.display_name,
-        category:     item.category || 'Uncategorised',
-        item_type:    item.item_type,
-        cost, price, qty: q, revenue,
-        total_cost:   totalCost,
-        gp:           revenue - totalCost,
-        cogs_pct:     revenue > 0 ? (totalCost / revenue) * 100 : null,
+        menu_item_id:  item.menu_item_id,
+        display_name:  item.display_name,
+        category:      item.category || 'Uncategorised',
+        item_type:     item.item_type,
+        cost, price_gross, price_net,
+        tax_pct:       item.tax_rate_pct,
+        qty:           q,
+        gross_revenue: gross_rev,
+        net_revenue:   net_rev,
+        total_cost:    totalCost,
+        gp:            net_rev - totalCost,
+        cogs_pct:      net_rev > 0 ? (totalCost / net_rev) * 100 : null,
       }
     })
   }, [data, qty, dispRate])
 
   const totalQty     = rows.reduce((s, r) => s + r.qty, 0)
-  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0)
+  const totalGross   = rows.reduce((s, r) => s + r.gross_revenue, 0)
+  const totalNet     = rows.reduce((s, r) => s + r.net_revenue, 0)
   const totalCost    = rows.reduce((s, r) => s + r.total_cost, 0)
-  const totalGP      = totalRevenue - totalCost
-  const overallCogs  = totalRevenue > 0 ? (totalCost / totalRevenue) * 100 : null
+  const totalGP      = totalNet - totalCost
+  const overallCogs  = totalNet > 0 ? (totalCost / totalNet) * 100 : null
 
   const categorised = useMemo(() => {
     const map: Record<string, ScenRow[]> = {}
@@ -1938,19 +2134,19 @@ function ScenarioTool({
 
   function exportCSV() {
     if (!data) return
-    const header = ['Item', 'Category', 'Type', 'Cost/ptn', 'Sell Price', 'Qty', 'Sales Mix%', 'Revenue', 'Rev Mix%', 'Total Cost', 'COGS%']
+    const header = ['Item', 'Category', 'Type', 'Cost/ptn', 'Price (gross)', 'Price (net)', 'Qty', 'Sales Mix%', 'Revenue (net)', 'Rev Mix%', 'Total Cost', 'COGS%']
     const csvRows: string[][] = [header]
     for (const [cat, catRows] of categorised) {
       const cQ = catRows.reduce((s, r) => s + r.qty, 0)
-      const cR = catRows.reduce((s, r) => s + r.revenue, 0)
+      const cR = catRows.reduce((s, r) => s + r.net_revenue, 0)
       const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
       const cP = cR > 0 ? (cC / cR) * 100 : null
-      csvRows.push([`── ${cat}`, '', '', '', '', String(cQ), fmtMix(cQ, totalQty), cR.toFixed(2), fmtMix(cR, totalRevenue), cC.toFixed(2), fmtPct(cP)])
+      csvRows.push([`── ${cat}`, '', '', '', '', '', String(cQ), fmtMix(cQ, totalQty), cR.toFixed(2), fmtMix(cR, totalNet), cC.toFixed(2), fmtPct(cP)])
       for (const r of catRows) {
-        csvRows.push([r.display_name, r.category, r.item_type, r.cost.toFixed(2), r.price.toFixed(2), String(r.qty), fmtMix(r.qty, totalQty), r.revenue.toFixed(2), fmtMix(r.revenue, totalRevenue), r.total_cost.toFixed(2), fmtPct(r.cogs_pct)])
+        csvRows.push([r.display_name, r.category, r.item_type, r.cost.toFixed(2), r.price_gross.toFixed(2), r.price_net.toFixed(2), String(r.qty), fmtMix(r.qty, totalQty), r.net_revenue.toFixed(2), fmtMix(r.net_revenue, totalNet), r.total_cost.toFixed(2), fmtPct(r.cogs_pct)])
       }
     }
-    csvRows.push(['TOTAL', '', '', '', '', String(totalQty), '100%', totalRevenue.toFixed(2), '100%', totalCost.toFixed(2), fmtPct(overallCogs)])
+    csvRows.push(['TOTAL', '', '', '', '', '', String(totalQty), '100%', totalNet.toFixed(2), '100%', totalCost.toFixed(2), fmtPct(overallCogs)])
     const csv = csvRows.map(r => r.map(v => `"${v.replace(/"/g, '""')}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -2008,6 +2204,31 @@ function ScenarioTool({
           )}
 
           <div className="flex gap-2 ml-auto items-center">
+            {savedName && !dirty && (
+              <span className="text-xs text-emerald-600 font-medium">✓ {savedName}</span>
+            )}
+            {savedName && dirty && (
+              <span className="text-xs text-amber-500 font-medium">● {savedName} (unsaved)</span>
+            )}
+            {!savedName && dirty && (
+              <span className="text-xs text-amber-500 font-medium">● unsaved</span>
+            )}
+            {menuId && (
+              <button
+                className="btn btn-sm btn-outline text-xs"
+                onClick={() => { setSaveNameInput(savedName || ''); setShowSaveDialog(true) }}
+                title="Save scenario"
+              >💾 Save</button>
+            )}
+            {menuId && (
+              <button
+                className="btn btn-sm btn-outline text-xs relative"
+                onClick={() => setShowLoadPanel(v => !v)}
+                title="Load saved scenario"
+              >
+                📂 Load{savedScenarios.length > 0 ? ` (${savedScenarios.length})` : ''}
+              </button>
+            )}
             {hasQty && (
               <button className="btn btn-sm btn-outline text-xs" onClick={onResetQty}>Reset Qty</button>
             )}
@@ -2017,15 +2238,83 @@ function ScenarioTool({
           </div>
         </div>
 
+        {/* Load panel */}
+        {showLoadPanel && menuId && (
+          <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Saved Scenarios</span>
+              <button onClick={() => setShowLoadPanel(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕ Close</button>
+            </div>
+            {loadingScenarios && <div className="py-4 text-center"><Spinner /></div>}
+            {!loadingScenarios && savedScenarios.length === 0 && (
+              <p className="text-xs text-gray-400 py-2">No saved scenarios for this menu.</p>
+            )}
+            {!loadingScenarios && savedScenarios.length > 0 && (
+              <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
+                {savedScenarios.map(s => (
+                  <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${savedId === s.id ? 'border-accent bg-accent-dim' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-gray-800 truncate block">{s.name}</span>
+                      <span className="text-xs text-gray-400">
+                        {s.price_level_name ?? 'No level'} · {new Date(s.updated_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <button
+                      className="btn btn-xs btn-outline text-xs shrink-0"
+                      onClick={() => loadScenario(s)}
+                    >Load</button>
+                    <button
+                      className="text-red-400 hover:text-red-600 text-xs shrink-0 px-1"
+                      onClick={() => deleteScenario(s.id)}
+                      title="Delete scenario"
+                    >🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Save dialog */}
+        {showSaveDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowSaveDialog(false)}>
+            <div className="bg-white rounded-xl shadow-xl p-6 w-80" onClick={e => e.stopPropagation()}>
+              <h3 className="font-semibold text-gray-800 mb-3">{savedId ? 'Update Scenario' : 'Save Scenario'}</h3>
+              <input
+                autoFocus
+                className="input w-full mb-4"
+                placeholder="Scenario name…"
+                value={saveNameInput}
+                onChange={e => setSaveNameInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && saveNameInput.trim()) saveScenario(saveNameInput.trim()) }}
+              />
+              <div className="flex gap-2 justify-end">
+                <button className="btn btn-sm btn-outline" onClick={() => setShowSaveDialog(false)}>Cancel</button>
+                <button
+                  className="btn btn-sm btn-primary"
+                  disabled={!saveNameInput.trim() || saving}
+                  onClick={() => saveScenario(saveNameInput.trim())}
+                >{saving ? 'Saving…' : savedId ? 'Update' : 'Save'}</button>
+              </div>
+              {savedId && (
+                <p className="text-xs text-gray-400 mt-2 text-center">
+                  Updates "{savedName}" — or change name to save as new
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* KPI Strip */}
         {data && (
-          <div className="px-4 py-3 border-b border-gray-100 grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="px-4 py-3 border-b border-gray-100 grid grid-cols-2 sm:grid-cols-6 gap-3">
             {[
-              { label: 'Total Covers',     value: totalQty > 0 ? totalQty.toLocaleString() : '—',        cls: 'text-gray-900' },
-              { label: `Revenue`,          value: hasQty ? fmtMoney(totalRevenue) : '—',                 cls: 'text-blue-700' },
-              { label: `Total Cost`,       value: hasQty ? fmtMoney(totalCost) : '—',                    cls: 'text-gray-700' },
-              { label: `GP`,               value: hasQty ? fmtMoney(totalGP) : '—',                      cls: totalGP >= 0 ? 'text-emerald-600' : 'text-red-600' },
-              { label: 'Overall COGS %',   value: hasQty ? fmtPct(overallCogs) : '—',                    cls: cogsColour(overallCogs) },
+              { label: 'Total Covers',          value: totalQty > 0 ? totalQty.toLocaleString() : '—',  cls: 'text-gray-900' },
+              { label: 'Revenue (gross)',        value: hasQty ? fmtMoney(totalGross) : '—',             cls: 'text-blue-500' },
+              { label: 'Revenue (ex-tax)',       value: hasQty ? fmtMoney(totalNet) : '—',               cls: 'text-blue-700' },
+              { label: 'Total Cost',             value: hasQty ? fmtMoney(totalCost) : '—',              cls: 'text-gray-700' },
+              { label: 'GP (net)',               value: hasQty ? fmtMoney(totalGP) : '—',                cls: totalGP >= 0 ? 'text-emerald-600' : 'text-red-600' },
+              { label: 'Overall COGS %',         value: hasQty ? fmtPct(overallCogs) : '—',              cls: cogsColour(overallCogs) },
             ].map(kpi => (
               <div key={kpi.label} className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
                 <div className="text-xs text-gray-400 mb-0.5">{kpi.label}</div>
@@ -2061,10 +2350,10 @@ function ScenarioTool({
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Item</th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Type</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost/ptn</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Price</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Price (gross)</th>
                   <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px]">Qty Sold</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Sales Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Revenue</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Revenue (net)</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Rev Mix</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Total Cost</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">COGS %</th>
@@ -2073,7 +2362,7 @@ function ScenarioTool({
               <tbody className="divide-y divide-gray-100">
                 {categorised.map(([cat, catRows]) => {
                   const cQ = catRows.reduce((s, r) => s + r.qty, 0)
-                  const cR = catRows.reduce((s, r) => s + r.revenue, 0)
+                  const cR = catRows.reduce((s, r) => s + r.net_revenue, 0)
                   const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
                   const cP = cR > 0 ? (cC / cR) * 100 : null
                   return (
@@ -2090,7 +2379,7 @@ function ScenarioTool({
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
                           {cR > 0 ? fmtMoney(cR) : '—'}
                         </td>
-                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{cR > 0 ? fmtMix(cR, totalRevenue) : '—'}</td>
+                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{cR > 0 ? fmtMix(cR, totalNet) : '—'}</td>
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
                           {cC > 0 ? fmtMoney(cC) : '—'}
                         </td>
@@ -2106,8 +2395,8 @@ function ScenarioTool({
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs text-gray-500">{fmtMoney(row.cost)}</td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs">
-                            {row.price > 0
-                              ? fmtMoney(row.price)
+                            {row.price_gross > 0
+                              ? <span title={`ex-tax: ${fmtMoney(row.price_net)}`}>{fmtMoney(row.price_gross)}</span>
                               : <span className="text-gray-300">no price</span>}
                           </td>
                           <td className="px-2 py-1.5">
@@ -2125,10 +2414,10 @@ function ScenarioTool({
                             {row.qty > 0 ? fmtMix(row.qty, totalQty) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
-                            {row.revenue > 0 ? fmtMoney(row.revenue) : <span className="text-gray-200">—</span>}
+                            {row.net_revenue > 0 ? fmtMoney(row.net_revenue) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
-                            {row.revenue > 0 ? fmtMix(row.revenue, totalRevenue) : <span className="text-gray-200">—</span>}
+                            {row.net_revenue > 0 ? fmtMix(row.net_revenue, totalNet) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs">
                             {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
@@ -2152,7 +2441,7 @@ function ScenarioTool({
                   </td>
                   <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
                   <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                    {totalRevenue > 0 ? fmtMoney(totalRevenue) : '—'}
+                    {totalNet > 0 ? fmtMoney(totalNet) : '—'}
                   </td>
                   <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
                   <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
