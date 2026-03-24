@@ -24,7 +24,10 @@
       "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit 2>&1\")",
       "Bash(export SHELL=/bin/bash)",
       "Bash(cmd.exe /c \"where npm & where node\")",
-      "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\api && node -e \"\"const f=require\\(''./src/routes/ai-chat.js''\\); console.log\\(''loaded OK''\\)\"\" 2>&1\")"
+      "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\api && node -e \"\"const f=require\\(''./src/routes/ai-chat.js''\\); console.log\\(''loaded OK''\\)\"\" 2>&1\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   },
   "disableAllHooks": true

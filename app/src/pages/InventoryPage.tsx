@@ -979,7 +979,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     ), [quotes, search]
   )
 
-  const initialQuoteFilters = useMemo(
+  const initialQuoteFilters = useMemo<Record<string, string[]>>(
     () => initialIngredientId ? { ingredient_id: [String(initialIngredientId)] } : {},
     [] // eslint-disable-line react-hooks/exhaustive-deps — intentionally only on mount
   )
