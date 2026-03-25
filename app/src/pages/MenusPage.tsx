@@ -246,6 +246,7 @@ export default function MenusPage() {
 
   const openMenu = useCallback(async (id: number) => {
     setSelectedMenuId(id)
+    setScenarioMenuId(id)   // keep scenario in sync
     setItemFilterQ(''); setItemFilterType(''); setItemFilterStatus('')
     setLoadingCogs(true)
     try {
@@ -561,9 +562,9 @@ export default function MenusPage() {
       <div className="flex gap-1 px-6 border-b border-gray-200 mb-0">
         {([
           { key: 'builder',      label: '🍽 Menus' },
+          { key: 'scenario',     label: '📊 Menu Engineer' },
           { key: 'price-report', label: '📈 Compare Markets' },
           { key: 'level-report', label: '🏷 Market Price Tool' },
-          { key: 'scenario',     label: '📊 Menu Engineer' },
         ] as const).map(t => (
           <button
             key={t.key}
@@ -719,7 +720,7 @@ export default function MenusPage() {
           menuId={scenarioMenuId}
           levelId={scenarioLevelId}
           qty={scenarioQty}
-          onMenuChange={id => setScenarioMenuId(id)}
+          onMenuChange={id => { setScenarioMenuId(id); setSelectedMenuId(id) }}
           onLevelChange={setScenarioLevelId}
           onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
           onResetQty={() => setScenarioQty({})}
@@ -1907,11 +1908,12 @@ interface SalesMixGenProps {
   priceLevels:    PriceLevel[]
   menuId:         number
   currencySymbol: string
+  currentQty:     Record<string, string>
   onGenerate(qMap: Record<string, string>): void
   onClose(): void
 }
 
-function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onGenerate, onClose }: SalesMixGenProps) {
+function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, onGenerate, onClose }: SalesMixGenProps) {
   const api = useApi()
 
   // Derive categories from current menu data
@@ -1924,8 +1926,33 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
   }, [data])
 
+  // ── Derive existing quantities from currentQty ──────────────────────────
+  const existingRows = useMemo(() => {
+    const rows: { label: string; qty: number; price: string }[] = []
+    for (const item of data.items) {
+      const key = item.item_type === 'recipe'
+        ? `r_${item.recipe_id}`
+        : `i_${item.ingredient_id}`
+      const q = parseInt(currentQty[key] || '0', 10)
+      if (q > 0) rows.push({ label: item.display_name, qty: q, price: `${currencySymbol}${(item.sell_price_gross || 0).toFixed(2)}` })
+    }
+    return rows
+  }, [data, currentQty, currencySymbol])
+
+  const existingRevenue = useMemo(() => {
+    let total = 0
+    for (const item of data.items) {
+      const key = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const q = parseInt(currentQty[key] || '0', 10)
+      total += q * (item.sell_price_gross || 0)
+    }
+    return total
+  }, [data, currentQty])
+
   // ── State ────────────────────────────────────────────────────────────────
-  const [targetRevenue, setTargetRevenue] = useState('')
+  const [targetRevenue, setTargetRevenue] = useState(() =>
+    existingRevenue > 0 ? String(Math.round(existingRevenue)) : ''
+  )
 
   // Category percentages — initialise with equal split
   const [catPcts, setCatPcts] = useState<Record<string, string>>(() => {
@@ -2063,7 +2090,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
           <div>
-            <h3 className="font-semibold text-gray-900">⚡ Sales Mix Generator</h3>
+            <h3 className="font-semibold text-gray-900">⚡ Mix Manager</h3>
             <p className="text-xs text-gray-400 mt-0.5">
               Enter revenue target + category &amp; price-level splits to auto-generate item quantities
             </p>
@@ -2073,6 +2100,28 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
 
         {/* Body — scrollable */}
         <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
+
+          {/* Current quantities — shown when qty already entered */}
+          {existingRows.length > 0 && (
+            <div className="border border-blue-200 bg-blue-50 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-blue-700 font-semibold text-sm">Current quantities in scenario</span>
+                <span className="text-xs text-blue-500">
+                  Est. revenue: {currencySymbol}{existingRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </span>
+              </div>
+              <div className="max-h-28 overflow-y-auto space-y-1">
+                {existingRows.map(row => (
+                  <div key={row.label} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-700 truncate flex-1 min-w-0">{row.label}</span>
+                    <span className="text-gray-400 text-xs mx-3">{row.price}/ptn</span>
+                    <span className="font-semibold tabular-nums text-gray-900 shrink-0">{row.qty.toLocaleString()} sold</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-blue-400 mt-2">Generate new quantities below to replace these values</p>
+            </div>
+          )}
 
           {/* Revenue target */}
           <div>
@@ -3025,7 +3074,7 @@ ${tableHtml}
 
           {/* Generate Mix + Reset Qty */}
           {menuId && (
-            <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Generate Mix</button>
+            <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
           )}
           {(hasQty || Object.values(qty).some(v => parseFloat(v) > 0)) && (
             <button className="btn btn-sm btn-outline text-xs" onClick={() => {
@@ -3076,6 +3125,7 @@ ${tableHtml}
             priceLevels={priceLevels}
             menuId={menuId}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
+            currentQty={qty}
             onGenerate={qMap => {
               onReplaceQty(qMap)
               dirtyRef.current = true

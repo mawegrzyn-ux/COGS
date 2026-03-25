@@ -123,7 +123,7 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
     : { position: 'sticky', top: 0, zIndex: 20, minWidth }
 
   return (
-    <th className={`px-3 py-3 text-left bg-surface-2 border-r border-border${sticky ? ' z-30' : ' z-20'}`} style={stickyStyle}>
+    <th className={`px-3 py-3 text-left bg-surface-2 border border-border${sticky ? ' z-30' : ' z-20'}`} style={stickyStyle}>
       <div ref={wrapRef} className="relative inline-block">
         {/* Header button — clicking opens the combined sort+filter dropdown */}
         <button
@@ -450,7 +450,7 @@ function InventoryAllergenMatrix() {
         />
       ) : (
         <div className="flex-1 overflow-auto mx-6 mb-4 mt-4 rounded-xl border border-border">
-          <table className="text-sm border-collapse" style={{ minWidth: `${310 + allergens.length * 52}px` }}>
+          <table className="text-sm border-separate border-spacing-0" style={{ minWidth: `${310 + allergens.length * 52}px` }}>
             {/* ── Header ──────────────────────────────────────────────────── */}
             <thead>
               <tr>
@@ -472,7 +472,7 @@ function InventoryAllergenMatrix() {
                 {/* 14 allergen columns — rotated headers */}
                 {allergens.map(a => (
                   <th key={a.code} title={a.name}
-                    className="border-r border-border last:border-r-0 bg-surface-2 w-[52px] min-w-[52px]"
+                    className="border border-border bg-surface-2 w-[52px] min-w-[52px]"
                     style={{ position: 'sticky', top: 0, zIndex: 20 }}>
                     <div className="flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
                       style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 96 }}>
@@ -481,7 +481,7 @@ function InventoryAllergenMatrix() {
                   </th>
                 ))}
                 {/* Save indicator column */}
-                <th className="w-7 bg-surface-2 border-l border-border" style={{ position: 'sticky', top: 0, zIndex: 20 }} />
+                <th className="w-7 bg-surface-2 border border-border" style={{ position: 'sticky', top: 0, zIndex: 20 }} />
               </tr>
             </thead>
 
@@ -490,12 +490,11 @@ function InventoryAllergenMatrix() {
               {sorted.map(row => (
                 <tr
                   key={row.ingredient_id}
-                  className={`border-b border-border last:border-0 transition-colors
-                    ${row._saveState === 'saving' ? 'opacity-60' : 'hover:bg-surface-2/60'}`}
+                  className={`transition-colors ${row._saveState === 'saving' ? 'opacity-60' : 'hover:bg-surface-2/60'}`}
                 >
                   {/* Name — sticky */}
                   <td
-                    className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-2 font-semibold text-text-1 whitespace-nowrap"
+                    className="sticky left-0 z-10 bg-surface border border-border px-3 py-2 font-semibold text-text-1 whitespace-nowrap"
                     style={{ minWidth: 200 }}
                   >
                     {row.name}
@@ -503,7 +502,7 @@ function InventoryAllergenMatrix() {
 
                   {/* Category — sticky */}
                   <td
-                    className="sticky bg-surface border-r border-border px-3 py-2 text-text-3 text-xs whitespace-nowrap"
+                    className="sticky z-10 bg-surface border border-border px-3 py-2 text-text-3 text-xs whitespace-nowrap"
                     style={{ left: 200, minWidth: 130 }}
                   >
                     {row.category || '—'}
@@ -513,7 +512,7 @@ function InventoryAllergenMatrix() {
                   {allergens.map(a => {
                     const status = row[a.code] as AlgStatus | null
                     return (
-                      <td key={a.code} className="border-r border-border last:border-r-0">
+                      <td key={a.code} className="border border-border">
                         <div className="flex items-center justify-center py-1.5">
                           <button
                             type="button"
@@ -533,7 +532,7 @@ function InventoryAllergenMatrix() {
                   })}
 
                   {/* Save state */}
-                  <td className="w-7 text-center border-l border-border">
+                  <td className="w-7 text-center border border-border">
                     {row._saveState === 'saving' && (
                       <span className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
                     )}
@@ -887,7 +886,7 @@ function MenuAllergenMatrix() {
         ) : filteredMatrix.length === 0 ? (
           <EmptyState message="No items match the selected categories." />
         ) : (
-          <table className="text-xs border-collapse print:w-full" style={{ minWidth: `${280 + allergens.length * 48}px` }}>
+          <table className="text-xs border-separate border-spacing-0 print:w-full" style={{ minWidth: `${280 + allergens.length * 48}px` }}>
             <thead>
               <tr>
                 <th className="sticky left-0 top-0 z-30 bg-surface border border-border px-4 py-3 text-left font-semibold text-text-1 min-w-[220px] whitespace-nowrap">
