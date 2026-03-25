@@ -2611,6 +2611,8 @@ function ScenarioTool({
              : { dispRate: 1, dispSym: menuCountry.currency_symbol }
   }, [dispCurrCode, menuCountry, marketRate, countries])
 
+  const sym = dispSym  // alias used in column headers
+
   // Auto-convert overrides when display rate changes (user switches currency)
   const prevDispRateRef = useRef<number | null>(null)
   useEffect(() => {

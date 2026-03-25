@@ -357,7 +357,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 11 | `mcogs_recipes` | Recipe definitions with yield qty and yield unit |
 | 12 | `mcogs_recipe_items` | Recipe line items: ingredient or sub-recipe, `prep_qty`, prep unit, conversion |
 | 13 | `mcogs_menus` | Menu definitions, linked to a country |
-| 14 | `mcogs_menu_items` | Menu line items: recipe or ingredient, display name, sort order |
+| 14 | `mcogs_menu_items` | Menu line items: recipe or ingredient, display name, sort order, allergen_notes |
 | 15 | `mcogs_menu_item_prices` | Sell prices per menu item per price level, with tax rate |
 | 16 | `mcogs_locations` | Physical store locations — linked to market, optional group, address, contact details |
 | 17 | `mcogs_location_groups` | Clusters of locations (e.g. "London Central") — optional grouping |
@@ -382,7 +382,7 @@ default_price_level_id → mcogs_price_levels
 ```sql
 id, name, category (string — denormalised), base_unit_id,
 default_prep_unit, default_prep_to_base_conversion,
-waste_pct (0–100), notes, image_url
+waste_pct (0–100), notes, image_url, allergen_notes TEXT
 ```
 
 **`mcogs_price_quotes`**
@@ -452,6 +452,9 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/menu-item-prices` | `menu-item-prices.js` | ✅ Active |
 | `GET /api/cogs` | `cogs.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/allergens` | `allergens.js` | ✅ Active |
+| `PATCH /api/allergens/ingredient/:id/notes` | `allergens.js` | ✅ Active — saves allergen_notes to mcogs_ingredients |
+| `PATCH /api/allergens/menu-item/:id/notes` | `allergens.js` | ✅ Active — saves allergen_notes to mcogs_menu_items |
+| `GET /api/allergens/menu/:id` | `allergens.js` | ✅ Active — includes allergen_notes in each item row |
 | `GET /api/nutrition` | `nutrition.js` | ✅ Active (USDA proxy) |
 | `GET/POST/PUT/DELETE /api/haccp/equipment` | `haccp.js` | ✅ Active — supports `?location_id=` |
 | `GET/POST/DELETE /api/haccp/equipment/:id/logs` | `haccp.js` | ✅ Active |
@@ -683,11 +686,20 @@ Three tabs:
 
 ### ✅ Menus Page (`/menus`)
 
-Three tabs:
+Four tabs:
 
 1. **Menu Builder** — create menus per country, add recipe/ingredient items with display name + sort order
-2. **PLT (Price Level Table)** — grid of sell prices per menu item per price level; inline editing with currency conversion
-3. **MPT (Menu Performance Table)** — COGS% grid showing gross/net margins per item per price level
+2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and margin engineering per menu item
+3. **PLT (Price Level Table)** — grid of sell prices per menu item per price level; inline editing with currency conversion
+4. **MPT (Menu Performance Table)** — COGS% grid showing gross/net margins per item per price level
+
+**Menu Engineer details:**
+- Tab renamed from "Scenario" to "Menu Engineer"
+- Selecting a menu in Menu Builder tab also selects the same menu in Menu Engineer tab and vice versa (cross-tab sync)
+- "Generate Mix" button renamed to "Mix Manager"
+- Mix Manager modal pre-populates with existing quantities when qty fields are already filled
+- Currency symbol shown in column headers (e.g. `Cost/ptn (£)`)
+- Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header to collapse/expand all categories at once
 
 **Currency conversion in PLT/MPT:**
 
@@ -698,12 +710,25 @@ Three tabs:
 
 ### ✅ Dashboard Page (`/dashboard`)
 
-- 8 KPI cards: ingredients, recipes, vendors, markets, active quotes, categories, price levels, coverage %
+- 8 KPI cards: ingredients, recipes, vendors, markets, active quotes, categories, coverage %, plus menu tiles
+- The **Price Levels** tile has been replaced with **Menu Tiles**. Menu tiles section shows all menus as clickable cards linking to `/menus`, each card showing: Menu Name, Market, item count, and a list of price level name → COGS% rows. Menu tile COGS data loaded in background.
 - Price quote coverage progress bar (green/amber/red)
 - Missing quotes panel: top 10 ingredients with no active price quote
 - Recent active quotes list
 - Quick links to all main pages
 - Refresh button (silent re-fetch, shows last-updated time)
+
+### ✅ Allergen Matrix Page (`/allergens`)
+
+Displays allergen status for all ingredients and menu items against the EU/UK FIC 14 regulated allergens.
+
+**Two matrices:** Inventory (per ingredient) and Menu (per menu item).
+
+- Both matrices have **sticky first row** (column headers) and **sticky first column(s)** — implemented using `border-separate border-spacing-0` (required because `border-collapse` breaks `position: sticky` in most browsers) with full `border border-border` on all cells individually.
+- **Allergen Notes field**: Added to both matrices as an inline editable textarea per row:
+  - Inventory matrix: saves to `mcogs_ingredients.allergen_notes` via `PATCH /allergens/ingredient/:id/notes`
+  - Menu matrix: saves to `mcogs_menu_items.allergen_notes` via `PATCH /allergens/menu-item/:id/notes`
+  - Saves on blur with a spinner indicator during save
 
 ### ✅ Import Page (`/import`)
 
@@ -828,6 +853,12 @@ Enforced via system prompt: Claude must verbally describe any create/update/dele
 3. Server calls `stageFileContent()` (shared with the `/import` upload route) — AI extraction + DB staging
 4. McFry replies with a link: `/import?job=<id>`
 5. User clicks link → ImportPage mounts → reads `?job` param → skips upload step → lands on Review tab
+
+### Additional AI Chat Features
+
+- **Concise mode**: Settings → AI tab has a "Response Behaviour" toggle. When enabled, injects a system prompt section that tells Claude to skip narration, not say "Let me check…", call tools silently, and give bullet-point results. Saved to `mcogs_settings` as `ai_concise_mode`. Read from DB on every `POST /ai-chat` and `POST /ai-upload` request.
+- **Animated waiting dots**: While waiting for an AI response, three dots animate with a wave effect (scale + opacity) using `@keyframes mcfry-dot` defined in `index.css`.
+- **Paste images**: Users can paste images directly from clipboard into the AI chat textarea (Ctrl+V / Cmd+V). Clipboard event handler detects image MIME types, creates a File object, and attaches it as the file attachment. An image preview thumbnail is shown in the attachment badge.
 
 ---
 
@@ -1075,6 +1106,14 @@ INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, prep_qty, p
 INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, qty, prep_unit, sort_order)
 ```
 
+### `border-collapse` Breaks `position: sticky`
+
+When `border-collapse` is set on a table, `position: sticky` on `<th>` and `<td>` elements does not work in most browsers. This affects sticky column headers and sticky first columns in data matrices.
+
+**Fix:** Use `border-separate border-spacing-0` on the `<table>` element, then add full `border border-border` classes to each `<th>` and `<td>` cell individually to recreate the collapsed-border appearance.
+
+**Affected component:** `AllergenMatrixPage.tsx`
+
 ### Local Dev Server Not Required
 
 This project deploys via GitHub Actions to Lightsail. There is no local dev server workflow. Claude Code hooks that require a running local server (e.g., the Claude Preview plugin Stop hook) are suppressed via `"disableAllHooks": true` in `.claude/settings.local.json`.
@@ -1138,4 +1177,4 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-*README last updated: March 2026 (session: McFry expanded to 74 tools — HACCP, locations, allergens, categories, tax rates, price levels, settings, web search; import wizard — menu import, override action, prep unit columns, recipe import bug fix, category inline create)*
+*README last updated: March 2026 (session: Menu Engineer enhancements — sticky allergen matrix headers, allergen notes fields, dashboard menu tiles, Mix Manager, cross-tab menu sync, collapsible categories, currency symbols in headers; AI chat — concise mode, animated waiting dots, paste images)*

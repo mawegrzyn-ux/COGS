@@ -163,7 +163,7 @@ export default function HelpPage() {
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
-          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.1</p>
+          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.2</p>
         </div>
         <div className="px-2 pt-2">
           <input
@@ -259,7 +259,7 @@ export default function HelpPage() {
             { label: 'Markets',       desc: 'Active country/market configurations' },
             { label: 'Active Quotes', desc: 'Live price quotes from vendors (is_active = true)' },
             { label: 'Categories',    desc: 'Ingredient and recipe category count' },
-            { label: 'Price Levels',  desc: 'Eat-in / Takeout / Delivery level configurations' },
+            { label: 'Menu Tiles',    desc: 'One clickable tile per menu — shows market, item count, and COGS% per price level, loaded in background' },
             { label: 'Coverage %',    desc: 'Percentage of ingredients with at least one active preferred-vendor quote' },
           ].map(k => (
             <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
@@ -472,7 +472,7 @@ export default function HelpPage() {
         <H2 id="menus" icon="📋" title="Menus" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           Menus are the top-level sales unit. Each menu belongs to a <strong>market/country</strong> and
-          contains menu items (recipes or individual ingredients). The Menus page has three tabs.
+          contains menu items (recipes or individual ingredients). The Menus page has four tabs.
         </p>
 
         <H3 id="menu-builder">Tab 1 — Menu Builder</H3>
@@ -482,7 +482,20 @@ export default function HelpPage() {
           consistent menu sequencing.
         </p>
 
-        <H3 id="plt">Tab 2 — PLT (Price Level Table)</H3>
+        <H3 id="menu-engineer">Tab 2 — Menu Engineer</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The Menu Engineer (formerly "Scenario") models your menu's sales mix and revenue. Select a menu and
+          a price level (or "All Levels") to see every item's cost, sell price, and COGS%. Selecting a menu
+          in the Builder tab automatically selects the same menu here and vice versa.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Qty Sold</strong> — enter quantities to model your sales mix and see revenue and COGS% impact</li>
+          <li><strong>Mix Manager</strong> (formerly Generate Mix) — opens a modal to set a revenue target and auto-generate quantity distributions. Pre-populates with any quantities already entered.</li>
+          <li><strong>Currency symbols</strong> shown in column headers (e.g. Cost/ptn (£)) based on the selected menu's market</li>
+          <li><strong>Collapsible categories</strong> — click any category row to collapse/expand its items. Use the ▼ All / ▶ All button beside the Item column header to collapse or expand everything at once.</li>
+        </ul>
+
+        <H3 id="plt">Tab 3 — PLT (Price Level Table)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Set <strong>sell prices</strong> for each menu item × price level (e.g. Classic Burger —
           Eat-in: £12.50 · Takeout: £11.50 · Delivery: £13.00). Prices are entered in <em>display currency</em>
@@ -494,7 +507,7 @@ export default function HelpPage() {
           <p className="mt-1">where <Mono>dispRate = market.exchange_rate / baseCurrency.exchange_rate</Mono></p>
         </InfoBox>
 
-        <H3 id="mpt">Tab 3 — MPT (Menu Performance Table)</H3>
+        <H3 id="mpt">Tab 4 — MPT (Menu Performance Table)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Shows <strong>COGS%</strong> for each menu item × price level, colour-coded against your target:
         </p>
@@ -520,9 +533,7 @@ export default function HelpPage() {
         {/* ═══════════════════════════════════ ALLERGEN MATRIX */}
         <H2 id="allergen-matrix" icon="⚠️" title="Allergen Matrix" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Generates a <strong>menu-level allergen declaration</strong> compliant with EU Regulation
-          1169/2011 (FIC) and UK Food Information Regulations. Maps all 14 regulated allergens across
-          every item on a selected menu, rolling up from ingredient → recipe → menu item.
+          The Allergen Matrix page has two tabs: <strong>Inventory</strong> (all ingredients vs. 14 allergens) and <strong>Menu</strong> (allergen matrix for a selected menu, rolling up from ingredient → recipe → menu item). Both matrices have <strong>sticky column headers</strong> and a <strong>sticky first column</strong> so names remain visible when scrolling horizontally.
         </p>
 
         <H3 id="eu-fic">EU FIC Compliance</H3>
@@ -539,6 +550,15 @@ export default function HelpPage() {
           Rows = menu items. Filter by recipe category to focus on a menu section (e.g. just Desserts).
           The matrix uses bold for <strong>Contains</strong>, italic for <em>May Contain</em>,
           and blank for Free From.
+        </p>
+
+        <H3 id="allergen-notes">Allergen Notes</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Both the Inventory and Menu matrices include an editable <strong>Notes</strong> column at the right edge.
+          Click into any Notes cell and type free-text notes about allergen specifics for that ingredient or menu item
+          (e.g. "sourced from gluten-controlled facility", "contains due to shared fryer"). Notes auto-save on blur
+          and are stored on <Mono>mcogs_ingredients.allergen_notes</Mono> (Inventory tab) or{' '}
+          <Mono>mcogs_menu_items.allergen_notes</Mono> (Menu tab).
         </p>
 
         <H3 id="allergen-print">Printing</H3>
@@ -644,13 +664,23 @@ export default function HelpPage() {
           Assistant will display "API key not configured".
         </InfoBox>
 
+        <H3 id="ai-concise-mode">Concise Mode</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          The <strong>Response Behaviour</strong> toggle in Settings → AI switches McFry to concise mode.
+          When enabled, McFry skips preamble ("Let me check…", "I'll look that up…"), calls tools silently,
+          and returns bullet-point answers in the fewest words possible. Ideal for quick data lookups.
+          The setting is saved in the database and persists across sessions.
+        </p>
+
         {/* ═══════════════════════════════════ AI ASSISTANT */}
         <H2 id="ai-assistant" icon="🤖" title="McFry — AI Assistant" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           <strong>McFry</strong> is a floating AI chat widget (bottom-right of every page) powered by{' '}
           <strong>Claude Haiku 4.5</strong>. It combines two complementary knowledge sources —
           vectorised documentation and live database queries — to answer questions in natural language.
-          McFry can also create, update, and delete records as a full sysadmin assistant.
+          McFry can create, update, and delete records across all entities as a full sysadmin assistant.
+          You can attach files (CSV, Excel, images) via the paperclip icon, or <strong>paste images directly</strong> from
+          the clipboard into the chat input. While McFry is thinking, three animated dots indicate activity.
         </p>
 
         <H3 id="ai-how-it-works">How It Works — Two Knowledge Layers</H3>
@@ -715,53 +745,49 @@ export default function HelpPage() {
           It also does not index this Help page or any other runtime content.
         </InfoBox>
 
-        <H3 id="ai-tools">Layer 2 — What the AI Can Query Live (Tools)</H3>
+        <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Claude has 9 tools that execute real PostgreSQL queries against your live{' '}
-          <Mono>mcogs</Mono> database. Tool calls happen automatically when Claude determines
-          it needs data to answer your question.
-        </p>
-        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
-          <thead><tr><Th>Tool</Th><Th>DB tables queried</Th><Th>What it returns</Th></tr></thead>
-          <tbody>
-            {[
-              ['get_dashboard_stats', 'All mcogs_ tables (COUNT queries)', 'Totals: ingredients, recipes, menus, vendors, markets, coverage %'],
-              ['list_ingredients',   'mcogs_ingredients', 'All ingredients with id, name, category — filterable by name keyword'],
-              ['get_ingredient',     'mcogs_ingredients + mcogs_price_quotes + mcogs_ingredient_allergens', 'Full ingredient: nutrition, all vendor quotes, allergen statuses'],
-              ['list_recipes',       'mcogs_recipes', 'All recipes with id, name — filterable by name keyword'],
-              ['get_recipe',         'mcogs_recipes + mcogs_recipe_items + mcogs_price_quotes (via preferred vendor logic)', 'Recipe header + all ingredient lines + cost per country'],
-              ['list_menus',         'mcogs_menus + mcogs_countries', 'All menus with market name'],
-              ['get_menu_cogs',      'mcogs_menu_items + mcogs_menu_item_prices + cogs calculation', 'Full menu: sell prices + COGS% per item per price level'],
-              ['get_feedback',       'mcogs_feedback', 'Feedback tickets — filterable by type (bug/feature/general) and status'],
-              ['submit_feedback',    'mcogs_feedback (INSERT)', 'Creates a new feedback record — the only write operation available'],
-            ].map(([tool, tables, returns]) => (
-              <tr key={tool}>
-                <Td mono>{tool}</Td>
-                <Td mono>{tables}</Td>
-                <Td>{returns}</Td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        <H3 id="ai-no-access">What the AI Cannot Access Directly</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          The following data is <strong>not exposed via tools</strong>. The AI can discuss these topics
-          using its RAG documentation context (general knowledge about the system), but it cannot
-          query live records for these areas:
+          McFry has <strong>78 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database.
+          Tool calls happen automatically — McFry determines which tools to call based on your question or request.
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
           {[
-            { label: 'Markets / Countries', note: 'Can describe the data model but not list your live markets' },
-            { label: 'Vendors', note: 'Can explain vendors but cannot list your actual vendor records' },
-            { label: 'Categories', note: 'Cannot list your ingredient/recipe categories' },
-            { label: 'Tax rates', note: 'Cannot query your configured tax rates' },
-            { label: 'Price levels', note: 'Cannot list your eat-in/takeout/delivery configuration' },
-            { label: 'Settings / Thresholds', note: 'Cannot read your COGS target thresholds or units' },
-            { label: 'HACCP data', note: 'No access to equipment registers, temp logs, or CCP logs' },
-            { label: 'Locations', note: 'Cannot list your store locations or groups' },
-            { label: 'Allergen matrix (menu level)', note: 'Can access allergens via get_ingredient but not menu-level matrix' },
-            { label: 'AI chat logs', note: 'Cannot access its own previous conversation history beyond the current session' },
+            { label: 'Dashboard & Stats',  note: 'get_dashboard_stats' },
+            { label: 'Ingredients',         note: 'list, get, create, update, delete' },
+            { label: 'Vendors',             note: 'list, create, update, delete' },
+            { label: 'Price Quotes',        note: 'list, create, update, delete, set preferred vendor' },
+            { label: 'Recipes & Items',     note: 'list, get, create, update, delete recipe + recipe items' },
+            { label: 'Menus & Items',       note: 'list, create, update, delete menus + items + sell prices' },
+            { label: 'Markets',             note: 'list, create, update, delete markets + brand partners' },
+            { label: 'Tax Rates',           note: 'list, create, update, set default, delete' },
+            { label: 'Categories',          note: 'list, create, update, delete' },
+            { label: 'Price Levels',        note: 'list, create, update, delete' },
+            { label: 'Settings',            note: 'get + update system settings' },
+            { label: 'Locations & Groups',  note: 'full CRUD for locations and location groups' },
+            { label: 'HACCP',               note: 'equipment register, temp logs, CCP logs' },
+            { label: 'Allergens',           note: 'list, read/write per ingredient, menu matrix' },
+            { label: 'Import',              note: 'start_import — stage a spreadsheet for the Import Wizard' },
+            { label: 'Web Search',          note: 'search_web — only when you explicitly ask to search the web' },
+            { label: 'Menu Engineer',       note: 'list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices' },
+            { label: 'Feedback',            note: 'get_feedback, submit_feedback' },
+          ].map(({ label, note }) => (
+            <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
+              <p className="text-xs font-semibold text-[#0F1F17]">{label}</p>
+              <p className="text-[10px] text-[#6B7F74] mt-0.5 leading-snug font-mono">{note}</p>
+            </div>
+          ))}
+        </div>
+
+        <H3 id="ai-no-access">What the AI Cannot Access</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          McFry has full read and write access to all 27 database tables. The only things outside its reach are:
+        </p>
+        <div className="grid grid-cols-2 gap-2 my-3">
+          {[
+            { label: 'AI chat logs', note: 'Cannot access previous conversation history beyond the current session' },
+            { label: 'Raw SQL / migrations', note: 'Cannot run arbitrary SQL or schema changes' },
+            { label: 'Server / OS config', note: 'No access to Nginx, PM2, environment variables, or SSH' },
+            { label: 'Auth0 user records', note: 'Cannot list users, roles, or authentication data' },
           ].map(({ label, note }) => (
             <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
               <p className="text-xs font-semibold text-[#0F1F17]">{label}</p>
@@ -770,9 +796,9 @@ export default function HelpPage() {
           ))}
         </div>
         <InfoBox type="tip" title="Getting the best answers">
-          For questions about markets, vendors, categories, or settings — navigate to the relevant page
-          directly. For questions about <strong>ingredient costs, recipe COGS, or menu performance</strong>,
-          the AI can give full answers with live numbers.
+          Ask McFry anything about your live data — ingredients, costs, COGS%, recipes, vendors, markets,
+          allergens, HACCP logs, or scenarios. For bulk imports, McFry can stage your spreadsheet and
+          provide a link to the Import Wizard review page.
         </InfoBox>
 
         <H3 id="example-questions">Example Questions</H3>
@@ -787,6 +813,9 @@ export default function HelpPage() {
             { q: '"What does waste % do to the COGS calculation?"',                           layer: 'RAG' },
             { q: '"Submit a bug report: the PLT isn\'t saving prices for the France menu"',   layer: 'Tools' },
             { q: '"What is the recommended setup order for a new instance?"',                 layer: 'RAG' },
+            { q: '"Create a vendor called Fresh Farms in the UK market"',                     layer: 'Tools' },
+            { q: '"Set the preferred vendor for Chicken Breast in the UK to Fresh Farms"',   layer: 'Tools' },
+            { q: '"Which menu items have no allergen data at all?"',                          layer: 'Tools' },
           ].map(({ q, layer }) => (
             <div key={q} className="flex items-start gap-2 text-sm">
               <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded mt-0.5
@@ -943,11 +972,17 @@ export default function HelpPage() {
               [24, 'mcogs_ai_chat_log',                'AI request/response log with token counts and tools called'],
               [25, 'mcogs_settings',                   'Single-row JSONB config: defaults, thresholds, AI keys'],
               [26, 'mcogs_brand_partners',             'Franchise brand partners linked to markets'],
+              [27, 'mcogs_menu_scenarios',             'Saved Menu Engineer scenarios with price/cost overrides and history'],
             ] as [number, string, string][]).map(([n, table, purpose]) => (
               <tr key={n}><Td>{n}</Td><Td mono>{table}</Td><Td>{purpose}</Td></tr>
             ))}
           </tbody>
         </table>
+        <p className="text-xs text-[#6B7F74] mt-2">
+          Notable additional columns: <Mono>mcogs_ingredients.allergen_notes</Mono> (free-text allergen notes) ·{' '}
+          <Mono>mcogs_menu_items.allergen_notes</Mono> (menu-item-level allergen notes).
+          Run <Mono>npm run migrate</Mono> in <Mono>api/</Mono> to apply all schema additions safely.
+        </p>
 
         <H3 id="data-flow">Data Flow: API Request Lifecycle</H3>
         <ProcessFlow steps={[
@@ -1054,7 +1089,10 @@ export default function HelpPage() {
               ['GET',    '/cogs/menu/:id',              'Calculate COGS for all items on a menu (?country_id=)'],
               ['GET',    '/allergens',                  'List all 14 EU FIC allergens'],
               ['GET',    '/allergens/ingredient/:id',   'Get allergen statuses for a specific ingredient'],
-              ['POST',   '/allergens/ingredient/:id',   'Set allergen statuses for an ingredient'],
+              ['PUT',    '/allergens/ingredient/:id',   'Set (bulk replace) allergen statuses for an ingredient'],
+              ['PATCH',  '/allergens/ingredient/:id/notes', 'Save allergen_notes text for an ingredient'],
+              ['GET',    '/allergens/menu/:id',         'Allergen matrix for a full menu (includes allergen_notes per item)'],
+              ['PATCH',  '/allergens/menu-item/:id/notes', 'Save allergen_notes text for a menu item'],
               ['GET',    '/nutrition',                  'USDA FoodData Central proxy (?query=flour)'],
               ['GET',    '/haccp/equipment',            'List equipment (?location_id=)'],
               ['POST',   '/haccp/equipment',            'Register a piece of equipment'],
