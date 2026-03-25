@@ -12,10 +12,12 @@ type AlgStatus    = 'contains' | 'may_contain' | 'free_from'
 type AlgSaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 interface IngAllergenRowBase {
-  ingredient_id: number
-  name:          string
-  category:      string | null
-  _saveState:    AlgSaveState
+  ingredient_id:  number
+  name:           string
+  category:       string | null
+  allergen_notes: string | null
+  _saveState:     AlgSaveState
+  _notesSaving:   boolean
 }
 type IngAllergenRow = IngAllergenRowBase & Record<string, any>
 
@@ -39,11 +41,12 @@ const ALG_LABEL: Record<string, string> = {
 
 interface Menu { id: number; name: string; country_name: string }
 interface MatrixRow {
-  menu_item_id: number
-  display_name: string
-  item_type:    string
-  category:     string | null
-  allergens:    Record<string, 'contains' | 'may_contain' | 'free_from' | null>
+  menu_item_id:   number
+  display_name:   string
+  item_type:      string
+  category:       string | null
+  allergens:      Record<string, 'contains' | 'may_contain' | 'free_from' | null>
+  allergen_notes: string | null
 }
 type ToastState = { message: string; type: 'success' | 'error' }
 const STATUS_CELL: Record<string, string> = { contains: 'bg-red-500 text-white', may_contain: 'bg-amber-400 text-white', free_from: 'bg-green-500 text-white' }
@@ -311,10 +314,12 @@ function InventoryAllergenMatrix() {
       }
 
       const built: IngAllergenRow[] = (ings || []).map((ing: any) => ({
-        ingredient_id: ing.id,
-        name:          ing.name,
-        category:      ing.category,
-        _saveState:    'idle' as AlgSaveState,
+        ingredient_id:  ing.id,
+        name:           ing.name,
+        category:       ing.category,
+        allergen_notes: ing.allergen_notes ?? null,
+        _saveState:     'idle' as AlgSaveState,
+        _notesSaving:   false,
         ...(algs || []).reduce((acc: any, alg: any) => {
           acc[alg.code] = algMap[ing.id]?.[alg.code] ?? null
           return acc
@@ -388,6 +393,17 @@ function InventoryAllergenMatrix() {
         .map(a => ({ allergen_id: a.id, status: row[a.code] as string }))
       performSave(ingredientId, payload)
     }, 600)
+  }
+
+  async function saveIngredientNotes(ingredientId: number, notes: string) {
+    setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _notesSaving: true } : r))
+    try {
+      await api.patch(`/allergens/ingredient/${ingredientId}/notes`, { allergen_notes: notes || null })
+    } catch {
+      showToast('Failed to save notes', 'error')
+    } finally {
+      setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _notesSaving: false } : r))
+    }
   }
 
   async function performSave(ingredientId: number, allergensList: any[]) {
@@ -482,6 +498,11 @@ function InventoryAllergenMatrix() {
                 ))}
                 {/* Save indicator column */}
                 <th className="w-7 bg-surface-2 border border-border" style={{ position: 'sticky', top: 0, zIndex: 20 }} />
+                {/* Allergen Notes column */}
+                <th className="bg-surface-2 border border-border px-3 py-2 text-left text-xs font-semibold text-text-2 whitespace-nowrap min-w-[180px]"
+                  style={{ position: 'sticky', top: 0, zIndex: 20 }}>
+                  Notes
+                </th>
               </tr>
             </thead>
 
@@ -543,6 +564,26 @@ function InventoryAllergenMatrix() {
                       <span className="text-red-500 font-bold text-xs">!</span>
                     )}
                   </td>
+
+                  {/* Allergen Notes */}
+                  <td className="border border-border px-2 py-1 min-w-[180px] max-w-[300px]">
+                    <div className="relative">
+                      <textarea
+                        rows={1}
+                        className="w-full resize-none text-xs bg-transparent outline-none leading-relaxed placeholder-text-3 focus:bg-surface-2 rounded px-1 py-0.5"
+                        placeholder="Add allergen note…"
+                        value={row.allergen_notes ?? ''}
+                        onChange={e => setRows(prev => prev.map(r =>
+                          r.ingredient_id === row.ingredient_id ? { ...r, allergen_notes: e.target.value } : r
+                        ))}
+                        onBlur={e => saveIngredientNotes(row.ingredient_id, e.target.value)}
+                        style={{ maxHeight: 72, overflowY: 'auto' }}
+                      />
+                      {row._notesSaving && (
+                        <span className="absolute right-1 top-1 inline-block w-2.5 h-2.5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -575,6 +616,9 @@ function MenuAllergenMatrix() {
   const [loading,   setLoading]   = useState(false)
   const [loadingMeta, setLoadingMeta] = useState(true)
   const [toast,     setToast]     = useState<ToastState | null>(null)
+  // notes: local edits + per-item saving flag
+  const [menuNotes,     setMenuNotes]     = useState<Record<number, string>>({})
+  const [notesSaving,   setNotesSaving]   = useState<Set<number>>(new Set())
 
   // Category filter + group state
   const [groupBy,    setGroupBy]    = useState(false)
@@ -601,11 +645,16 @@ function MenuAllergenMatrix() {
 
   // Load matrix whenever selected menu changes
   const loadMatrix = useCallback(async (menuId: string) => {
-    if (!menuId) { setMatrix([]); return }
+    if (!menuId) { setMatrix([]); setMenuNotes({}); return }
     setLoading(true)
     try {
       const data = await api.get(`/allergens/menu/${menuId}`)
-      setMatrix(data?.items || [])
+      const items: MatrixRow[] = data?.items || []
+      setMatrix(items)
+      // seed local notes from fetched data
+      const notes: Record<number, string> = {}
+      for (const row of items) notes[row.menu_item_id] = row.allergen_notes ?? ''
+      setMenuNotes(notes)
     } catch {
       showToast('Failed to load allergen matrix', 'error')
       setMatrix([])
@@ -692,9 +741,23 @@ function MenuAllergenMatrix() {
 
   const selectedMenuObj = menus.find(m => String(m.id) === selectedMenu)
 
+  // ── Notes save ──────────────────────────────────────────────────────────────
+
+  async function saveMenuItemNotes(menuItemId: number, notes: string) {
+    setNotesSaving(prev => new Set(prev).add(menuItemId))
+    try {
+      await api.patch(`/allergens/menu-item/${menuItemId}/notes`, { allergen_notes: notes || null })
+    } catch {
+      showToast('Failed to save notes', 'error')
+    } finally {
+      setNotesSaving(prev => { const next = new Set(prev); next.delete(menuItemId); return next })
+    }
+  }
+
   // ── Row renderer ────────────────────────────────────────────────────────────
 
   function renderRow(row: MatrixRow) {
+    const isSavingNotes = notesSaving.has(row.menu_item_id)
     return (
       <tr key={row.menu_item_id} className="hover:bg-surface-2 transition-colors">
         <td className="sticky left-0 z-10 bg-surface border border-border px-4 py-2.5 font-semibold text-text-1 whitespace-nowrap">
@@ -717,6 +780,23 @@ function MenuAllergenMatrix() {
             </td>
           )
         })}
+        {/* Allergen Notes cell */}
+        <td className="border border-border px-2 py-1 min-w-[180px] max-w-[280px]">
+          <div className="relative">
+            <textarea
+              rows={1}
+              className="w-full resize-none text-xs bg-transparent outline-none leading-relaxed placeholder-text-3 focus:bg-surface-2 rounded px-1 py-0.5"
+              placeholder="Add allergen note…"
+              value={menuNotes[row.menu_item_id] ?? ''}
+              onChange={e => setMenuNotes(prev => ({ ...prev, [row.menu_item_id]: e.target.value }))}
+              onBlur={e => saveMenuItemNotes(row.menu_item_id, e.target.value)}
+              style={{ maxHeight: 72, overflowY: 'auto' }}
+            />
+            {isSavingNotes && (
+              <span className="absolute right-1 top-1 inline-block w-2.5 h-2.5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+            )}
+          </div>
+        </td>
       </tr>
     )
   }
@@ -886,7 +966,7 @@ function MenuAllergenMatrix() {
         ) : filteredMatrix.length === 0 ? (
           <EmptyState message="No items match the selected categories." />
         ) : (
-          <table className="text-xs border-separate border-spacing-0 print:w-full" style={{ minWidth: `${280 + allergens.length * 48}px` }}>
+          <table className="text-xs border-separate border-spacing-0 print:w-full" style={{ minWidth: `${460 + allergens.length * 48}px` }}>
             <thead>
               <tr>
                 <th className="sticky left-0 top-0 z-30 bg-surface border border-border px-4 py-3 text-left font-semibold text-text-1 min-w-[220px] whitespace-nowrap">
@@ -906,6 +986,9 @@ function MenuAllergenMatrix() {
                     </div>
                   </th>
                 ))}
+                <th className="sticky top-0 z-20 bg-surface-2 border border-border px-3 py-2 text-left text-xs font-semibold text-text-2 whitespace-nowrap min-w-[180px]">
+                  Notes
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -915,7 +998,7 @@ function MenuAllergenMatrix() {
                     {/* Category header row */}
                     <tr>
                       <td
-                        colSpan={1 + allergens.length}
+                        colSpan={2 + allergens.length}
                         className="bg-accent-dim border border-border px-4 py-1.5 font-semibold text-xs text-accent uppercase tracking-wide"
                       >
                         {cat}

@@ -2693,7 +2693,7 @@ async function executeTool(name, input) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(context, helpContext) {
+function buildSystemPrompt(context, helpContext, conciseMode = false) {
   const page = context?.currentPage || 'unknown';
   return `You are McFry — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
@@ -2765,6 +2765,14 @@ When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
 
 Be concise and practical. For numbers include currency symbols and units. Format data as readable lists or tables where appropriate.
 
+${conciseMode ? `## RESPONSE STYLE (concise mode ON)
+- Give the direct answer only — no preamble, no narration of steps.
+- Do NOT say things like "Let me check…", "I'll look that up…", "First I'll…", "Now I'll…", or "I've retrieved…".
+- Call tools silently. When a tool returns data, summarise the result in the fewest words possible.
+- Use bullet points or a short table for multi-item results. One sentence max per item.
+- For write operations: one short confirmation sentence ("Creating X — shall I proceed?"), then execute on yes. No elaboration.
+- Skip any closing remarks ("Let me know if you need anything else", "Hope that helps", etc.).
+` : ''}
 ${helpContext ? `## Relevant COGS Documentation\n\n${helpContext}` : ''}
 
 ## Current Context
@@ -2790,7 +2798,15 @@ router.post('/', async (req, res) => {
 
   // RAG — retrieve relevant help context
   const helpContext  = await rag.retrieve(message);
-  const systemPrompt = buildSystemPrompt(context, helpContext);
+
+  // Read concise-mode setting
+  let conciseMode = false;
+  try {
+    const { rows: sRows } = await pool.query(`SELECT data->>'ai_concise_mode' AS v FROM mcogs_settings WHERE id = 1`);
+    conciseMode = sRows[0]?.v === 'true';
+  } catch (_) {}
+
+  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode);
 
   // Build messages array (enforce max 20 history items)
   const messages = [

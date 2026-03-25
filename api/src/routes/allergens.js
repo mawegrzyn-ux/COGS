@@ -157,6 +157,7 @@ router.get('/menu/:id', async (req, res) => {
     // All items on this menu
     const { rows: menuItems } = await pool.query(`
       SELECT mi.id, mi.display_name, mi.item_type, mi.recipe_id, mi.ingredient_id,
+             mi.allergen_notes,
              r.name AS recipe_name, r.category AS recipe_category,
              ing.name AS ingredient_name, ing.category AS ingredient_category
       FROM   mcogs_menu_items mi
@@ -246,13 +247,43 @@ router.get('/menu/:id', async (req, res) => {
         ? (mi.ingredient_category || null)
         : (mi.recipe_category || null);
 
-      return { menu_item_id: mi.id, display_name: display, item_type: mi.item_type, category, allergens: allergenStatus };
+      return { menu_item_id: mi.id, display_name: display, item_type: mi.item_type, category, allergens: allergenStatus, allergen_notes: mi.allergen_notes ?? null };
     });
 
     res.json({ allergens: allAllergens, items });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch menu allergen matrix' } });
+  }
+});
+
+// ── PATCH /allergens/menu-item/:id/notes — save allergen notes on a menu item
+router.patch('/menu-item/:id/notes', async (req, res) => {
+  const { allergen_notes = null } = req.body;
+  try {
+    await pool.query(
+      `UPDATE mcogs_menu_items SET allergen_notes = $1, updated_at = NOW() WHERE id = $2`,
+      [allergen_notes || null, Number(req.params.id)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to save allergen notes' } });
+  }
+});
+
+// ── PATCH /allergens/ingredient/:id/notes — save allergen notes on an ingredient
+router.patch('/ingredient/:id/notes', async (req, res) => {
+  const { allergen_notes = null } = req.body;
+  try {
+    await pool.query(
+      `UPDATE mcogs_ingredients SET allergen_notes = $1, updated_at = NOW() WHERE id = $2`,
+      [allergen_notes || null, Number(req.params.id)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to save allergen notes' } });
   }
 });
 

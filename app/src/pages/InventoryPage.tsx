@@ -1146,7 +1146,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     return Object.keys(e).length === 0
   }
 
-  async function handleSave() {
+  async function handleSave(andNext = false) {
     if (!validate()) return
     setSaving(true)
     try {
@@ -1158,10 +1158,34 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
       }
       if (modal === 'new') { await api.post('/price-quotes', payload); showToast('Quote added') }
       else if (modal != null) { await api.put(`/price-quotes/${(modal as Quote).id}`, payload); showToast('Quote updated') }
-      setModal(null); load()
+      load()
+      if (andNext) {
+        // Keep modal open, reset form but retain vendor_id for rapid entry
+        setForm({ ...blankForm, vendor_id: form.vendor_id })
+        setErrors({})
+        setModal('new')
+      } else {
+        setModal(null)
+      }
     } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
     finally { setSaving(false) }
   }
+
+  async function handleSaveAndNext() { handleSave(true) }
+
+  // Alt+S → Save & Next when the Add Quote modal is open
+  useEffect(() => {
+    if (modal !== 'new') return
+    function onKey(e: KeyboardEvent) {
+      if (e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        if (!saving) handleSave(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal, saving, form])
 
   async function handleDelete() {
     if (!confirmDelete) return
@@ -1393,7 +1417,13 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
           </div>
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
-            <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
+            {modal === 'new' && (
+              <button className="btn-outline px-4 py-2 text-sm" onClick={handleSaveAndNext} disabled={saving}
+                title="Save this quote and open a new one (Alt+S)">
+                {saving ? 'Saving…' : <>Save &amp; Next <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Alt+S</kbd></>}
+              </button>
+            )}
+            <button className="btn-primary px-4 py-2 text-sm" onClick={() => handleSave()} disabled={saving}>
               {saving ? 'Saving…' : 'Save Quote'}
             </button>
           </div>

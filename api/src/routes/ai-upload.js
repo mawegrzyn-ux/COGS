@@ -207,7 +207,15 @@ router.post('/', (req, res, next) => {
   // RAG context
   const ragQuery    = message || (file ? `file: ${file.originalname}` : '');
   const helpContext = await rag.retrieve(ragQuery);
-  const systemPrompt = buildSystemPrompt(context, helpContext);
+
+  // Read concise-mode setting
+  let conciseMode = false;
+  try {
+    const { rows: sRows } = await pool.query(`SELECT data->>'ai_concise_mode' AS v FROM mcogs_settings WHERE id = 1`);
+    conciseMode = sRows[0]?.v === 'true';
+  } catch (_) {}
+
+  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode);
 
   // Build the user content array
   const userContent = [];

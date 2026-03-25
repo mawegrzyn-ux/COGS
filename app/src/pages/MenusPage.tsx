@@ -2375,6 +2375,10 @@ function ScenarioTool({
   // ── Mix generator ──────────────────────────────────────────────────────────
   const [showMixGen, setShowMixGen] = useState(false)
 
+  // ── Collapsible categories ─────────────────────────────────────────────────
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set())
+  useEffect(() => { setCollapsedCats(new Set()) }, [menuId])
+
   // ── All-levels mode ────────────────────────────────────────────────────────
   const [allLevelsData,    setAllLevelsData]    = useState<{ level: PriceLevel; data: CogsData }[]>([])
   const [allLevelsLoading, setAllLevelsLoading] = useState(false)
@@ -2800,6 +2804,26 @@ function ScenarioTool({
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
   }, [allLevelRows])
 
+  // ── Category collapse helpers ─────────────────────────────────────────────
+  const allCats = useMemo(() => {
+    const src = levelId === 'ALL' ? allLevelCategorised : categorised
+    return src.map(([cat]) => cat)
+  }, [levelId, allLevelCategorised, categorised])
+
+  const allCollapsed = allCats.length > 0 && allCats.every(c => collapsedCats.has(c))
+
+  function toggleCat(cat: string) {
+    setCollapsedCats(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat); else next.add(cat)
+      return next
+    })
+  }
+
+  function toggleAllCats() {
+    setCollapsedCats(allCollapsed ? new Set() : new Set(allCats))
+  }
+
   // ── Export helpers ────────────────────────────────────────────────────────
 
   const menuName  = menus.find(m => m.id === menuId)?.name ?? 'Scenario'
@@ -3180,15 +3204,28 @@ ${tableHtml}
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Item</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">
+                    <div className="flex items-center gap-2">
+                      Item
+                      {allCats.length > 1 && (
+                        <button
+                          onClick={toggleAllCats}
+                          className="text-[10px] font-normal text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-1.5 py-0.5 leading-none"
+                          title={allCollapsed ? 'Expand all categories' : 'Collapse all categories'}
+                        >
+                          {allCollapsed ? '▶ All' : '▼ All'}
+                        </button>
+                      )}
+                    </div>
+                  </th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Type</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost/ptn</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Price (gross)</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px]">Qty Sold</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Sales Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Revenue (net)</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Rev Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Total Cost</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500">COGS %</th>
                 </tr>
               </thead>
@@ -3201,9 +3238,18 @@ ${tableHtml}
                   return (
                     <>
                       {/* ── Category header row ── */}
-                      <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
+                      <tr key={`cat-${cat}`}
+                        className="bg-blue-50/40 border-y border-blue-100 cursor-pointer select-none hover:bg-blue-100/60"
+                        onClick={() => toggleCat(cat)}
+                      >
                         <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide" colSpan={4}>
-                          {cat}
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="text-gray-400 text-[9px] w-2.5 shrink-0">{collapsedCats.has(cat) ? '▶' : '▼'}</span>
+                            {cat}
+                            {collapsedCats.has(cat) && (
+                              <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
+                            )}
+                          </span>
                         </td>
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
                           {cQ > 0 ? cQ.toLocaleString() : '—'}
@@ -3220,7 +3266,7 @@ ${tableHtml}
                       </tr>
 
                       {/* ── Item rows ── */}
-                      {catRows.map(row => (
+                      {!collapsedCats.has(cat) && catRows.map(row => (
                         <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
                           <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
                           <td className="px-3 py-2.5">
@@ -3343,8 +3389,21 @@ ${tableHtml}
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>Item</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn</th>
+                  <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>
+                    <div className="flex items-center gap-2">
+                      Item
+                      {allCats.length > 1 && (
+                        <button
+                          onClick={toggleAllCats}
+                          className="text-[10px] font-normal text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-1.5 py-0.5 leading-none normal-case tracking-normal"
+                          title={allCollapsed ? 'Expand all categories' : 'Collapse all categories'}
+                        >
+                          {allCollapsed ? '▶ All' : '▼ All'}
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   {allLevelsData.map(({ level }) => (
                     <th key={level.id} colSpan={allLevelsCompact ? 3 : 4}
                       className="px-3 py-2 text-center font-semibold text-accent border-l border-gray-300 bg-accent-dim/30 whitespace-nowrap">
@@ -3357,9 +3416,9 @@ ${tableHtml}
                   {allLevelsData.map(({ level }) => (
                     <>
                       <th key={`${level.id}-qh`} className="px-2 py-1.5 text-center font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
-                      <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Price</th>
+                      <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                       {!allLevelsCompact && (
-                        <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue (net)</th>
+                        <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                       )}
                       <th key={`${level.id}-ch`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 normal-case">COGS%</th>
                     </>
@@ -3373,8 +3432,19 @@ ${tableHtml}
                   const cTotalCogsPct = cTotalRev > 0 ? (cC / cTotalRev) * 100 : null
                   return (
                     <>
-                      <tr key={`cat-${cat}`} className="bg-blue-50/40 border-y border-blue-100">
-                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide">{cat}</td>
+                      <tr key={`cat-${cat}`}
+                        className="bg-blue-50/40 border-y border-blue-100 cursor-pointer select-none hover:bg-blue-100/60"
+                        onClick={() => toggleCat(cat)}
+                      >
+                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="text-gray-400 text-[9px] w-2.5 shrink-0">{collapsedCats.has(cat) ? '▶' : '▼'}</span>
+                            {cat}
+                            {collapsedCats.has(cat) && (
+                              <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
+                            )}
+                          </span>
+                        </td>
                         <td />
                         {allLevelsData.map(({ level }) => {
                           const cLvlQ = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
@@ -3402,7 +3472,7 @@ ${tableHtml}
                           {fmtPct(cTotalCogsPct)}
                         </td>
                       </tr>
-                      {catRows.map(row => {
+                      {!collapsedCats.has(cat) && catRows.map(row => {
                         const totalRev     = row.perLevel.reduce((s, p) => s + p.revenue, 0)
                         const totalCogsPct = totalRev > 0 ? (row.total_cost / totalRev) * 100 : null
                         return (

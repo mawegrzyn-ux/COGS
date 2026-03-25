@@ -1061,21 +1061,43 @@ interface AiKeyStatus {
 
 function AiTab() {
   const api = useApi()
-  const [loading,   setLoading]   = useState(true)
-  const [saving,    setSaving]    = useState(false)
-  const [status,    setStatus]    = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false })
-  const [anthropic, setAnthropic] = useState('')
-  const [voyage,    setVoyage]    = useState('')
-  const [brave,     setBrave]     = useState('')
-  const [toast,     setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [loading,      setLoading]      = useState(true)
+  const [saving,       setSaving]       = useState(false)
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false })
+  const [anthropic,    setAnthropic]    = useState('')
+  const [voyage,       setVoyage]       = useState('')
+  const [brave,        setBrave]        = useState('')
+  const [conciseMode,  setConciseMode]  = useState(false)
+  const [savingMode,   setSavingMode]   = useState(false)
+  const [toast,        setToast]        = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
-    api.get('/ai-config')
-      .then((s: AiKeyStatus) => setStatus(s))
+    Promise.all([
+      api.get('/ai-config'),
+      api.get('/settings'),
+    ])
+      .then(([s, settings]) => {
+        setStatus(s)
+        setConciseMode(settings?.ai_concise_mode === true)
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [api])
+
+  async function handleToggleConciseMode(val: boolean) {
+    setConciseMode(val)
+    setSavingMode(true)
+    try {
+      await api.patch('/settings', { ai_concise_mode: val })
+      setToast({ message: val ? 'Concise mode enabled' : 'Concise mode disabled', type: 'success' })
+    } catch (err: any) {
+      setConciseMode(!val) // revert
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingMode(false)
+    }
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -1197,6 +1219,37 @@ function AiTab() {
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>
+      </div>
+
+      {/* ── Response behaviour ── */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">Response Behaviour</h2>
+        <p className="text-sm text-text-3 mb-4">Controls how McFry formats its replies.</p>
+
+        <div className="flex items-start justify-between gap-4 rounded-xl border border-border bg-surface-2/50 px-4 py-3.5">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-text-1">Concise mode</div>
+            <div className="text-xs text-text-3 mt-0.5">
+              McFry gives direct answers without narrating its investigation steps ("Let me check…", "I'll look that up…"). Tool calls happen silently — only the result is shown.
+            </div>
+          </div>
+          <button
+            role="switch"
+            aria-checked={conciseMode}
+            disabled={savingMode}
+            onClick={() => handleToggleConciseMode(!conciseMode)}
+            className={`relative flex-shrink-0 mt-0.5 w-10 h-5.5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+              conciseMode ? 'bg-accent' : 'bg-border'
+            } ${savingMode ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            style={{ height: '22px', width: '40px' }}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-transform ${
+                conciseMode ? 'translate-x-[18px]' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

@@ -183,12 +183,14 @@ interface ChatPanelProps {
   streaming: boolean
   toolLabel: string | null
   attachedFile: File | null
+  attachedFilePreview: string | null   // object URL for image thumbnail
   input: string
   inputRef: RefObject<HTMLTextAreaElement>
   fileInputRef: RefObject<HTMLInputElement>
   bottomRef: RefObject<HTMLDivElement>
   onInputChange: (val: string) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onSend: () => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onFilePickerClick: () => void
@@ -197,9 +199,9 @@ interface ChatPanelProps {
 }
 
 function ChatPanel({
-  messages, streaming, toolLabel, attachedFile, input,
+  messages, streaming, toolLabel, attachedFile, attachedFilePreview, input,
   inputRef, fileInputRef, bottomRef,
-  onInputChange, onKeyDown, onSend, onFileChange, onFilePickerClick, onRemoveFile,
+  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onRemoveFile,
   canSend,
 }: ChatPanelProps) {
   return (
@@ -246,8 +248,22 @@ function ChatPanel({
                 <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
               ) : (
                 streaming && i === messages.length - 1 ? (
-                  <span className="opacity-60 text-xs">
-                    {toolLabel ? `Running ${toolLabel}…` : '…'}
+                  <span className="flex items-center gap-1.5 py-0.5">
+                    {toolLabel && (
+                      <span className="text-xs opacity-50 mr-1">{toolLabel}</span>
+                    )}
+                    {[0, 1, 2].map(j => (
+                      <span
+                        key={j}
+                        className="inline-block rounded-full"
+                        style={{
+                          width: 7, height: 7,
+                          background: 'var(--accent)',
+                          opacity: 0.7,
+                          animation: `mcfry-dot 1.2s ease-in-out ${j * 0.2}s infinite`,
+                        }}
+                      />
+                    ))}
                   </span>
                 ) : null
               )}
@@ -259,12 +275,17 @@ function ChatPanel({
 
       {/* File preview badge */}
       {attachedFile && (
-        <div className="flex-shrink-0 mx-3 mb-1 px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs"
-          style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)' }}>
-          <span>📎</span>
-          <span className="flex-1 truncate">{attachedFile.name}</span>
+        <div className="flex-shrink-0 mx-3 mb-1 rounded-lg flex items-center gap-2 text-xs overflow-hidden"
+          style={{ background: 'var(--accent-dim)', color: 'var(--accent-dark)', border: '1px solid var(--accent)/20' }}>
+          {attachedFilePreview ? (
+            <img src={attachedFilePreview} alt="preview"
+              className="w-14 h-14 object-cover flex-shrink-0 rounded-l-lg" />
+          ) : (
+            <span className="pl-3">📎</span>
+          )}
+          <span className="flex-1 truncate py-1.5 pr-1">{attachedFile.name}</span>
           <button onClick={onRemoveFile}
-            className="shrink-0 opacity-60 hover:opacity-100 transition-opacity font-bold"
+            className="shrink-0 px-2 py-1.5 opacity-60 hover:opacity-100 transition-opacity font-bold self-stretch flex items-center"
             title="Remove file">✕</button>
         </div>
       )}
@@ -286,6 +307,7 @@ function ChatPanel({
             value={input}
             onChange={e => onInputChange(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             placeholder={attachedFile ? 'Add a message… (optional)' : 'Ask anything… (Enter to send)'}
             disabled={streaming}
             rows={1}
@@ -296,13 +318,18 @@ function ChatPanel({
             className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40"
             style={{ background: 'var(--accent)', color: '#fff' }} aria-label="Send">
             {streaming
-              ? <span className="text-xs animate-pulse">…</span>
+              ? <span className="flex items-center gap-0.5">
+                  {[0,1,2].map(j => (
+                    <span key={j} className="inline-block rounded-full bg-white"
+                      style={{ width: 4, height: 4, animation: `mcfry-dot 1.2s ease-in-out ${j * 0.2}s infinite` }} />
+                  ))}
+                </span>
               : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
             }
           </button>
         </div>
         <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-3)' }}>
-          Shift+Enter for new line · 📎 CSV, Excel, Word, PPTX, PDF or image · 10 MB max
+          Shift+Enter for new line · 📎 attach or paste image · CSV, Excel, Word, PPTX, PDF · 10 MB max
         </p>
       </div>
     </>
@@ -315,16 +342,17 @@ export default function AiChat() {
   const { user }   = useAuth0()
   const location   = useLocation()
 
-  const [open,         setOpen]         = useState(false)
-  const [view,         setView]         = useState<PanelView>('chat')
-  const [messages,     setMessages]     = useState<Message[]>([])
-  const [input,        setInput]        = useState('')
-  const [streaming,    setStreaming]    = useState(false)
-  const [toolLabel,    setToolLabel]    = useState<string | null>(null)
-  const [attachedFile, setAttachedFile] = useState<File | null>(null)
-  const [sessionId,    setSessionId]    = useState(newSessionId)
-  const [sessions,     setSessions]     = useState<ChatSession[]>([])
-  const [sessionsLoad, setSessionsLoad] = useState(false)
+  const [open,               setOpen]               = useState(false)
+  const [view,               setView]               = useState<PanelView>('chat')
+  const [messages,           setMessages]           = useState<Message[]>([])
+  const [input,              setInput]              = useState('')
+  const [streaming,          setStreaming]          = useState(false)
+  const [toolLabel,          setToolLabel]          = useState<string | null>(null)
+  const [attachedFile,       setAttachedFile]       = useState<File | null>(null)
+  const [attachedFilePreview,setAttachedFilePreview]= useState<string | null>(null)
+  const [sessionId,          setSessionId]          = useState(newSessionId)
+  const [sessions,           setSessions]           = useState<ChatSession[]>([])
+  const [sessionsLoad,       setSessionsLoad]       = useState(false)
 
   const bottomRef    = useRef<HTMLDivElement>(null)
   const inputRef     = useRef<HTMLTextAreaElement>(null)
@@ -519,6 +547,29 @@ export default function AiChat() {
 
   const handleRemoveFile = useCallback(() => setAttachedFile(null), [])
 
+  // Generate / revoke object URL for image previews
+  useEffect(() => {
+    if (attachedFile && attachedFile.type.startsWith('image/')) {
+      const url = URL.createObjectURL(attachedFile)
+      setAttachedFilePreview(url)
+      return () => URL.revokeObjectURL(url)
+    }
+    setAttachedFilePreview(null)
+  }, [attachedFile])
+
+  // Paste image from clipboard
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const imgItem = items.find(item => item.type.startsWith('image/'))
+    if (!imgItem) return
+    const blob = imgItem.getAsFile()
+    if (!blob) return
+    e.preventDefault()
+    const ext  = blob.type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png'
+    const name = `pasted-image-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`
+    setAttachedFile(new File([blob], name, { type: blob.type }))
+  }, [])
+
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -593,12 +644,14 @@ export default function AiChat() {
                 streaming={streaming}
                 toolLabel={toolLabel}
                 attachedFile={attachedFile}
+                attachedFilePreview={attachedFilePreview}
                 input={input}
                 inputRef={inputRef}
                 fileInputRef={fileInputRef}
                 bottomRef={bottomRef}
                 onInputChange={setInput}
                 onKeyDown={handleKey}
+                onPaste={handlePaste}
                 onSend={send}
                 onFileChange={handleFileChange}
                 onFilePickerClick={handleFilePickerClick}
