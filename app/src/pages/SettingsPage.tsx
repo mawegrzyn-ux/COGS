@@ -1070,32 +1070,38 @@ function TestDataTab() {
 // ── AI Integration Tab ────────────────────────────────────────────────────────
 
 interface AiKeyStatus {
-  anthropic_key_set: boolean
-  voyage_key_set:    boolean
-  brave_key_set:     boolean
+  anthropic_key_set:   boolean
+  voyage_key_set:      boolean
+  brave_key_set:       boolean
+  claude_code_key_set: boolean
 }
 
 function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
-  const [conciseMode,  setConciseMode]  = useState(false)
-  const [savingMode,   setSavingMode]   = useState(false)
-  const [toast,        setToast]        = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [conciseMode,      setConciseMode]      = useState(false)
+  const [savingMode,       setSavingMode]       = useState(false)
+  const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
+  const [generatingKey,    setGeneratingKey]    = useState(false)
+  const [keyCopied,        setKeyCopied]        = useState(false)
+  const [toast,            setToast]            = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
     Promise.all([
       api.get('/ai-config'),
       api.get('/settings'),
+      api.get('/ai-config/claude-code-key'),
     ])
-      .then(([s, settings]) => {
+      .then(([s, settings, keyData]) => {
         setStatus(s)
         setConciseMode(settings?.ai_concise_mode === true)
+        setClaudeCodeKey(keyData?.key ?? null)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -1146,6 +1152,27 @@ function AiTab() {
     } catch (err: any) {
       setToast({ message: err.message || 'Failed to clear key', type: 'error' })
     }
+  }
+
+  async function handleGenerateKey() {
+    setGeneratingKey(true)
+    try {
+      const result = await api.post('/ai-config/generate-claude-code-key', {})
+      setClaudeCodeKey(result.key)
+      setStatus(s => ({ ...s, claude_code_key_set: true }))
+      setToast({ message: 'New key generated', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to generate key', type: 'error' })
+    } finally {
+      setGeneratingKey(false)
+    }
+  }
+
+  async function handleCopyKey() {
+    if (!claudeCodeKey) return
+    await navigator.clipboard.writeText(claudeCodeKey)
+    setKeyCopied(true)
+    setTimeout(() => setKeyCopied(false), 2000)
   }
 
   if (loading) return <Spinner />
@@ -1265,6 +1292,59 @@ function AiTab() {
               }`}
             />
           </button>
+        </div>
+      </div>
+
+      {/* ── Claude Code Integration ── */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">Claude Code Integration</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Generate an API key so Claude Code can query bugs, feature requests, and change requests logged by Pepper directly from your terminal.
+        </p>
+
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4 space-y-4">
+          {claudeCodeKey ? (
+            <>
+              <div>
+                <div className="text-xs font-semibold text-text-2 mb-1.5">Your API Key</div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 font-mono text-xs bg-surface px-3 py-2 rounded-lg border border-border text-text-1 break-all select-all">
+                    {claudeCodeKey}
+                  </code>
+                  <button
+                    onClick={handleCopyKey}
+                    className="btn-outline text-xs px-3 py-2 shrink-0"
+                    title="Copy to clipboard"
+                  >
+                    {keyCopied ? '✓ Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+              <div className="text-xs text-text-3 bg-surface rounded-lg border border-border px-3 py-2.5 space-y-1">
+                <div className="font-semibold text-text-2 mb-1">Add to .claude/settings.local.json in your project:</div>
+                <code className="block text-xs font-mono whitespace-pre">{`"env": { "INTERNAL_API_KEY": "<paste key here>" }`}</code>
+                <div className="mt-1.5">Then ask Claude Code: <span className="italic">"show me open bugs"</span> or <span className="italic">"list feature requests"</span></div>
+              </div>
+              <button
+                onClick={handleGenerateKey}
+                disabled={generatingKey}
+                className="text-xs text-text-3 hover:text-red-500 transition-colors"
+              >
+                {generatingKey ? 'Regenerating…' : 'Regenerate key (invalidates current)'}
+              </button>
+            </>
+          ) : (
+            <div className="flex items-center justify-between gap-4">
+              <div className="text-sm text-text-3">No key generated yet.</div>
+              <button
+                onClick={handleGenerateKey}
+                disabled={generatingKey}
+                className="btn-primary text-sm px-4 py-2 shrink-0"
+              >
+                {generatingKey ? 'Generating…' : 'Generate Key'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

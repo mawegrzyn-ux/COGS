@@ -18,7 +18,7 @@ interface AiContextData {
 interface ContextMenuState {
   x:       number
   y:       number
-  context: AiContextData
+  context: AiContextData | null  // null = no instrumented element, show screenshot-only menu
 }
 
 // ── Prompt builder ─────────────────────────────────────────────────────────────
@@ -69,11 +69,13 @@ function buildAskPrompt(ctx: AiContextData): string {
 function PepperContextMenu({
   state,
   onAsk,
+  onScreenshotAsk,
   onClose,
 }: {
-  state:   ContextMenuState
-  onAsk:   (message: string) => Promise<void>
-  onClose: () => void
+  state:           ContextMenuState
+  onAsk:           (message: string) => Promise<void>
+  onScreenshotAsk: () => Promise<void>
+  onClose:         () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -107,31 +109,50 @@ function PepperContextMenu({
     }
   }, [onClose])
 
+  const btnClass = "w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-1 hover:bg-accent-dim hover:text-accent transition-colors text-left"
+
   return (
     <div
       ref={ref}
       style={{ position: 'fixed', top: pos.y, left: pos.x, zIndex: 99999 }}
-      className="pepper-ui bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[160px]"
+      className="pepper-ui bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[180px]"
     >
       {/* Section label */}
       <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-3 select-none">
         Pepper AI
       </div>
+
+      {/* Contextual Ask Pepper — only for instrumented elements */}
+      {state.context && (
+        <button
+          className={btnClass}
+          onClick={() => { onAsk(buildAskPrompt(state.context!)); onClose() }}
+        >
+          <svg viewBox="-100 -100 200 200" width="15" height="15" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="0" cy="0" r="66" fill="currentColor"/>
+            <g fill="currentColor">
+              {[0,30,60,90,120,150,180,210,240,270,300,330].map(deg => (
+                <rect key={deg} x="-9" y="-80" width="18" height="20" rx="3" transform={`rotate(${deg})`}/>
+              ))}
+            </g>
+            <circle cx="0" cy="0" r="54" fill="var(--accent)"/>
+          </svg>
+          {state.context.type === 'tutorial' ? 'Ask Pepper — how to use this' : 'Ask Pepper'}
+        </button>
+      )}
+
+      {/* Screenshot & Ask — always available */}
       <button
-        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-1 hover:bg-accent-dim hover:text-accent transition-colors text-left"
-        onClick={() => { onAsk(buildAskPrompt(state.context)); onClose() }}
+        className={btnClass}
+        onClick={() => { onScreenshotAsk(); onClose() }}
       >
-        {/* mini cog icon */}
-        <svg viewBox="-100 -100 200 200" width="15" height="15" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="0" cy="0" r="66" fill="currentColor"/>
-          <g fill="currentColor">
-            {[0,30,60,90,120,150,180,210,240,270,300,330].map(deg => (
-              <rect key={deg} x="-9" y="-80" width="18" height="20" rx="3" transform={`rotate(${deg})`}/>
-            ))}
-          </g>
-          <circle cx="0" cy="0" r="54" fill="var(--accent)"/>
+        {/* camera icon */}
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
         </svg>
-        {state.context.type === 'tutorial' ? 'Ask Pepper — how to use this' : 'Ask Pepper'}
+        Screenshot &amp; Ask Pepper
       </button>
     </div>
   )
@@ -151,21 +172,24 @@ export default function AppLayout() {
   }, [])
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
+    // Don't intercept right-clicks inside input/textarea/contenteditable
+    const tag = (e.target as HTMLElement).tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
+
     // Walk up from event target looking for data-ai-context
+    let foundCtx: AiContextData | null = null
     let el = e.target as HTMLElement | null
     while (el && el !== document.body) {
       const raw = el.getAttribute('data-ai-context')
       if (raw) {
-        try {
-          const ctx = JSON.parse(raw) as AiContextData
-          e.preventDefault()
-          setCtxMenu({ x: e.clientX, y: e.clientY, context: ctx })
-        } catch { /* malformed JSON — skip */ }
-        return
+        try { foundCtx = JSON.parse(raw) as AiContextData } catch { /* malformed — ignore */ }
+        break
       }
       el = el.parentElement
     }
-    // No data-ai-context found — let browser default handle it
+
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY, context: foundCtx })
   }, [])
 
   useEffect(() => {
@@ -173,8 +197,8 @@ export default function AppLayout() {
     return () => document.removeEventListener('contextmenu', handleContextMenu)
   }, [handleContextMenu])
 
-  const handleAsk = useCallback(async (message: string) => {
-    let screenshotFile: File | null = null
+  // Shared screenshot capture helper
+  const captureScreenshot = useCallback(async (): Promise<File | null> => {
     try {
       const { default: html2canvas } = await import('html2canvas')
       const mainEl = document.querySelector('main') as HTMLElement
@@ -184,15 +208,26 @@ export default function AppLayout() {
         logging: false,
         ignoreElements: (el: Element) => el.classList.contains('pepper-ui'),
       })
-      screenshotFile = await new Promise<File | null>(resolve => {
+      return await new Promise<File | null>(resolve => {
         canvas.toBlob(
           blob => resolve(blob ? new File([blob], `page-${Date.now()}.jpg`, { type: 'image/jpeg' }) : null),
           'image/jpeg', 0.82
         )
       })
-    } catch { /* screenshot failed — proceed without */ }
-    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message, screenshotFile } }))
+    } catch { return null }
   }, [])
+
+  // Right-click "Ask Pepper" — sends message + screenshot
+  const handleAsk = useCallback(async (message: string) => {
+    const screenshotFile = await captureScreenshot()
+    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message, screenshotFile } }))
+  }, [captureScreenshot])
+
+  // Right-click "Screenshot & Ask Pepper" — attaches screenshot, opens panel, lets user type
+  const handleScreenshotAsk = useCallback(async () => {
+    const screenshotFile = await captureScreenshot()
+    window.dispatchEvent(new CustomEvent('pepper-screenshot', { detail: { screenshotFile } }))
+  }, [captureScreenshot])
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-2">
@@ -227,6 +262,7 @@ export default function AppLayout() {
         <PepperContextMenu
           state={ctxMenu}
           onAsk={handleAsk}
+          onScreenshotAsk={handleScreenshotAsk}
           onClose={() => setCtxMenu(null)}
         />
       )}

@@ -1,0 +1,12 @@
+{
+  "name": "cogs-feedback-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP server giving Claude Code direct access to COGS feedback/bugs database",
+  "main": "cogs-feedback.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.3"
+  }
+}

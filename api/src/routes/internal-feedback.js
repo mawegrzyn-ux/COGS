@@ -1,10 +1,14 @@
-const router = require('express').Router();
-const pool   = require('../db/pool');
+const router    = require('express').Router();
+const pool      = require('../db/pool');
+const aiConfig  = require('../helpers/aiConfig');
 
-// Key-auth middleware — reads ?key= or X-Internal-Key header
+// Key-auth middleware — checks X-Internal-Key header or ?key= query param
+// Validates against the DB-managed CLAUDE_CODE_API_KEY (set via Settings > AI)
+// with fallback to INTERNAL_API_KEY env var for backwards compatibility
 function requireInternalKey(req, res, next) {
-  const key = req.query.key || req.headers['x-internal-key'];
-  if (!process.env.INTERNAL_API_KEY || key !== process.env.INTERNAL_API_KEY) {
+  const provided = req.headers['x-internal-key'] || req.query.key;
+  const valid    = aiConfig.get('CLAUDE_CODE_API_KEY') || process.env.INTERNAL_API_KEY;
+  if (!valid || provided !== valid) {
     return res.status(401).json({ error: { message: 'Invalid or missing API key' } });
   }
   next();

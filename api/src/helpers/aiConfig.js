@@ -8,9 +8,10 @@
 const pool = require('../db/pool');
 
 const _keys = {
-  ANTHROPIC_API_KEY:   process.env.ANTHROPIC_API_KEY   || null,
-  VOYAGE_API_KEY:      process.env.VOYAGE_API_KEY      || null,
+  ANTHROPIC_API_KEY:    process.env.ANTHROPIC_API_KEY    || null,
+  VOYAGE_API_KEY:       process.env.VOYAGE_API_KEY       || null,
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || null,
+  CLAUDE_CODE_API_KEY:  process.env.CLAUDE_CODE_API_KEY  || null,
 };
 
 // Load DB-stored keys into the runtime store (called at startup)
@@ -23,10 +24,12 @@ async function init() {
     if (stored.ANTHROPIC_API_KEY)    _keys.ANTHROPIC_API_KEY    = stored.ANTHROPIC_API_KEY;
     if (stored.VOYAGE_API_KEY)       _keys.VOYAGE_API_KEY       = stored.VOYAGE_API_KEY;
     if (stored.BRAVE_SEARCH_API_KEY) _keys.BRAVE_SEARCH_API_KEY = stored.BRAVE_SEARCH_API_KEY;
+    if (stored.CLAUDE_CODE_API_KEY)  _keys.CLAUDE_CODE_API_KEY  = stored.CLAUDE_CODE_API_KEY;
     console.log('[aiConfig] Keys loaded:', {
-      anthropic: !!_keys.ANTHROPIC_API_KEY,
-      voyage:    !!_keys.VOYAGE_API_KEY,
-      brave:     !!_keys.BRAVE_SEARCH_API_KEY,
+      anthropic:  !!_keys.ANTHROPIC_API_KEY,
+      voyage:     !!_keys.VOYAGE_API_KEY,
+      brave:      !!_keys.BRAVE_SEARCH_API_KEY,
+      claude_code: !!_keys.CLAUDE_CODE_API_KEY,
     });
   } catch (err) {
     console.warn('[aiConfig] Could not load keys from DB:', err.message);
@@ -43,9 +46,10 @@ function set(key, value) {
 
 function status() {
   return {
-    anthropic_key_set:   !!_keys.ANTHROPIC_API_KEY,
-    voyage_key_set:      !!_keys.VOYAGE_API_KEY,
-    brave_key_set:       !!_keys.BRAVE_SEARCH_API_KEY,
+    anthropic_key_set:    !!_keys.ANTHROPIC_API_KEY,
+    voyage_key_set:       !!_keys.VOYAGE_API_KEY,
+    brave_key_set:        !!_keys.BRAVE_SEARCH_API_KEY,
+    claude_code_key_set:  !!_keys.CLAUDE_CODE_API_KEY,
   };
 }
 

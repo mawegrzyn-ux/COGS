@@ -606,7 +606,7 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     setAttachedFile(new File([blob], name, { type: blob.type }))
   }, [])
 
-  // ── pepper-ask: triggered by right-click context menu on instrumented elements
+  // ── pepper-ask: right-click "Ask Pepper" on instrumented elements — sends immediately
   useEffect(() => {
     function onAsk(e: Event) {
       const { message, screenshotFile } = (e as CustomEvent<{ message: string; screenshotFile?: File | null }>).detail
@@ -619,6 +619,20 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     window.addEventListener('pepper-ask', onAsk)
     return () => window.removeEventListener('pepper-ask', onAsk)
   }, [sendCore])
+
+  // ── pepper-screenshot: right-click "Screenshot & Ask" — attaches file, opens panel, user types
+  useEffect(() => {
+    function onScreenshot(e: Event) {
+      const { screenshotFile } = (e as CustomEvent<{ screenshotFile: File | null }>).detail
+      setOpen(true)
+      setView('chat')
+      if (screenshotFile) setAttachedFile(screenshotFile)
+      // Focus textarea so user can type their question
+      setTimeout(() => inputRef.current?.focus(), 80)
+    }
+    window.addEventListener('pepper-screenshot', onScreenshot)
+    return () => window.removeEventListener('pepper-screenshot', onScreenshot)
+  }, [])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
