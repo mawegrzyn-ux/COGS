@@ -536,7 +536,6 @@ export default function AiChat() {
   }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user])
 
   const send        = useCallback(() => sendCore(),          [sendCore])
-  const sendDirect  = useCallback((text: string) => sendCore(text), [sendCore])
 
   const handleKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
