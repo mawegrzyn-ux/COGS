@@ -27,6 +27,7 @@ export default function CategoriesPage() {
       <PageHeader
         title="Categories"
         subtitle="Manage ingredient and recipe categories. Groups are for analytics only."
+        tutorialPrompt="How do Categories work in COGS Manager? What is the difference between ingredient categories and recipe categories, what is the group name field for, and how do categories affect filtering and reporting?"
       />
 
       {/* Type tabs */}

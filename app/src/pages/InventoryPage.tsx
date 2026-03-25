@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, McFryHelpButton } from '../components/ui'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
@@ -132,11 +132,18 @@ export default function InventoryPage() {
     'vendors':      'Vendors',
   }
 
+  const TAB_TUTORIALS: Record<Tab, string> = {
+    'ingredients': 'How do I use the Ingredients tab? Explain adding an ingredient, setting base unit, waste percentage, prep unit conversion, and how categories work.',
+    'quotes':      'How do Price Quotes work? Explain how one ingredient can have multiple quotes from different vendors in different countries, what the preferred vendor setting does, how is_active affects COGS, and the best workflow for pricing ingredients across multiple markets.',
+    'vendors':     'How do Vendors work in COGS Manager? Explain country-scoping of vendors, why each vendor belongs to one country, and the workflow for setting up suppliers for a new market.',
+  }
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
         title="Inventory"
         subtitle="Manage ingredients, vendor price quotes, and preferred suppliers per country."
+        tutorialPrompt="Give me an overview of the Inventory section. What are the three tabs — Ingredients, Price Quotes, and Vendors — and how do they connect to build a complete cost picture for each market?"
       />
 
       <div className="flex gap-4 px-6 py-4 border-b border-border bg-surface">
@@ -151,13 +158,17 @@ export default function InventoryPage() {
           <button
             key={t}
             onClick={() => { setTab(t); localStorage.setItem('inventory-tab', t) }}
+            data-ai-context={JSON.stringify({ type: 'tutorial', prompt: TAB_TUTORIALS[t] })}
             className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors
               ${tab === t
                 ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
                 : 'text-text-3 hover:text-text-1'
               }`}
           >
-            {TAB_LABELS[t]}
+            <span className="flex items-center gap-1.5">
+                {TAB_LABELS[t]}
+                <McFryHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
+              </span>
           </button>
         ))}
       </div>

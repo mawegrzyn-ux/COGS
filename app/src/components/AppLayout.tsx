@@ -53,6 +53,10 @@ function buildAskPrompt(ctx: AiContextData): string {
       q += `. Is this a healthy margin for a restaurant, and what are the key levers to improve it?`
       return q
     }
+    case 'tutorial': {
+      // prompt is already fully formed — pass through directly
+      return ctx.prompt ?? `How do I use this section?`
+    }
     default: {
       const label = ctx.label || ctx.type
       return `Explain this ${label}: ${v}. What does it mean and what should I do about it?`
@@ -127,7 +131,7 @@ function McFryContextMenu({
           </g>
           <circle cx="0" cy="0" r="54" fill="var(--accent)"/>
         </svg>
-        Ask McFry
+        {state.context.type === 'tutorial' ? 'Ask McFry — how to use this' : 'Ask McFry'}
       </button>
     </div>
   )

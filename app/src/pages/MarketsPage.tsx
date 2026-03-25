@@ -748,6 +748,7 @@ export default function MarketsPage() {
       <PageHeader
         title="Markets"
         subtitle="Manage franchise markets, local currencies, tax rates and brand partners."
+        tutorialPrompt="What are Markets in COGS Manager and how do they connect to everything else? Explain countries, currencies, exchange rates, tax rates, brand partners, and locations — and how selecting a market drives vendor scoping and COGS calculations."
         action={
           activeTab === 'Markets' ? (
             <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddMarket}>

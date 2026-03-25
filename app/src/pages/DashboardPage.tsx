@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
+import { McFryHelpButton } from '../components/ui'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -408,12 +409,21 @@ export default function DashboardPage() {
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
 
         {/* ── Header ── */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-text-1">Dashboard</h1>
-            <p className="text-text-3 text-sm mt-0.5">
-              Your COGS overview at a glance
-            </p>
+        <div
+          className="flex items-center justify-between"
+          data-ai-context={JSON.stringify({ type: 'tutorial', prompt: 'Walk me through the Dashboard. What do the KPI tiles mean, what is Price Quote Coverage and why does it matter, how do the Menu COGS tiles work, and what should I check first thing each day?' })}
+        >
+          <div className="flex items-start gap-2">
+            <div>
+              <h1 className="text-2xl font-bold text-text-1">Dashboard</h1>
+              <p className="text-text-3 text-sm mt-0.5">
+                Your COGS overview at a glance
+              </p>
+            </div>
+            <McFryHelpButton
+              prompt="Walk me through the Dashboard. What do the KPI tiles mean, what is Price Quote Coverage and why does it matter, how do the Menu COGS tiles work, and what should I check first thing each day?"
+              size={14}
+            />
           </div>
           <button
             onClick={() => load(true)}

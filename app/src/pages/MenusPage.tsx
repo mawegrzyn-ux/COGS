@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, McFryHelpButton } from '../components/ui'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { useSortFilter } from '../hooks/useSortFilter'
 
@@ -551,6 +551,7 @@ export default function MenusPage() {
       <PageHeader
         title="Menu Builder"
         subtitle="Build menus, set sell prices and see live COGS% per dish."
+        tutorialPrompt="Give me an overview of the Menu Builder section. What are the four tabs — Menus, Menu Engineer, Compare Markets, and Market Price Tool — and what is each one for?"
         action={
           activeTab === 'builder'
             ? <button className="btn btn-primary" onClick={() => setMenuModal('new')}>+ New Menu</button>
@@ -561,21 +562,25 @@ export default function MenusPage() {
       {/* ── Tabs ── */}
       <div className="flex gap-1 px-6 border-b border-gray-200 mb-0">
         {([
-          { key: 'builder',      label: '🍽 Menus' },
-          { key: 'scenario',     label: '📊 Menu Engineer' },
-          { key: 'price-report', label: '📈 Compare Markets' },
-          { key: 'level-report', label: '🏷 Market Price Tool' },
+          { key: 'builder',      label: '🍽 Menus',              tutorial: 'How do I use the Menu Builder tab? Explain creating a menu for a country, adding recipe and ingredient items, setting sort order, and assigning sell prices across different price levels.' },
+          { key: 'scenario',     label: '📊 Menu Engineer',      tutorial: 'How does the Menu Engineer work? Explain the sales mix concept, how to enter quantities sold, what COGS% means in this context, how to use the Mix Manager, and how to save and push scenarios.' },
+          { key: 'price-report', label: '📈 Compare Markets',    tutorial: 'What is the Compare Markets (Price Level Table) view? How do I use it to compare and edit sell prices across different markets and price levels, and how does currency conversion work here?' },
+          { key: 'level-report', label: '🏷 Market Price Tool',  tutorial: 'What is the Market Price Tool (Menu Performance Table)? How do I read the COGS% grid across price levels and markets, and what should I be looking at to spot pricing problems?' },
         ] as const).map(t => (
           <button
             key={t.key}
             onClick={() => setActiveTab(t.key)}
+            data-ai-context={JSON.stringify({ type: 'tutorial', prompt: t.tutorial })}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               activeTab === t.key
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {t.label}
+            <span className="flex items-center gap-1.5">
+              {t.label}
+              <McFryHelpButton prompt={t.tutorial} size={12} />
+            </span>
           </button>
         ))}
       </div>

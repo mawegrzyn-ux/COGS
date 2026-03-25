@@ -33,19 +33,57 @@ export function Modal({ title, onClose, children, width = 'max-w-lg' }: ModalPro
   )
 }
 
-// ── Page Header ───────────────────────────────────────────────────────────────
-interface PageHeaderProps {
-  title:     string
-  subtitle?: string
-  action?:   React.ReactNode
+// ── McFryHelpButton ───────────────────────────────────────────────────────────
+// Small inline cog icon that fires a tutorial prompt at McFry.
+// Also sets data-ai-context so right-click "Ask McFry" works too.
+export function McFryHelpButton({ prompt, size = 14 }: { prompt: string; size?: number }) {
+  function fire(e: React.MouseEvent) {
+    e.stopPropagation()
+    window.dispatchEvent(new CustomEvent('mcfry-ask', { detail: { message: prompt } }))
+  }
+  return (
+    <button
+      onClick={fire}
+      title="Ask McFry — how to use this section"
+      data-ai-context={JSON.stringify({ type: 'tutorial', prompt })}
+      className="inline-flex items-center justify-center rounded-full opacity-30 hover:opacity-100 transition-opacity flex-shrink-0 focus:outline-none"
+      style={{ color: 'var(--accent)', width: size + 4, height: size + 4 }}
+      aria-label="McFry help"
+    >
+      {/* Mini cog */}
+      <svg viewBox="-100 -100 200 200" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+        <circle cx="0" cy="0" r="66" fill="currentColor"/>
+        <g fill="currentColor">
+          {[0,30,60,90,120,150,180,210,240,270,300,330].map(deg => (
+            <rect key={deg} x="-9" y="-80" width="18" height="20" rx="3" transform={`rotate(${deg})`}/>
+          ))}
+        </g>
+        <circle cx="0" cy="0" r="54" fill="var(--accent)"/>
+      </svg>
+    </button>
+  )
 }
 
-export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
+// ── Page Header ───────────────────────────────────────────────────────────────
+interface PageHeaderProps {
+  title:          string
+  subtitle?:      string
+  action?:        React.ReactNode
+  tutorialPrompt?: string
+}
+
+export function PageHeader({ title, subtitle, action, tutorialPrompt }: PageHeaderProps) {
   return (
-    <div className="flex items-center justify-between px-6 py-5 border-b border-border bg-surface">
-      <div>
-        <h1 className="text-xl font-extrabold text-text-1">{title}</h1>
-        {subtitle && <p className="text-sm text-text-3 mt-0.5">{subtitle}</p>}
+    <div
+      className="flex items-center justify-between px-6 py-5 border-b border-border bg-surface"
+      data-ai-context={tutorialPrompt ? JSON.stringify({ type: 'tutorial', prompt: tutorialPrompt }) : undefined}
+    >
+      <div className="flex items-start gap-2">
+        <div>
+          <h1 className="text-xl font-extrabold text-text-1">{title}</h1>
+          {subtitle && <p className="text-sm text-text-3 mt-0.5">{subtitle}</p>}
+        </div>
+        {tutorialPrompt && <McFryHelpButton prompt={tutorialPrompt} size={14} />}
       </div>
       {action && <div>{action}</div>}
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, McFryHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -40,6 +40,17 @@ const TAB_LABELS: Record<Tab, string> = {
   'import':         'Import',
 }
 
+const TAB_TUTORIALS: Record<Tab, string> = {
+  'units':          'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
+  'price-levels':   'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
+  'exchange-rates': 'How does the Exchange Rates sync work? How are exchange rates used when I have menus priced in different currencies, and how often should I sync them?',
+  'system':         'What is on the System settings tab? What admin information and tools are available here?',
+  'thresholds':     'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
+  'test-data':      'What is the Test Data tab for? When would I use it and what does it do?',
+  'ai':             'What AI settings are available? Explain the Brave Search API key, what concise mode does, and when I would want to turn it on or off.',
+  'import':         'How does the Settings Import tab work? What can I import or export here?',
+}
+
 // ── Settings Page ─────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -50,6 +61,7 @@ export default function SettingsPage() {
       <PageHeader
         title="Settings"
         subtitle="Units, price levels and exchange rates"
+        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Exchange Rates, COGS Thresholds, and AI — and which should I configure first when setting up a new account?"
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
@@ -57,13 +69,17 @@ export default function SettingsPage() {
           <button
             key={t}
             onClick={() => setTab(t)}
+            data-ai-context={JSON.stringify({ type: 'tutorial', prompt: TAB_TUTORIALS[t] })}
             className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors whitespace-nowrap
               ${tab === t
                 ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
                 : 'text-text-3 hover:text-text-1'
               }`}
           >
-            {TAB_LABELS[t]}
+            <span className="flex items-center gap-1.5">
+              {TAB_LABELS[t]}
+              <McFryHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
+            </span>
           </button>
         ))}
       </div>

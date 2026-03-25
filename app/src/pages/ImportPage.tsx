@@ -910,7 +910,8 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         <div className="flex items-center justify-between mb-6">
           <PageHeader
             title="Import Data"
-            subtitle="Upload a spreadsheet and review before importing to your live database." />
+            subtitle="Upload a spreadsheet and review before importing to your live database."
+            tutorialPrompt="Walk me through the AI Import Wizard. What file formats does it accept, what are the 5 steps, how does the category and vendor mapping work, what happens with duplicate records, and what template should I use?" />
           {step !== 'upload' && step !== 'parsing' && step !== 'done' && (
             <button onClick={handleDiscard} className="btn-ghost text-sm" style={{ color: 'var(--text-3)' }}>✕ Discard</button>
           )}

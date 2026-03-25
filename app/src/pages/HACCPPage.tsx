@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, McFryHelpButton } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,13 @@ export default function HACCPPage() {
     'report':     'Report',
   }
 
+  const TAB_TUTORIALS: Record<HACCPTab, string> = {
+    'equipment': 'How do I set up the HACCP Equipment register? What information do I enter for each piece of equipment, how does the location assignment work, and how does this connect to temperature logging?',
+    'temp-logs': 'How do I use HACCP Temperature Logs? What is a temperature log entry, what equipment types need logging, how often should I be recording, and what counts as a compliance failure?',
+    'ccp-logs':  'What are CCP (Critical Control Point) logs and how do I record them? Walk me through the different log types — cooking, cooling, and delivery — and what data I need to capture for each.',
+    'report':    'What does the HACCP Report show? How do I read it and what should I look for to identify compliance gaps?',
+  }
+
   const selectedLocation = locations.find(l => l.id === locationId)
 
   return (
@@ -91,6 +98,7 @@ export default function HACCPPage() {
       <PageHeader
         title="HACCP"
         subtitle="Hazard Analysis Critical Control Points — equipment monitoring and process logs."
+        tutorialPrompt="Give me an overview of the HACCP section. What are the four tabs — Equipment, Temp Logs, CCP Logs, and Report — and how do they work together to maintain food safety compliance?"
       />
 
       {/* Location selector bar */}
@@ -127,13 +135,17 @@ export default function HACCPPage() {
           <button
             key={t}
             onClick={() => setTab(t)}
+            data-ai-context={JSON.stringify({ type: 'tutorial', prompt: TAB_TUTORIALS[t] })}
             className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors
               ${tab === t
                 ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
                 : 'text-text-3 hover:text-text-1'
               }`}
           >
-            {TAB_LABELS[t]}
+            <span className="flex items-center gap-1.5">
+              {TAB_LABELS[t]}
+              <McFryHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
+            </span>
           </button>
         ))}
       </div>

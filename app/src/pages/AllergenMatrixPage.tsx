@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Spinner, EmptyState, Toast } from '../components/ui'
+import { PageHeader, Spinner, EmptyState, Toast, McFryHelpButton } from '../components/ui'
 // ── Shared Allergen type ───────────────────────────────────────────────────────
 
 interface Allergen { id: number; code: string; name: string }
@@ -1035,24 +1035,35 @@ export default function AllergenMatrixPage() {
         <PageHeader
           title="Allergens"
           subtitle="EU FIC Regulation 1169/2011 — 14 major allergens."
+          tutorialPrompt="Give me an overview of the Allergens section. What are the two tabs — Inventory and Menu — and what is each one for? How do the 14 EU FIC allergens work, and what do C, M, and F codes mean?"
         />
       </div>
 
       {/* Tabs */}
       <div className="flex gap-1 px-6 bg-surface border-b border-border print:hidden">
-        {(['inventory', 'menu'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); localStorage.setItem('allergen-page-tab', t) }}
-            className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors
-              ${tab === t
-                ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
-                : 'text-text-3 hover:text-text-1'
-              }`}
-          >
-            {t === 'inventory' ? 'Inventory Allergen Matrix' : 'Menu Allergen Matrix'}
-          </button>
-        ))}
+        {(['inventory', 'menu'] as const).map(t => {
+          const label   = t === 'inventory' ? 'Inventory Allergen Matrix' : 'Menu Allergen Matrix'
+          const tutorial = t === 'inventory'
+            ? 'How do I use the Inventory Allergen Matrix? Explain how to assign C (Contains), M (May Contain), and F (Free From) status to each allergen for each ingredient, how clicking cycles the status, and what the allergen notes field is for.'
+            : 'How does the Menu Allergen Matrix work? How are allergens from ingredients automatically rolled up to menu items via recipes, when should I use the allergen notes field on a menu item, and how do I print the matrix?'
+          return (
+            <button
+              key={t}
+              onClick={() => { setTab(t); localStorage.setItem('allergen-page-tab', t) }}
+              data-ai-context={JSON.stringify({ type: 'tutorial', prompt: tutorial })}
+              className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors
+                ${tab === t
+                  ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
+                  : 'text-text-3 hover:text-text-1'
+                }`}
+            >
+              <span className="flex items-center gap-1.5">
+                {label}
+                <McFryHelpButton prompt={tutorial} size={12} />
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Tab content */}

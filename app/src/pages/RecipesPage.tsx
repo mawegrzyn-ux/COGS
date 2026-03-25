@@ -496,6 +496,7 @@ export default function RecipesPage() {
       <PageHeader
         title="Recipes"
         subtitle="Build recipes from your ingredient library. COGS is calculated via preferred vendor quotes per country."
+        tutorialPrompt="Walk me through building a Recipe in COGS Manager. How do I create a recipe, add ingredients with quantities and units, use sub-recipes, set yield, and what does the COGS cost-per-portion figure mean and how is it calculated?"
         action={
           <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={() => setRecipeModal('new')}>
             <PlusIcon /> New Recipe
