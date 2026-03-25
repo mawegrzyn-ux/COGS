@@ -424,12 +424,13 @@ export default function AiChat() {
 
   // ── Core send logic (accepts direct text override for programmatic use) ───────
 
-  const sendCore = useCallback(async (overrideText?: string) => {
-    const text    = (overrideText ?? input).trim()
-    const hasFile = attachedFile !== null
+  const sendCore = useCallback(async (overrideText?: string, overrideFile?: File | null) => {
+    const text     = (overrideText ?? input).trim()
+    const fileToUse = overrideFile !== undefined ? overrideFile : attachedFile
+    const hasFile  = fileToUse !== null
     if ((!text && !hasFile) || streaming) return
 
-    const fileName = attachedFile?.name
+    const fileName = fileToUse?.name
     const userMsg: Message = { role: 'user', content: text || `📎 ${fileName}`, fileName }
     setMessages(prev => [...prev, userMsg])
     setInput('')
@@ -445,10 +446,10 @@ export default function AiChat() {
     try {
       let res: Response
 
-      if (hasFile && attachedFile) {
+      if (hasFile && fileToUse) {
         const form = new FormData()
         if (text)          form.append('message',    text)
-        form.append('file',      attachedFile)
+        form.append('file',      fileToUse)
         form.append('context',   JSON.stringify(context))
         form.append('history',   JSON.stringify(history))
         form.append('sessionId', sessionId)
@@ -578,16 +579,16 @@ export default function AiChat() {
   // ── mcfry-ask: triggered by right-click context menu on instrumented elements
   useEffect(() => {
     function onAsk(e: Event) {
-      const { message } = (e as CustomEvent<{ message: string }>).detail
+      const { message, screenshotFile } = (e as CustomEvent<{ message: string; screenshotFile?: File | null }>).detail
       if (!message) return
       setOpen(true)
       setView('chat')
       // Small delay to ensure panel is mounted/visible before sending
-      setTimeout(() => sendDirect(message), 80)
+      setTimeout(() => sendCore(message, screenshotFile ?? null), 80)
     }
     window.addEventListener('mcfry-ask', onAsk)
     return () => window.removeEventListener('mcfry-ask', onAsk)
-  }, [sendDirect])
+  }, [sendCore])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
@@ -598,7 +599,7 @@ export default function AiChat() {
       {/* FAB toggle */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
+        className="mcfry-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
         style={{ background: 'var(--accent)', color: '#fff' }}
         title="McFry" aria-label="Toggle AI chat">
         {open
@@ -609,7 +610,7 @@ export default function AiChat() {
 
       {/* Panel */}
       {open && (
-        <div className="fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
+        <div className="mcfry-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
           style={{ width: '390px', height: '600px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
 
           {/* Header */}

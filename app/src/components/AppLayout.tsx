@@ -72,7 +72,7 @@ function McFryContextMenu({
   onClose,
 }: {
   state:   ContextMenuState
-  onAsk:   (message: string) => void
+  onAsk:   (message: string) => Promise<void>
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -111,7 +111,7 @@ function McFryContextMenu({
     <div
       ref={ref}
       style={{ position: 'fixed', top: pos.y, left: pos.x, zIndex: 99999 }}
-      className="bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[160px]"
+      className="mcfry-ui bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[160px]"
     >
       {/* Section label */}
       <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-3 select-none">
@@ -165,8 +165,25 @@ export default function AppLayout() {
     return () => document.removeEventListener('contextmenu', handleContextMenu)
   }, [handleContextMenu])
 
-  const handleAsk = useCallback((message: string) => {
-    window.dispatchEvent(new CustomEvent('mcfry-ask', { detail: { message } }))
+  const handleAsk = useCallback(async (message: string) => {
+    let screenshotFile: File | null = null
+    try {
+      const { default: html2canvas } = await import('html2canvas')
+      const mainEl = document.querySelector('main') as HTMLElement
+      const canvas = await html2canvas(mainEl || document.body, {
+        scale: 0.65,
+        useCORS: true,
+        logging: false,
+        ignoreElements: (el: Element) => el.classList.contains('mcfry-ui'),
+      })
+      screenshotFile = await new Promise<File | null>(resolve => {
+        canvas.toBlob(
+          blob => resolve(blob ? new File([blob], `page-${Date.now()}.jpg`, { type: 'image/jpeg' }) : null),
+          'image/jpeg', 0.82
+        )
+      })
+    } catch { /* screenshot failed — proceed without */ }
+    window.dispatchEvent(new CustomEvent('mcfry-ask', { detail: { message, screenshotFile } }))
   }, [])
 
   return (
