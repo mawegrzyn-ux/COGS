@@ -21,7 +21,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 11. [Design System & Conventions](#11-design-system--conventions)
 12. [Pages Built](#12-pages-built)
 13. [Pages Remaining to Build](#13-pages-remaining-to-build)
-14. [McFry AI Assistant](#14-mcfry-ai-assistant)
+14. [Pepper AI Assistant](#14-pepper-ai-assistant)
 15. [Known Bugs Fixed](#15-known-bugs-fixed)
 16. [Critical Gotchas & Lessons Learned](#16-critical-gotchas--lessons-learned)
 17. [Backlog](#17-backlog)
@@ -93,7 +93,7 @@ COGS/
 │       │   ├── LoadingScreen.tsx   # Auth0 loading spinner
 │       │   ├── DataGrid.tsx        # Generic sortable/filterable grid
 │       │   ├── ColumnHeader.tsx    # Sort + multi-select filter dropdown
-│       │   ├── AiChat.tsx          # McFry AI chat panel (SSE streaming)
+│       │   ├── AiChat.tsx          # Pepper AI chat panel (SSE streaming)
 │       │   └── ui.tsx              # Shared UI: PageHeader, Modal, Field,
 │       │                           #   EmptyState, Spinner, ConfirmDialog,
 │       │                           #   Toast, Badge
@@ -146,7 +146,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # McFry AI chat (74 tools)
+│           ├── ai-chat.js          # Pepper AI chat (74 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── feedback.js
@@ -368,7 +368,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 22 | `mcogs_ccp_logs` | CCP logs (cooking/cooling/delivery) — linked to location |
 | 23 | `mcogs_brand_partners` | Brand/franchise partners (e.g. "McDonald's UK") — linked to markets |
 | 24 | `mcogs_import_jobs` | AI import staging jobs: raw AI output, enriched rows, status, created_by |
-| 25 | `mcogs_ai_chat_log` | McFry AI conversation log: messages, tools_called, token counts, context JSONB |
+| 25 | `mcogs_ai_chat_log` | Pepper AI conversation log: messages, tools_called, token counts, context JSONB |
 
 ### Key Schema Details
 
@@ -466,8 +466,8 @@ All routes registered in `api/src/routes/index.js`.
 | `POST /api/import` | `import.js` | ✅ Active — multipart file upload → AI extraction → staging job |
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
-| `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by McFry) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming McFry chat with 74 tools (includes web search) |
+| `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by Pepper) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 74 tools (includes web search) |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
 
@@ -735,7 +735,7 @@ Displays allergen status for all ingredients and menu items against the EU/UK FI
 AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and runs them through Claude to extract structured data.
 
 **5-step wizard:**
-1. **Upload** — drag-and-drop file or initiate from McFry chatbot (`?job=<id>` URL param auto-skips to step 2)
+1. **Upload** — drag-and-drop file or initiate from Pepper chatbot (`?job=<id>` URL param auto-skips to step 2)
 2. **Review** — AI-extracted data shown in tabbed tables (Ingredients, Price Quotes, Recipes, Menus)
 3. **Categories** — map each "Imported Category" to an existing COGS category (or create new inline via dropdown)
 4. **Vendors** — map imported vendor names to existing vendors (or create new)
@@ -749,7 +749,7 @@ AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and
 - **Prep unit import**: Ingredients sheet supports `prep_unit` and `prep_to_base` columns — maps to `default_prep_unit` / `default_prep_to_base_conversion` on `mcogs_ingredients`
 - **Menu import**: Menus sheet (`menu_name`, `country`, `description`) + Menu Items sheet (`menu_name`, `item_type`, `item_name`, `display_name`, `sort_order`) — creates menus and links items from imported recipes/ingredients
 - **Category inline create**: In the Categories mapping step, selecting "+ Create new category" from the COGS Category dropdown auto-switches the row action to "create" and pre-fills the suggested name — no need to use the Action column separately
-- Chatbot integration: McFry can trigger an import job with `start_import` tool; ImportPage reads `?job` param on mount
+- Chatbot integration: Pepper can trigger an import job with `start_import` tool; ImportPage reads `?job` param on mount
 
 **Template sheets** (download via Import page → "Download template"):
 - `Ingredients` — name, category, base_unit, waste_pct, prep_unit, prep_to_base, notes
@@ -779,19 +779,20 @@ AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and
 
 ---
 
-## 14. McFry AI Assistant
+## 14. Pepper AI Assistant
 
-McFry is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears as a collapsible chat panel at the bottom-right of every page. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
+Pepper is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears as a floating chat panel (bottom-right) or can be docked to the left or right side of the screen. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
 
 ### Architecture
 
-- **Frontend:** `app/src/components/AiChat.tsx` — chat panel with history tab, file attachment (paperclip), streaming display
+- **Frontend:** `app/src/components/AiChat.tsx` — chat panel with history tab, file attachment, screenshot button, dockable panel
 - **Chat endpoint:** `POST /api/ai-chat` — JSON body `{ messages, conversationId? }` → SSE stream
-- **Upload endpoint:** `POST /api/ai-upload` — multipart `{ file, message, conversationId? }` → SSE stream (image/CSV)
+- **Upload endpoint:** `POST /api/ai-upload` — multipart `{ file, message, conversationId? }` → SSE stream (image/CSV/screenshot)
 - **Shared agentic loop:** `api/src/helpers/agenticStream.js` — SSE helper, keepalive ping, `while(true)` tool loop, token counting
 - **Logging:** all sessions logged to `mcogs_ai_chat_log` (messages, tools_called JSONB, token counts)
 - **File support:** CSV/text (injected as text block), PNG/JPEG/WEBP (injected as base64 vision block); max 5MB; PDF not supported
 - **Web search config:** `BRAVE_SEARCH_API_KEY` stored via `GET/PUT /api/ai-config` — if set, `search_web` tool uses Brave Search; otherwise DuckDuckGo instant answer fallback
+- **Panel mode:** `PepperMode = 'float' | 'docked-left' | 'docked-right'` — persisted in `localStorage('pepper-mode')`. Docked modes render as a full-height flex column in `AppLayout`; float is fixed-position popup
 
 ### Tool Count: 74
 
@@ -849,16 +850,20 @@ Enforced via system prompt: Claude must verbally describe any create/update/dele
 ### Chatbot → Import Wizard Flow
 
 1. User pastes or uploads spreadsheet content in chat
-2. McFry calls `start_import` with the text content
+2. Pepper calls `start_import` with the text content
 3. Server calls `stageFileContent()` (shared with the `/import` upload route) — AI extraction + DB staging
-4. McFry replies with a link: `/import?job=<id>`
+4. Pepper replies with a link: `/import?job=<id>`
 5. User clicks link → ImportPage mounts → reads `?job` param → skips upload step → lands on Review tab
 
 ### Additional AI Chat Features
 
 - **Concise mode**: Settings → AI tab has a "Response Behaviour" toggle. When enabled, injects a system prompt section that tells Claude to skip narration, not say "Let me check…", call tools silently, and give bullet-point results. Saved to `mcogs_settings` as `ai_concise_mode`. Read from DB on every `POST /ai-chat` and `POST /ai-upload` request.
-- **Animated waiting dots**: While waiting for an AI response, three dots animate with a wave effect (scale + opacity) using `@keyframes mcfry-dot` defined in `index.css`.
+- **Animated waiting dots**: While waiting for an AI response, three dots animate with a wave effect (scale + opacity) using `@keyframes pepper-dot` defined in `index.css`.
 - **Paste images**: Users can paste images directly from clipboard into the AI chat textarea (Ctrl+V / Cmd+V). Clipboard event handler detects image MIME types, creates a File object, and attaches it as the file attachment. An image preview thumbnail is shown in the attachment badge.
+- **Screenshot button**: Camera icon in the chat input bar (next to paperclip). Captures the current `<main>` element via `html2canvas` at 65% scale, converts to JPEG, and attaches it as the file — user can then add a message and send. Elements with class `pepper-ui` are excluded from the capture.
+- **Right-click Ask Pepper**: Any element with `data-ai-context` JSON attribute triggers a custom context menu on right-click. The menu shows "Ask Pepper" which builds a contextual prompt from the element's data and dispatches a `pepper-ask` CustomEvent. The handler in `AiChat.tsx` also captures a screenshot via `html2canvas` and sends it alongside the prompt via `ai-upload`. Supported context types: `cogs_pct`, `coverage`, `cost_per_portion`, `menu_cogs`, `tutorial`.
+- **Dockable panel**: Three mode icons in the Pepper header toggle between `float` (fixed popup), `docked-left` (panel between sidebar and main), `docked-right` (panel right of main). `AppLayout` manages the mode in `pepperMode` state, persisted to `localStorage('pepper-mode')`. Switching mode remounts the component (conversation is cleared).
+- **Contextual help buttons**: `PepperHelpButton` component (`app/src/components/ui.tsx`) renders a small cog icon next to `PageHeader` titles and tab labels. Clicking fires a pre-written tutorial prompt for that section. Also sets `data-ai-context` so right-click works too.
 
 ---
 
@@ -1177,4 +1182,4 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-*README last updated: March 2026 (session: Menu Engineer enhancements — sticky allergen matrix headers, allergen notes fields, dashboard menu tiles, Mix Manager, cross-tab menu sync, collapsible categories, currency symbols in headers; AI chat — concise mode, animated waiting dots, paste images)*
+*README last updated: March 2026 (session: Allergen notes fields on Inventory + Menu matrices; Right-click Ask Pepper context menu with auto-screenshot; PepperHelpButton tutorial icons on page/tab headers; Pepper panel docking (left/right/float) with mode persistence; Screenshot camera button in chat input; html2canvas integration; AI renamed from McFry to Pepper; System prompt updated with price quote multi-market model, allergen notes, screenshot, and panel mode context)*

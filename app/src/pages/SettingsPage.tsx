@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, McFryHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ export default function SettingsPage() {
           >
             <span className="flex items-center gap-1.5">
               {TAB_LABELS[t]}
-              <McFryHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
+              <PepperHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
             </span>
           </button>
         ))}
@@ -1240,13 +1240,13 @@ function AiTab() {
       {/* ── Response behaviour ── */}
       <div className="mt-8 pt-6 border-t border-border">
         <h2 className="text-base font-bold text-text-1 mb-1">Response Behaviour</h2>
-        <p className="text-sm text-text-3 mb-4">Controls how McFry formats its replies.</p>
+        <p className="text-sm text-text-3 mb-4">Controls how Pepper formats its replies.</p>
 
         <div className="flex items-start justify-between gap-4 rounded-xl border border-border bg-surface-2/50 px-4 py-3.5">
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-text-1">Concise mode</div>
             <div className="text-xs text-text-3 mt-0.5">
-              McFry gives direct answers without narrating its investigation steps ("Let me check…", "I'll look that up…"). Tool calls happen silently — only the result is shown.
+              Pepper gives direct answers without narrating its investigation steps ("Let me check…", "I'll look that up…"). Tool calls happen silently — only the result is shown.
             </div>
           </div>
           <button

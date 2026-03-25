@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, McFryHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ export default function HACCPPage() {
           >
             <span className="flex items-center gap-1.5">
               {TAB_LABELS[t]}
-              <McFryHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
+              <PepperHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
             </span>
           </button>
         ))}

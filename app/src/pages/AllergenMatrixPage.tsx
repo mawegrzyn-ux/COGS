@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Spinner, EmptyState, Toast, McFryHelpButton } from '../components/ui'
+import { PageHeader, Spinner, EmptyState, Toast, PepperHelpButton } from '../components/ui'
 // ── Shared Allergen type ───────────────────────────────────────────────────────
 
 interface Allergen { id: number; code: string; name: string }
@@ -1059,7 +1059,7 @@ export default function AllergenMatrixPage() {
             >
               <span className="flex items-center gap-1.5">
                 {label}
-                <McFryHelpButton prompt={tutorial} size={12} />
+                <PepperHelpButton prompt={tutorial} size={12} />
               </span>
             </button>
           )

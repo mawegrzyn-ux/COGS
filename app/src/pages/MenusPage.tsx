@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, McFryHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { useSortFilter } from '../hooks/useSortFilter'
 
@@ -579,7 +579,7 @@ export default function MenusPage() {
           >
             <span className="flex items-center gap-1.5">
               {t.label}
-              <McFryHelpButton prompt={t.tutorial} size={12} />
+              <PepperHelpButton prompt={t.tutorial} size={12} />
             </span>
           </button>
         ))}

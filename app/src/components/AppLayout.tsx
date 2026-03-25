@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
-import AiChat from './AiChat'
+import AiChat, { type PepperMode } from './AiChat'
 
 // ── Context menu types ─────────────────────────────────────────────────────────
 
@@ -64,9 +64,9 @@ function buildAskPrompt(ctx: AiContextData): string {
   }
 }
 
-// ── McFry Context Menu component ──────────────────────────────────────────────
+// ── Pepper Context Menu component ──────────────────────────────────────────────
 
-function McFryContextMenu({
+function PepperContextMenu({
   state,
   onAsk,
   onClose,
@@ -111,11 +111,11 @@ function McFryContextMenu({
     <div
       ref={ref}
       style={{ position: 'fixed', top: pos.y, left: pos.x, zIndex: 99999 }}
-      className="mcfry-ui bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[160px]"
+      className="pepper-ui bg-surface border border-border rounded-lg shadow-modal py-1 min-w-[160px]"
     >
       {/* Section label */}
       <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-3 select-none">
-        McFry AI
+        Pepper AI
       </div>
       <button
         className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-1 hover:bg-accent-dim hover:text-accent transition-colors text-left"
@@ -131,7 +131,7 @@ function McFryContextMenu({
           </g>
           <circle cx="0" cy="0" r="54" fill="var(--accent)"/>
         </svg>
-        {state.context.type === 'tutorial' ? 'Ask McFry — how to use this' : 'Ask McFry'}
+        {state.context.type === 'tutorial' ? 'Ask Pepper — how to use this' : 'Ask Pepper'}
       </button>
     </div>
   )
@@ -140,7 +140,15 @@ function McFryContextMenu({
 // ── AppLayout ──────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
-  const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
+  const [ctxMenu,    setCtxMenu]    = useState<ContextMenuState | null>(null)
+  const [pepperMode,  setPepperMode]  = useState<PepperMode>(() =>
+    (localStorage.getItem('pepper-mode') as PepperMode) || 'float'
+  )
+
+  const handleModeChange = useCallback((m: PepperMode) => {
+    setPepperMode(m)
+    localStorage.setItem('pepper-mode', m)
+  }, [])
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
     // Walk up from event target looking for data-ai-context
@@ -174,7 +182,7 @@ export default function AppLayout() {
         scale: 0.65,
         useCORS: true,
         logging: false,
-        ignoreElements: (el: Element) => el.classList.contains('mcfry-ui'),
+        ignoreElements: (el: Element) => el.classList.contains('pepper-ui'),
       })
       screenshotFile = await new Promise<File | null>(resolve => {
         canvas.toBlob(
@@ -183,7 +191,7 @@ export default function AppLayout() {
         )
       })
     } catch { /* screenshot failed — proceed without */ }
-    window.dispatchEvent(new CustomEvent('mcfry-ask', { detail: { message, screenshotFile } }))
+    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message, screenshotFile } }))
   }, [])
 
   return (
@@ -191,13 +199,32 @@ export default function AppLayout() {
       <div className="print:hidden flex flex-col self-stretch">
         <Sidebar />
       </div>
-      <main className="flex-1 overflow-y-auto">
+
+      {/* Docked-left panel */}
+      {pepperMode === 'docked-left' && (
+        <div className="flex-shrink-0 border-r print:hidden" style={{ width: 390, borderColor: 'var(--border)' }}>
+          <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+        </div>
+      )}
+
+      <main className="flex-1 overflow-y-auto min-w-0">
         <Outlet />
       </main>
-      <AiChat />
+
+      {/* Docked-right panel */}
+      {pepperMode === 'docked-right' && (
+        <div className="flex-shrink-0 border-l print:hidden" style={{ width: 390, borderColor: 'var(--border)' }}>
+          <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+        </div>
+      )}
+
+      {/* Floating panel */}
+      {pepperMode === 'float' && (
+        <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+      )}
 
       {ctxMenu && (
-        <McFryContextMenu
+        <PepperContextMenu
           state={ctxMenu}
           onAsk={handleAsk}
           onClose={() => setCtxMenu(null)}

@@ -95,6 +95,8 @@ function renderMd(text: string): string {
 
 const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 
+export type PepperMode = 'float' | 'docked-left' | 'docked-right'
+
 // ── HistoryPanel — module-level component (stable identity across renders) ────
 
 interface HistoryPanelProps {
@@ -195,13 +197,14 @@ interface ChatPanelProps {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onFilePickerClick: () => void
   onRemoveFile: () => void
+  onScreenshot: () => void
   canSend: boolean
 }
 
 function ChatPanel({
   messages, streaming, toolLabel, attachedFile, attachedFilePreview, input,
   inputRef, fileInputRef, bottomRef,
-  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onRemoveFile,
+  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onRemoveFile, onScreenshot,
   canSend,
 }: ChatPanelProps) {
   return (
@@ -216,7 +219,7 @@ function ChatPanel({
                 <CogIcon size={28} color="var(--accent)" />
               </div>
             </div>
-            <p className="text-sm font-semibold mb-1" style={{ color: 'var(--accent)' }}>Hi, I'm McFry!</p>
+            <p className="text-sm font-semibold mb-1" style={{ color: 'var(--accent)' }}>Hi, I'm Pepper!</p>
             <p className="text-sm">Ask me about your ingredients, recipes, COGS, or how to use the platform. I can also create and edit records — just ask!</p>
             <p className="text-xs mt-2 opacity-70">📎 Attach CSV, Excel, Word, PPTX, PDF or images to import data</p>
           </div>
@@ -260,7 +263,7 @@ function ChatPanel({
                           width: 7, height: 7,
                           background: 'var(--accent)',
                           opacity: 0.7,
-                          animation: `mcfry-dot 1.2s ease-in-out ${j * 0.2}s infinite`,
+                          animation: `pepper-dot 1.2s ease-in-out ${j * 0.2}s infinite`,
                         }}
                       />
                     ))}
@@ -295,11 +298,21 @@ function ChatPanel({
         <div className="flex items-end gap-2 rounded-lg px-3 py-2"
           style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
           <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={onFileChange} />
+          {/* Attach file */}
           <button onClick={onFilePickerClick} disabled={streaming}
             className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
             style={{ color: 'var(--text-3)' }} title="Attach file" aria-label="Attach file">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          {/* Screenshot page */}
+          <button onClick={onScreenshot} disabled={streaming}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
+            style={{ color: 'var(--text-3)' }} title="Attach screenshot of current page" aria-label="Screenshot page">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+              <circle cx="12" cy="13" r="4"/>
             </svg>
           </button>
           <textarea
@@ -321,7 +334,7 @@ function ChatPanel({
               ? <span className="flex items-center gap-0.5">
                   {[0,1,2].map(j => (
                     <span key={j} className="inline-block rounded-full bg-white"
-                      style={{ width: 4, height: 4, animation: `mcfry-dot 1.2s ease-in-out ${j * 0.2}s infinite` }} />
+                      style={{ width: 4, height: 4, animation: `pepper-dot 1.2s ease-in-out ${j * 0.2}s infinite` }} />
                   ))}
                 </span>
               : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
@@ -338,7 +351,7 @@ function ChatPanel({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AiChat() {
+export default function AiChat({ mode = 'float', onModeChange }: { mode?: PepperMode; onModeChange?: (m: PepperMode) => void }) {
   const { user }   = useAuth0()
   const location   = useLocation()
 
@@ -552,6 +565,24 @@ export default function AiChat() {
 
   const handleRemoveFile = useCallback(() => setAttachedFile(null), [])
 
+  const handleScreenshot = useCallback(async () => {
+    try {
+      const { default: html2canvas } = await import('html2canvas')
+      const mainEl = document.querySelector('main') as HTMLElement
+      const canvas = await html2canvas(mainEl || document.body, {
+        scale: 0.65, useCORS: true, logging: false,
+        ignoreElements: (el: Element) => el.classList.contains('pepper-ui'),
+      })
+      const file = await new Promise<File | null>(resolve =>
+        canvas.toBlob(
+          blob => resolve(blob ? new File([blob], `screenshot-${Date.now()}.jpg`, { type: 'image/jpeg' }) : null),
+          'image/jpeg', 0.82
+        )
+      )
+      if (file) setAttachedFile(file)
+    } catch { /* silent */ }
+  }, [])
+
   // Generate / revoke object URL for image previews
   useEffect(() => {
     if (attachedFile && attachedFile.type.startsWith('image/')) {
@@ -575,7 +606,7 @@ export default function AiChat() {
     setAttachedFile(new File([blob], name, { type: blob.type }))
   }, [])
 
-  // ── mcfry-ask: triggered by right-click context menu on instrumented elements
+  // ── pepper-ask: triggered by right-click context menu on instrumented elements
   useEffect(() => {
     function onAsk(e: Event) {
       const { message, screenshotFile } = (e as CustomEvent<{ message: string; screenshotFile?: File | null }>).detail
@@ -585,100 +616,131 @@ export default function AiChat() {
       // Small delay to ensure panel is mounted/visible before sending
       setTimeout(() => sendCore(message, screenshotFile ?? null), 80)
     }
-    window.addEventListener('mcfry-ask', onAsk)
-    return () => window.removeEventListener('mcfry-ask', onAsk)
+    window.addEventListener('pepper-ask', onAsk)
+    return () => window.removeEventListener('pepper-ask', onAsk)
   }, [sendCore])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
+  // ── Shared panel content ──────────────────────────────────────────────────
+
+  const docked = mode !== 'float'
+
+  const panelHeader = (
+    <div className={`flex items-center justify-between px-4 py-3 flex-shrink-0 ${!docked ? 'rounded-t-xl' : ''}`}
+      style={{ background: 'var(--accent)', color: '#fff' }}>
+      <div className="flex items-center gap-2.5">
+        <CogIcon size={26} color="#fff" />
+        <div>
+          <div className="font-semibold text-sm leading-tight">Pepper</div>
+          <div className="text-xs opacity-75">Powered by Claude</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
+        {/* Dock-mode toggles */}
+        <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
+          {/* Dock left */}
+          <button onClick={() => onModeChange?.('docked-left')} title="Dock to left"
+            className={`p-1.5 transition-colors ${mode === 'docked-left' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="1" y="1" width="5" height="14" rx="1" opacity="1"/>
+              <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+            </svg>
+          </button>
+          {/* Float */}
+          <button onClick={() => onModeChange?.('float')} title="Floating panel"
+            className={`p-1.5 transition-colors ${mode === 'float' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="4" y="4" width="10" height="10" rx="1.5"/>
+              <path d="M2 2h4v4H2z" fill="currentColor" stroke="none" opacity="0.5"/>
+            </svg>
+          </button>
+          {/* Dock right */}
+          <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
+            className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
+              <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+            </svg>
+          </button>
+        </div>
+        {/* History button */}
+        <button onClick={view === 'history' ? () => setView('chat') : openHistory}
+          className="p-1.5 rounded hover:bg-white/20 transition-colors"
+          title={view === 'history' ? 'Back to chat' : 'Chat history'} aria-label="Chat history">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+        </button>
+        {/* New Chat button */}
+        <button onClick={startNewChat} disabled={streaming}
+          className="p-1.5 rounded hover:bg-white/20 transition-colors disabled:opacity-40"
+          title="New chat" aria-label="New chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+        {/* Close button — float only */}
+        {!docked && (
+          <button onClick={() => setOpen(false)}
+            className="p-1.5 rounded hover:bg-white/20 transition-colors ml-0.5"
+            title="Close" aria-label="Close Pepper">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
+  const panelBody = (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {view === 'history' ? (
+        <HistoryPanel
+          sessions={sessions} sessionsLoad={sessionsLoad}
+          onBack={() => setView('chat')} onNewChat={startNewChat} onLoadSession={loadSession}
+        />
+      ) : (
+        <ChatPanel
+          messages={messages} streaming={streaming} toolLabel={toolLabel}
+          attachedFile={attachedFile} attachedFilePreview={attachedFilePreview}
+          input={input} inputRef={inputRef} fileInputRef={fileInputRef} bottomRef={bottomRef}
+          onInputChange={setInput} onKeyDown={handleKey} onPaste={handlePaste}
+          onSend={send} onFileChange={handleFileChange} onFilePickerClick={handleFilePickerClick}
+          onRemoveFile={handleRemoveFile} onScreenshot={handleScreenshot} canSend={canSend}
+        />
+      )}
+    </div>
+  )
+
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Docked mode — fills the slot provided by AppLayout
+  if (docked) {
+    return (
+      <div className="pepper-ui h-full flex flex-col print:hidden"
+        style={{ background: 'var(--surface)' }}>
+        {panelHeader}
+        {panelBody}
+      </div>
+    )
+  }
+
+  // Float mode — FAB + fixed popup
   return (
     <>
-      {/* FAB toggle */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="mcfry-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
+      <button onClick={() => setOpen(o => !o)}
+        className="pepper-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
         style={{ background: 'var(--accent)', color: '#fff' }}
-        title="McFry" aria-label="Toggle AI chat">
-        {open
-          ? <span className="text-lg font-bold">✕</span>
-          : <CogIcon size={30} color="#fff" />
-        }
+        title="Pepper" aria-label="Toggle AI chat">
+        {open ? <span className="text-lg font-bold">✕</span> : <CogIcon size={30} color="#fff" />}
       </button>
-
-      {/* Panel */}
       {open && (
-        <div className="mcfry-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
+        <div className="pepper-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
           style={{ width: '390px', height: '600px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
-
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 rounded-t-xl flex-shrink-0"
-            style={{ background: 'var(--accent)', color: '#fff' }}>
-            <div className="flex items-center gap-2.5">
-              <CogIcon size={26} color="#fff" />
-              <div>
-                <div className="font-semibold text-sm leading-tight">McFry</div>
-                <div className="text-xs opacity-75">Powered by Claude</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* History button */}
-              <button
-                onClick={view === 'history' ? () => setView('chat') : openHistory}
-                className="p-1.5 rounded hover:bg-white/20 transition-colors"
-                title={view === 'history' ? 'Back to chat' : 'Chat history'}
-                aria-label="Chat history">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-              </button>
-              {/* New Chat button */}
-              <button
-                onClick={startNewChat}
-                disabled={streaming}
-                className="p-1.5 rounded hover:bg-white/20 transition-colors disabled:opacity-40"
-                title="New chat" aria-label="New chat">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 5v14M5 12h14"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Body — either chat or history */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {view === 'history' ? (
-              <HistoryPanel
-                sessions={sessions}
-                sessionsLoad={sessionsLoad}
-                onBack={() => setView('chat')}
-                onNewChat={startNewChat}
-                onLoadSession={loadSession}
-              />
-            ) : (
-              <ChatPanel
-                messages={messages}
-                streaming={streaming}
-                toolLabel={toolLabel}
-                attachedFile={attachedFile}
-                attachedFilePreview={attachedFilePreview}
-                input={input}
-                inputRef={inputRef}
-                fileInputRef={fileInputRef}
-                bottomRef={bottomRef}
-                onInputChange={setInput}
-                onKeyDown={handleKey}
-                onPaste={handlePaste}
-                onSend={send}
-                onFileChange={handleFileChange}
-                onFilePickerClick={handleFilePickerClick}
-                onRemoveFile={handleRemoveFile}
-                canSend={canSend}
-              />
-            )}
-          </div>
+          {panelHeader}
+          {panelBody}
         </div>
       )}
     </>

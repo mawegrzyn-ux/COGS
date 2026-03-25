@@ -111,7 +111,7 @@ const SECTIONS = [
   { id: 'allergen-matrix',  icon: '⚠️', label: 'Allergen Matrix' },
   { id: 'haccp',            icon: '🛡️', label: 'HACCP' },
   { id: 'settings',         icon: '⚙️', label: 'Settings' },
-  { id: 'ai-assistant',     icon: '🤖', label: 'McFry (AI)' },
+  { id: 'ai-assistant',     icon: '🤖', label: 'Pepper (AI)' },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
   { id: 'api-reference',    icon: '📡', label: 'API Reference' },
   { id: 'security',         icon: '🔒', label: 'Security' },
@@ -666,21 +666,21 @@ export default function HelpPage() {
 
         <H3 id="ai-concise-mode">Concise Mode</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The <strong>Response Behaviour</strong> toggle in Settings → AI switches McFry to concise mode.
-          When enabled, McFry skips preamble ("Let me check…", "I'll look that up…"), calls tools silently,
+          The <strong>Response Behaviour</strong> toggle in Settings → AI switches Pepper to concise mode.
+          When enabled, Pepper skips preamble ("Let me check…", "I'll look that up…"), calls tools silently,
           and returns bullet-point answers in the fewest words possible. Ideal for quick data lookups.
           The setting is saved in the database and persists across sessions.
         </p>
 
         {/* ═══════════════════════════════════ AI ASSISTANT */}
-        <H2 id="ai-assistant" icon="🤖" title="McFry — AI Assistant" />
+        <H2 id="ai-assistant" icon="🤖" title="Pepper — AI Assistant" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          <strong>McFry</strong> is a floating AI chat widget (bottom-right of every page) powered by{' '}
+          <strong>Pepper</strong> is a floating AI chat widget (bottom-right of every page) powered by{' '}
           <strong>Claude Haiku 4.5</strong>. It combines two complementary knowledge sources —
           vectorised documentation and live database queries — to answer questions in natural language.
-          McFry can create, update, and delete records across all entities as a full sysadmin assistant.
+          Pepper can create, update, and delete records across all entities as a full sysadmin assistant.
           You can attach files (CSV, Excel, images) via the paperclip icon, or <strong>paste images directly</strong> from
-          the clipboard into the chat input. While McFry is thinking, three animated dots indicate activity.
+          the clipboard into the chat input. While Pepper is thinking, three animated dots indicate activity.
         </p>
 
         <H3 id="ai-how-it-works">How It Works — Two Knowledge Layers</H3>
@@ -747,8 +747,8 @@ export default function HelpPage() {
 
         <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          McFry has <strong>78 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database.
-          Tool calls happen automatically — McFry determines which tools to call based on your question or request.
+          Pepper has <strong>78 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database.
+          Tool calls happen automatically — Pepper determines which tools to call based on your question or request.
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
           {[
@@ -780,7 +780,7 @@ export default function HelpPage() {
 
         <H3 id="ai-no-access">What the AI Cannot Access</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          McFry has full read and write access to all 27 database tables. The only things outside its reach are:
+          Pepper has full read and write access to all 27 database tables. The only things outside its reach are:
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
           {[
@@ -796,8 +796,8 @@ export default function HelpPage() {
           ))}
         </div>
         <InfoBox type="tip" title="Getting the best answers">
-          Ask McFry anything about your live data — ingredients, costs, COGS%, recipes, vendors, markets,
-          allergens, HACCP logs, or scenarios. For bulk imports, McFry can stage your spreadsheet and
+          Ask Pepper anything about your live data — ingredients, costs, COGS%, recipes, vendors, markets,
+          allergens, HACCP logs, or scenarios. For bulk imports, Pepper can stage your spreadsheet and
           provide a link to the Import Wizard review page.
         </InfoBox>
 

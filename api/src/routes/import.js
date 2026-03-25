@@ -666,7 +666,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// ── POST /from-text — used by the McFry chatbot import tool ──────────────────
+// ── POST /from-text — used by the Pepper chatbot import tool ──────────────────
 // Accepts pre-extracted text content (already in the conversation) and runs
 // the AI staging pipeline. Returns the same shape as /upload.
 

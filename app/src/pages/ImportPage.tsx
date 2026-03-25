@@ -384,7 +384,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
             </div>
             <div className="text-xs" style={{ color: 'var(--text-3)' }}>
               {p === 'ai'
-                ? 'Upload any Excel or CSV file. McFry reads and maps your data automatically.'
+                ? 'Upload any Excel or CSV file. Pepper reads and maps your data automatically.'
                 : 'Download the blank template, fill it in, upload it. Columns are pre-mapped — no AI needed.'}
             </div>
           </button>
@@ -426,7 +426,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
       <div className="mt-6 flex justify-end">
         <button onClick={handleParse} disabled={!file} className="btn-primary px-6">
-          {importPath === 'ai' ? '🤖 Parse with McFry' : 'Parse File'} →
+          {importPath === 'ai' ? '🤖 Parse with Pepper' : 'Parse File'} →
         </button>
       </div>
     </div>
@@ -438,7 +438,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     <div className="flex flex-col items-center justify-center py-20 gap-4">
       <Spinner />
       <p className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
-        {importPath === 'ai' ? 'McFry is reading your file…' : 'Parsing template…'}
+        {importPath === 'ai' ? 'Pepper is reading your file…' : 'Parsing template…'}
       </p>
       <p className="text-xs" style={{ color: 'var(--text-3)' }}>
         {importPath === 'ai' ? 'This may take 20–30 seconds for large files.' : 'Just a moment…'}
@@ -458,7 +458,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     return (
       <div>
         <p className="text-sm mb-4" style={{ color: 'var(--text-2)' }}>
-          McFry found the following categories in your file. Review how they map to existing COGS categories — or create new ones.
+          Pepper found the following categories in your file. Review how they map to existing COGS categories — or create new ones.
         </p>
 
         {entries.length === 0 ? (

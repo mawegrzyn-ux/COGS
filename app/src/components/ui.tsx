@@ -33,22 +33,22 @@ export function Modal({ title, onClose, children, width = 'max-w-lg' }: ModalPro
   )
 }
 
-// ── McFryHelpButton ───────────────────────────────────────────────────────────
-// Small inline cog icon that fires a tutorial prompt at McFry.
-// Also sets data-ai-context so right-click "Ask McFry" works too.
-export function McFryHelpButton({ prompt, size = 14 }: { prompt: string; size?: number }) {
+// ── PepperHelpButton ───────────────────────────────────────────────────────────
+// Small inline cog icon that fires a tutorial prompt at Pepper.
+// Also sets data-ai-context so right-click "Ask Pepper" works too.
+export function PepperHelpButton({ prompt, size = 14 }: { prompt: string; size?: number }) {
   function fire(e: React.MouseEvent) {
     e.stopPropagation()
-    window.dispatchEvent(new CustomEvent('mcfry-ask', { detail: { message: prompt } }))
+    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message: prompt } }))
   }
   return (
     <button
       onClick={fire}
-      title="Ask McFry — how to use this section"
+      title="Ask Pepper — how to use this section"
       data-ai-context={JSON.stringify({ type: 'tutorial', prompt })}
       className="inline-flex items-center justify-center rounded-full opacity-30 hover:opacity-100 transition-opacity flex-shrink-0 focus:outline-none"
       style={{ color: 'var(--accent)', width: size + 4, height: size + 4 }}
-      aria-label="McFry help"
+      aria-label="Pepper help"
     >
       {/* Mini cog */}
       <svg viewBox="-100 -100 200 200" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
@@ -83,7 +83,7 @@ export function PageHeader({ title, subtitle, action, tutorialPrompt }: PageHead
           <h1 className="text-xl font-extrabold text-text-1">{title}</h1>
           {subtitle && <p className="text-sm text-text-3 mt-0.5">{subtitle}</p>}
         </div>
-        {tutorialPrompt && <McFryHelpButton prompt={tutorialPrompt} size={14} />}
+        {tutorialPrompt && <PepperHelpButton prompt={tutorialPrompt} size={14} />}
       </div>
       {action && <div>{action}</div>}
     </div>

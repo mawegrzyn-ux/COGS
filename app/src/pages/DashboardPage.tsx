@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
-import { McFryHelpButton } from '../components/ui'
+import { PepperHelpButton } from '../components/ui'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -420,7 +420,7 @@ export default function DashboardPage() {
                 Your COGS overview at a glance
               </p>
             </div>
-            <McFryHelpButton
+            <PepperHelpButton
               prompt="Walk me through the Dashboard. What do the KPI tiles mean, what is Price Quote Coverage and why does it matter, how do the Menu COGS tiles work, and what should I check first thing each day?"
               size={14}
             />
