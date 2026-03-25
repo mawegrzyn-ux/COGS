@@ -71,6 +71,10 @@ interface RecipeDetail extends Recipe {
 interface MenuAssignment {
   menu_id: number
   menu_name: string
+  country_name: string
+  country_id: number
+  exchange_rate: number
+  currency_symbol: string
   menu_item_id: number
   display_name: string
   sell_price_gross: number
@@ -83,6 +87,7 @@ interface SimpleMenu {
   id: number
   name: string
   country_id: number
+  country_name: string
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -210,35 +215,38 @@ export default function RecipesPage() {
     }
   }, [api])
 
-  // Fetch menu assignments for this recipe in the selected market + price level
+  // Fetch menu assignments for this recipe across ALL markets
   useEffect(() => {
-    if (!selected || !selectedCountryId || selectedCountryId === 'GLOBAL') {
+    if (!selected || !menus.length) {
       setMenuAssignments([])
       setSelectedMenuId(null)
       return
     }
-    const countryMenus = menus.filter(m => m.country_id === selectedCountryId)
-    if (!countryMenus.length) { setMenuAssignments([]); setSelectedMenuId(null); return }
 
     setLoadingMenuAssign(true)
     const lvlParam = selectedPriceLevelId ? `&price_level_id=${selectedPriceLevelId}` : ''
     Promise.all(
-      countryMenus.map(m =>
-        api.get(`/cogs/menu/${m.id}?market_id=${selectedCountryId}${lvlParam}`)
-          .then((res: any) => ({ menu_id: m.id, menu_name: m.name, res }))
+      menus.map(m =>
+        api.get(`/cogs/menu/${m.id}?market_id=${m.country_id}${lvlParam}`)
+          .then((res: any) => ({ menu: m, res }))
           .catch(() => null)
       )
     ).then(results => {
       const found: MenuAssignment[] = []
-      ;(results as Array<{ menu_id: number; menu_name: string; res: any } | null>).forEach(r => {
+      ;(results as Array<{ menu: SimpleMenu; res: any } | null>).forEach(r => {
         if (!r) return
         const item = r.res?.items?.find((it: any) => it.recipe_id === selected.id)
         if (item) {
+          const country = countries.find(c => c.id === r.menu.country_id)
           found.push({
-            menu_id:        r.menu_id,
-            menu_name:      r.menu_name,
-            menu_item_id:   item.menu_item_id,
-            display_name:   item.display_name,
+            menu_id:          r.menu.id,
+            menu_name:        r.menu.name,
+            country_name:     r.menu.country_name,
+            country_id:       r.menu.country_id,
+            exchange_rate:    country?.exchange_rate ?? 1,
+            currency_symbol:  country?.currency_symbol ?? '$',
+            menu_item_id:     item.menu_item_id,
+            display_name:     item.display_name,
             sell_price_gross: item.sell_price_gross ?? 0,
             sell_price_net:   item.sell_price_net   ?? 0,
             cogs_pct_net:     item.cogs_pct_net     ?? null,
@@ -249,7 +257,7 @@ export default function RecipesPage() {
       setMenuAssignments(found)
       setSelectedMenuId(found.length > 0 ? found[0].menu_id : null)
     }).finally(() => setLoadingMenuAssign(false))
-  }, [selected?.id, selectedCountryId, selectedPriceLevelId, menus, api, menuAssignVersion])
+  }, [selected?.id, selectedPriceLevelId, menus, countries, api, menuAssignVersion])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -747,21 +755,21 @@ export default function RecipesPage() {
                               <select
                                 value={selectedMenuId ?? ''}
                                 onChange={e => setSelectedMenuId(Number(e.target.value))}
-                                className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[90px]"
+                                className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[120px]"
                               >
                                 {menuAssignments.map(m => (
-                                  <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>
+                                  <option key={m.menu_id} value={m.menu_id}>{m.country_name} — {m.menu_name}</option>
                                 ))}
                               </select>
                             ) : menuAssignments.length === 1 ? (
-                              <span className="text-xs text-text-3 truncate max-w-[90px]" title={menuAssignments[0].menu_name}>{menuAssignments[0].menu_name}</span>
+                              <span className="text-xs text-text-3 truncate max-w-[110px]" title={`${menuAssignments[0].country_name} — ${menuAssignments[0].menu_name}`}>{menuAssignments[0].menu_name}</span>
                             ) : null}
                           </div>
                         </div>
                         {activeMenu ? (
                           editingTilePrice !== null ? (
                             <div className="flex items-center gap-1 mt-1">
-                              <span className="text-sm text-text-3">{displayCurrency.symbol}</span>
+                              <span className="text-sm text-text-3">{activeMenu.currency_symbol}</span>
                               <input
                                 type="number" min="0" step="0.01"
                                 className="input text-sm font-mono w-24 py-0.5 px-1"
@@ -771,8 +779,7 @@ export default function RecipesPage() {
                                   if (e.key === 'Enter') {
                                     const gross = parseFloat(editingTilePrice)
                                     if (!isNaN(gross) && gross >= 0 && selectedPriceLevelId) {
-                                      const localGross = gross * activeCogs.exchange_rate / displayCurrency.rate
-                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(localGross * 10000) / 10000 })
+                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(gross * 10000) / 10000 })
                                       setMenuAssignVersion(v => v + 1)
                                       showToast('Price updated')
                                     }
@@ -790,9 +797,9 @@ export default function RecipesPage() {
                               <div
                                 className="text-lg font-bold font-mono text-text-1 cursor-pointer hover:text-accent transition-colors"
                                 title="Click to edit price"
-                                onClick={() => setEditingTilePrice(fmtCost(activeMenu.sell_price_gross / activeCogs.exchange_rate * displayCurrency.rate))}
+                                onClick={() => setEditingTilePrice(fmtCost(activeMenu.sell_price_gross))}
                               >
-                                {displayCurrency.symbol}{fmtCost(activeMenu.sell_price_net / activeCogs.exchange_rate * displayCurrency.rate)}
+                                {activeMenu.currency_symbol}{fmtCost(activeMenu.sell_price_net)}
                               </div>
                               <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                 <span className="text-xs text-text-3">net ex-tax</span>
@@ -1095,7 +1102,7 @@ export default function RecipesPage() {
               </div>
 
               {/* ── Menus section ── */}
-              {selectedCountryId !== 'GLOBAL' && selectedCountryId !== '' && (
+              {selected && (
                 <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                     <span className="font-semibold text-sm text-text-1">Menus</span>
@@ -1103,11 +1110,10 @@ export default function RecipesPage() {
                       <span className="text-xs text-text-3">
                         {loadingMenuAssign ? 'Loading…' : menuAssignments.length === 0 ? 'Not on any menu' : `${menuAssignments.length} menu${menuAssignments.length !== 1 ? 's' : ''}`}
                       </span>
-                      {menus.filter(m => m.country_id === selectedCountryId).length > 0 && (
+                      {menus.length > 0 && (
                         <button
                           onClick={() => {
-                            const countryMenus = menus.filter(m => m.country_id === selectedCountryId)
-                            setAddToMenuTargetId(countryMenus[0]?.id ?? null)
+                            setAddToMenuTargetId(menus[0]?.id ?? null)
                             setAddToMenuDisplayName(selected?.name ?? '')
                             setAddToMenuModal(true)
                           }}
@@ -1120,12 +1126,13 @@ export default function RecipesPage() {
                     <div className="p-4 text-center"><Spinner /></div>
                   ) : menuAssignments.length === 0 ? (
                     <div className="px-4 py-6 text-center text-text-3 text-sm">
-                      This recipe hasn't been added to any {activeCogs?.country_name ?? ''} menu yet.
+                      This recipe hasn't been added to any menu yet.
                     </div>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                          <th className="px-4 py-2.5 text-left font-semibold">Market</th>
                           <th className="px-4 py-2.5 text-left font-semibold">Menu</th>
                           <th className="px-4 py-2.5 text-left font-semibold">Display Name</th>
                           <th className="px-4 py-2.5 text-right font-semibold">Price (gross)</th>
@@ -1136,15 +1143,17 @@ export default function RecipesPage() {
                       <tbody>
                         {menuAssignments.map(m => {
                           const isEditing = editingMenuPrice?.menu_item_id === m.menu_item_id && editingMenuPrice?.level_id === (selectedPriceLevelId ?? 0)
-                          const exchRate = activeCogs?.exchange_rate ?? 1
+                          // Prices displayed in each menu's own market currency
+                          const sym = m.currency_symbol
                           return (
                             <tr key={m.menu_id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
+                              <td className="px-4 py-2.5 text-text-3 text-xs">{m.country_name}</td>
                               <td className="px-4 py-2.5 font-medium text-text-1">{m.menu_name}</td>
                               <td className="px-4 py-2.5 text-text-2">{m.display_name}</td>
                               <td className="px-4 py-2.5 text-right font-mono text-text-2">
                                 {isEditing ? (
                                   <div className="flex items-center justify-end gap-1">
-                                    <span className="text-text-3">{displayCurrency.symbol}</span>
+                                    <span className="text-text-3">{sym}</span>
                                     <input
                                       type="number" min="0" step="0.01"
                                       className="input text-sm font-mono w-24 py-0.5 px-1 text-right"
@@ -1154,8 +1163,8 @@ export default function RecipesPage() {
                                         if (e.key === 'Enter') {
                                           const gross = parseFloat(editingMenuPrice!.value)
                                           if (!isNaN(gross) && gross >= 0 && selectedPriceLevelId) {
-                                            const localGross = gross * exchRate / displayCurrency.rate
-                                            await api.post('/menu-item-prices', { menu_item_id: m.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(localGross * 10000) / 10000 })
+                                            // price stored in market's local currency (base USD * exchRate)
+                                            await api.post('/menu-item-prices', { menu_item_id: m.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(gross * 10000) / 10000 })
                                             setMenuAssignVersion(v => v + 1)
                                             showToast('Price updated')
                                           }
@@ -1174,16 +1183,16 @@ export default function RecipesPage() {
                                     title={selectedPriceLevelId ? 'Click to edit gross price' : 'Select a price level to edit'}
                                     onClick={() => {
                                       if (!selectedPriceLevelId) return
-                                      const grossDisplay = m.sell_price_gross > 0 ? fmtCost(m.sell_price_gross / exchRate * displayCurrency.rate) : ''
+                                      const grossDisplay = m.sell_price_gross > 0 ? fmtCost(m.sell_price_gross) : ''
                                       setEditingMenuPrice({ menu_item_id: m.menu_item_id, level_id: selectedPriceLevelId, value: grossDisplay })
                                     }}
                                   >
-                                    {m.sell_price_gross > 0 ? `${displayCurrency.symbol}${fmtCost(m.sell_price_gross / exchRate * displayCurrency.rate)}` : '—'}
+                                    {m.sell_price_gross > 0 ? `${sym}${fmtCost(m.sell_price_gross)}` : '—'}
                                   </span>
                                 )}
                               </td>
                               <td className="px-4 py-2.5 text-right font-mono font-semibold text-text-1">
-                                {m.sell_price_net > 0 ? `${displayCurrency.symbol}${fmtCost(m.sell_price_net / exchRate * displayCurrency.rate)}` : '—'}
+                                {m.sell_price_net > 0 ? `${sym}${fmtCost(m.sell_price_net)}` : '—'}
                               </td>
                               <td className={`px-4 py-2.5 text-right font-semibold ${recipeCogsColour(m.cogs_pct_net)}`}>
                                 {m.cogs_pct_net != null ? `${m.cogs_pct_net.toFixed(1)}%` : '—'}
