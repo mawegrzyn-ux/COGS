@@ -140,6 +140,19 @@ export default function RecipesPage() {
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
   const showToast = (msg: string, type?: 'error') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000) }
 
+  // allergen map — loaded once, used in ingredient rows
+  const [ingAllergenMap, setIngAllergenMap] = useState<Map<number, { code: string; status: string }[]>>(new Map())
+  useEffect(() => {
+    api.get('/allergens/ingredients').then((rows: { ingredient_id: number; code: string; status: string }[]) => {
+      const m = new Map<number, { code: string; status: string }[]>()
+      for (const row of (rows || [])) {
+        if (!m.has(row.ingredient_id)) m.set(row.ingredient_id, [])
+        m.get(row.ingredient_id)!.push({ code: row.code, status: row.status })
+      }
+      setIngAllergenMap(m)
+    }).catch(() => {})
+  }, [api])
+
   useEffect(() => {
     api.get('/countries').then((d: Country[]) => setCountries(d || [])).catch(() => {})
   }, [api])
@@ -905,8 +918,10 @@ export default function RecipesPage() {
                               return (
                                 <tr key={item.id} className={`border-b border-border last:border-0 ${removed ? 'bg-amber-50' : 'hover:bg-surface-2/40'}`}>
                                   <td className="px-3 py-2.5">
-                                    <div className={`font-medium ${removed ? 'text-amber-700' : 'text-text-1'}`}>
+                                    <div className={`font-medium flex items-center flex-wrap gap-x-1 ${removed ? 'text-amber-700' : 'text-text-1'}`}>
                                       {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                      {item.item_type === 'ingredient' && item.ingredient_id != null &&
+                                        <AllergenBadge allergens={ingAllergenMap.get(item.ingredient_id)} />}
                                       {removed && <span className="ml-1.5 text-[10px] bg-amber-100 text-amber-600 px-1 rounded">removed</span>}
                                     </div>
                                     {item.item_type === 'ingredient' && item.base_unit_abbr && (
@@ -949,8 +964,10 @@ export default function RecipesPage() {
                               return (
                                 <tr key={item.id} className={`border-b border-border last:border-0 ${added ? 'bg-emerald-50' : 'hover:bg-surface-2/40'}`}>
                                   <td className="px-3 py-2.5">
-                                    <div className={`font-medium ${added ? 'text-emerald-700' : 'text-text-1'}`}>
+                                    <div className={`font-medium flex items-center flex-wrap gap-x-1 ${added ? 'text-emerald-700' : 'text-text-1'}`}>
                                       {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                      {item.item_type === 'ingredient' && item.ingredient_id != null &&
+                                        <AllergenBadge allergens={ingAllergenMap.get(item.ingredient_id)} />}
                                       {added && <span className="ml-1.5 text-[10px] bg-emerald-100 text-emerald-600 px-1 rounded">added</span>}
                                     </div>
                                     {item.item_type === 'ingredient' && item.base_unit_abbr && (
@@ -1014,8 +1031,10 @@ export default function RecipesPage() {
                           return (
                             <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-2/50 group">
                               <td className="px-4 py-2.5">
-                                <div className="font-medium text-text-1">
+                                <div className="font-medium text-text-1 flex items-center flex-wrap gap-x-1">
                                   {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
+                                  {item.item_type === 'ingredient' && item.ingredient_id != null &&
+                                    <AllergenBadge allergens={ingAllergenMap.get(item.ingredient_id)} />}
                                 </div>
                                 {item.item_type === 'ingredient' && item.base_unit_abbr && (
                                   <div className="text-xs text-text-3">base unit: {item.base_unit_abbr}</div>
@@ -1708,4 +1727,36 @@ function SearchIcon({ className }: { className?: string }) {
 }
 function BookOpenIcon({ size = 24 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+}
+
+// ── Allergen badge ─────────────────────────────────────────────────────────────
+
+function AllergenBadge({ allergens }: { allergens: { code: string; status: string }[] | undefined }) {
+  if (!allergens || allergens.length === 0) return null
+  const contains    = allergens.filter(a => a.status === 'contains')
+  const mayContain  = allergens.filter(a => a.status === 'may_contain')
+  if (contains.length === 0 && mayContain.length === 0) return null
+
+  const tooltipLines: string[] = []
+  if (contains.length)   tooltipLines.push(`Contains: ${contains.map(a => a.code).join(', ')}`)
+  if (mayContain.length) tooltipLines.push(`May contain: ${mayContain.map(a => a.code).join(', ')}`)
+  const tooltip = tooltipLines.join('\n')
+
+  const hasContains = contains.length > 0
+  const codes = [...contains, ...mayContain].map(a => a.code).join(' · ')
+
+  return (
+    <span className="relative group/allergen inline-flex items-center ml-1.5 align-middle">
+      <span className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-semibold leading-none cursor-default
+        ${hasContains ? 'bg-amber-100 text-amber-700' : 'bg-yellow-50 text-yellow-600'}`}>
+        ⚠ {codes}
+      </span>
+      {/* Tooltip */}
+      <span className="pointer-events-none absolute bottom-full left-0 mb-1.5 z-50 hidden group-hover/allergen:block
+        whitespace-pre bg-gray-900 text-white text-xs rounded px-2 py-1.5 shadow-lg min-w-max leading-relaxed">
+        {tooltip}
+        <span className="absolute top-full left-3 border-4 border-transparent border-t-gray-900" />
+      </span>
+    </span>
+  )
 }

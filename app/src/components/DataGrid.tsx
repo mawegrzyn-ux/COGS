@@ -792,6 +792,16 @@ export function DataGrid<T extends Record<string, any>>({
       if (next) focusCell(next._key, String(editCols[0].key))
     }
 
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // Only navigate rows when the input is not a <select> (selects use arrows for options)
+      if ((e.target as HTMLElement).tagName === 'SELECT') return
+      e.preventDefault()
+      const cur = draftsRef.current
+      const idx = cur.findIndex(d => d._key === draft._key)
+      const target = e.key === 'ArrowDown' ? cur[idx + 1] : cur[idx - 1]
+      if (target) focusCell(target._key, String(col.key))
+    }
+
     if (e.key === 'Escape') {
       e.preventDefault()
       if (isGhost) {

@@ -98,14 +98,19 @@ interface Unit {
   type:         string
 }
 
-type Tab        = 'ingredients' | 'quotes' | 'vendors' | 'allergen-grid'
+type Tab        = 'ingredients' | 'quotes' | 'vendors'
 type ToastState = { message: string; type: 'success' | 'error' }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
   const api = useApi()
-  const [tab, setTab] = useState<Tab>('vendors')
+  const [tab, setTab] = useState<Tab>(() => {
+    const saved = localStorage.getItem('inventory-tab') as Tab | null
+    return (saved && ['ingredients', 'quotes', 'vendors'].includes(saved))
+      ? saved
+      : 'quotes'
+  })
 
   const [ingredientCount, setIngredientCount] = useState<number>(0)
   const [quoteCount,      setQuoteCount]      = useState<number>(0)
@@ -126,7 +131,6 @@ export default function InventoryPage() {
     'ingredients':  'Ingredients',
     'quotes':       'Price Quotes',
     'vendors':      'Vendors',
-    'allergen-grid': 'Allergen Grid',
   }
 
   return (
@@ -144,10 +148,10 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border">
-        {(['ingredients', 'quotes', 'vendors', 'allergen-grid'] as Tab[]).map(t => (
+        {(['ingredients', 'quotes', 'vendors'] as Tab[]).map(t => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => { setTab(t); localStorage.setItem('inventory-tab', t) }}
             className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors
               ${tab === t
                 ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
@@ -160,10 +164,9 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes') }} />}
+        {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }} />}
         {tab === 'quotes'        && <PriceQuotesTab initialIngredientId={initialQuoteIngId} />}
         {tab === 'vendors'       && <VendorsTab onCountChange={setVendorCount} />}
-        {tab === 'allergen-grid' && <AllergenGridTab />}
       </div>
     </div>
   )
@@ -453,6 +456,21 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
     useSortFilter<Ingredient>(searchFiltered, 'name', 'asc')
+
+  // ── Keyboard prev/next while ingredient modal is open ───────────────────────
+  useEffect(() => {
+    if (modal === null || modal === 'new') return
+    const handler = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT'  ||
+          (e.target as HTMLElement).tagName === 'TEXTAREA' ||
+          (e.target as HTMLElement).tagName === 'SELECT') return
+      const idx = sorted.findIndex(i => i.id === (modal as Ingredient).id)
+      if (e.key === 'ArrowLeft'  && idx > 0)                  openEdit(sorted[idx - 1])
+      if (e.key === 'ArrowRight' && idx < sorted.length - 1)  openEdit(sorted[idx + 1])
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [modal, sorted]) // eslint-disable-line
 
   // ── Column definitions for DataGrid ─────────────────────────────────────────
 
@@ -796,12 +814,39 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         </div>
       )}
 
-      {modal !== null && (
+      {modal !== null && (() => {
+        const modalIdx  = modal === 'new' ? -1 : sorted.findIndex(i => i.id === (modal as Ingredient).id)
+        const prevIng   = modalIdx > 0                   ? sorted[modalIdx - 1] : null
+        const nextIng   = modalIdx < sorted.length - 1   ? sorted[modalIdx + 1] : null
+        return (
         <Modal
           title={modal === 'new' ? 'Add Ingredient' : `Edit: ${(modal as Ingredient).name}`}
           onClose={() => setModal(null)}
           width="max-w-2xl"
         >
+          {/* Prev / Next navigation */}
+          {modal !== 'new' && sorted.length > 1 && (
+            <div className="flex items-center justify-between -mt-1 mb-3 pb-2 border-b border-border/50">
+              <button
+                className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${prevIng ? 'text-accent hover:bg-accent-dim' : 'text-text-3 opacity-30 cursor-default'}`}
+                onClick={() => prevIng && openEdit(prevIng)}
+                disabled={!prevIng}
+                title={prevIng ? `Previous: ${prevIng.name}` : undefined}
+              >
+                ← {prevIng ? prevIng.name : 'Prev'}
+              </button>
+              <span className="text-xs text-text-3">{modalIdx + 1} / {sorted.length}</span>
+              <button
+                className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${nextIng ? 'text-accent hover:bg-accent-dim' : 'text-text-3 opacity-30 cursor-default'}`}
+                onClick={() => nextIng && openEdit(nextIng)}
+                disabled={!nextIng}
+                title={nextIng ? `Next: ${nextIng.name}` : undefined}
+              >
+                {nextIng ? nextIng.name : 'Next'} →
+              </button>
+            </div>
+          )}
+
           {/* Tabs — only for existing ingredients */}
           {modal !== 'new' && (
             <div className="flex gap-1 -mt-1 mb-4 border-b border-border">
@@ -912,7 +957,8 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             />
           )}
         </Modal>
-      )}
+        )
+      })()}
 
       {confirmDelete && (
         <ConfirmDialog
@@ -1367,536 +1413,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   )
 }
 
-// ── Allergen Grid Tab ─────────────────────────────────────────────────────────
-
-type AlgStatus    = 'contains' | 'may_contain' | 'free_from'
-type AlgSaveState = 'idle' | 'saving' | 'saved' | 'error'
-
-interface IngAllergenRowBase {
-  ingredient_id: number
-  name:          string
-  category:      string | null
-  _saveState:    AlgSaveState
-}
-type IngAllergenRow = IngAllergenRowBase & Record<string, any>
-
-const ALG_STATUS_ORDER = ['contains', 'may_contain', 'free_from', null] as const
-
-const ALG_CELL_CLS: Record<string, string> = {
-  contains:    'bg-red-500 text-white hover:bg-red-600',
-  may_contain: 'bg-amber-400 text-white hover:bg-amber-500',
-  free_from:   'bg-green-500 text-white hover:bg-green-600',
-}
-const ALG_ABBR: Record<string, string> = {
-  contains: 'C', may_contain: 'M', free_from: 'F',
-}
-const ALG_LABEL: Record<string, string> = {
-  contains: 'Contains', may_contain: 'May Contain', free_from: 'Free From',
-}
-
-// Sortable/filterable column header — defined at module level to prevent remount issues.
-// Single button opens a combined Sort + Filter dropdown, matching ColumnHeader.tsx exactly.
-// Uses position:fixed + getBoundingClientRect to escape the overflow:auto table wrapper.
-function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, minWidth, filterOptions, filterValues, onFilter }: {
-  label:          string
-  field:          string
-  sortField:      string
-  sortDir:        SortDir
-  onSort:         (f: string, d: SortDir) => void
-  sticky?:        boolean
-  left?:          number
-  minWidth?:      number
-  filterOptions?: { label: string; value: string }[]
-  filterValues?:  string[]
-  onFilter?:      (v: string[]) => void
-}) {
-  const [open,    setOpen]    = useState(false)
-  const [search,  setSearch]  = useState('')
-  const [dropPos, setDropPos] = useState<{ top: number; left: number } | null>(null)
-  const btnRef = useRef<HTMLButtonElement>(null)
-  const wrapRef = useRef<HTMLDivElement>(null)
-  const isActive  = sortField === field
-  const hasFilter = (filterValues?.length ?? 0) > 0
-  const hasFilterOptions = !!filterOptions && filterOptions.length > 0
-
-  function openDropdown() {
-    if (!btnRef.current) return
-    const r = btnRef.current.getBoundingClientRect()
-    setDropPos({ top: r.bottom + 4, left: r.left })
-    setOpen(true)
-  }
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return
-    function h(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false); setSearch('')
-      }
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
-
-  // Reposition when table scrolls so dropdown tracks the header cell
-  useEffect(() => {
-    if (!open) return
-    function reposition() {
-      if (!btnRef.current) return
-      const r = btnRef.current.getBoundingClientRect()
-      setDropPos({ top: r.bottom + 4, left: r.left })
-    }
-    window.addEventListener('scroll', reposition, true)
-    window.addEventListener('resize', reposition)
-    return () => {
-      window.removeEventListener('scroll', reposition, true)
-      window.removeEventListener('resize', reposition)
-    }
-  }, [open])
-
-  // Auto-focus search when dropdown opens
-  useEffect(() => {
-    if (!open) setSearch('')
-  }, [open])
-
-  const visible = filterOptions?.filter(o => o.label.toLowerCase().includes(search.toLowerCase())) ?? []
-
-  const stickyStyle: React.CSSProperties = sticky
-    ? { position: 'sticky', left: left ?? 0, zIndex: 20, minWidth }
-    : { minWidth }
-
-  return (
-    <th className={`px-3 py-3 text-left bg-surface-2 border-r border-border${sticky ? ' z-20' : ''}`} style={stickyStyle}>
-      <div ref={wrapRef} className="relative inline-block">
-        {/* Header button — clicking opens the combined sort+filter dropdown */}
-        <button
-          ref={btnRef}
-          onClick={() => open ? setOpen(false) : openDropdown()}
-          className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-wide select-none transition-colors
-            ${isActive || hasFilter ? 'text-accent' : 'text-text-2 hover:text-text-1'}`}
-        >
-          {label}
-          <span className="ml-0.5">
-            {isActive
-              ? (sortDir === 'asc'
-                  ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="18 15 12 9 6 15"/></svg>
-                  : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="6 9 12 15 18 9"/></svg>)
-              : <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="18 15 12 9 6 15" opacity="0.4"/><polyline points="6 9 12 15 18 9" opacity="0.4"/></svg>
-            }
-          </span>
-          {hasFilter && (
-            <span className="ml-0.5 px-1 rounded-full bg-accent text-white text-[9px] font-bold leading-4 min-w-[14px] text-center">
-              {filterValues!.length}
-            </span>
-          )}
-        </button>
-
-        {/* Dropdown — fixed positioning escapes overflow:auto table wrapper */}
-        {open && dropPos && (
-          <div
-            className="w-56 bg-surface border border-border rounded-lg shadow-lg overflow-hidden"
-            style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 99999 }}
-          >
-            {/* Sort section */}
-            <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-b border-border bg-surface-2">
-              Sort
-            </div>
-            <button
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2
-                ${isActive && sortDir === 'asc' ? 'text-accent font-semibold' : 'text-text-1'}`}
-              onMouseDown={e => { e.preventDefault(); onSort(field, 'asc'); setOpen(false) }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="18 15 12 9 6 15"/></svg>
-              Ascending
-            </button>
-            <button
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2
-                ${isActive && sortDir === 'desc' ? 'text-accent font-semibold' : 'text-text-1'}`}
-              onMouseDown={e => { e.preventDefault(); onSort(field, 'desc'); setOpen(false) }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-              Descending
-            </button>
-
-            {/* Filter section */}
-            {hasFilterOptions && onFilter && (
-              <>
-                <div className="px-3 py-1.5 text-xs text-text-3 font-semibold uppercase tracking-wide border-t border-b border-border bg-surface-2 flex items-center justify-between">
-                  <span>Filter</span>
-                  {hasFilter && (
-                    <button className="text-accent hover:underline font-normal normal-case tracking-normal"
-                      onMouseDown={e => { e.preventDefault(); onFilter([]) }}>
-                      Clear all
-                    </button>
-                  )}
-                </div>
-                <div className="px-2 py-2 border-b border-border">
-                  <input
-                    type="text"
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    onMouseDown={e => e.stopPropagation()}
-                    placeholder="Search…"
-                    autoFocus
-                    className="w-full px-2 py-1 text-sm bg-surface-2 border border-border rounded-md outline-none focus:border-accent transition-colors"
-                  />
-                </div>
-                <div className="max-h-52 overflow-y-auto">
-                  {visible.length === 0
-                    ? <div className="px-3 py-2 text-sm text-text-3 italic">No matches</div>
-                    : visible.map(opt => {
-                        const checked = filterValues!.includes(opt.value)
-                        return (
-                          <button key={opt.value}
-                            className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors flex items-center gap-2.5
-                              ${checked ? 'text-accent' : 'text-text-1'}`}
-                            onMouseDown={e => { e.preventDefault(); onFilter(checked ? filterValues!.filter(v => v !== opt.value) : [...filterValues!, opt.value]) }}
-                          >
-                            <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors
-                              ${checked ? 'bg-accent border-accent' : 'border-border'}`}>
-                              {checked && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>}
-                            </span>
-                            <span className="truncate">{opt.label}</span>
-                          </button>
-                        )
-                      })
-                  }
-                </div>
-                <div className="px-2 py-2 border-t border-border bg-surface-2">
-                  <button
-                    className="w-full py-1.5 text-xs font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity"
-                    onMouseDown={e => { e.preventDefault(); setOpen(false); setSearch('') }}
-                  >
-                    {hasFilter ? `Apply (${filterValues!.length} selected)` : 'Close'}
-                  </button>
-                </div>
-              </>
-            )}
-
-            {/* If sort-only (no filter options), show a close button */}
-            {!hasFilterOptions && (
-              <div className="px-2 py-2 border-t border-border bg-surface-2">
-                <button
-                  className="w-full py-1.5 text-xs font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity"
-                  onMouseDown={e => { e.preventDefault(); setOpen(false) }}
-                >
-                  Close
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </th>
-  )
-}
-
-function AllergenGridTab() {
-  const api = useApi()
-
-  const [allergens,     setAllergens]     = useState<Allergen[]>([])
-  const [rows,          setRows]          = useState<IngAllergenRow[]>([])
-  const [countries,     setCountries]     = useState<Country[]>([])
-  const [filterCountry, setFilterCountry] = useState('')
-  const [filterCats,    setFilterCats]    = useState<string[]>([])
-  const [loading,       setLoading]       = useState(true)
-  const [search,        setSearch]        = useState('')
-  const [toast,         setToast]         = useState<ToastState | null>(null)
-
-  // Refs — kept in sync with state to avoid stale closures in debounce timers
-  const rowsRef      = useRef<IngAllergenRow[]>([])
-  const allergensRef = useRef<Allergen[]>([])
-  const saveTimers   = useRef<Record<number, ReturnType<typeof setTimeout>>>({})
-  const quotedByCountry = useRef<Record<string, Set<number>>>({})
-
-  rowsRef.current      = rows
-  allergensRef.current = allergens
-
-  const showToast = (msg: string, type: 'success' | 'error' = 'success') =>
-    setToast({ message: msg, type })
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [ings, algs, assignments, ctrs, quotes] = await Promise.all([
-        api.get('/ingredients'),
-        api.get('/allergens'),
-        api.get('/allergens/ingredients'),
-        api.get('/countries'),
-        api.get('/price-quotes'),
-      ])
-
-      setAllergens(algs || [])
-      setCountries(ctrs || [])
-
-      // Build country → Set<ingredient_id>
-      const byCtry: Record<string, Set<number>> = {}
-      for (const q of (quotes || [])) {
-        const cid = String(q.country_id)
-        if (!byCtry[cid]) byCtry[cid] = new Set()
-        byCtry[cid].add(Number(q.ingredient_id))
-      }
-      quotedByCountry.current = byCtry
-
-      // Build ingredient → { allergenCode: status } map
-      const algMap: Record<number, Record<string, AlgStatus>> = {}
-      for (const a of (assignments || [])) {
-        if (!algMap[a.ingredient_id]) algMap[a.ingredient_id] = {}
-        algMap[a.ingredient_id][a.code] = a.status
-      }
-
-      const built: IngAllergenRow[] = (ings || []).map((ing: any) => ({
-        ingredient_id: ing.id,
-        name:          ing.name,
-        category:      ing.category,
-        _saveState:    'idle' as AlgSaveState,
-        ...(algs || []).reduce((acc: any, alg: any) => {
-          acc[alg.code] = algMap[ing.id]?.[alg.code] ?? null
-          return acc
-        }, {}),
-      }))
-      setRows(built)
-    } catch {
-      showToast('Failed to load allergen data', 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [api])
-
-  useEffect(() => { load() }, [load])
-
-  // Derived — categories for filter
-  const categoryOptions = useMemo(() =>
-    [...new Set(rows.map(r => r.category).filter(Boolean) as string[])].sort().map(c => ({ label: c, value: c }))
-  , [rows])
-
-  // Filtered rows
-  const filteredRows = useMemo(() => {
-    let result = rows
-    if (filterCountry) {
-      const allowed = quotedByCountry.current[filterCountry]
-      result = allowed ? result.filter(r => allowed.has(r.ingredient_id)) : []
-    }
-    if (filterCats.length > 0) {
-      result = result.filter(r => filterCats.includes(r.category ?? ''))
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      result = result.filter(r => r.name.toLowerCase().includes(q))
-    }
-    return result
-  }, [rows, filterCountry, filterCats, search])
-
-  // Sort
-  const [sortField, setSortField] = useState('name')
-  const [sortDir,   setSortDir]   = useState<SortDir>('asc')
-
-  function handleSort(field: string, dir: SortDir) {
-    setSortField(field); setSortDir(dir)
-  }
-
-  const sorted = useMemo(() => {
-    return [...filteredRows].sort((a, b) => {
-      const av = a[sortField] ?? ''
-      const bv = b[sortField] ?? ''
-      const cmp = String(av).localeCompare(String(bv))
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-  }, [filteredRows, sortField, sortDir])
-
-  // Cycle allergen status on click → debounced save
-  function cycleStatus(ingredientId: number, code: string) {
-    setRows(prev => prev.map(r => {
-      if (r.ingredient_id !== ingredientId) return r
-      const cur    = r[code] as AlgStatus | null
-      const nextIdx = (ALG_STATUS_ORDER.indexOf(cur) + 1) % ALG_STATUS_ORDER.length
-      return { ...r, [code]: ALG_STATUS_ORDER[nextIdx] }
-    }))
-
-    // Debounce: after 600ms of no changes for this ingredient, save
-    clearTimeout(saveTimers.current[ingredientId])
-    saveTimers.current[ingredientId] = setTimeout(() => {
-      const row = rowsRef.current.find(r => r.ingredient_id === ingredientId)
-      if (!row) return
-      const payload = allergensRef.current
-        .filter(a => row[a.code] != null)
-        .map(a => ({ allergen_id: a.id, status: row[a.code] as string }))
-      performSave(ingredientId, payload)
-    }, 600)
-  }
-
-  async function performSave(ingredientId: number, allergensList: any[]) {
-    setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _saveState: 'saving' } : r))
-    try {
-      await api.put(`/allergens/ingredient/${ingredientId}`, { allergens: allergensList })
-      setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _saveState: 'saved' } : r))
-      setTimeout(() => {
-        setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _saveState: 'idle' } : r))
-      }, 1500)
-    } catch {
-      showToast('Save failed', 'error')
-      setRows(prev => prev.map(r => r.ingredient_id === ingredientId ? { ...r, _saveState: 'error' } : r))
-    }
-  }
-
-  return (
-    <>
-      {/* ── Controls bar ────────────────────────────────────────────────────── */}
-      <div className="flex gap-3 mb-4 flex-wrap items-center">
-        <div className="relative">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
-          <input
-            type="search" placeholder="Search ingredients…"
-            value={search} onChange={e => setSearch(e.target.value)}
-            className="input pl-9 w-52"
-          />
-        </div>
-
-        <select
-          className="select"
-          value={filterCountry}
-          onChange={e => setFilterCountry(e.target.value)}
-        >
-          <option value="">All Countries</option>
-          {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-
-        {/* Legend */}
-        <div className="ml-auto flex items-center gap-3 flex-wrap">
-          {Object.entries(ALG_LABEL).map(([status, label]) => (
-            <span key={status} className="flex items-center gap-1 text-xs text-text-2">
-              <span className={`w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center ${ALG_CELL_CLS[status].split(' ').slice(0, 2).join(' ')}`}>
-                {ALG_ABBR[status]}
-              </span>
-              {label}
-            </span>
-          ))}
-          <span className="text-xs text-text-3">· click cell to cycle · auto-saves</span>
-        </div>
-      </div>
-
-      {loading ? <Spinner /> : sorted.length === 0 ? (
-        <EmptyState
-          message={search || filterCountry || filterCats.length > 0
-            ? 'No ingredients match your filters.'
-            : 'No ingredients found.'}
-        />
-      ) : (
-        <div className="overflow-auto rounded-xl border border-border" style={{ maxHeight: 'calc(100vh - 310px)' }}>
-          <table className="text-sm border-collapse" style={{ minWidth: `${310 + allergens.length * 52}px` }}>
-            {/* ── Header ──────────────────────────────────────────────────── */}
-            <thead>
-              <tr>
-                {/* Ingredient name — sticky left */}
-                <AlgSortTh
-                  label="Ingredient" field="name"
-                  sortField={sortField} sortDir={sortDir} onSort={handleSort}
-                  sticky left={0} minWidth={200}
-                />
-                {/* Category — sticky behind name */}
-                <AlgSortTh
-                  label="Category" field="category"
-                  sortField={sortField} sortDir={sortDir} onSort={handleSort}
-                  sticky left={200} minWidth={130}
-                  filterOptions={categoryOptions}
-                  filterValues={filterCats}
-                  onFilter={setFilterCats}
-                />
-                {/* 14 allergen columns — rotated headers */}
-                {allergens.map(a => (
-                  <th key={a.code} title={a.name} className="border-r border-border last:border-r-0 bg-surface-2 w-[52px] min-w-[52px]">
-                    <div className="flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
-                      style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 96 }}>
-                      {a.code}
-                    </div>
-                  </th>
-                ))}
-                {/* Save indicator column */}
-                <th className="w-7 bg-surface-2 border-l border-border" />
-              </tr>
-            </thead>
-
-            {/* ── Body ────────────────────────────────────────────────────── */}
-            <tbody>
-              {sorted.map(row => (
-                <tr
-                  key={row.ingredient_id}
-                  className={`border-b border-border last:border-0 transition-colors
-                    ${row._saveState === 'saving' ? 'opacity-60' : 'hover:bg-surface-2/60'}`}
-                >
-                  {/* Name — sticky */}
-                  <td
-                    className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-2 font-semibold text-text-1 whitespace-nowrap"
-                    style={{ minWidth: 200 }}
-                  >
-                    {row.name}
-                  </td>
-
-                  {/* Category — sticky */}
-                  <td
-                    className="sticky bg-surface border-r border-border px-3 py-2 text-text-3 text-xs whitespace-nowrap"
-                    style={{ left: 200, minWidth: 130 }}
-                  >
-                    {row.category || '—'}
-                  </td>
-
-                  {/* Allergen cells */}
-                  {allergens.map(a => {
-                    const status = row[a.code] as AlgStatus | null
-                    return (
-                      <td key={a.code} className="border-r border-border last:border-r-0">
-                        <div className="flex items-center justify-center py-1.5">
-                          <button
-                            type="button"
-                            title={`${a.name}: ${status ? ALG_LABEL[status] : 'Not set'} — click to cycle`}
-                            onClick={() => cycleStatus(row.ingredient_id, a.code)}
-                            className={`w-9 h-8 rounded font-bold text-xs transition-all active:scale-90
-                              ${status
-                                ? ALG_CELL_CLS[status]
-                                : 'bg-surface-2 text-text-3 hover:bg-border border border-border'
-                              }`}
-                          >
-                            {status ? ALG_ABBR[status] : '—'}
-                          </button>
-                        </div>
-                      </td>
-                    )
-                  })}
-
-                  {/* Save state */}
-                  <td className="w-7 text-center border-l border-border">
-                    {row._saveState === 'saving' && (
-                      <span className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                    )}
-                    {row._saveState === 'saved' && (
-                      <span className="text-accent font-bold text-xs">✓</span>
-                    )}
-                    {row._saveState === 'error' && (
-                      <span className="text-red-500 font-bold text-xs">!</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Row count */}
-      {!loading && sorted.length > 0 && (
-        <div className="mt-2 text-xs text-text-3 text-right">
-          {sorted.length} ingredient{sorted.length !== 1 ? 's' : ''}
-          {(filterCountry || filterCats.length > 0 || search) && ` (filtered from ${rows.length})`}
-        </div>
-      )}
-
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-    </>
-  )
-}
-
 // ── Category Combo (used in ingredient modal) ─────────────────────────────────
-
 
 function CategoryCombo({ value, onChange, options }: {
   value: string; onChange: (v: string) => void; options: string[]
