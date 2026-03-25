@@ -1,7 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import AiChat, { type PepperMode } from './AiChat'
+
+const PANEL_WIDTH_KEY  = 'pepper-panel-width'
+const MIN_PANEL_WIDTH  = 280
+const MAX_PANEL_WIDTH  = 700
+const DEFAULT_PANEL_W  = 390
 
 // ── Context menu types ─────────────────────────────────────────────────────────
 
@@ -162,13 +167,49 @@ function PepperContextMenu({
 
 export default function AppLayout() {
   const [ctxMenu,    setCtxMenu]    = useState<ContextMenuState | null>(null)
-  const [pepperMode,  setPepperMode]  = useState<PepperMode>(() =>
+  const [pepperMode, setPepperMode] = useState<PepperMode>(() =>
     (localStorage.getItem('pepper-mode') as PepperMode) || 'float'
   )
+  const [panelWidth, setPanelWidth] = useState<number>(() =>
+    parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || String(DEFAULT_PANEL_W), 10)
+  )
+  const panelWidthRef  = useRef(panelWidth)
+  const pepperModeRef  = useRef(pepperMode)
+  useEffect(() => { panelWidthRef.current = panelWidth },  [panelWidth])
+  useEffect(() => { pepperModeRef.current = pepperMode },  [pepperMode])
 
   const handleModeChange = useCallback((m: PepperMode) => {
     setPepperMode(m)
     localStorage.setItem('pepper-mode', m)
+  }, [])
+
+  // ── Docked panel resize drag ───────────────────────────────────────────────
+  const startPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = panelWidthRef.current
+    const side   = pepperModeRef.current
+
+    function onMove(ev: MouseEvent) {
+      // docked-left: drag right edge → moving right increases width
+      // docked-right: drag left edge → moving left increases width
+      const dx    = side === 'docked-left' ? ev.clientX - startX : startX - ev.clientX
+      const newW  = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, startW + dx))
+      panelWidthRef.current = newW
+      setPanelWidth(newW)
+    }
+    function onUp() {
+      localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidthRef.current))
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup',   onUp)
+    }
+
+    document.body.style.cursor     = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup',   onUp)
   }, [])
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
@@ -237,8 +278,19 @@ export default function AppLayout() {
 
       {/* Docked-left panel */}
       {pepperMode === 'docked-left' && (
-        <div className="flex-shrink-0 border-r print:hidden" style={{ width: 390, borderColor: 'var(--border)' }}>
+        <div className="relative flex-shrink-0 border-r print:hidden"
+          style={{ width: panelWidth, borderColor: 'var(--border)' }}>
           <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+          {/* Resize handle — right edge */}
+          <div
+            onMouseDown={startPanelResize}
+            className="absolute top-0 right-0 h-full z-20 flex items-center justify-center group"
+            style={{ width: 6, cursor: 'col-resize' }}
+            title="Drag to resize"
+          >
+            <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: 'var(--accent)' }} />
+          </div>
         </div>
       )}
 
@@ -248,8 +300,19 @@ export default function AppLayout() {
 
       {/* Docked-right panel */}
       {pepperMode === 'docked-right' && (
-        <div className="flex-shrink-0 border-l print:hidden" style={{ width: 390, borderColor: 'var(--border)' }}>
+        <div className="relative flex-shrink-0 border-l print:hidden"
+          style={{ width: panelWidth, borderColor: 'var(--border)' }}>
           <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+          {/* Resize handle — left edge */}
+          <div
+            onMouseDown={startPanelResize}
+            className="absolute top-0 left-0 h-full z-20 flex items-center justify-center group"
+            style={{ width: 6, cursor: 'col-resize' }}
+            title="Drag to resize"
+          >
+            <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: 'var(--accent)' }} />
+          </div>
         </div>
       )}
 

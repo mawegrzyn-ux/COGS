@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, RefObject } from 'react'
+import React, { useState, useRef, useEffect, useCallback, RefObject } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 
@@ -96,6 +96,12 @@ function renderMd(text: string): string {
 const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 
 export type PepperMode = 'float' | 'docked-left' | 'docked-right'
+
+const FLOAT_SIZE_KEY  = 'pepper-float-size'
+const MIN_FLOAT_W = 300
+const MAX_FLOAT_W = 800
+const MIN_FLOAT_H = 380
+const MAX_FLOAT_H = 900
 
 // ── HistoryPanel — module-level component (stable identity across renders) ────
 
@@ -367,6 +373,16 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
   const [sessions,           setSessions]           = useState<ChatSession[]>([])
   const [sessionsLoad,       setSessionsLoad]       = useState(false)
 
+  const [floatSize, setFloatSize] = useState<{ w: number; h: number }>(() => {
+    try {
+      const s = localStorage.getItem(FLOAT_SIZE_KEY)
+      if (s) return JSON.parse(s)
+    } catch { /* ignore */ }
+    return { w: 390, h: 600 }
+  })
+  const floatSizeRef = useRef(floatSize)
+  useEffect(() => { floatSizeRef.current = floatSize }, [floatSize])
+
   const bottomRef    = useRef<HTMLDivElement>(null)
   const inputRef     = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -583,6 +599,40 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     } catch { /* silent */ }
   }, [])
 
+  // ── Float panel resize ────────────────────────────────────────────────────
+  // Panel is pinned to bottom-right, so dragging the top-left corner
+  // moves the top (height) and left (width) edges.
+
+  const startFloatResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = floatSizeRef.current.w
+    const startH = floatSizeRef.current.h
+
+    function onMove(ev: MouseEvent) {
+      // Moving left → panel grows wider (right edge is fixed)
+      const w = Math.max(MIN_FLOAT_W, Math.min(MAX_FLOAT_W, startW - (ev.clientX - startX)))
+      // Moving up → panel grows taller (bottom edge is fixed)
+      const h = Math.max(MIN_FLOAT_H, Math.min(MAX_FLOAT_H, startH - (ev.clientY - startY)))
+      floatSizeRef.current = { w, h }
+      setFloatSize({ w, h })
+    }
+    function onUp() {
+      localStorage.setItem(FLOAT_SIZE_KEY, JSON.stringify(floatSizeRef.current))
+      document.body.style.cursor     = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup',   onUp)
+    }
+
+    document.body.style.cursor     = 'nw-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup',   onUp)
+  }, [])
+
   // Generate / revoke object URL for image previews
   useEffect(() => {
     if (attachedFile && attachedFile.type.startsWith('image/')) {
@@ -694,16 +744,17 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
             <path d="M12 5v14M5 12h14"/>
           </svg>
         </button>
-        {/* Close button — float only */}
-        {!docked && (
-          <button onClick={() => setOpen(false)}
-            className="p-1.5 rounded hover:bg-white/20 transition-colors ml-0.5"
-            title="Close" aria-label="Close Pepper">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M18 6L6 18M6 6l12 12"/>
-            </svg>
-          </button>
-        )}
+        {/* Close button — always visible */}
+        <button
+          onClick={docked ? () => onModeChange?.('float') : () => setOpen(false)}
+          className="p-1.5 rounded hover:bg-white/20 transition-colors ml-0.5"
+          title={docked ? 'Close panel' : 'Close'}
+          aria-label={docked ? 'Close panel' : 'Close Pepper'}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
       </div>
     </div>
   )
@@ -752,7 +803,21 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
       </button>
       {open && (
         <div className="pepper-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
-          style={{ width: '390px', height: '600px', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          style={{ width: floatSize.w, height: floatSize.h, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          {/* Resize handle — top-left corner (panel is bottom-right anchored) */}
+          <div
+            onMouseDown={startFloatResize}
+            className="absolute top-0 left-0 z-10 rounded-tl-xl"
+            style={{ width: 24, height: 24, cursor: 'nw-resize' }}
+            title="Drag to resize"
+          >
+            {/* Grip dots */}
+            <svg width="10" height="10" viewBox="0 0 10 10" className="absolute top-1.5 left-1.5 opacity-30">
+              {[1,4,7].flatMap(x => [1,4,7].map(y => (
+                <circle key={`${x}-${y}`} cx={x} cy={y} r="0.9" fill="var(--text-3)" />
+              )))}
+            </svg>
+          </div>
           {panelHeader}
           {panelBody}
         </div>
