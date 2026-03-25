@@ -46,9 +46,9 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'exchange-rates': 'How does the Exchange Rates sync work? How are exchange rates used when I have menus priced in different currencies, and how often should I sync them?',
   'system':         'What is on the System settings tab? What admin information and tools are available here?',
   'thresholds':     'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
-  'test-data':      'What is the Test Data tab for? When would I use it and what does it do?',
-  'ai':             'What AI settings are available? Explain the Brave Search API key, what concise mode does, and when I would want to turn it on or off.',
-  'import':         'How does the Settings Import tab work? What can I import or export here?',
+  'test-data':      'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
+  'ai':             'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, and the Claude Code Integration key — what each does and when I would configure it.',
+  'import':         'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────

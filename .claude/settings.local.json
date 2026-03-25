@@ -36,7 +36,10 @@
       "Bash(powershell.exe -Command \"git -C ''C:/GitHubReps/COGS'' status\")",
       "Bash(git -C \"C:/GitHubReps/COGS\" add api/src/routes/ai-chat.js app/src/pages/MenusPage.tsx app/src/pages/RecipesPage.tsx)",
       "Bash(git -C:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(cmd /c \"curl -s -H \"\"X-Internal-Key: ccak_4af1a4e0b8d76bc710f830df2a4ef86d7105f6a8710db1d2\"\" \"\"http://localhost:3001/api/internal/feedback?limit=50\"\"\")",
+      "Bash(powershell -Command \"Invoke-RestMethod -Uri ''http://localhost:3001/api/internal/feedback?limit=50'' -Headers @{''X-Internal-Key''=''ccak_4af1a4e0b8d76bc710f830df2a4ef86d7105f6a8710db1d2''} | ConvertTo-Json -Depth 5\")",
+      "WebFetch(domain:obscurekitty.com)"
     ]
   },
   "disableAllHooks": true,

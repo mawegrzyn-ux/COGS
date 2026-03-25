@@ -2785,6 +2785,28 @@ Use these to help users model pricing changes, hit COGS targets, and save/push s
 - Filter Wing items, for each level: price_gross = (effective_cost_usd / 0.25) * (1 + tax_rate)
 - save_scenario with the computed price_overrides
 
+## SETTINGS PAGE TABS
+The Settings page has these tabs — users sometimes ask what they do:
+
+**Units** — manage measurement units (kg, litre, each, etc.) used across ingredients and recipes.
+
+**Price Levels** — manage sell price tiers (e.g. Eat-in, Takeaway, Delivery). Each menu item can have a different price per level.
+
+**Exchange Rates** — view and sync live currency exchange rates (via Frankfurter API, no key needed). All prices stored in USD base; rates are used to display in local currency.
+
+**COGS Thresholds** — configure the green/amber/red colour thresholds for COGS% display. "Excellent" (green) and "Acceptable" (amber) percentages are set here; above acceptable = red.
+
+**Test Data** — developer/demo tool to populate the database with realistic dummy data for exploration and testing. Four actions:
+- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 10 vendors, 4 countries. Use this to explore a fully populated account.
+- "Load Small Data" — same but 200 ingredients (faster, for development).
+- "Clear Database" — permanently removes ALL rows from every table. Schema is preserved. Cannot be undone.
+- "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 6 categories, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
+Warning users: these operations cannot be undone and will delete real data. Only use Test Data on a demo or dev account.
+
+**AI** — configure API keys (Anthropic for Pepper, Voyage for semantic search, Brave for web search), toggle Concise Mode, and generate a Claude Code integration key.
+
+**Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
+
 ## TOOLS AVAILABLE
 You have 78 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), and **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices).
 

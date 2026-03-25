@@ -3252,27 +3252,31 @@ ${tableHtml}
                     <>
                       {/* ── Category header row ── */}
                       <tr key={`cat-${cat}`}
-                        className="bg-blue-50/40 border-y border-blue-100 cursor-pointer select-none hover:bg-blue-100/60"
+                        className="border-y cursor-pointer select-none transition-colors"
+                        style={{ background: 'var(--accent-dim)', borderColor: 'var(--border)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#d4eddc')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent-dim)')}
                         onClick={() => toggleCat(cat)}
                       >
-                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide" colSpan={4}>
+                        <td className="px-3 py-1.5 font-bold text-xs uppercase tracking-wide" colSpan={4}
+                          style={{ color: 'var(--accent-dark)' }}>
                           <span className="inline-flex items-center gap-1.5">
-                            <span className="text-gray-400 text-[9px] w-2.5 shrink-0">{collapsedCats.has(cat) ? '▶' : '▼'}</span>
+                            <span className="text-[9px] w-2.5 shrink-0" style={{ color: 'var(--accent)' }}>{collapsedCats.has(cat) ? '▶' : '▼'}</span>
                             {cat}
                             {collapsedCats.has(cat) && (
                               <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
                             )}
                           </span>
                         </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
                           {cQ > 0 ? cQ.toLocaleString() : '—'}
                         </td>
-                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{fmtMix(cQ, totalQty)}</td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                        <td className="px-3 py-1.5 text-right text-xs" style={{ color: 'var(--text-3)' }}>{fmtMix(cQ, totalQty)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
                           {cR > 0 ? fmtMoney(cR) : '—'}
                         </td>
-                        <td className="px-3 py-1.5 text-right text-xs text-gray-500">{cR > 0 ? fmtMix(cR, totalNet) : '—'}</td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                        <td className="px-3 py-1.5 text-right text-xs" style={{ color: 'var(--text-3)' }}>{cR > 0 ? fmtMix(cR, totalNet) : '—'}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
                           {cC > 0 ? fmtMoney(cC) : '—'}
                         </td>
                         <td className={`px-3 py-1.5 text-right text-xs ${cogsColour(cP)}`}>{fmtPct(cP)}</td>
