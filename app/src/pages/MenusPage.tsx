@@ -193,7 +193,7 @@ export default function MenusPage() {
 
   // scenario tool
   const [scenarioMenuId,  setScenarioMenuId]  = useState<number | null>(null)
-  const [scenarioLevelId, setScenarioLevelId] = useState<number | '' | 'ALL'>('')
+  const [scenarioLevelId, setScenarioLevelId] = useState<number | '' | 'ALL'>('ALL')
   const [scenarioData,    setScenarioData]    = useState<CogsData | null>(null)
   const [scenarioLoading, setScenarioLoading] = useState(false)
   const [scenarioQty,     setScenarioQty]     = useState<Record<string, string>>({})
@@ -2023,7 +2023,15 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, onG
           const key   = item.item_type === 'recipe'
             ? `r_${item.recipe_id}`
             : `i_${item.ingredient_id}`
-          qMap[key]   = String(qty)
+          // Plain key — used by single-level view
+          qMap[key] = String(qty)
+          // Per-level keys — used by All Levels view (format: natKey__lLevelId)
+          for (const level of activeLevels) {
+            if (level.id === 0) continue // placeholder level, skip
+            const pct      = activeLevels.length === 1 ? 100 : (parseFloat(String(levelPcts[level.id])) || 0)
+            const levelQty = Math.max(0, Math.round(qty * pct / 100))
+            if (levelQty > 0) qMap[`${key}__l${level.id}`] = String(levelQty)
+          }
           previewRows.push({
             label: item.display_name,
             qty,
@@ -2900,23 +2908,11 @@ ${tableHtml}
       {scToast && <Toast message={scToast.msg} type={scToast.type === 'error' ? 'error' : 'success'} onClose={() => setScToast(null)} />}
       <div className="bg-white rounded-lg border border-gray-200">
 
-        {/* Toolbar */}
-        <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
+        {/* Toolbar — row 1: selectors */}
+        <div className="px-4 pt-4 pb-2 border-b border-gray-100 flex flex-wrap gap-3 items-center">
           <span className="font-semibold text-gray-700 text-sm shrink-0">📊 Scenario</span>
 
-          {/* ① Scenario — button opens modal */}
-          <button
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium
-              ${savedId ? 'border-accent bg-accent-dim text-accent' : 'border-gray-200 bg-white text-gray-600'} hover:border-accent`}
-            onClick={() => setShowScenarioModal(true)}
-            disabled={loadingScenarios}
-          >
-            <span className="truncate max-w-[180px]">{savedName || '— New scenario —'}</span>
-            {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />}
-            <span className="text-gray-400 text-xs">▾</span>
-          </button>
-
-          {/* ② Menu (was "Market") */}
+          {/* Menu */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400">Menu</span>
             <select
@@ -2929,7 +2925,7 @@ ${tableHtml}
             </select>
           </div>
 
-          {/* ③ Price level */}
+          {/* Price level */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400">Level</span>
             <select
@@ -2948,7 +2944,7 @@ ${tableHtml}
             </select>
           </div>
 
-          {/* ④ Display currency */}
+          {/* Display currency */}
           {menuCountry && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-gray-400">Display</span>
@@ -2962,67 +2958,82 @@ ${tableHtml}
             </div>
           )}
 
-          {/* Actions */}
-          <div className="flex gap-1.5 ml-auto items-center flex-wrap">
+          {/* Compact + Excel / Print — aligned right in the selector row */}
+          {(levelId === 'ALL' || data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
+            <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden ml-auto">
+              {levelId === 'ALL' && (
+                <button
+                  className={`px-2.5 py-1.5 text-xs border-r border-gray-200 hover:bg-gray-50 ${allLevelsCompact ? 'bg-accent text-white hover:bg-accent' : ''}`}
+                  onClick={() => setAllLevelsCompact(v => !v)}
+                  title={allLevelsCompact ? 'Expand all levels' : 'Compact all levels'}
+                >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
+              )}
+              {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
+                <>
+                  <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200" onClick={exportExcel}>📊 Excel</button>
+                  <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50" onClick={handlePrint}>🖨 Print</button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
-            {/* What If — always shown when menu loaded */}
-            {menuId && (
-              <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
-            )}
+        {/* Toolbar — row 2: scenario picker + actions */}
+        <div className="px-4 py-2 border-b border-gray-100 flex flex-wrap gap-1.5 items-center">
 
-            {/* Override reset buttons */}
-            {Object.keys(priceOverrides).length > 0 && (
-              <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
-            )}
-            {Object.keys(costOverrides).length > 0 && (
-              <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
-            )}
+          {/* What If — first item on this row */}
+          {menuId && (
+            <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
+          )}
 
-            {/* Push prices to live menu */}
-            {Object.keys(priceOverrides).length > 0 && (
-              <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
-            )}
+          {/* Scenario picker */}
+          <button
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium
+              ${savedId ? 'border-accent bg-accent-dim text-accent' : 'border-gray-200 bg-white text-gray-600'} hover:border-accent`}
+            onClick={() => setShowScenarioModal(true)}
+            disabled={loadingScenarios}
+          >
+            <span className="truncate max-w-[180px]">{savedName || '— New scenario —'}</span>
+            {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />}
+            <span className="text-gray-400 text-xs">▾</span>
+          </button>
 
-            {/* History */}
-            {history.length > 0 && (
-              <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
-            )}
+          {/* Save */}
+          <button
+            className="btn btn-sm btn-primary text-xs"
+            onClick={() => setShowScenarioModal(true)}
+            title="Save or update scenario"
+          >💾 {savedId ? 'Update' : 'Save'}</button>
 
-            {/* Generate Mix + Reset Qty — always shown when menu loaded */}
-            {menuId && (
-              <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Generate Mix</button>
-            )}
-            {(hasQty || Object.values(qty).some(v => parseFloat(v) > 0)) && (
-              <button className="btn btn-sm btn-outline text-xs" onClick={() => {
-                onResetQty()
-                addHistoryEntry('reset_qty', 'Quantities reset')
-                markDirty()
-              }}>↺ Qty</button>
-            )}
+          {/* Override reset buttons */}
+          {Object.keys(priceOverrides).length > 0 && (
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
+          )}
+          {Object.keys(costOverrides).length > 0 && (
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
+          )}
 
-            {/* Save */}
-            <button
-              className="btn btn-sm btn-primary text-xs"
-              onClick={() => setShowScenarioModal(true)}
-              title="Save or update scenario"
-            >💾 {savedId ? 'Update' : 'Save'}</button>
+          {/* Push prices to live menu */}
+          {Object.keys(priceOverrides).length > 0 && (
+            <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
+          )}
 
-            {/* Compact toggle (All Levels only) */}
-            {levelId === 'ALL' && (
-              <button
-                className={`btn btn-sm text-xs border ${allLevelsCompact ? 'bg-accent text-white border-accent' : 'btn-outline'}`}
-                onClick={() => setAllLevelsCompact(v => !v)}
-              >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
-            )}
+          {/* History */}
+          {history.length > 0 && (
+            <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
+          )}
 
-            {/* Excel / Print */}
-            {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
-              <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
-                <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200" onClick={exportExcel}>📊 Excel</button>
-                <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50" onClick={handlePrint}>🖨 Print</button>
-              </div>
-            )}
-          </div>
+          {/* Generate Mix + Reset Qty */}
+          {menuId && (
+            <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Generate Mix</button>
+          )}
+          {(hasQty || Object.values(qty).some(v => parseFloat(v) > 0)) && (
+            <button className="btn btn-sm btn-outline text-xs" onClick={() => {
+              onResetQty()
+              addHistoryEntry('reset_qty', 'Quantities reset')
+              markDirty()
+            }}>↺ Qty</button>
+          )}
         </div>
 
         {/* ── Scenario Modal ─────────────────────────────────────────────── */}
@@ -3176,6 +3187,7 @@ ${tableHtml}
                                   setCostOverrides(prev => v === '' ? (({ [row.nat_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.nat_key]: v })
                                   markDirty()
                                 }}
+                                onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
                                 placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
                                 className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                   ${row.nat_key in costOverrides
@@ -3203,6 +3215,7 @@ ${tableHtml}
                                       setPriceOverrides(prev => v === '' ? (({ [priceKey]: _, ...rest }) => rest)(prev) : { ...prev, [priceKey]: v })
                                       markDirty()
                                     }}
+                                    onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} → ${e.target.value}`) }}
                                     placeholder={row.base_price_gross > 0 ? String(Math.round(row.base_price_gross * 100) / 100) : '—'}
                                     className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                       ${isOv
@@ -3356,6 +3369,7 @@ ${tableHtml}
                                     setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
                                     markDirty()
                                   }}
+                                  onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
                                   placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
                                   className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
                                     ${row.is_cost_overridden
@@ -3391,6 +3405,7 @@ ${tableHtml}
                                         setPriceOverrides(prev => v === '' ? (({ [p.price_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [p.price_override_key]: v })
                                         markDirty()
                                       }}
+                                      onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} [${p.level.name}] → ${e.target.value}`) }}
                                       placeholder={p.base_price_gross > 0 ? String(Math.round(p.base_price_gross * 100) / 100) : ''}
                                       className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
                                         ${p.is_price_overridden
