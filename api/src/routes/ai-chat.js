@@ -2727,21 +2727,21 @@ You can both READ and WRITE to the database — you are a full sysadmin assistan
 Use these to help users model pricing changes, hit COGS targets, and save/push scenarios.
 
 ### Workflow for scenario changes:
-1. `get_scenario_analysis(menu_id)` — get all items with costs, prices, tax rates, COGS% per level
+1. get_scenario_analysis(menu_id) — get all items with costs, prices, tax rates, COGS% per level
 2. Compute new values (all in USD):
    - **% price change**: new_price = base_price_usd * (1 + pct/100)
    - **Target COGS%**: price_gross_usd = (effective_cost_usd / target_cogs_decimal) * (1 + tax_rate)
    - **% cost change**: new_cost = base_cost_usd * (1 + pct/100)
    - **Filter by category**: match item.category (case-insensitive contains)
-3. `save_scenario(name, menu_id, price_overrides, cost_overrides, note)` — save with computed values
-4. Optionally `push_scenario_prices(scenario_id)` — make prices live (confirm first, warns user it's permanent)
+3. save_scenario(name, menu_id, price_overrides, cost_overrides, note) — save with computed values
+4. Optionally push_scenario_prices(scenario_id) — make prices live (confirm first, warns user it's permanent)
 
 ### Key fields from get_scenario_analysis:
-- `item.cost_override_key` = `item.nat_key` e.g. "r_5" — key for cost_overrides
-- `item.per_level[].price_override_key` e.g. "42_l1" — key for price_overrides
-- `item.per_level[].tax_rate` — decimal tax rate for that level (use in target COGS formula)
-- `item.per_level[].base_price_usd` — current price before any override
-- `item.effective_cost_usd` — current cost (with any cost override applied)
+- item.cost_override_key = item.nat_key e.g. "r_5" — key for cost_overrides
+- item.per_level[].price_override_key e.g. "42_l1" — key for price_overrides
+- item.per_level[].tax_rate — decimal tax rate for that level (use in target COGS formula)
+- item.per_level[].base_price_usd — current price before any override
+- item.effective_cost_usd — current cost (with any cost override applied)
 
 ### Example — "raise Wings prices by 10% across all levels":
 - Filter items where category contains "wing"

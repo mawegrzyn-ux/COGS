@@ -31,7 +31,9 @@
       "Bash(cmd /c \"cd C:\\\\GitHubReps\\\\COGS\\\\app && npx tsc --noEmit --skipLibCheck 2>&1\")",
       "Bash(cmd /c \"git status\")",
       "Bash(git -C \"C:/GitHubReps/COGS\" status)",
-      "Bash(powershell.exe -Command \"git -C ''C:/GitHubReps/COGS'' status\")"
+      "Bash(powershell.exe -Command \"git -C ''C:/GitHubReps/COGS'' status\")",
+      "Bash(git -C \"C:/GitHubReps/COGS\" add api/src/routes/ai-chat.js app/src/pages/MenusPage.tsx app/src/pages/RecipesPage.tsx)",
+      "Bash(git -C:*)"
     ]
   },
   "disableAllHooks": true,
