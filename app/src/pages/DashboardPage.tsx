@@ -18,6 +18,17 @@ interface DashStats {
 interface PriceLevel { id: number; name: string; is_default: boolean }
 interface CogsThresholds { excellent: number; acceptable: number }
 
+interface SimpleMenu { id: number; name: string; country_id: number; country_name: string }
+
+interface MenuCogsTile {
+  menu_id:      number
+  menu_name:    string
+  country_name: string
+  country_id:   number
+  item_count:   number
+  levels:       { id: number; name: string; is_default: boolean; cogs_pct: number | null }[]
+}
+
 interface RecentQuote {
   id: number
   ingredient_name: string
@@ -226,7 +237,10 @@ export default function DashboardPage() {
   const [recentQuotes, setRecentQuotes] = useState<RecentQuote[]>([])
   const [missingCoverage, setMissingCoverage] = useState<CoverageItem[]>([])
   const [priceLevelList, setPriceLevelList] = useState<PriceLevel[]>([])
+  const [menuList, setMenuList] = useState<SimpleMenu[]>([])
   const [cogsThresholds, setCogsThresholds] = useState<CogsThresholds | null>(null)
+  const [menuTiles, setMenuTiles] = useState<MenuCogsTile[]>([])
+  const [menuTilesLoading, setMenuTilesLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
@@ -260,6 +274,7 @@ export default function DashboardPage() {
         ])
 
         setPriceLevelList(priceLevels || [])
+        setMenuList(menus || [])
         if (settings?.cogs_thresholds) setCogsThresholds(settings.cogs_thresholds)
 
         const activeQuotes: RecentQuote[] = (quotes || []).filter(
@@ -327,9 +342,58 @@ export default function DashboardPage() {
     [api]
   )
 
+  useEffect(() => { load() }, [load])
+
+  // ── Load per-menu COGS tiles (background, after main data ready) ──
   useEffect(() => {
-    load()
-  }, [load])
+    if (!menuList.length || !priceLevelList.length) return
+    let cancelled = false
+    setMenuTilesLoading(true)
+    Promise.all(
+      menuList.map(async menu => {
+        const levelResults = await Promise.all(
+          priceLevelList.map(level =>
+            api.get(`/cogs/menu/${menu.id}?market_id=${menu.country_id}&price_level_id=${level.id}`)
+              .then((res: any) => ({
+                level_id:   level.id,
+                cogs_pct:   res?.summary?.cogs_pct_net ?? null,
+                item_count: (res?.items ?? []).length,
+              }))
+              .catch(() => ({ level_id: level.id, cogs_pct: null, item_count: 0 }))
+          )
+        )
+        const item_count = Math.max(...levelResults.map(r => r.item_count))
+        return {
+          menu_id:      menu.id,
+          menu_name:    menu.name,
+          country_name: menu.country_name,
+          country_id:   menu.country_id,
+          item_count:   item_count > 0 ? item_count : 0,
+          levels:       priceLevelList.map((level, i) => ({
+            id:         level.id,
+            name:       level.name,
+            is_default: level.is_default,
+            cogs_pct:   levelResults[i].cogs_pct,
+          })),
+        } as MenuCogsTile
+      })
+    ).then(tiles => {
+      if (!cancelled) setMenuTiles(tiles)
+    }).finally(() => {
+      if (!cancelled) setMenuTilesLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [menuList, priceLevelList, api])
+
+  // ── Helpers ──
+
+  function cogsColor(pct: number | null, thresholds: CogsThresholds | null) {
+    if (pct == null) return 'text-text-3'
+    if (!thresholds) return 'text-text-1'
+    if (pct <= thresholds.excellent)  return 'text-emerald-600'
+    if (pct <= thresholds.acceptable) return 'text-amber-500'
+    return 'text-red-500'
+  }
 
   // ── Render ──
 
@@ -384,35 +448,67 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        {/* ── COGS per price level ── */}
-        {!loading && priceLevelList.length > 0 && (
+        {/* ── Menu COGS tiles ── */}
+        {!loading && menuList.length > 0 && (
           <div className="card p-5">
-            <SectionHeader title="COGS per Price Level" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {priceLevelList.map(level => (
-                <div key={level.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-border bg-surface-2/50">
-                  <div>
-                    <div className="text-sm font-semibold text-text-1 flex items-center gap-1.5">
-                      {level.name}
-                      {level.is_default && <span className="text-[10px] font-bold bg-accent-dim text-accent px-1.5 py-0.5 rounded-full">default</span>}
-                    </div>
-                    <div className="text-xs text-text-3 mt-0.5">Price level</div>
-                  </div>
-                  {cogsThresholds ? (
-                    <div className="text-right">
-                      <div className="text-xs font-medium text-emerald-600">✓ ≤{cogsThresholds.excellent}%</div>
-                      <div className="text-xs text-amber-500">~ ≤{cogsThresholds.acceptable}%</div>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-text-3">No targets set</div>
-                  )}
+            <div className="flex items-center justify-between mb-4">
+              <SectionHeader title="Menus" count={menuList.length} />
+              {cogsThresholds && (
+                <div className="flex items-center gap-3 text-xs text-text-3 mb-4">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />≤{cogsThresholds.excellent}% excellent</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />≤{cogsThresholds.acceptable}% acceptable</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" />above target</span>
                 </div>
-              ))}
+              )}
             </div>
-            {cogsThresholds && (
-              <p className="text-xs text-text-3 mt-2.5">
-                ✓ excellent · ~ acceptable · COGS targets apply to all price levels
-              </p>
+            {menuTilesLoading && menuTiles.length === 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {menuList.map(m => <Skeleton key={m.id} className="h-32" />)}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {menuTiles.map(tile => (
+                  <a
+                    key={tile.menu_id}
+                    href="/menus"
+                    className="block rounded-xl border border-border bg-surface hover:border-accent/40 hover:shadow-sm transition-all group"
+                  >
+                    {/* Tile header */}
+                    <div className="px-4 pt-3 pb-2 border-b border-border/60">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-semibold text-sm text-text-1 group-hover:text-accent transition-colors leading-tight">
+                          {tile.menu_name}
+                        </div>
+                        <span className="flex-shrink-0 text-[10px] font-medium bg-surface-2 text-text-3 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                          {tile.item_count} item{tile.item_count !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <div className="text-xs text-text-3 mt-0.5">{tile.country_name}</div>
+                    </div>
+
+                    {/* Price level COGS rows */}
+                    <div className="px-4 py-2 space-y-1">
+                      {tile.levels.map(level => (
+                        <div key={level.id} className="flex items-center justify-between">
+                          <span className="text-xs text-text-2 flex items-center gap-1">
+                            {level.name}
+                            {level.is_default && (
+                              <span className="text-[9px] font-bold bg-accent-dim text-accent px-1 py-0 rounded-full leading-4">default</span>
+                            )}
+                          </span>
+                          {menuTilesLoading && level.cogs_pct == null ? (
+                            <span className="w-10 h-3 bg-surface-2 rounded animate-pulse" />
+                          ) : (
+                            <span className={`text-xs font-semibold tabular-nums ${cogsColor(level.cogs_pct, cogsThresholds)}`}>
+                              {level.cogs_pct != null ? `${level.cogs_pct.toFixed(1)}%` : '—'}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </a>
+                ))}
+              </div>
             )}
           </div>
         )}

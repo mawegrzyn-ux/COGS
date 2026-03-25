@@ -3333,7 +3333,7 @@ ${tableHtml}
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
-                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
+                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-center font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
                                 {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
                               </td>
                               <td key={`${level.id}-cp`} className="border-gray-200" />
@@ -3386,17 +3386,19 @@ ${tableHtml}
                               <>
                                 {/* Qty per level */}
                                 <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
-                                  <input
-                                    type="number" min="0" step="1"
-                                    value={qty[p.qty_key] ?? ''}
-                                    onChange={e => onQtyChange(p.qty_key, e.target.value)}
-                                    placeholder="0"
-                                    className="w-12 text-right font-mono text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
-                                  />
+                                  <div className="flex justify-center">
+                                    <input
+                                      type="number" min="0" step="1"
+                                      value={qty[p.qty_key] ?? ''}
+                                      onChange={e => onQtyChange(p.qty_key, e.target.value)}
+                                      placeholder="0"
+                                      className="w-12 text-right font-mono text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                                    />
+                                  </div>
                                 </td>
                                 {/* Price — editable */}
                                 <td key={`${p.level.id}-ip`} className="px-1 py-1">
-                                  <div className="inline-flex items-center">
+                                  <div className="flex justify-end items-center">
                                     <input
                                       type="number" min="0" step="0.01"
                                       value={priceOverrides[p.price_override_key] ?? ''}
@@ -3454,7 +3456,7 @@ ${tableHtml}
                         const tP = tR > 0 ? (tC / tR) * 100 : null
                         return (
                           <>
-                            <td key={`${level.id}-fq`} className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
+                            <td key={`${level.id}-fq`} className="px-3 py-3 text-center font-mono font-bold text-gray-900 border-l border-gray-200">
                               {tQ > 0 ? tQ.toLocaleString() : '—'}
                             </td>
                             <td key={`${level.id}-fp`} className="border-gray-200" />
