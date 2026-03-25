@@ -993,7 +993,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                     </td>
                     <td
                       className="px-3 py-2.5 text-right text-xs font-semibold"
-                      data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: selectedMenu?.name ?? '' }) : undefined}
+                      data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
                     >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
                     <td className="px-3 py-2.5">
                       {hasPrice ? (
