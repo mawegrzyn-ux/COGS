@@ -19,5 +19,6 @@
       "runtimeArgs": ["C:\\Users\\micha\\Downloads\\xlsb_server.js"],
       "port": 8765
     }
-  ]
+  ],
+  "autoVerify": false
 }

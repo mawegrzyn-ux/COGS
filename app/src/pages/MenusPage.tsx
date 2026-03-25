@@ -2959,7 +2959,7 @@ ${tableHtml}
           )}
 
           {/* Compact + Excel / Print — aligned right in the selector row */}
-          {(levelId === 'ALL' || data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
+          {(levelId === 'ALL' || !!data) && (
             <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden ml-auto">
               {levelId === 'ALL' && (
                 <button
