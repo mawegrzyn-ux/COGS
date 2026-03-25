@@ -119,11 +119,11 @@ function AlgSortTh({ label, field, sortField, sortDir, onSort, sticky, left, min
   const visible = filterOptions?.filter(o => o.label.toLowerCase().includes(search.toLowerCase())) ?? []
 
   const stickyStyle: React.CSSProperties = sticky
-    ? { position: 'sticky', left: left ?? 0, zIndex: 20, minWidth }
-    : { minWidth }
+    ? { position: 'sticky', top: 0, left: left ?? 0, zIndex: 30, minWidth }
+    : { position: 'sticky', top: 0, zIndex: 20, minWidth }
 
   return (
-    <th className={`px-3 py-3 text-left bg-surface-2 border-r border-border${sticky ? ' z-20' : ''}`} style={stickyStyle}>
+    <th className={`px-3 py-3 text-left bg-surface-2 border-r border-border${sticky ? ' z-30' : ' z-20'}`} style={stickyStyle}>
       <div ref={wrapRef} className="relative inline-block">
         {/* Header button — clicking opens the combined sort+filter dropdown */}
         <button
@@ -407,7 +407,7 @@ function InventoryAllergenMatrix() {
   return (
     <>
       {/* ── Controls bar ────────────────────────────────────────────────────── */}
-      <div className="flex gap-3 mb-4 flex-wrap items-center">
+      <div className="flex gap-3 px-6 py-4 flex-wrap items-center border-b border-border bg-surface">
         <div className="relative">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
@@ -440,14 +440,16 @@ function InventoryAllergenMatrix() {
         </div>
       </div>
 
-      {loading ? <Spinner /> : sorted.length === 0 ? (
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center"><Spinner /></div>
+      ) : sorted.length === 0 ? (
         <EmptyState
           message={search || filterCountry || filterCats.length > 0
             ? 'No ingredients match your filters.'
             : 'No ingredients found.'}
         />
       ) : (
-        <div className="overflow-auto rounded-xl border border-border" style={{ maxHeight: 'calc(100vh - 310px)' }}>
+        <div className="flex-1 overflow-auto mx-6 mb-4 mt-4 rounded-xl border border-border">
           <table className="text-sm border-collapse" style={{ minWidth: `${310 + allergens.length * 52}px` }}>
             {/* ── Header ──────────────────────────────────────────────────── */}
             <thead>
@@ -469,7 +471,9 @@ function InventoryAllergenMatrix() {
                 />
                 {/* 14 allergen columns — rotated headers */}
                 {allergens.map(a => (
-                  <th key={a.code} title={a.name} className="border-r border-border last:border-r-0 bg-surface-2 w-[52px] min-w-[52px]">
+                  <th key={a.code} title={a.name}
+                    className="border-r border-border last:border-r-0 bg-surface-2 w-[52px] min-w-[52px]"
+                    style={{ position: 'sticky', top: 0, zIndex: 20 }}>
                     <div className="flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
                       style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 96 }}>
                       {a.code}
@@ -477,7 +481,7 @@ function InventoryAllergenMatrix() {
                   </th>
                 ))}
                 {/* Save indicator column */}
-                <th className="w-7 bg-surface-2 border-l border-border" />
+                <th className="w-7 bg-surface-2 border-l border-border" style={{ position: 'sticky', top: 0, zIndex: 20 }} />
               </tr>
             </thead>
 
@@ -549,7 +553,7 @@ function InventoryAllergenMatrix() {
 
       {/* Row count */}
       {!loading && sorted.length > 0 && (
-        <div className="mt-2 text-xs text-text-3 text-right">
+        <div className="px-6 pb-3 text-xs text-text-3 text-right">
           {sorted.length} ingredient{sorted.length !== 1 ? 's' : ''}
           {(filterCountry || filterCats.length > 0 || search) && ` (filtered from ${rows.length})`}
         </div>
@@ -873,7 +877,7 @@ function MenuAllergenMatrix() {
       )}
 
       {/* ── Main content ─────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto p-6 print:overflow-visible print:p-4">
+      <div className="flex-1 overflow-auto print:overflow-visible">
         {!selectedMenu ? (
           <EmptyState message="Select a menu above to view its allergen matrix." />
         ) : loading ? (
@@ -883,51 +887,49 @@ function MenuAllergenMatrix() {
         ) : filteredMatrix.length === 0 ? (
           <EmptyState message="No items match the selected categories." />
         ) : (
-          <div className="overflow-x-auto print:overflow-visible">
-            <table className="text-xs border-collapse" style={{ minWidth: `${280 + allergens.length * 48}px` }}>
-              <thead>
-                <tr>
-                  <th className="sticky left-0 z-10 bg-surface border border-border px-4 py-3 text-left font-semibold text-text-1 min-w-[220px] whitespace-nowrap">
-                    Menu Item
-                  </th>
-                  {allergens.map(a => (
-                    <th
-                      key={a.code}
-                      title={a.name}
-                      className="border border-border px-1 py-2 font-semibold text-text-2 text-center w-12 min-w-[48px]"
+          <table className="text-xs border-collapse print:w-full" style={{ minWidth: `${280 + allergens.length * 48}px` }}>
+            <thead>
+              <tr>
+                <th className="sticky left-0 top-0 z-30 bg-surface border border-border px-4 py-3 text-left font-semibold text-text-1 min-w-[220px] whitespace-nowrap">
+                  Menu Item
+                </th>
+                {allergens.map(a => (
+                  <th
+                    key={a.code}
+                    title={a.name}
+                    className="sticky top-0 z-20 bg-surface-2 border border-border px-1 py-2 font-semibold text-text-2 text-center w-12 min-w-[48px]"
+                  >
+                    <div
+                      className="text-xs uppercase tracking-wide"
+                      style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     >
-                      <div
-                        className="text-xs uppercase tracking-wide"
-                        style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      {a.code}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {grouped ? (
+                grouped.map(([cat, rows]) => (
+                  <Fragment key={cat}>
+                    {/* Category header row */}
+                    <tr>
+                      <td
+                        colSpan={1 + allergens.length}
+                        className="bg-accent-dim border border-border px-4 py-1.5 font-semibold text-xs text-accent uppercase tracking-wide"
                       >
-                        {a.code}
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {grouped ? (
-                  grouped.map(([cat, rows]) => (
-                    <Fragment key={cat}>
-                      {/* Category header row */}
-                      <tr>
-                        <td
-                          colSpan={1 + allergens.length}
-                          className="bg-accent-dim border border-border px-4 py-1.5 font-semibold text-xs text-accent uppercase tracking-wide"
-                        >
-                          {cat}
-                        </td>
-                      </tr>
-                      {rows.map(row => renderRow(row))}
-                    </Fragment>
-                  ))
-                ) : (
-                  filteredMatrix.map(row => renderRow(row))
-                )}
-              </tbody>
-            </table>
-          </div>
+                        {cat}
+                      </td>
+                    </tr>
+                    {rows.map(row => renderRow(row))}
+                  </Fragment>
+                ))
+              ) : (
+                filteredMatrix.map(row => renderRow(row))
+              )}
+            </tbody>
+          </table>
         )}
       </div>
 
