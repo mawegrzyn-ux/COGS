@@ -5,14 +5,18 @@ import { useApi } from '../hooks/useApi'
 
 interface DashStats {
   ingredients: number
-  recipes: number
-  vendors: number
-  countries: number
+  recipes:     number
+  vendors:     number
+  countries:   number
+  menus:       number
   activeQuotes: number
-  categories: number
+  categories:  number
   priceLevels: number
-  coverage: number // % of ingredients with at least one active quote
+  coverage:    number // % of ingredients with at least one active quote
 }
+
+interface PriceLevel { id: number; name: string; is_default: boolean }
+interface CogsThresholds { excellent: number; acceptable: number }
 
 interface RecentQuote {
   id: number
@@ -198,6 +202,14 @@ const IconAlert = () => (
     <line x1="12" y1="17" x2="12.01" y2="17"/>
   </svg>
 )
+const IconMenu = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+    <rect x="9" y="3" width="6" height="4" rx="1"/>
+    <line x1="9" y1="12" x2="15" y2="12"/>
+    <line x1="9" y1="16" x2="13" y2="16"/>
+  </svg>
+)
 const IconRefresh = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
     <polyline points="23 4 23 10 17 10"/>
@@ -213,6 +225,8 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashStats | null>(null)
   const [recentQuotes, setRecentQuotes] = useState<RecentQuote[]>([])
   const [missingCoverage, setMissingCoverage] = useState<CoverageItem[]>([])
+  const [priceLevelList, setPriceLevelList] = useState<PriceLevel[]>([])
+  const [cogsThresholds, setCogsThresholds] = useState<CogsThresholds | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
@@ -231,6 +245,8 @@ export default function DashboardPage() {
           quotes,
           categories,
           priceLevels,
+          menus,
+          settings,
         ] = await Promise.all([
           api.get('/ingredients').catch(() => []),
           api.get('/recipes').catch(() => []),
@@ -239,7 +255,12 @@ export default function DashboardPage() {
           api.get('/price-quotes').catch(() => []),
           api.get('/categories').catch(() => []),
           api.get('/price-levels').catch(() => []),
+          api.get('/menus').catch(() => []),
+          api.get('/settings').catch(() => null),
         ])
+
+        setPriceLevelList(priceLevels || [])
+        if (settings?.cogs_thresholds) setCogsThresholds(settings.cogs_thresholds)
 
         const activeQuotes: RecentQuote[] = (quotes || []).filter(
           (q: any) => q.is_active
@@ -286,13 +307,14 @@ export default function DashboardPage() {
         setRecentQuotes(sorted)
 
         setStats({
-          ingredients: ingList.length,
-          recipes: (recipes || []).length,
-          vendors: (vendors || []).length,
-          countries: (countries || []).length,
+          ingredients:  ingList.length,
+          recipes:      (recipes      || []).length,
+          vendors:      (vendors      || []).length,
+          countries:    (countries    || []).length,
+          menus:        (menus        || []).length,
           activeQuotes: activeQuotes.length,
-          categories: (categories || []).length,
-          priceLevels: (priceLevels || []).length,
+          categories:   (categories   || []).length,
+          priceLevels:  (priceLevels  || []).length,
           coverage,
         })
 
@@ -343,62 +365,57 @@ export default function DashboardPage() {
         {/* ── KPI Grid ── */}
         {loading ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
+            {Array.from({ length: 9 }).map((_, i) => (
               <Skeleton key={i} className="h-28" />
             ))}
           </div>
         ) : stats ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard
-              label="Ingredients"
-              value={fmt(stats.ingredients)}
-              icon={<IconIngredient />}
-            />
-            <StatCard
-              label="Recipes"
-              value={fmt(stats.recipes)}
-              icon={<IconRecipe />}
-            />
-            <StatCard
-              label="Vendors"
-              value={fmt(stats.vendors)}
-              icon={<IconVendor />}
-            />
-            <StatCard
-              label="Markets"
-              value={fmt(stats.countries)}
-              icon={<IconCountry />}
-              sub="Franchise markets"
-            />
-            <StatCard
-              label="Active Quotes"
-              value={fmt(stats.activeQuotes)}
-              icon={<IconQuote />}
-              accent
-            />
-            <StatCard
-              label="Categories"
-              value={fmt(stats.categories)}
-              icon={<IconCategory />}
-            />
-            <StatCard
-              label="Price Levels"
-              value={fmt(stats.priceLevels)}
-              icon={<IconCategory />}
-            />
-            <StatCard
-              label="Coverage"
-              value={`${stats.coverage}%`}
-              icon={<IconQuote />}
+            <StatCard label="Ingredients"   value={fmt(stats.ingredients)}   icon={<IconIngredient />} />
+            <StatCard label="Recipes"        value={fmt(stats.recipes)}        icon={<IconRecipe />} />
+            <StatCard label="Menus"          value={fmt(stats.menus)}          icon={<IconMenu />} />
+            <StatCard label="Markets"        value={fmt(stats.countries)}      icon={<IconCountry />} sub="Franchise markets" />
+            <StatCard label="Vendors"        value={fmt(stats.vendors)}        icon={<IconVendor />} />
+            <StatCard label="Active Quotes"  value={fmt(stats.activeQuotes)}   icon={<IconQuote />} accent />
+            <StatCard label="Categories"     value={fmt(stats.categories)}     icon={<IconCategory />} />
+            <StatCard label="Coverage"       value={`${stats.coverage}%`}      icon={<IconQuote />}
               accent={stats.coverage >= 80}
-              sub={
-                stats.coverage >= 80
-                  ? 'All major ingredients priced'
-                  : 'Some ingredients unpriced'
-              }
-            />
+              sub={stats.coverage >= 80 ? 'All major ingredients priced' : 'Some ingredients unpriced'} />
           </div>
         ) : null}
+
+        {/* ── COGS per price level ── */}
+        {!loading && priceLevelList.length > 0 && (
+          <div className="card p-5">
+            <SectionHeader title="COGS per Price Level" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              {priceLevelList.map(level => (
+                <div key={level.id} className="flex items-center justify-between px-4 py-3 rounded-lg border border-border bg-surface-2/50">
+                  <div>
+                    <div className="text-sm font-semibold text-text-1 flex items-center gap-1.5">
+                      {level.name}
+                      {level.is_default && <span className="text-[10px] font-bold bg-accent-dim text-accent px-1.5 py-0.5 rounded-full">default</span>}
+                    </div>
+                    <div className="text-xs text-text-3 mt-0.5">Price level</div>
+                  </div>
+                  {cogsThresholds ? (
+                    <div className="text-right">
+                      <div className="text-xs font-medium text-emerald-600">✓ ≤{cogsThresholds.excellent}%</div>
+                      <div className="text-xs text-amber-500">~ ≤{cogsThresholds.acceptable}%</div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-text-3">No targets set</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {cogsThresholds && (
+              <p className="text-xs text-text-3 mt-2.5">
+                ✓ excellent · ~ acceptable · COGS targets apply to all price levels
+              </p>
+            )}
+          </div>
+        )}
 
         {/* ── Coverage bar ── */}
         {!loading && stats && (

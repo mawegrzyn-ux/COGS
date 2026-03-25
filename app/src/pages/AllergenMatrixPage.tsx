@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Spinner, EmptyState, Toast } from '../components/ui'
-import type { SortDir } from '../hooks/useSortFilter'
-
 // ── Shared Allergen type ───────────────────────────────────────────────────────
 
 interface Allergen { id: number; code: string; name: string }
 
 // ── Inventory tab types & constants ───────────────────────────────────────────
 
+type SortDir      = 'asc' | 'desc'
 type AlgStatus    = 'contains' | 'may_contain' | 'free_from'
 type AlgSaveState = 'idle' | 'saving' | 'saved' | 'error'
 
