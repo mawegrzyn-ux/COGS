@@ -68,18 +68,19 @@ function StatCard({
   icon,
   accent = false,
   sub,
+  aiContext,
 }: {
   label: string
   value: number | string
   icon: React.ReactNode
   accent?: boolean
   sub?: string
+  aiContext?: Record<string, string>
 }) {
   return (
     <div
-      className={`card p-5 flex flex-col gap-3 ${
-        accent ? 'border-accent/30 bg-accent-dim' : ''
-      }`}
+      className={`card p-5 flex flex-col gap-3 ${accent ? 'border-accent/30 bg-accent-dim' : ''}`}
+      data-ai-context={aiContext ? JSON.stringify(aiContext) : undefined}
     >
       <div className="flex items-center justify-between">
         <span className="text-text-3 text-xs font-medium uppercase tracking-wide">
@@ -444,7 +445,8 @@ export default function DashboardPage() {
             <StatCard label="Categories"     value={fmt(stats.categories)}     icon={<IconCategory />} />
             <StatCard label="Coverage"       value={`${stats.coverage}%`}      icon={<IconQuote />}
               accent={stats.coverage >= 80}
-              sub={stats.coverage >= 80 ? 'All major ingredients priced' : 'Some ingredients unpriced'} />
+              sub={stats.coverage >= 80 ? 'All major ingredients priced' : 'Some ingredients unpriced'}
+              aiContext={{ type: 'coverage', value: `${stats.coverage}%`, label: 'Price Quote Coverage' }} />
           </div>
         ) : null}
 
@@ -489,7 +491,11 @@ export default function DashboardPage() {
                     {/* Price level COGS rows */}
                     <div className="px-4 py-2 space-y-1">
                       {tile.levels.map(level => (
-                        <div key={level.id} className="flex items-center justify-between">
+                        <div
+                          key={level.id}
+                          className="flex items-center justify-between"
+                          data-ai-context={level.cogs_pct != null ? JSON.stringify({ type: 'menu_cogs', value: `${level.cogs_pct.toFixed(1)}%`, menu: tile.menu_name, price_level: level.name }) : undefined}
+                        >
                           <span className="text-xs text-text-2 flex items-center gap-1">
                             {level.name}
                             {level.is_default && (

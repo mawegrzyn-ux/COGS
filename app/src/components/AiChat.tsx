@@ -422,8 +422,10 @@ export default function AiChat() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
-  const send = useCallback(async () => {
-    const text    = input.trim()
+  // ── Core send logic (accepts direct text override for programmatic use) ───────
+
+  const sendCore = useCallback(async (overrideText?: string) => {
+    const text    = (overrideText ?? input).trim()
     const hasFile = attachedFile !== null
     if ((!text && !hasFile) || streaming) return
 
@@ -532,6 +534,9 @@ export default function AiChat() {
     }
   }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user])
 
+  const send        = useCallback(() => sendCore(),          [sendCore])
+  const sendDirect  = useCallback((text: string) => sendCore(text), [sendCore])
+
   const handleKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }, [send])
@@ -569,6 +574,20 @@ export default function AiChat() {
     const name = `pasted-image-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`
     setAttachedFile(new File([blob], name, { type: blob.type }))
   }, [])
+
+  // ── mcfry-ask: triggered by right-click context menu on instrumented elements
+  useEffect(() => {
+    function onAsk(e: Event) {
+      const { message } = (e as CustomEvent<{ message: string }>).detail
+      if (!message) return
+      setOpen(true)
+      setView('chat')
+      // Small delay to ensure panel is mounted/visible before sending
+      setTimeout(() => sendDirect(message), 80)
+    }
+    window.addEventListener('mcfry-ask', onAsk)
+    return () => window.removeEventListener('mcfry-ask', onAsk)
+  }, [sendDirect])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 

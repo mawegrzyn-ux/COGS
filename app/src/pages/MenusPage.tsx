@@ -991,7 +991,10 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                     <td className={`px-3 py-2.5 text-right font-mono text-xs ${item.gp_net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                       {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-xs font-semibold">{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
+                    <td
+                      className="px-3 py-2.5 text-right text-xs font-semibold"
+                      data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: selectedMenu?.name ?? '' }) : undefined}
+                    >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
                     <td className="px-3 py-2.5">
                       {hasPrice ? (
                         <Badge
@@ -1642,7 +1645,10 @@ function PriceLevelTool({
                               />
                             </div>
                           </td>
-                          <td className="px-3 py-2.5 text-right">
+                          <td
+                            className="px-3 py-2.5 text-right"
+                            data-ai-context={row.cogs_pct != null ? JSON.stringify({ type: 'cogs_pct', value: `${row.cogs_pct.toFixed(1)}%`, item: row.recipe_name, price_level: priceLevels.find(l => l.id === Number(selectedLevel))?.name ?? '' }) : undefined}
+                          >
                             {badge
                               ? <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
                               : <span className="text-gray-300 text-xs">—</span>}
@@ -3351,7 +3357,10 @@ ${tableHtml}
                           <td className="px-3 py-2.5 text-right font-mono text-xs">
                             {row.total_cost > 0 ? fmtMoney(row.total_cost) : <span className="text-gray-200">—</span>}
                           </td>
-                          <td className={`px-3 py-2.5 text-right text-xs ${cogsColour(row.cogs_pct)}`}>
+                          <td
+                            className={`px-3 py-2.5 text-right text-xs ${cogsColour(row.cogs_pct)}`}
+                            data-ai-context={row.cogs_pct != null ? JSON.stringify({ type: 'cogs_pct', value: fmtPct(row.cogs_pct), item: row.display_name, price_level: levelName, menu: menuName }) : undefined}
+                          >
                             {fmtPct(row.cogs_pct)}
                           </td>
                         </tr>
@@ -3547,7 +3556,10 @@ ${tableHtml}
                                     {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
                                   </td>
                                 )}
-                                <td key={`${p.level.id}-ic`} className={`px-3 py-2 text-right text-xs ${cogsColour(p.cogs_pct)}`}>
+                                <td key={`${p.level.id}-ic`}
+                                  className={`px-3 py-2 text-right text-xs ${cogsColour(p.cogs_pct)}`}
+                                  data-ai-context={p.cogs_pct != null ? JSON.stringify({ type: 'cogs_pct', value: fmtPct(p.cogs_pct), item: row.display_name, price_level: p.level.name, menu: menuName }) : undefined}
+                                >
                                   {fmtPct(p.cogs_pct)}
                                 </td>
                               </>
