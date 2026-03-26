@@ -2802,7 +2802,7 @@ The Menus page (/menus) has exactly FOUR tabs. Never invent tab names. The four 
 
 **Menu Engineer** — Sales mix and profitability analysis. The Mix Manager button opens a modal to enter expected sales quantities per item. Shows cost per portion, sell price, and contribution margin per item. Categories are collapsible. Cross-tab sync: selecting a menu here also selects it in Menu Builder and vice versa.
 
-**Compare Markets** — Set and manage sell prices for every menu item across every price level (e.g. Eat-in, Takeout, Delivery). Prices edited inline in local currency, stored in USD. Shows gross (incl. tax) and net (ex-tax) prices. (Internally this tab key is 'price-report', sometimes referred to as PLT in code comments.)
+**Compare Markets** — Set and manage sell prices for every menu item across every price level (e.g. Eat-in, Takeout, Delivery). Prices edited inline in local currency, stored in USD. Shows gross (incl. tax) and net (ex-tax) prices. Columns: Menu, Recipe, Category, Country, Cost, Gross Price, COGS%. The Menu column has sort and multi-select filter so users can focus on a specific menu. (Internally this tab key is 'price-report', sometimes referred to as PLT in code comments.)
 
 **Market Price Tool** — COGS% grid showing every menu item × every price level, colour-coded green (excellent, at or below target) / amber (acceptable, up to target+10%) / red (alert, above acceptable). Helps identify over-cost items that need repricing. (Internally this tab key is 'level-report', sometimes referred to as MPT in code comments.)
 

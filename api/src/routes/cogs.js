@@ -537,7 +537,7 @@ router.get('/report/menu-prices', async (req, res) => {
     // All menu items for these recipes (across all menus/countries)
     const { rows: menuItemRows } = await pool.query(`
       SELECT mi.id AS menu_item_id, mi.recipe_id, mi.sell_price, mi.tax_rate_id, mi.qty,
-             m.country_id
+             m.country_id, m.id AS menu_id, m.name AS menu_name
       FROM   mcogs_menu_items mi
       JOIN   mcogs_menus m ON m.id = mi.menu_id
       WHERE  mi.recipe_id = ANY($1::int[])
@@ -595,7 +595,7 @@ router.get('/report/menu-prices', async (req, res) => {
           mi => Number(mi.recipe_id) === recipeId && Number(mi.country_id) === cid
         );
         if (!itemsInCountry.length) {
-          row.countries[cid] = { on_menu: false };
+          row.countries[cid] = [];
           continue;
         }
 
@@ -603,35 +603,28 @@ router.get('/report/menu-prices', async (req, res) => {
         const cppLocal = cost * Number(country.exchange_rate); // USD base → local currency
         const defaultRate = defaultTaxMap[cid] || 0;
 
-        const grosses = [], nets = [];
-        for (const mi of itemsInCountry) {
+        row.countries[cid] = itemsInCountry.map(mi => {
           let gross     = Number(mi.sell_price || 0);
           let taxRateId = mi.tax_rate_id;
           if (priceLevelId) {
             const lp = levelPriceMap[mi.menu_item_id];
             if (lp) { gross = Number(lp.sell_price); if (lp.tax_rate_id) taxRateId = lp.tax_rate_id; }
           }
-          const rate = taxRateId && taxById[taxRateId] !== undefined ? taxById[taxRateId] : defaultRate;
-          const net  = rate > 0 ? gross / (1 + rate) : gross;
-          grosses.push(gross);
-          nets.push(net);
-        }
-
-        const avgGross = grosses.reduce((a, b) => a + b, 0) / grosses.length;
-        const avgNet   = nets.reduce((a, b) => a + b, 0) / nets.length;
-        const cogsPct  = avgNet > 0 && cppLocal > 0 ? Math.round((cppLocal / avgNet) * 10000) / 100 : null;
-
-        const miIds = itemsInCountry.map(mi => mi.menu_item_id);
-        row.countries[cid] = {
-          on_menu:      true,
-          sell_gross:   Math.round(avgGross  * 10000) / 10000,
-          sell_net:     Math.round(avgNet    * 10000) / 10000,
-          cost:         Math.round(cppLocal  * 10000) / 10000,
-          cogs_pct:     cogsPct,
-          count:        itemsInCountry.length,
-          menu_item_id: miIds.length === 1 ? miIds[0] : null,
-          rate:         Number(country.exchange_rate),
-        };
+          const rate    = taxRateId && taxById[taxRateId] !== undefined ? taxById[taxRateId] : defaultRate;
+          const net     = rate > 0 ? gross / (1 + rate) : gross;
+          const cogsPct = net > 0 && cppLocal > 0 ? Math.round((cppLocal / net) * 10000) / 100 : null;
+          return {
+            on_menu:      true,
+            menu_id:      mi.menu_id,
+            menu_name:    mi.menu_name,
+            sell_gross:   Math.round(gross   * 10000) / 10000,
+            sell_net:     Math.round(net     * 10000) / 10000,
+            cost:         Math.round(cppLocal * 10000) / 10000,
+            cogs_pct:     cogsPct,
+            menu_item_id: mi.menu_item_id,
+            rate:         Number(country.exchange_rate),
+          };
+        });
       }
       return row;
     });

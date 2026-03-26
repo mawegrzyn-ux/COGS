@@ -89,20 +89,22 @@ interface CogsData {
 interface PriceReportCountry {
   id: number; name: string; code: string; symbol: string; rate: number
 }
+interface PriceReportCountryEntry {
+  on_menu: boolean
+  menu_id?: number
+  menu_name?: string
+  sell_gross?: number
+  sell_net?: number
+  cost?: number
+  cogs_pct?: number | null
+  menu_item_id?: number | null
+  rate?: number
+}
 interface PriceReportRecipe {
   recipe_id: number
   recipe_name: string
   category: string
-  countries: Record<number, {
-    on_menu: boolean
-    sell_gross?: number
-    sell_net?: number
-    cost?: number
-    cogs_pct?: number | null
-    count?: number
-    menu_item_id?: number | null
-    rate?: number
-  }>
+  countries: Record<number, PriceReportCountryEntry[]>
 }
 interface PriceReportData {
   recipes: PriceReportRecipe[]
@@ -1447,6 +1449,8 @@ function PriceLevelTool({
     recipe_id: number
     recipe_name: string
     category: string
+    menu_id: number
+    menu_name: string
     country_id: number
     country_name: string
     country_sym: string
@@ -1465,8 +1469,8 @@ function PriceLevelTool({
     const result: PltGridRow[] = []
     filtered.forEach(recipe => {
       data.countries.forEach(c => {
-        const cd = recipe.countries[c.id]
-        if (!cd?.on_menu) return
+        const entries = recipe.countries[c.id]
+        if (!entries?.length) return
 
         // Convert to display currency
         // stored prices are in country local currency
@@ -1476,27 +1480,32 @@ function PriceLevelTool({
           dispRate = targetRate / (c.rate || 1)
         }
 
-        const costLocal    = cd.cost ?? 0
-        const grossLocal   = cd.sell_gross ?? null
-        const costDisplay  = costLocal * (currencyMode === 'single' ? dispRate : 1)
-        const grossDisplay = grossLocal !== null ? grossLocal * (currencyMode === 'single' ? dispRate : 1) : null
+        entries.forEach(cd => {
+          if (!cd.on_menu) return
+          const costLocal    = cd.cost ?? 0
+          const grossLocal   = cd.sell_gross ?? null
+          const costDisplay  = costLocal * (currencyMode === 'single' ? dispRate : 1)
+          const grossDisplay = grossLocal !== null ? grossLocal * (currencyMode === 'single' ? dispRate : 1) : null
 
-        result.push({
-          key:               `${recipe.recipe_id}_${c.id}`,
-          recipe_id:         recipe.recipe_id,
-          recipe_name:       recipe.recipe_name,
-          category:          recipe.category || '',
-          country_id:        c.id,
-          country_name:      c.name,
-          country_sym:       currencyMode === 'own' ? c.symbol : (displaySym ?? c.symbol),
-          country_rate:      c.rate,
-          disp_rate:         currencyMode === 'single' ? dispRate : 1,
-          cost_local:        costLocal,
-          cost_display:      costDisplay,
-          sell_gross_local:  grossLocal,
-          sell_gross_display:grossDisplay,
-          cogs_pct:          cd.cogs_pct ?? null,
-          menu_item_id:      cd.menu_item_id ?? null,
+          result.push({
+            key:               `${recipe.recipe_id}_${c.id}_${cd.menu_id}`,
+            recipe_id:         recipe.recipe_id,
+            recipe_name:       recipe.recipe_name,
+            category:          recipe.category || '',
+            menu_id:           cd.menu_id ?? 0,
+            menu_name:         cd.menu_name ?? '',
+            country_id:        c.id,
+            country_name:      c.name,
+            country_sym:       currencyMode === 'own' ? c.symbol : (displaySym ?? c.symbol),
+            country_rate:      c.rate,
+            disp_rate:         currencyMode === 'single' ? dispRate : 1,
+            cost_local:        costLocal,
+            cost_display:      costDisplay,
+            sell_gross_local:  grossLocal,
+            sell_gross_display:grossDisplay,
+            cogs_pct:          cd.cogs_pct ?? null,
+            menu_item_id:      cd.menu_item_id ?? null,
+          })
         })
       })
     })
@@ -1520,9 +1529,9 @@ function PriceLevelTool({
 
   function exportCSV() {
     if (!data) return
-    const header = ['Recipe', 'Category', 'Country', `Cost`, `Gross Price`, 'COGS %']
+    const header = ['Menu', 'Recipe', 'Category', 'Country', `Cost`, `Gross Price`, 'COGS %']
     const csvRows = [header, ...sortedRows.map(r => [
-      r.recipe_name, r.category, r.country_name,
+      r.menu_name, r.recipe_name, r.category, r.country_name,
       r.cost_display.toFixed(2),
       r.sell_gross_display?.toFixed(2) ?? '',
       r.cogs_pct?.toFixed(1) ?? '',
@@ -1599,6 +1608,9 @@ function PriceLevelTool({
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
+                  <ColumnHeader<PltGridRow> label="Menu"     field="menu_name"          sortField={sortField} sortDir={sortDir} onSort={setSort}
+                    filterOptions={[...new Set(gridRows.map(r => r.menu_name).filter(Boolean))].sort().map(m => ({ value: m, label: m }))}
+                    filterValues={getFilter('menu_name')} onFilter={v => setFilter('menu_name', v)} />
                   <ColumnHeader<PltGridRow> label="Recipe"   field="recipe_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} />
                   <ColumnHeader<PltGridRow> label="Category" field="category"           sortField={sortField} sortDir={sortDir} onSort={setSort}
                     filterOptions={[...new Set(gridRows.map(r => r.category).filter(Boolean))].sort().map(c => ({ value: c, label: c }))}
@@ -1619,7 +1631,7 @@ function PriceLevelTool({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedRows.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">
+                  <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
                     No data. Make sure recipes are added to menus.
                   </td></tr>
                 )}
@@ -1629,6 +1641,7 @@ function PriceLevelTool({
                   const badge   = cogsBadge(row.cogs_pct)
                   return (
                     <tr key={row.key} className="hover:bg-gray-50">
+                      <td className="px-3 py-2.5 text-gray-700 font-medium">{row.menu_name || <span className="text-gray-300">—</span>}</td>
                       <td className="px-3 py-2.5 font-medium text-gray-900">{row.recipe_name}</td>
                       <td className="px-3 py-2.5">
                         {row.category
