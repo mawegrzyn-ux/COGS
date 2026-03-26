@@ -169,14 +169,16 @@ CONFIRMATION REQUIRED before calling.`,
   },
   {
     name: 'submit_feedback',
-    description: 'Submits a bug report, feature request, or general feedback. No confirmation required.',
+    description: 'Submits a bug report, feature request, or general feedback. No confirmation required. If there is a screenshot or image in the current conversation, include it as screenshot_base64 and screenshot_filename so it is saved with the ticket.',
     input_schema: {
       type: 'object',
       properties: {
-        type:        { type: 'string', enum: ['bug', 'feature', 'general'] },
-        title:       { type: 'string' },
-        description: { type: 'string' },
-        page:        { type: 'string', description: 'Which page/section the feedback relates to' },
+        type:                { type: 'string', enum: ['bug', 'feature', 'general'] },
+        title:               { type: 'string' },
+        description:         { type: 'string' },
+        page:                { type: 'string', description: 'Which page/section the feedback relates to' },
+        screenshot_base64:   { type: 'string', description: 'Base64-encoded screenshot or image attached to this conversation. Include if an image is present.' },
+        screenshot_filename: { type: 'string', description: 'Filename for the attachment, e.g. "screenshot.jpg"' },
       },
       required: ['type', 'title'],
     },
@@ -1453,10 +1455,13 @@ async function executeTool(name, input) {
     }
 
     case 'submit_feedback': {
-      const { type = 'general', title, description, page } = input;
+      const { type = 'general', title, description, page, screenshot_base64, screenshot_filename } = input;
+      const attachments = screenshot_base64
+        ? [{ filename: screenshot_filename || 'screenshot.jpg', data_base64: screenshot_base64, content_type: 'image/jpeg' }]
+        : [];
       const { rows } = await pool.query(
-        `INSERT INTO mcogs_feedback (type, title, description, page) VALUES ($1,$2,$3,$4) RETURNING *`,
-        [type, title, description || null, page || null]
+        `INSERT INTO mcogs_feedback (type, title, description, page, attachments) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [type, title, description || null, page || null, JSON.stringify(attachments)]
       );
       return rows[0];
     }
@@ -2699,6 +2704,11 @@ function buildSystemPrompt(context, helpContext, conciseMode = false) {
 
 Your name is Pepper. When users greet you or ask your name, introduce yourself as Pepper.
 
+## CRITICAL: ACCURACY RULES
+- NEVER invent page names, tab names, feature names, or field names that are not explicitly documented in your context or the sections below.
+- If you are unsure whether a feature exists, say so — do not guess or hallucinate UI elements.
+- The authoritative list of pages, tabs, and features is in this system prompt and the retrieved documentation context. Treat it as ground truth over any prior training knowledge about this app.
+
 You can both READ and WRITE to the database — you are a full sysadmin assistant with the ability to create, update, and delete records across all entities.
 
 ## CONFIRMATION RULES (mandatory — no exceptions)
@@ -2784,6 +2794,19 @@ Use these to help users model pricing changes, hit COGS targets, and save/push s
 ### Example — "set Wings to 25% COGS":
 - Filter Wing items, for each level: price_gross = (effective_cost_usd / 0.25) * (1 + tax_rate)
 - save_scenario with the computed price_overrides
+
+## MENUS PAGE TABS
+The Menus page (/menus) has exactly FOUR tabs. Never invent tab names. The four tabs are:
+
+**Menu Builder** — Create and manage menus (each linked to a market/country). Add items (recipes or ingredients) with a display name and sort order. Items are grouped by category. This is where you define what is on the menu.
+
+**Menu Engineer** — Sales mix and profitability analysis. The Mix Manager button opens a modal to enter expected sales quantities per item. Shows cost per portion, sell price, and contribution margin per item. Categories are collapsible. Cross-tab sync: selecting a menu here also selects it in Menu Builder and vice versa.
+
+**PLT (Price Level Table)** — Set and manage sell prices for every menu item across every price level (e.g. Eat-in, Takeout, Delivery). Prices edited inline in local currency, stored in USD. Shows gross (incl. tax) and net (ex-tax) prices.
+
+**MPT (Menu Performance Table)** — COGS% grid showing every menu item × every price level, colour-coded green (excellent, at or below target) / amber (acceptable, up to target+10%) / red (alert, above acceptable). Helps identify over-cost items that need repricing.
+
+There is NO "Compare Markets" tab, NO "Market Price Tool" tab, NO "Scenario" tab (it was renamed to Menu Engineer), and no other tabs on this page.
 
 ## SETTINGS PAGE TABS
 The Settings page has these tabs — users sometimes ask what they do:

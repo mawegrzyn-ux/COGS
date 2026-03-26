@@ -447,6 +447,7 @@ const migrations = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_feedback_status ON mcogs_feedback(status)`,
   `CREATE INDEX IF NOT EXISTS idx_feedback_type   ON mcogs_feedback(type)`,
+  `ALTER TABLE mcogs_feedback ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'`,
 
   // ── 25. AI Chat Log ────────────────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS mcogs_ai_chat_log (
