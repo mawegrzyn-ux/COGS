@@ -1228,7 +1228,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   const preferredFilterOptions   = [{ label: '★ Preferred', value: 'true' }, { label: 'Not preferred', value: 'false' }]
   const ingredientFilterOptions  = [...new Map(
     quotes.map(q => [q.ingredient_id, { label: q.ingredient_name, value: String(q.ingredient_id) }])
-  ).values()].sort((a, b) => a.label.localeCompare(b.label))
+  ).values()].sort((a, b) => (a.label ?? '').localeCompare(b.label ?? ''))
   const categoryFilterOptions    = [...new Set(
     quotes.map(q => q.ingredient_category).filter(Boolean) as string[]
   )].sort().map(c => ({ label: c, value: c }))
@@ -1275,7 +1275,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
           }}
           onSaved={(saved, isNew) => {
             if (isNew) setQuotes(prev => [...prev, saved])
-            else       setQuotes(prev => prev.map(q => q.id === saved.id ? saved : q))
+            else       setQuotes(prev => prev.map(q => q.id === saved.id ? { ...q, ...saved } : q))
             showToast(isNew ? 'Quote added' : 'Quote saved')
           }}
           onEdit={openEdit}
