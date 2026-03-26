@@ -674,14 +674,40 @@ export default function HelpPage() {
 
         {/* ═══════════════════════════════════ AI ASSISTANT */}
         <H2 id="ai-assistant" icon="🤖" title="Pepper — AI Assistant" />
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          <strong>Pepper</strong> is a floating AI chat widget (bottom-right of every page) powered by{' '}
-          <strong>Claude Haiku 4.5</strong>. It combines two complementary knowledge sources —
-          vectorised documentation and live database queries — to answer questions in natural language.
-          Pepper can create, update, and delete records across all entities as a full sysadmin assistant.
-          You can attach files (CSV, Excel, images) via the paperclip icon, or <strong>paste images directly</strong> from
-          the clipboard into the chat input. While Pepper is thinking, three animated dots indicate activity.
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          <strong>Pepper</strong> is the built-in AI assistant powered by <strong>Claude Haiku 4.5</strong>.
+          It can read and write to your live database, answer questions using the documentation knowledge
+          base, and help you build and manage your menu data through natural conversation.
         </p>
+
+        <H3 id="ai-panel">Opening &amp; Positioning Pepper</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Pepper defaults to a <strong>floating button</strong> in the bottom-right corner. Click it to open
+          the chat panel. Three layout modes are available via the icons in the Pepper panel header:
+        </p>
+        <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside mb-2 space-y-1">
+          <li><strong>Float</strong> — fixed popup overlay (default)</li>
+          <li><strong>Dock left</strong> — full-height panel between the sidebar and main content</li>
+          <li><strong>Dock right</strong> — full-height panel to the right of main content</li>
+        </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Mode is remembered across sessions (stored in your browser). The close button (float mode only)
+          collapses the panel back to the floating button.
+        </p>
+
+        <H3 id="ai-input">Sending Messages &amp; Attachments</H3>
+        <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside space-y-1 mb-2">
+          <li><strong>Type &amp; send</strong> — press Enter or click Send</li>
+          <li><strong>Paperclip icon</strong> — attach a file: CSV, XLSX, PNG, JPEG, WEBP (max 5 MB). PDFs not supported.</li>
+          <li><strong>Camera icon</strong> — captures a screenshot of the current page and attaches it to your next message. Pepper's own UI is excluded from the capture. Type your question then send.</li>
+          <li><strong>Paste image</strong> — Ctrl+V / Cmd+V pastes an image from your clipboard directly into the chat input as an attachment.</li>
+          <li><strong>Right-click → Ask Pepper</strong> — right-click on any highlighted data element (COGS%, coverage bar, cost figures) to open a contextual prompt with an auto-captured screenshot already attached.</li>
+        </ul>
+        <InfoBox type="tip" title="Tutorial buttons">
+          Small <strong>?</strong> icons appear next to page headers and tab labels. Clicking one sends a
+          pre-written tutorial prompt to Pepper for that specific section — useful for a quick walkthrough
+          of any feature.
+        </InfoBox>
 
         <H3 id="ai-how-it-works">How It Works — Two Knowledge Layers</H3>
         <ProcessFlow steps={[
@@ -701,48 +727,48 @@ export default function HelpPage() {
         <H3 id="ai-rag">Layer 1 — What Is Vectorised (RAG)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           RAG stands for <strong>Retrieval-Augmented Generation</strong>. At API startup, the system
-          reads a single source file — <Mono>CLAUDE.md</Mono> (the project documentation at the repo
-          root) — splits it into sections by <Mono>##</Mono> heading, and embeds each section using
-          Voyage AI's <Mono>voyage-3-lite</Mono> model.
+          reads two source files, splits each into sections by <Mono>##</Mono> heading, and embeds
+          every section using Voyage AI's <Mono>voyage-3-lite</Mono> model.
         </p>
 
         <div className="border border-[#D8E6DD] rounded-lg overflow-hidden my-3">
           <div className="bg-[#F7F9F8] px-3 py-2 border-b border-[#D8E6DD]">
-            <p className="text-xs font-bold text-[#0F1F17]">Source vectorised</p>
+            <p className="text-xs font-bold text-[#0F1F17]">Sources vectorised at startup</p>
           </div>
-          <div className="p-3">
-            <div className="flex items-start gap-2 mb-2">
+          <div className="p-3 flex flex-col gap-3">
+            <div className="flex items-start gap-2">
               <span className="text-lg shrink-0">📄</span>
               <div>
-                <p className="text-sm font-semibold text-[#0F1F17]">CLAUDE.md — Project documentation</p>
-                <p className="text-xs text-[#6B7F74] mt-0.5">~17 sections split by ## headings, each embedded as a separate vector</p>
+                <p className="text-sm font-semibold text-[#0F1F17]">CLAUDE.md — Technical &amp; developer documentation</p>
+                <p className="text-xs text-[#6B7F74] mt-0.5">Infrastructure, CI/CD, database schema, API routes, code patterns, known bugs, deployment</p>
               </div>
             </div>
-            <p className="text-xs text-[#2D4A38] leading-relaxed">
-              Sections include: Project Overview · Tech Stack · Repository Structure · Infrastructure ·
-              Local Dev Setup · CI/CD Pipeline · Auth0 Config · Database Schema · API Routes ·
-              Frontend Architecture · Design System · Pages Built · Known Bugs Fixed · Gotchas &amp;
-              Lessons Learned · Backlog
-            </p>
+            <div className="flex items-start gap-2">
+              <span className="text-lg shrink-0">📄</span>
+              <div>
+                <p className="text-sm font-semibold text-[#0F1F17]">docs/user-guide.md — User documentation</p>
+                <p className="text-xs text-[#6B7F74] mt-0.5">All pages, features, workflows, field explanations, setup guide, troubleshooting</p>
+              </div>
+            </div>
           </div>
         </div>
 
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          When you ask a question, the query is also embedded and compared to the stored section
-          vectors using <strong>cosine similarity</strong>. The top 4 most relevant sections are
-          retrieved and injected into Claude's system prompt as documentation context — before Claude
-          sees your question.
+          When you ask a question, it is also embedded and compared to all stored section vectors
+          using <strong>cosine similarity</strong>. The top 4 most relevant sections are retrieved
+          and injected into Pepper's system prompt as context before it sees your question.
         </p>
         <InfoBox type="info" title="Fallback behaviour">
           If no <strong>Voyage AI key</strong> is configured, the system falls back to{' '}
-          <strong>keyword search</strong> (simple word-frequency scoring over CLAUDE.md sections).
-          This is less accurate but still functional. Configure your Voyage key in Settings → AI
+          <strong>keyword search</strong> (word-frequency scoring over section text).
+          Less accurate but still functional. Configure your Voyage key in Settings → AI
           for semantic search quality.
         </InfoBox>
         <InfoBox type="warning" title="What RAG does NOT cover">
-          RAG only covers the static <Mono>CLAUDE.md</Mono> documentation. It does not index your
+          RAG covers the two static documentation files above. It does not index your
           live data (ingredients, recipes, prices, etc.) — that is handled by Layer 2 (tools).
-          It also does not index this Help page or any other runtime content.
+          It also does not index this Help page. The knowledge base updates automatically on every
+          server restart (each deploy re-indexes from the latest file versions).
         </InfoBox>
 
         <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
