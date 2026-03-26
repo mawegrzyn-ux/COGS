@@ -105,7 +105,7 @@ COGS/
 │           ├── CategoriesPage.tsx  # Ingredient/recipe categories
 │           ├── InventoryPage.tsx   # Ingredients, vendors, price quotes
 │           ├── RecipesPage.tsx     # Recipe builder with COGS calculation
-│           ├── MenusPage.tsx       # Menu builder (PLT/MPT/Menu Builder tabs)
+│           ├── MenusPage.tsx       # Menu builder (Menus/Menu Engineer/Compare Markets/Market Price Tool tabs)
 │           ├── ImportPage.tsx      # AI-powered data import wizard
 │           ├── AllergenMatrixPage.tsx  # Allergen matrix (EU/UK FIC 14)
 │           ├── HACCPPage.tsx       # HACCP temp logs & CCP logs
@@ -688,10 +688,10 @@ Three tabs:
 
 Four tabs:
 
-1. **Menu Builder** — create menus per country, add recipe/ingredient items with display name + sort order
+1. **Menus (Menu Builder)** — create menus per country, add recipe/ingredient items with display name + sort order
 2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and margin engineering per menu item
-3. **PLT (Price Level Table)** — grid of sell prices per menu item per price level; inline editing with currency conversion
-4. **MPT (Menu Performance Table)** — COGS% grid showing gross/net margins per item per price level
+3. **Compare Markets** — grid of sell prices per menu item per price level; inline editing with currency conversion (internally called PLT/price-report)
+4. **Market Price Tool** — COGS% grid showing gross/net margins per item per price level (internally called MPT/level-report)
 
 **Menu Engineer details:**
 - Tab renamed from "Scenario" to "Menu Engineer"
@@ -701,12 +701,12 @@ Four tabs:
 - Currency symbol shown in column headers (e.g. `Cost/ptn (£)`)
 - Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header to collapse/expand all categories at once
 
-**Currency conversion in PLT/MPT:**
+**Currency conversion in Compare Markets / Market Price Tool:**
 
 - All prices stored in USD base
 - Display rate: `dispRate = country.rate / targetCurrency.rate`
 - Save-back: `localPrice = displayValue / dispRate`
-- MPT always shows local currency (`dispRate = 1`)
+- Market Price Tool always shows local currency (`dispRate = 1`)
 
 ### ✅ Dashboard Page (`/dashboard`)
 

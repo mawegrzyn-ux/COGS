@@ -1431,7 +1431,7 @@ async function executeTool(name, input) {
           cogs_pct_gross:   item.cogs_pct_gross,
           gp_net:           item.gp_net,
           note: item.sell_price_gross === 0
-            ? `No sell price set — add via Menus → PLT tab`
+            ? `No sell price set — add via Menus → Compare Markets tab`
             : item.cost_per_portion === 0
             ? `No vendor price quotes found for this item's ingredients`
             : null,
@@ -2802,11 +2802,11 @@ The Menus page (/menus) has exactly FOUR tabs. Never invent tab names. The four 
 
 **Menu Engineer** — Sales mix and profitability analysis. The Mix Manager button opens a modal to enter expected sales quantities per item. Shows cost per portion, sell price, and contribution margin per item. Categories are collapsible. Cross-tab sync: selecting a menu here also selects it in Menu Builder and vice versa.
 
-**PLT (Price Level Table)** — Set and manage sell prices for every menu item across every price level (e.g. Eat-in, Takeout, Delivery). Prices edited inline in local currency, stored in USD. Shows gross (incl. tax) and net (ex-tax) prices.
+**Compare Markets** — Set and manage sell prices for every menu item across every price level (e.g. Eat-in, Takeout, Delivery). Prices edited inline in local currency, stored in USD. Shows gross (incl. tax) and net (ex-tax) prices. (Internally this tab key is 'price-report', sometimes referred to as PLT in code comments.)
 
-**MPT (Menu Performance Table)** — COGS% grid showing every menu item × every price level, colour-coded green (excellent, at or below target) / amber (acceptable, up to target+10%) / red (alert, above acceptable). Helps identify over-cost items that need repricing.
+**Market Price Tool** — COGS% grid showing every menu item × every price level, colour-coded green (excellent, at or below target) / amber (acceptable, up to target+10%) / red (alert, above acceptable). Helps identify over-cost items that need repricing. (Internally this tab key is 'level-report', sometimes referred to as MPT in code comments.)
 
-There is NO "Compare Markets" tab, NO "Market Price Tool" tab, NO "Scenario" tab (it was renamed to Menu Engineer), and no other tabs on this page.
+There is NO "PLT" tab, NO "MPT" tab, NO "Scenario" tab (it was renamed to Menu Engineer), and no other tabs on this page.
 
 ## SETTINGS PAGE TABS
 The Settings page has these tabs — users sometimes ask what they do:

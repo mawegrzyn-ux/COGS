@@ -29,8 +29,8 @@ Follow this sequence on a fresh instance. Skipping steps causes missing dropdown
 9. **Inventory → Price Quotes → Preferred Vendors** — assign the best quote per ingredient per market
 10. **Recipes** — build your dishes
 11. **Menus → Menu Builder** — create menus and add items
-12. **Menus → PLT** — set sell prices per price level
-13. **Menus → MPT** — review COGS% performance
+12. **Menus → Compare Markets** — set sell prices per price level across markets
+13. **Menus → Market Price Tool** — review COGS% performance per market and price level
 
 ---
 
@@ -114,7 +114,7 @@ Full CRUD: create, edit, and delete units. You cannot delete a unit that is in u
 
 ### Price Levels Tab
 
-Price Levels represent channels or contexts in which a menu item is sold: for example, Eat-in, Takeout, and Delivery. Every sell price in the PLT (Price Level Table) is tied to a price level.
+Price Levels represent channels or contexts in which a menu item is sold: for example, Eat-in, Takeout, and Delivery. Every sell price in the Compare Markets tab is tied to a price level.
 
 One price level is marked as the default. This default is used when a new country is created without specifying a price level. Changing the default is atomic — only one level can be default at a time.
 
@@ -135,7 +135,7 @@ You can also edit rates manually per market on the Markets page.
 
 ### COGS Thresholds Tab
 
-Configure the target COGS% bands used for colour coding throughout the app, particularly in the MPT (Menu Performance Table).
+Configure the target COGS% bands used for colour coding throughout the app, particularly in the Market Price Tool tab.
 
 | Band | Colour | When applied |
 |---|---|---|
@@ -192,7 +192,7 @@ Tax rates map to price levels via Country-Level Tax configuration. For example:
 - UK Cold Takeaway → Zero 0%
 - UK Hot Takeaway → Standard 20%
 
-This mapping means the MPT and PLT correctly apply the right tax rate per channel when calculating net sell prices and COGS%.
+This mapping means the Market Price Tool and Compare Markets tabs correctly apply the right tax rate per channel when calculating net sell prices and COGS%.
 
 Full CRUD for tax rates. Set the default tax rate flag per market.
 
@@ -381,9 +381,9 @@ Once quantities are set, the tab displays for each item:
 
 **Currency display:** The currency symbol for the selected market is shown in column headers (e.g. `Cost/ptn (£)`).
 
-### PLT (Price Level Table) Tab
+### Compare Markets Tab
 
-The PLT lets you set and manage sell prices for every menu item across every price level.
+The Compare Markets tab lets you set and manage sell prices for every menu item across every price level.
 
 Prices are edited inline — click a cell to edit it, type the price in local currency, and the system converts and stores it in USD.
 
@@ -392,13 +392,13 @@ Prices are edited inline — click a cell to edit it, type the price in local cu
 - Display: `displayed price = stored_USD × dispRate` where `dispRate = market.exchange_rate / baseCurrency.exchange_rate`
 - Save-back: `stored_USD = displayed price / dispRate`
 
-The PLT shows both gross (inclusive of tax) and net (exclusive of tax) prices. The tax rate applied to each price level is configured in Markets → Tax Rates.
+The tab shows both gross (inclusive of tax) and net (exclusive of tax) prices. The tax rate applied to each price level is configured in Markets → Tax Rates.
 
 If prices are displaying incorrectly, check that the market's exchange rate is set correctly in Markets, and use Settings → Exchange Rates → Sync to refresh live rates.
 
-### MPT (Menu Performance Table) Tab
+### Market Price Tool Tab
 
-The MPT shows the COGS% for every menu item across every price level in a colour-coded grid.
+The Market Price Tool shows the COGS% for every menu item across every price level in a colour-coded grid.
 
 COGS% = recipe cost per portion ÷ net sell price × 100
 
@@ -410,7 +410,7 @@ COGS% = recipe cost per portion ÷ net sell price × 100
 
 The target is configured in Settings → COGS Thresholds.
 
-The MPT always displays prices in the local currency of the selected market (`dispRate = 1` for the local view).
+The Market Price Tool always displays prices in the local currency of the selected market (`dispRate = 1` for the local view).
 
 ---
 
@@ -865,7 +865,7 @@ dispRate = market.exchange_rate / baseCurrency.exchange_rate
 displayed_price = stored_USD × dispRate
 ```
 
-When saving a price entered in local currency (e.g. in the PLT):
+When saving a price entered in local currency (e.g. in the Compare Markets tab):
 
 ```
 stored_USD = displayed_price / dispRate
@@ -895,7 +895,7 @@ Typical targets: QSR 28–32%, casual dining 30–35%, fine dining 35–40%. Del
 
 No preferred vendor (or no active quote) exists for one or more ingredients in the selected market. Go to Inventory → Price Quotes, verify that an active quote exists for the ingredient, and assign a preferred vendor for the market.
 
-**PLT price is displaying incorrectly after editing**
+**Compare Markets price is displaying incorrectly after editing**
 
 Check that the market's exchange rate is set correctly in Markets. Use Settings → Exchange Rates → Sync to fetch current live rates. Also confirm the base currency is USD and that the target market's currency code matches the ISO 4217 code in the exchange rate table.
 

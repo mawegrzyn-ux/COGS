@@ -227,7 +227,7 @@ export default function HelpPage() {
           { label: 'Preferred Vendors', sub: 'Best source per market' },
           { label: 'Recipes', sub: 'Build dishes' },
           { label: 'Menus', sub: 'Assemble menus' },
-          { label: 'PLT / MPT', sub: 'Set prices, review COGS' },
+          { label: 'Compare Markets / Market Price Tool', sub: 'Set prices, review COGS' },
         ]} />
         <InfoBox type="tip">
           You must create at least one <strong>Market</strong>, one <strong>Price Level</strong>, and one{' '}
@@ -495,19 +495,19 @@ export default function HelpPage() {
           <li><strong>Collapsible categories</strong> — click any category row to collapse/expand its items. Use the ▼ All / ▶ All button beside the Item column header to collapse or expand everything at once.</li>
         </ul>
 
-        <H3 id="plt">Tab 3 — PLT (Price Level Table)</H3>
+        <H3 id="plt">Tab 3 — Compare Markets</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Set <strong>sell prices</strong> for each menu item × price level (e.g. Classic Burger —
           Eat-in: £12.50 · Takeout: £11.50 · Delivery: £13.00). Prices are entered in <em>display currency</em>
           and stored in USD.
         </p>
-        <InfoBox type="info" title="Currency conversion in PLT">
+        <InfoBox type="info" title="Currency conversion in Compare Markets">
           <p>Entered value → stored USD: <Mono>stored = displayValue / dispRate</Mono></p>
           <p className="mt-1">Display USD → local: <Mono>display = storedUSD × dispRate</Mono></p>
           <p className="mt-1">where <Mono>dispRate = market.exchange_rate / baseCurrency.exchange_rate</Mono></p>
         </InfoBox>
 
-        <H3 id="mpt">Tab 4 — MPT (Menu Performance Table)</H3>
+        <H3 id="mpt">Tab 4 — Market Price Tool</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Shows <strong>COGS%</strong> for each menu item × price level, colour-coded against your target:
         </p>
@@ -620,7 +620,7 @@ export default function HelpPage() {
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           Create and manage price levels (Eat-in, Takeout, Delivery, etc.). One level is marked as{' '}
           <strong>default</strong> — changing the default is an atomic transaction to avoid conflicts.
-          Price levels drive the PLT/MPT columns in Menus.
+          Price levels drive the Compare Markets and Market Price Tool columns in Menus.
         </p>
 
         <H3 id="exchange-rates-tab">Exchange Rates</H3>
@@ -633,7 +633,7 @@ export default function HelpPage() {
 
         <H3 id="cogs-thresholds-tab">COGS Thresholds</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Set the target COGS% for colour-coding in the Menu Performance Table. Three bands:
+          Set the target COGS% for colour-coding in the Market Price Tool. Three bands:
           <span className="text-green-700 font-semibold"> Excellent</span> (green ≤ target),{' '}
           <span className="text-amber-600 font-semibold">Acceptable</span> (amber, target+10%),{' '}
           <span className="text-red-600 font-semibold">Alert</span> (red, above acceptable). A typical
@@ -837,7 +837,7 @@ export default function HelpPage() {
             { q: '"What\'s our total ingredient coverage across all markets?"',                layer: 'Tools' },
             { q: '"How do I set a preferred vendor for an ingredient?"',                       layer: 'RAG' },
             { q: '"What does waste % do to the COGS calculation?"',                           layer: 'RAG' },
-            { q: '"Submit a bug report: the PLT isn\'t saving prices for the France menu"',   layer: 'Tools' },
+            { q: '"Submit a bug report: Compare Markets isn\'t saving prices for the France menu"',   layer: 'Tools' },
             { q: '"What is the recommended setup order for a new instance?"',                 layer: 'RAG' },
             { q: '"Create a vendor called Fresh Farms in the UK market"',                     layer: 'Tools' },
             { q: '"Set the preferred vendor for Chicken Breast in the UK to Fresh Farms"',   layer: 'Tools' },
@@ -932,7 +932,7 @@ export default function HelpPage() {
             {
               title: 'DataGrid — Inline-editable spreadsheet grid',
               path: 'app/src/components/DataGrid.tsx',
-              detail: 'Generic editable grid supporting text / number / select / combo / derived cell types. Save states: idle / saving / saved / error. Used in PLT and MPT tabs.',
+              detail: 'Generic editable grid supporting text / number / select / combo / derived cell types. Save states: idle / saving / saved / error. Used in Compare Markets and Market Price Tool tabs.',
             },
             {
               title: 'ColumnHeader — Sortable, filterable column header',
@@ -1234,7 +1234,7 @@ export default function HelpPage() {
               file: 'api/src/index.js',
             },
             {
-              title: 'Fix 4 — Currency conversion bug in PLT',
+              title: 'Fix 4 — Currency conversion bug in Compare Markets',
               symptom: 'Editing a price in a non-USD market saved the wrong value (e.g. entering €15 saved as ~€17.41).',
               fix: 'Save-back formula used c.rate instead of dispRate (= c.rate / targetRate). Fix: pass dispRate through to onSavePrice and use it in the reverse conversion.',
               file: 'app/src/pages/MenusPage.tsx',
@@ -1267,8 +1267,8 @@ export default function HelpPage() {
               a: 'An ingredient in the recipe has no active price quote for the selected market. Go to Inventory → Price Quotes, ensure the ingredient has at least one active quote, then optionally set a Preferred Vendor for that market.',
             },
             {
-              q: 'Prices in PLT are showing in the wrong currency or wrong amount.',
-              a: "Check the market's exchange rate in Markets. Rates must be stored relative to USD (e.g. UK: 0.79, EU: 0.92). Use Settings → Exchange Rates → Sync to fetch live rates from Frankfurter. Then re-open the PLT — display values recalculate on load.",
+              q: 'Prices in Compare Markets are showing in the wrong currency or wrong amount.',
+              a: "Check the market's exchange rate in Markets. Rates must be stored relative to USD (e.g. UK: 0.79, EU: 0.92). Use Settings → Exchange Rates → Sync to fetch live rates from Frankfurter. Then re-open Compare Markets — display values recalculate on load.",
             },
             {
               q: 'The AI assistant says "API key not configured".',
