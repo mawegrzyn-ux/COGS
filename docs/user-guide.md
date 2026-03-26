@@ -2,661 +2,935 @@
 
 Comprehensive user-facing documentation for COGS Manager — a menu cost-of-goods calculator for restaurant franchise operators. This guide covers every feature, workflow, and troubleshooting scenario.
 
+Production URL: https://obscurekitty.com
+
 ---
 
 ## What Is COGS Manager
 
 COGS Manager calculates the food cost (cost of goods sold) for restaurant menus. It gives franchise operators accurate, real-time food cost visibility across menus, recipes, ingredients, and vendor pricing — segmented by market and country.
 
-Core capabilities:
-- Build a master ingredient library with waste percentages and prep unit conversions
-- Manage vendor pricing per ingredient with multiple competing quotes
-- Assign preferred vendors by market so each country uses its best-sourced price
-- Build recipes with nested sub-recipes and automatic COGS per market
-- Construct menus and view sell price vs. food cost in multiple currencies
-- Generate allergen matrices compliant with EU/UK FIC Regulation 1169/2011
-- Log HACCP food safety data: equipment registers, temperature checks, CCP logs
-- Ask the built-in AI Assistant questions about live data in natural language
+Built on React 18 + Vite + TypeScript (frontend), Node.js + Express (API), and PostgreSQL 16 (database). All prices are stored in USD and converted for display using live exchange rates.
 
 ---
 
 ## Recommended First-Time Setup Order
 
-Follow this sequence when configuring a fresh instance. Skipping steps will cause missing dropdowns and broken COGS calculations.
+Follow this sequence on a fresh instance. Skipping steps causes missing dropdowns and broken COGS calculations.
 
-Step 1 — Settings: Create units of measurement (kg, g, litre, ml, each) and price levels (Eat-in, Takeout, Delivery).
-
-Step 2 — Markets: Create countries with currency codes, exchange rates, and tax rates.
-
-Step 3 — Categories: Create ingredient categories (Dairy, Proteins, Produce, etc.) and recipe categories (Mains, Sides, Desserts).
-
-Step 4 — Vendors: Create supplier records linked to markets.
-
-Step 5 — Ingredients: Build the master ingredient library with base units, waste %, and prep conversions.
-
-Step 6 — Price Quotes: Add vendor pricing for each ingredient.
-
-Step 7 — Preferred Vendors: Assign the best vendor quote per ingredient per market.
-
-Step 8 — Recipes: Build dishes using ingredients and sub-recipes.
-
-Step 9 — Menus: Assemble menu items from recipes.
-
-Step 10 — PLT and MPT: Set sell prices and review COGS performance.
-
-You must create at least one Market, one Price Level, and one Unit before ingredients and recipes will work correctly.
+1. **Settings → Units** — create kg, g, litre, ml, each
+2. **Settings → Price Levels** — create Eat-in, Takeout, Delivery
+3. **Markets** — create countries/markets with currency codes and exchange rates
+4. **Markets → Tax Rates** — add VAT or sales tax rates per market
+5. **Categories** — create ingredient and recipe categories
+6. **Inventory → Vendors** — create supplier records per market
+7. **Inventory → Ingredients** — build the master ingredient library
+8. **Inventory → Price Quotes** — add vendor pricing for each ingredient
+9. **Inventory → Price Quotes → Preferred Vendors** — assign the best quote per ingredient per market
+10. **Recipes** — build your dishes
+11. **Menus → Menu Builder** — create menus and add items
+12. **Menus → PLT** — set sell prices per price level
+13. **Menus → MPT** — review COGS% performance
 
 ---
 
-## Dashboard: Understanding KPIs and Coverage
+## Dashboard
 
-The Dashboard shows a live health snapshot of COGS data. Use the Refresh button (top-right) to re-fetch all metrics.
+The Dashboard is the home screen at `/dashboard`. It gives you a live summary of your data and a quick health check of your pricing coverage.
 
-KPI cards:
-- Ingredients: Total distinct ingredients in the master library
-- Recipes: Total recipes built in the system
-- Vendors: Total supplier records across all markets
-- Markets: Active country/market configurations
-- Active Quotes: Live price quotes with is_active = true
-- Categories: Ingredient and recipe category count
-- Price Levels: Eat-in / Takeout / Delivery configurations
-- Coverage %: Percentage of ingredients with at least one active preferred-vendor quote
+### KPI Cards
 
-Coverage meter: Green = greater than 80%, Amber = 50–80%, Red = less than 50%. Low coverage means recipe COGS will show £0 for unpriced ingredients.
+Eight tiles display at the top of the page:
 
-Missing Quotes panel: Shows the top 10 ingredients used in recipes that have no active price quote anywhere. These are the highest-priority gaps to fill in Inventory → Price Quotes.
+| Tile | What it shows |
+|---|---|
+| Ingredients | Total ingredients in the master library |
+| Recipes | Total recipe records |
+| Vendors | Total supplier records |
+| Markets | Total market/country records |
+| Active Quotes | Total active price quote entries |
+| Categories | Total categories (ingredient + recipe) |
+| Coverage % | Percentage of ingredients that have at least one active preferred vendor quote |
+| Menu Tiles | All menus shown as clickable cards (see below) |
 
-Recent Quotes: Lists the most recently added active price quotes.
+### Menu Tiles
+
+The Menu Tiles section replaces a simple count tile. It shows every menu in the system as a clickable card that links to `/menus`. Each card displays:
+
+- Menu name
+- Market (country)
+- Number of items in the menu
+- A row per price level showing the price level name and the overall COGS% for that level
+
+COGS data for menu tiles loads in the background after the page renders. Tiles update once the calculation completes.
+
+### Coverage Meter
+
+The Coverage % tile uses colour to signal the health of your pricing data:
+
+| Coverage | Colour | Meaning |
+|---|---|---|
+| Above 80% | Green | Good — most ingredients are priced |
+| 50–80% | Amber | Acceptable — some gaps to fill |
+| Below 50% | Red | Alert — significant pricing gaps |
+
+### Missing Quotes Panel
+
+Below the KPI tiles, the Missing Quotes panel lists the top 10 ingredients that have no active price quote anywhere in the system. These are the highest-priority items to price up before costing menus.
+
+### Recent Active Quotes
+
+A list of the most recently added or updated active price quotes, showing ingredient name, vendor, and price. Useful for confirming that recent data entry is visible in the system.
+
+### Refresh Button
+
+A Refresh button in the page header silently re-fetches all Dashboard data without a full page reload. After refreshing, the header shows the last-updated timestamp.
+
+### Quick Links
+
+The Dashboard includes quick navigation links to all main sections of the app.
 
 ---
 
-## Markets: Countries, Currencies and Tax Rates
+## Settings
 
-Markets are the core geographic unit. Everything market-specific — vendor pricing, preferred vendors, menu sell prices, tax rates, and COGS calculations — is linked to a Market.
+Settings are at `/settings`. There are five tabs.
 
-Each market stores: country name, ISO currency code (e.g. GBP), currency symbol (£), and exchange rate vs USD.
+### Units Tab
 
-All prices are stored in USD. Display conversion: dispRate = market.exchange_rate / targetCurrency.exchange_rate. Sync live rates via Settings → Exchange Rates.
+Units define the measurement system for the app. Every ingredient has a base unit, and every price quote and recipe line item uses units from this list.
 
-Tax rates: Each market supports multiple tax rates (e.g. Standard 20%, Reduced 5%, Zero 0%). One is flagged as default. Rates are mapped to price levels via the Country-Level Tax junction — for example, UK Delivery at 20% VAT while cold takeaway food uses 0%.
+Fields per unit:
 
-Price levels per market: Each market has a default price level pre-selected when viewing menus.
+| Field | Description |
+|---|---|
+| Name | Display name, e.g. Kilogram |
+| Abbreviation | Short form, e.g. kg |
+| Type | mass, volume, or count |
 
-Locations: Physical store locations are linked to a market and optionally to a Location Group (e.g. "London Central"). Location Groups allow clustering of sites. Locations are the scope for all HACCP records.
+Default units to create: kg, g, litre, ml, each.
 
-Brand Partners: Franchise operators are associated at the market level.
+Full CRUD: create, edit, and delete units. You cannot delete a unit that is in use by an ingredient or recipe.
+
+### Price Levels Tab
+
+Price Levels represent channels or contexts in which a menu item is sold: for example, Eat-in, Takeout, and Delivery. Every sell price in the PLT (Price Level Table) is tied to a price level.
+
+One price level is marked as the default. This default is used when a new country is created without specifying a price level. Changing the default is atomic — only one level can be default at a time.
+
+Full CRUD: create, edit, and delete price levels. You cannot delete a price level that is referenced by existing prices.
+
+### Exchange Rates Tab
+
+All prices in COGS Manager are stored internally in USD. Exchange rates are used to convert display prices into each market's local currency.
+
+Rates are stored as units of the local currency per 1 USD. For example:
+
+- GBP = 0.79 means 1 USD = 0.79 GBP
+- EUR = 0.92 means 1 USD = 0.92 EUR
+
+Use the **Sync** button to fetch current live rates from the Frankfurter API (free, no API key required). Rates are updated in the database for all markets with a matching currency code.
+
+You can also edit rates manually per market on the Markets page.
+
+### COGS Thresholds Tab
+
+Configure the target COGS% bands used for colour coding throughout the app, particularly in the MPT (Menu Performance Table).
+
+| Band | Colour | When applied |
+|---|---|---|
+| Excellent | Green | COGS% at or below target |
+| Acceptable | Amber | COGS% between target and target + 10% |
+| Alert | Red | COGS% above the acceptable ceiling |
+
+Typical targets:
+
+- Quick-service restaurant (QSR): 28–32%
+- Casual dining: 30–35%
+- Fine dining: 35–40%
+- Delivery channels: often need lower COGS% to absorb platform commission fees
+
+### AI Tab
+
+Configure the Pepper AI assistant. All keys entered here are stored in the database and used server-side only — they are never exposed to the browser.
+
+| Field | Description |
+|---|---|
+| Anthropic API Key | Required for Pepper to function. Without this, all Pepper requests fail. |
+| Voyage AI Key | Enables semantic vector search for Pepper's knowledge base (RAG). Without it, falls back to keyword frequency scoring, which is less accurate. |
+| Brave Search API Key | Enables real web search in Pepper. Without it, Pepper falls back to DuckDuckGo instant answers, which have limited coverage. |
+| Response Behaviour | Concise mode toggle. When on, Pepper skips narration, calls tools silently, and returns bullet-point results instead of prose paragraphs. |
+| Claude Code API Key | Generate or regenerate a bearer token for the Claude Code developer tool to query the internal feedback API. Not required for end users. |
 
 ---
 
-## Categories: Organising Ingredients and Recipes
+## Markets
 
-Categories organise ingredients and recipes into logical groups. There are two category types: ingredient and recipe. Each category also has a Group Name (a flat string label, e.g. "Dairy", "Produce") to cluster similar categories together.
+The Markets page at `/markets` manages the countries and regions in which your brand operates. It has three tabs.
 
-Suggested ingredient groups: Dairy, Proteins, Produce, Dry Goods, Beverages, Sauces and Condiments, Packaging, Cleaning.
+### Markets Tab
+
+Each market record defines a country or trading region. Fields:
+
+| Field | Description |
+|---|---|
+| Name | Market name, e.g. United Kingdom |
+| Currency Code | ISO 4217 code, e.g. GBP, EUR, USD |
+| Currency Symbol | Display symbol, e.g. £, €, $ |
+| Exchange Rate | Units of this currency per 1 USD |
+| Default Price Level | Which price level is the default for this market |
+
+Full CRUD. All prices stored in USD are converted for display using `dispRate = market.exchange_rate / baseCurrency.exchange_rate`.
+
+### Tax Rates Tab
+
+Each market can have multiple tax rates (e.g. UK VAT Standard 20%, Reduced 5%, Zero 0%). One rate per market is marked as the default.
+
+Tax rates map to price levels via Country-Level Tax configuration. For example:
+
+- UK Eat-in → Standard 20%
+- UK Cold Takeaway → Zero 0%
+- UK Hot Takeaway → Standard 20%
+
+This mapping means the MPT and PLT correctly apply the right tax rate per channel when calculating net sell prices and COGS%.
+
+Full CRUD for tax rates. Set the default tax rate flag per market.
+
+### Brand Partners and Locations Tab
+
+**Brand Partners** are franchise or brand records linked to a market. They represent the operator or brand running locations in that market. Fields: name, market.
+
+**Locations** are physical store addresses. Each location is linked to a market and optionally to a Location Group (e.g. "London Central", "North West England"). Location Groups let you cluster locations for HACCP reporting.
+
+Fields per location: name, market, location group (optional), address, contact details, active flag.
+
+Locations scope all HACCP records — every temperature log and CCP log is tied to a specific location.
+
+---
+
+## Categories
+
+Categories at `/categories` organise your ingredients and recipes into logical groups. Each category has three fields:
+
+| Field | Description |
+|---|---|
+| Name | Category name, e.g. Dairy, Proteins, Mains |
+| Group Name | A flat label grouping related categories, e.g. "Produce", "Proteins" |
+| Type | ingredient or recipe — determines which picker the category appears in |
+
+Suggested ingredient categories: Dairy, Proteins, Produce, Dry Goods, Beverages, Sauces, Packaging.
 
 Suggested recipe categories: Mains, Sides, Desserts, Drinks, Sauces.
 
----
-
-## Ingredients: Creating and Managing the Master Library
-
-The ingredient master list is the foundation of all recipe and menu costing.
-
-Fields:
-- name: Ingredient name, used in recipe builder autocomplete
-- category: Ingredient category from the Categories page
-- base_unit: The unit all prices are stored in (e.g. kg, litre, each)
-- waste_pct: Percentage of ingredient discarded in preparation (0–100). Increases effective cost per usable unit.
-- default_prep_unit: The unit chefs measure in recipes (e.g. grams, ml)
-- prep_to_base_conversion: How many prep units equal one base unit (e.g. 1000 g = 1 kg)
-- notes: Free-text notes for buyers or kitchen team
-- nutrition fields: Optional kcal, protein, fat, carbs, sugar, salt per 100g — sourced from USDA FoodData Central
+Full CRUD. You cannot delete a category that is currently assigned to an ingredient or recipe.
 
 ---
 
-## Understanding Waste Percentage and Prep Conversion
+## Inventory
 
-Waste % accounts for the portion of an ingredient that is discarded during preparation (peeling, trimming, bones, shells, cooking loss).
+The Inventory page at `/inventory` is where you manage your master ingredient library, your supplier list, and all pricing data. It has three tabs.
 
-Example with 20% waste: If flour costs £2.00 per kg and waste is 0%, cost per kg usable = £2.00. If chicken breast costs £6.00 per kg and waste is 25% (trim loss), effective cost per kg usable = £6.00 / (1 - 0.25) = £8.00 per kg of usable meat.
+### Ingredients Tab
 
-The formula: Effective cost = purchase_price / (1 - waste_pct / 100)
+The Ingredients tab is the master list of every ingredient in your system. An ingredient record defines what an item is and how it is measured — pricing is handled separately in Price Quotes.
 
-Prep conversion converts between the unit the vendor sells in (base unit, e.g. kg) and the unit the recipe uses (prep unit, e.g. grams). If base unit is kg and prep unit is g, then prep_to_base_conversion = 1000, meaning 1000 g = 1 kg.
+Fields per ingredient:
 
-Recipe line cost calculation:
-1. Take recipe quantity in prep units (e.g. 150 g)
-2. Divide by prep_to_base_conversion to get base units (150 / 1000 = 0.15 kg)
-3. Divide by (1 - waste_pct/100) to get effective qty
-4. Multiply by vendor price per base unit
-5. Result is the cost contribution of that ingredient line
+| Field | Description |
+|---|---|
+| Name | Ingredient name |
+| Category | Links to a category record (ingredient type) |
+| Base Unit | The fundamental unit used for purchase quantities (e.g. kg) |
+| Waste % | Percentage of purchased weight lost during preparation (peeling, trimming, cooking shrinkage, bones). Range: 0–100. |
+| Default Prep Unit | The unit chefs measure in (e.g. grams when base unit is kg) |
+| Prep to Base Conversion | How many prep units equal one base unit (e.g. 1000 g per 1 kg) |
+| Notes | Free-text notes |
+| Image URL | Optional link to an image of the ingredient |
+| Allergen Notes | Free-text field for supplementary allergen information |
 
----
+**Optional nutrition fields** (per 100g of ingredient):
 
-## Vendors: Managing Suppliers
+| Field | Unit |
+|---|---|
+| Calories | kcal |
+| Protein | g |
+| Fat | g |
+| Carbohydrates | g |
+| Sugar | g |
+| Salt | g |
 
-Vendors are ingredient suppliers. Each vendor is linked to a country/market. You can have multiple vendors per market and multiple vendors offering the same ingredient at competing prices.
+Nutrition data is sourced from the USDA FoodData Central database. Use the USDA lookup in the ingredient form to search and auto-populate these fields.
 
-Vendor records store: name, country, and optional contact details.
+### Vendors Tab
 
-Vendor pricing is managed through Price Quotes, not on the vendor record itself.
+The Vendors tab lists your suppliers. Vendor records are intentionally simple — pricing detail lives in Price Quotes, not here.
 
----
+Fields per vendor:
 
-## Price Quotes: Setting Vendor Pricing
+| Field | Description |
+|---|---|
+| Name | Supplier name |
+| Country / Market | Which market this supplier operates in |
 
-Price quotes link a vendor to an ingredient at a specific price. Each quote records:
-- purchase_price: Price paid per purchase unit (entered in local currency, stored in USD)
-- qty_in_base_units: How many base units per purchase unit (e.g. 12.5 kg per sack)
-- purchase_unit: The unit the vendor sells in (sack, case, litre, each)
-- is_active: Only active quotes are used in COGS calculations and coverage metrics
-- vendor_product_code: Optional vendor SKU for ordering reference
+Full CRUD. You cannot delete a vendor that has active price quotes.
 
-To deactivate a quote without deleting it (e.g. when a vendor changes pricing), set is_active to false. The quote is retained for historical reference.
+### Price Quotes Tab
 
----
+Price Quotes link a vendor to an ingredient at a specific price. Every COGS calculation in the system ultimately traces back to a price quote.
 
-## Preferred Vendors: Choosing the Best Source Per Market
+Fields per quote:
 
-For each ingredient and market combination, you can designate a Preferred Vendor — the single quote used for COGS calculations in that market. The database enforces one preferred vendor per ingredient per country (UNIQUE constraint).
+| Field | Description |
+|---|---|
+| Ingredient | The ingredient being priced |
+| Vendor | The supplier providing this price |
+| Purchase Price | The price paid, entered in the vendor's local currency — stored in USD |
+| Qty in Base Units | The quantity of the ingredient supplied per purchase unit (e.g. 12.5 kg per sack) |
+| Purchase Unit | The commercial unit used by the vendor (e.g. sack, case, litre, each) |
+| Active | Whether this quote is currently valid. Inactive quotes are excluded from COGS. |
+| Vendor Product Code | Optional reference code from the supplier's catalogue |
 
-If no preferred vendor is set for an ingredient in a market, the system automatically falls back to the lowest active quote for that ingredient. Set preferred vendors to ensure COGS reflects the actual supplier each franchise location uses, not just any available price.
+**Preferred Vendor assignment:** For each ingredient, you can designate one preferred vendor per market. The preferred vendor's quote is used for all COGS calculations in that market. Only one preferred vendor per ingredient per country is permitted. If no preferred vendor is set, the system falls back to the cheapest active quote for that ingredient in that market.
 
-Preferred vendors are set in the Inventory → Price Quotes tab.
-
----
-
-## Allergen Management: EU FIC Compliance
-
-The EU/UK Food Information to Consumers (FIC) Regulation 1169/2011 requires food businesses to declare the 14 major allergens in all food sold.
-
-The 14 regulated allergens: Celery, Cereals containing gluten, Crustaceans, Eggs, Fish, Lupin, Milk, Molluscs, Mustard, Peanuts, Sesame, Soybeans, Sulphur dioxide and Sulphites, Tree nuts.
-
-For each ingredient and allergen combination, set one of three statuses:
-- Contains: The ingredient definitely contains this allergen
-- May Contain: Risk of cross-contamination (e.g. processed in same facility)
-- Free From: No allergen present
-
-Allergen status is set at ingredient level in Inventory → Allergens (the matrix view). The status propagates through recipes to menus: if any ingredient in a recipe contains an allergen, the recipe and its menu items are flagged.
-
----
-
-## Recipes: Building and Costing Dishes
-
-Recipes define the ingredients and quantities that make a dish. The system calculates cost per portion for each recipe using live vendor pricing per market.
-
-How to create a recipe:
-Step 1 — Create the recipe header: Give it a name, assign a recipe category, set yield quantity and yield unit (e.g. 4 portions). The yield divides total cost to give cost per portion.
-
-Step 2 — Add ingredient lines: Click Add Item, choose Ingredient, select the ingredient, and enter the quantity in the ingredient's prep unit (e.g. 150 g of flour). The system converts prep to base unit automatically.
-
-Step 3 — Add sub-recipes (optional): Set item type to Recipe and select a sub-recipe. Useful for pre-made sauces, marinades, or components shared across multiple dishes. Sub-recipe cost is calculated recursively.
-
-Step 4 — Select a market: Use the market selector dropdown to view COGS for a specific country. The preferred vendor quote for each ingredient in that market is used.
-
-If an ingredient has no active quote in the selected market, its line cost shows £0.00 and is flagged. These gaps also appear on the Dashboard Missing Quotes panel.
+To set a preferred vendor: find the quote in the Price Quotes list, select the market, and mark it as preferred.
 
 ---
 
-## Understanding How Recipe COGS is Calculated
+## Recipes
 
-The COGS calculation for a recipe line item:
+The Recipes page at `/recipes` is where you build the dishes that populate your menus.
 
-1. Get the quantity in prep units (e.g. 200 g of chicken)
-2. Convert to base units: 200 / 1000 = 0.2 kg
-3. Apply waste adjustment: 0.2 / (1 - 0.25) = 0.267 kg effective
-4. Get effective price from preferred vendor or lowest active quote
-5. Line cost = 0.267 × price per kg
+### Recipe Header
 
-Sum all line costs, then divide by yield quantity = cost per portion.
+Each recipe has the following header fields:
 
-The effective price formula: effective_price = purchase_price / qty_in_base_units
+| Field | Description |
+|---|---|
+| Name | Recipe name |
+| Category | Recipe category (recipe type only) |
+| Yield Quantity | How many portions (or units) this recipe produces |
+| Yield Unit | The unit for the yield (e.g. portions, litres, each) |
 
-This converts the vendor's pack price to a price per base unit (e.g. £15.00 for a 12.5 kg sack = £1.20 per kg).
+The yield quantity divides the total recipe cost to produce a cost per portion.
 
----
+### Recipe Line Items
 
-## Menus: Building the Menu Builder
+Each line item is either an ingredient or a sub-recipe.
 
-Menus are the top-level sales unit. Each menu belongs to a market/country and contains menu items (recipes or individual ingredients). The Menus page has three tabs.
+For an **ingredient line item**:
+- Select the ingredient from the master library
+- Enter the quantity in the ingredient's prep unit
+- The system auto-converts to base units using the prep_to_base_conversion
 
-Tab 1 — Menu Builder: Create menus and add items to them. Each item carries a display name (what appears to the customer), a link to a recipe or ingredient, and a sort order for consistent menu sequencing.
+For a **sub-recipe line item**:
+- Select another recipe from the library
+- The cost of that sub-recipe is calculated recursively and used as the line cost
+- This enables multi-tier recipes: raw ingredients feed sub-recipes, which feed main recipes
 
-To add an item to a menu: select the menu from the dropdown, click Add Item, choose whether it links to a recipe or ingredient, enter the display name, and set sort order.
+### COGS Calculation
 
----
+The COGS calculation for each ingredient line item follows these steps:
 
-## PLT: Setting Sell Prices with Currency Conversion
+1. Quantity in prep units ÷ prep_to_base_conversion = quantity in base units
+2. Quantity in base units ÷ (1 − waste_pct / 100) = effective quantity (accounting for prep waste)
+3. Effective quantity × (purchase_price ÷ qty_in_base_units) = line cost in USD
 
-The Price Level Table (PLT) is where you set sell prices for each menu item and price level combination. For example: Classic Burger — Eat-in: £12.50, Takeout: £11.50, Delivery: £13.00.
+All line costs are summed, then divided by the yield quantity to produce the cost per portion.
 
-All prices are stored in USD. When you enter a price in the PLT, enter it in the display currency (local market currency). The system converts to USD for storage.
+### Market Selector
 
-Currency conversion formula:
-- Display to stored: stored_USD = displayed_price / dispRate
-- Stored to display: displayed_price = stored_USD × dispRate
-- dispRate = market.exchange_rate / baseCurrency.exchange_rate
-
-If you see a price displaying incorrectly, check that the market's exchange rate is correct in Markets. Use Settings → Exchange Rates → Sync to fetch live rates.
-
----
-
-## MPT: Analysing Menu Performance and COGS Percentage
-
-The Menu Performance Table (MPT) shows COGS% for each menu item and price level, colour-coded against your target thresholds.
-
-COGS% = (Recipe Cost ÷ Sell Price excl. tax) × 100
-
-Colour coding:
-- Green: COGS% is at or below your target (e.g. ≤ 30%) — Good
-- Amber: COGS% is between target and target + 10% (e.g. 30–40%) — Acceptable
-- Red: COGS% is above target + 10% (e.g. > 40%) — Alert
-
-Both gross (including tax) and net (excluding tax) sell prices are shown. The COGS% is calculated against the net (ex-tax) sell price because tax is collected on behalf of the government, not revenue.
-
-Set your target COGS threshold in Settings → COGS Thresholds. A typical quick-service restaurant target is 28–32% food cost.
+A market selector at the top of the recipe view lets you see COGS for any specific market using that market's preferred vendor quotes and exchange rates. Switching the market recalculates all line costs and the cost per portion in the selected market's currency.
 
 ---
 
-## Allergen Matrix: EU FIC Menu Declaration
+## Menus
 
-The Allergen Matrix page generates a menu-level allergen declaration compliant with EU Regulation 1169/2011 and UK Food Information Regulations. It maps all 14 regulated allergens across every item on a selected menu.
+The Menus page at `/menus` is where you build and cost your menu offerings. It has four tabs.
 
-How to use:
-1. Select a menu from the dropdown
-2. Optionally filter by recipe category to focus on a section (e.g. just Desserts)
-3. The matrix shows columns (14 allergens) and rows (menu items)
-4. Bold = Contains, italic = May Contain, blank = Free From
+### Menu Builder Tab
 
-Printing: Click Print to open the browser print dialog. The sidebar and navigation are hidden automatically. The matrix scales to A4 landscape. The printed sheet is suitable for customer-facing display or authority inspection.
+Create menus and populate them with items.
 
-The allergen status propagates from ingredients through recipes to menu items. If any ingredient in a recipe contains an allergen, the menu item is flagged as Contains.
+Each menu is linked to a market (country). You can have multiple menus per market (e.g. Dine-in Menu, Delivery Menu).
 
----
+Each menu item record contains:
 
-## HACCP: Food Safety Records
+| Field | Description |
+|---|---|
+| Recipe or Ingredient | What is being sold — link to a recipe or a raw ingredient |
+| Display Name | The name shown to customers on the menu |
+| Sort Order | Integer controlling the display order within the menu |
+| Allergen Notes | Free text shown alongside allergen matrix data for this item |
 
-The HACCP module enables franchise locations to manage food safety records digitally. All records are scoped to a Location — select a location from the top dropdown before adding records.
+Items are grouped by their recipe or ingredient category within the menu view.
 
-Equipment Register: Register all refrigeration, cooking, and holding equipment at each location. Equipment records capture type, description, and location. Each piece of equipment can then have temperature logs attached.
+### Menu Engineer Tab
 
-Temperature Logs: Log temperature readings against specific equipment. Each log captures temperature (in Celsius or Fahrenheit), timestamp, and any corrective actions taken. Readings outside the safe range should include a corrective action note. Full history is retained per equipment item.
+The Menu Engineer tab (formerly called "Scenario") provides a sales mix analysis view. It helps you understand profitability across your menu and model the impact of different sales volumes.
 
-CCP Logs (Critical Control Points): Log key food safety checks — cooking temperatures, cooling records, delivery temperatures. Each CCP log records the type, measured value, pass/fail status, and corrective action notes. All CCP logs are location-scoped.
+**Mix Manager:** Click the Mix Manager button to open a modal where you enter the expected or actual sales quantities per menu item. If quantities have already been entered, the modal pre-populates with those values.
 
-HACCP Reports: The Report tab aggregates all equipment and CCP log data for a selected location into a printable summary. Use this for local authority inspections, internal audits, or franchise compliance reviews.
+Once quantities are set, the tab displays for each item:
+- Cost per portion (in the market's currency)
+- Sell price
+- Contribution margin
 
----
+**Cross-tab sync:** Selecting a menu in Menu Builder also selects the same menu in Menu Engineer, and vice versa. You do not need to reselect the menu when switching tabs.
 
-## Settings: Units, Price Levels and Exchange Rates
+**Category collapsing:** Items are grouped by category. Click any category row to collapse or expand the items under it. Use the "▼ All" button next to the Item column header to expand all categories at once, or "▶ All" to collapse all. The button label toggles based on the current state.
 
-Units of Measurement: Define the units used across the system. Common units are pre-seeded (kg, g, litre, ml, each). Each unit has a type: mass, volume, or count. Units are assigned to ingredients as their base unit.
+**Currency display:** The currency symbol for the selected market is shown in column headers (e.g. `Cost/ptn (£)`).
 
-Price Levels: Create and manage price levels (Eat-in, Takeout, Delivery, etc.). One level is marked as default. Changing the default is an atomic database transaction to avoid conflicts. Price levels drive the PLT and MPT columns in Menus.
+### PLT (Price Level Table) Tab
 
-Exchange Rates: Click Sync Exchange Rates to fetch live rates from the Frankfurter API (free, no API key needed). Rates are stored against each market country. Base currency is USD — all rates are stored as units per 1 USD. For example, if USD to GBP is 0.79, the UK market should have exchange_rate = 0.79.
+The PLT lets you set and manage sell prices for every menu item across every price level.
 
-COGS Thresholds: Set the target COGS% for colour-coding in the Menu Performance Table. The three bands are Excellent (green, at or below target), Acceptable (amber, target to target+10%), and Alert (red, above acceptable). A typical QSR target is 28–32% food cost.
+Prices are edited inline — click a cell to edit it, type the price in local currency, and the system converts and stores it in USD.
 
-System tab: Shows database information and provides tools for test data management.
+**Currency conversion:**
 
----
+- Display: `displayed price = stored_USD × dispRate` where `dispRate = market.exchange_rate / baseCurrency.exchange_rate`
+- Save-back: `stored_USD = displayed price / dispRate`
 
-## COGS Thresholds: Target Food Cost Percentages
+The PLT shows both gross (inclusive of tax) and net (exclusive of tax) prices. The tax rate applied to each price level is configured in Markets → Tax Rates.
 
-COGS thresholds determine the colour-coding in the Menu Performance Table (MPT). They are set in Settings → COGS Thresholds.
+If prices are displaying incorrectly, check that the market's exchange rate is set correctly in Markets, and use Settings → Exchange Rates → Sync to refresh live rates.
 
-Three threshold bands:
-- Excellent (green): COGS% is at or below your target percentage — the item is well-priced
-- Acceptable (amber): COGS% is between the target and target plus 10 percentage points — acceptable but worth reviewing
-- Alert (red): COGS% is above the acceptable band — the item is likely underpriced or ingredient cost has risen
+### MPT (Menu Performance Table) Tab
 
-Example: If target is 30%, then Excellent = ≤30%, Acceptable = 30–40%, Alert = >40%.
+The MPT shows the COGS% for every menu item across every price level in a colour-coded grid.
 
-A typical quick-service restaurant target food cost is 28–32%. Fine dining may target 35–40% due to higher ingredient quality. Delivery channels typically need lower COGS% due to platform commission fees.
+COGS% = recipe cost per portion ÷ net sell price × 100
 
-If an item shows amber or red, options are: (1) raise the sell price in PLT, (2) reduce recipe portion size, (3) switch to a lower-cost ingredient or vendor, (4) negotiate a better vendor price.
+| Colour | Meaning | When applied |
+|---|---|---|
+| Green | Excellent | COGS% at or below target |
+| Amber | Acceptable | COGS% between target and target + 10% |
+| Red | Alert | COGS% above acceptable ceiling |
 
----
+The target is configured in Settings → COGS Thresholds.
 
-## McFry AI Assistant: What It Can and Cannot Do
-
-McFry is a floating AI chat widget at the bottom-right of every page. It is powered by Claude Haiku 4.5 and uses two knowledge layers: vectorised documentation (RAG) and 35 live database tools that cover every entity in the system.
-
-McFry can read AND write to the database. It acts as a full AI system administrator — not just answering questions but creating, updating, and deleting records on your behalf.
-
-What McFry can do:
-- Answer questions about live data: ingredients, recipes, menus, vendors, price quotes, markets, categories, units, and price levels
-- Create new records: ingredients, vendors, price quotes, preferred vendor assignments, recipes, recipe items, menus, menu items, menu item prices, and categories
-- Update existing records: edit ingredient details, vendor info, price quotes, recipes, and recipe line items
-- Delete records: remove ingredients, vendors, price quotes, recipe items, and entire menus (with cascade warning)
-- Analyse uploaded files: read CSV/Excel data and import records row by row; extract structured data from Word documents, PowerPoints, PDF invoices/recipe cards; identify data from images of labels, menus, and invoices
-- Submit and retrieve feedback tickets
-- Explain how any feature works using the documentation knowledge base
-
-Safety behaviour: McFry always asks for confirmation before creating, updating, or deleting any records. For batch imports (more than 3 rows from a file), it describes the full plan once and asks once before proceeding. For delete_menu, McFry will explicitly warn that all menu items and prices will also be deleted.
-
-What McFry cannot do:
-- Write to HACCP records (equipment, temperature logs, CCP logs) — no tools for these
-- Write to market/country tax configuration — use the Markets page for this
-- Update Settings (units, price levels, COGS thresholds) — use the Settings page
-- Access conversation history from a different browser session (though all turns are saved to the database and can be reloaded from the History panel)
-
-For the best results: Ask McFry to "create an ingredient called X", "show me the COGS for recipe Y", "import this CSV of ingredients", or "what does waste percentage mean?" — it will use the right tools automatically.
+The MPT always displays prices in the local currency of the selected market (`dispRate = 1` for the local view).
 
 ---
 
-## AI Assistant: Vectorised Knowledge (RAG)
+## Allergen Matrix
 
-RAG stands for Retrieval-Augmented Generation. At API startup, the system reads two markdown source files, splits them into sections by double-hash (##) headings, and embeds each section using Voyage AI's voyage-3-lite model.
+The Allergen Matrix page at `/allergens` displays allergen information for your ingredients and menu items against the 14 allergens regulated under EU/UK FIC Regulation 1169/2011.
 
-Source files indexed for RAG:
-1. CLAUDE.md — technical project documentation: infrastructure, CI/CD, database schema, code patterns, known bugs, deployment
-2. docs/user-guide.md — this file: user tutorials, workflow guides, field explanations, troubleshooting, FAQ
+**The 14 regulated allergens:**
 
-When you ask a question, the query is also embedded and compared to all stored section vectors using cosine similarity. The top 4 most relevant sections are retrieved and injected into Claude's system prompt as context before Claude sees your question.
+1. Celery
+2. Cereals containing gluten
+3. Crustaceans
+4. Eggs
+5. Fish
+6. Lupin
+7. Milk
+8. Molluscs
+9. Mustard
+10. Peanuts
+11. Sesame
+12. Soybeans
+13. Sulphur dioxide and Sulphites
+14. Tree nuts
 
-Fallback behaviour: If no Voyage AI key is configured, the system falls back to keyword frequency search (simple word scoring over section text). Less accurate but still functional. Configure the Voyage key in Settings → AI for semantic search quality.
+There are two matrix views.
 
-What RAG does not cover: RAG does not index live data (ingredients, recipes, prices, menus). That is handled by database tools. RAG also does not update automatically when you change settings or add ingredients — it only covers these static documentation files.
+### Inventory Matrix
 
----
+Shows all ingredients in your master library against all 14 allergens. For each ingredient × allergen combination, the status can be:
 
-## McFry AI Assistant: Live Database Tools
+| Status | Meaning |
+|---|---|
+| Contains | The ingredient definitively contains this allergen |
+| May Contain | The ingredient may contain traces due to cross-contamination |
+| Free From | The ingredient is confirmed free from this allergen |
+| (blank) | Not assessed |
 
-McFry has 35 tools that run against the live mcogs PostgreSQL database. Tools are selected automatically based on your request. McFry always resolves names to IDs using list tools before making any write calls — it never guesses IDs.
+The first column (ingredient name) and the header row are sticky — they remain visible as you scroll horizontally or vertically through the matrix.
 
-Read and lookup tools (15):
+**Allergen Notes column:** The last column of the Inventory matrix is an inline-editable text area per ingredient. Use it to record additional allergen context that does not fit into the Contains/May Contain/Free From schema (e.g. "Produced on equipment shared with tree nuts"). Notes save automatically when you click away from the field. A spinner indicates that the save is in progress.
 
-get_dashboard_stats: Returns total counts of ingredients, recipes, menus, vendors, markets, and the price quote coverage percentage.
+### Menu Matrix
 
-list_ingredients: Lists all ingredients with id, name, and category. Accepts an optional name search filter (case-insensitive partial match).
+Select a menu from the dropdown to see its items in the matrix. Allergen status propagates upward through the data hierarchy:
 
-get_ingredient: Returns full details for a single ingredient including nutrition, all vendor price quotes, and allergen statuses for all 14 EU FIC allergens.
+- Allergen status is set at ingredient level
+- Recipe-level allergen status is the combined status of all its ingredients (Contains overrides May Contain)
+- Menu item allergen status reflects the recipe (or ingredient) it is linked to
 
-list_recipes: Lists all recipes with id and name. Accepts an optional name search filter.
+**Allergen Notes column:** The Menu matrix also has a per-row Allergen Notes field for each menu item. This field is separate from the ingredient-level notes and saves to the menu item record. It is useful for recording preparation notes relevant to allergen management at the point of service (e.g. "Served with separate gluten-free bun on request").
 
-get_recipe: Returns a recipe with all ingredient lines, quantities, units, and cost breakdown per country using preferred vendor pricing.
-
-list_menus: Lists all menus with id, name, and market.
-
-get_menu_cogs: Returns menu items with sell prices per price level and calculated COGS% per item.
-
-get_feedback: Returns submitted feedback tickets, filterable by type and status.
-
-list_vendors: Lists all vendors with id, name, and country. Accepts optional country_id filter.
-
-list_markets: Lists all markets (countries) with id, name, currency code, currency symbol, and exchange rate.
-
-list_categories: Lists ingredient and recipe categories. Accepts optional type filter (ingredient or recipe).
-
-list_units: Lists all units of measurement with id, name, abbreviation, and type.
-
-list_price_levels: Lists all price levels with id, name, description, and default flag.
-
-list_price_quotes: Lists price quotes with optional filters for ingredient_id, vendor_id, and is_active. Returns computed price per base unit.
-
-submit_feedback: Creates a new feedback record. Requires type (bug, feature, or general) and title.
-
-Create tools (10):
-
-create_ingredient: Creates a new ingredient. Required: name. Optional: category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes. If the category name does not exist, it is created automatically.
-
-create_vendor: Creates a new vendor. Required: name. Optional: country_id, contact, email, phone, notes.
-
-create_price_quote: Creates a price quote linking a vendor to an ingredient at a price. Required: ingredient_id, vendor_id, purchase_price, qty_in_base_units. Optional: purchase_unit, is_active, vendor_product_code.
-
-set_preferred_vendor: Sets (or replaces) the preferred vendor for an ingredient in a specific market. Required: ingredient_id, country_id, vendor_id, quote_id. One preferred vendor is allowed per ingredient per market.
-
-create_recipe: Creates a new recipe. Required: name. Optional: category, description, yield_qty, yield_unit_id.
-
-add_recipe_item: Adds an ingredient or sub-recipe line to a recipe. Required: recipe_id, item_type (ingredient or recipe), prep_qty. Also requires ingredient_id or recipe_item_id depending on type. Optional: prep_unit, prep_to_base_conversion.
-
-create_menu: Creates a new menu for a market. Required: name, country_id. Optional: description.
-
-add_menu_item: Adds an item to a menu. Required: menu_id, item_type (recipe or ingredient), display_name. Also requires recipe_id or ingredient_id. Optional: qty, sell_price.
-
-set_menu_item_price: Sets (or updates) the sell price for a menu item at a specific price level. Required: menu_item_id, price_level_id, sell_price. Optional: tax_rate_id.
-
-create_category: Creates a new ingredient or recipe category. Required: name, type (ingredient or recipe). Optional: group_name, sort_order.
-
-Update tools (5):
-
-update_ingredient: Updates an existing ingredient. Required: id, name. Optional: category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes.
-
-update_vendor: Updates an existing vendor. Required: id, name. Optional: country_id, contact, email, phone, notes.
-
-update_price_quote: Updates price and quantity on an existing quote. Required: id, purchase_price, qty_in_base_units. Optional: purchase_unit, is_active, vendor_product_code. Does not require re-supplying ingredient_id or vendor_id.
-
-update_recipe: Updates recipe header fields. Required: id, name. Optional: category, description, yield_qty, yield_unit_id.
-
-update_recipe_item: Updates a recipe line item's quantity or conversion. Required: recipe_id, item_id, prep_qty. Optional: prep_unit, prep_to_base_conversion.
-
-Delete tools (5):
-
-delete_ingredient: Deletes an ingredient by id. Returns an error if the ingredient is used in recipes or has price quotes (foreign key violation) — McFry will offer to resolve dependencies first.
-
-delete_vendor: Deletes a vendor by id. Returns an error if the vendor has price quotes — McFry will offer to remove those first.
-
-delete_price_quote: Deletes a price quote by id.
-
-delete_recipe_item: Removes a line item from a recipe. Required: recipe_id, item_id.
-
-delete_menu: Deletes a menu and all its items and prices (cascade). McFry will always warn about the cascade before confirming this action.
+Both matrices use `border-separate` with `border-spacing-0` on the table element. This is necessary because `border-collapse` disables `position: sticky` in most browsers — a known CSS limitation.
 
 ---
 
-## McFry AI Assistant: File Upload and Document Analysis
+## HACCP
 
-McFry accepts file attachments via the paperclip icon in the chat input. Attach a file and optionally add a message to describe what you want done with it.
+The HACCP page at `/haccp` provides digital food safety logs for temperature monitoring and critical control point (CCP) checks.
 
-Supported file types and how they are processed:
+**Location selector:** All HACCP records are scoped to a physical location. Select your location from the dropdown at the top of the page before entering or viewing any records. Locations are managed on the Markets page.
 
-CSV (.csv) and plain text (.txt): The file content is read as UTF-8 text and sent directly to McFry. Use this for bulk ingredient imports — prepare a CSV with columns like name, category, waste_pct and McFry will parse every row, show you the full import plan, and ask for confirmation before creating any records.
+### Equipment Register
 
-Excel spreadsheets (.xlsx, .xls, .xlsb, .xlsm): Converted to CSV automatically using SheetJS. All sheets are included, each labelled with the sheet name. Multi-sheet workbooks work — McFry will process each sheet in turn.
+Register all temperature-monitored equipment at the selected location.
 
-Word documents (.docx): Text is extracted using mammoth. Useful for uploading a recipe card, ingredient specification sheet, or supplier document. McFry reads the text and identifies structured data you can import.
+Fields per equipment record:
 
-PowerPoint presentations (.pptx): Text is extracted from each slide. McFry will summarise the slides and identify any structured data (ingredient lists, pricing tables, recipe details).
+| Field | Description |
+|---|---|
+| Type | Equipment type (e.g. Refrigerator, Freezer, Hot Hold, Oven) |
+| Description | Identifying description (e.g. "Walk-in chiller unit 1") |
+| Location | The store location this equipment is assigned to |
 
-PDF files: Sent natively to Claude as a document block. Claude reads the full PDF layout including tables, images, and scanned content. Ideal for vendor invoices, recipe books, nutrition data sheets, and price lists. This is the highest-fidelity file format — no information is lost in conversion.
+Full CRUD. Equipment must be registered before temperature logs can be entered against it.
 
-Images (.png, .jpg, .jpeg, .webp): Sent as vision blocks. McFry analyses the image visually and extracts all relevant data fields — prices, product names, quantities, ingredients, weights. Use this for photos of handwritten recipe cards, printed invoices, product labels, and nutrition panels.
+### Temperature Logs
 
-Maximum file size: 10 MB per upload.
+Log temperature readings against registered equipment.
 
-How the confirmation workflow works:
-1. Attach your file (and optionally type a message like "import these as ingredients")
-2. McFry reads the file, summarises what it found, and describes the full import plan (number of rows, fields identified, sample data)
-3. McFry asks "Shall I proceed?" — review the plan carefully
-4. Confirm, and McFry creates all records using its create tools
+Fields per log entry:
 
-Tip: For a bulk ingredient import from CSV, include columns for name, category, and waste_pct. McFry will map these to the correct fields and create any categories that do not already exist.
+| Field | Description |
+|---|---|
+| Equipment | Which registered equipment was checked |
+| Temperature | Reading in °C or °F |
+| Timestamp | Date and time of the reading |
+| Corrective Action | Notes on any action taken if the reading was outside acceptable range |
 
----
+### CCP Logs
 
-## McFry AI Assistant: Chat History and Sessions
+CCP logs capture critical control point checks: cooking temperatures, cooling records, and delivery temperature checks.
 
-Every conversation with McFry is automatically saved to the database with a full audit trail. No manual save is required.
+Fields per CCP log:
 
-What is stored per turn: Your message, McFry's response, the list of tools called (as JSON), token counts, and the timestamp. All turns in a session share a session ID so the conversation can be reassembled.
+| Field | Description |
+|---|---|
+| Type | Check type: cooking, cooling, or delivery |
+| Measured Value | The recorded value (temperature, time, or other measurement) |
+| Pass / Fail | Whether the check met the required standard |
+| Corrective Action | Notes on actions taken if the check failed |
 
-Session identity: Each time you open a fresh chat, McFry generates a new session ID (a UUID). If you click the history icon (clock) and reload a past session, that session's ID is resumed — new turns are appended to the same session in the database.
+### Report Tab
 
-User identity: If you are logged in, your email and Auth0 user ID (user_sub) are attached to every turn. This means session history is personal — you see only your own past conversations.
-
-How to access your history:
-1. Click the clock icon in the McFry panel header
-2. The History panel lists all your previous sessions grouped by date: Today, Yesterday, This Week, and Older
-3. Each session shows the first message, when it was active, and how many turns it contains
-4. Click any session to load it — McFry will restore the full conversation and you can continue from where you left off
-
-Starting a new chat: Click the plus (+) icon in the McFry panel header. This clears the current messages and generates a new session ID. Your current session is already saved — you can return to it via History at any time.
-
-How chat history relates to the RAG knowledge base: Chat history is NOT embedded into the Voyage AI vector store. The RAG knowledge base contains only curated documentation (this user guide and the technical project docs). Embedding chat history into RAG would pollute the documentation index with ephemeral, user-specific conversation data. Instead, past sessions are loaded as context — if you resume a session, McFry receives those turns as its conversation history and picks up naturally where it left off. This is the recommended approach: RAG stays clean and general; history loading is personalised and specific.
-
----
-
-## Troubleshooting: COGS Showing Zero
-
-If recipe COGS or menu COGS shows £0.00 for an ingredient line:
-
-Cause 1 (most common): The ingredient has no active price quote for the selected market. Solution: Go to Inventory → Price Quotes, find the ingredient, and add an active quote from a vendor in that market. Then set a preferred vendor for that ingredient in that market.
-
-Cause 2: There is a price quote but it is marked is_active = false. Solution: Edit the quote and toggle it to active.
-
-Cause 3: A preferred vendor was set but the quote was later deactivated. Solution: Go to Inventory → Price Quotes, set a new preferred vendor with an active quote.
-
-Cause 4: The ingredient has no preferred vendor set and no active quotes at all. Solution: Add a vendor for the market, add a price quote, set it as active, then assign as preferred vendor.
-
-The Dashboard Missing Quotes panel lists the top 10 ingredients with no active quotes anywhere — check this first.
+The Report tab generates a summary of all equipment records, temperature logs, and CCP logs for the selected location. The report is formatted for printing and can be presented to environmental health officers or food safety auditors during inspections.
 
 ---
 
-## Troubleshooting: PLT Currency Issues
+## Import
 
-If prices in the Price Level Table (PLT) appear in the wrong currency or the wrong amount:
+The Import page at `/import` provides an AI-powered data import wizard that accepts spreadsheet files and extracts structured data into COGS Manager. Use it to bulk-load ingredients, vendors, price quotes, recipes, and menus from existing spreadsheets.
 
-Cause 1: The market has an incorrect exchange rate. Solution: Go to Markets, check the exchange rate for that country. The rate should be units of the local currency per 1 USD (e.g. GBP: 0.79, EUR: 0.92). Use Settings → Exchange Rates → Sync to fetch live rates.
+Supported file formats: CSV, XLSX, XLSB. PDF is not supported. Maximum file size: 5 MB.
 
-Cause 2: You entered a price in PLT but it saved incorrectly. Solution: The PLT converts your entered value from display currency to USD for storage using dispRate = market.rate / baseCurrency.rate. If the market rate is wrong, re-enter the price after correcting the exchange rate.
+The wizard has five steps.
 
-Cause 3: The target currency selector in PLT is set to the wrong currency. Solution: Check the currency dropdown at the top of the PLT tab and ensure the correct target currency is selected.
+### Step 1: Upload
 
----
+Drag and drop your file onto the upload area, or click to browse for it. The AI extraction runs automatically once the file is uploaded.
 
-## Troubleshooting: McFry AI Assistant Not Working
+If you arrive at the Import page via a link from Pepper (e.g. `/import?job=<id>`), the wizard automatically skips to Step 2 (Review) using the already-staged job.
 
-If McFry shows "API key not configured": Go to Settings → AI tab and enter your Anthropic API key (starts with sk-ant-...). Get one at console.anthropic.com. The key is stored securely in the database.
+### Step 2: Review
 
-If McFry is unresponsive or times out: The Anthropic API may be temporarily unavailable. Try again in a few minutes. Check status at status.anthropic.com.
+The extracted data is shown in tabbed tables: Ingredients, Price Quotes, Recipes, Menus. Review the data carefully before proceeding.
 
-If McFry gives vague or incorrect answers about your data: McFry uses list tools first to resolve names to IDs, then fetches details. Ask clearly — include the ingredient, recipe, or menu name. For example: "Show me the COGS for the Classic Burger recipe" works better than "what does that burger cost?"
+Sub-recipe items are identified with a 📋 icon and a green badge.
 
-If a file upload fails with an unsupported type error: Only CSV, TXT, PDF, XLSX, XLS, DOCX, PPTX, PNG, JPG, and WebP are accepted. Files larger than 10 MB will be rejected.
+**Duplicate handling:** If an extracted row matches an existing record, you are offered three actions:
 
-If McFry performs a write operation without asking first: This should not happen — the system prompt requires verbal confirmation before every create, update, or delete call. If it does occur, use Inventory / Recipes / Menus to manually revert the change, and submit feedback via McFry ("submit a bug report about...") so it can be investigated.
+| Action | Effect |
+|---|---|
+| Create | Insert as a new record (may create a duplicate) |
+| Skip | Do not import this row |
+| Override | Update the existing matched record with the imported values |
 
-If the Voyage AI key is not set: RAG falls back to keyword search, which may retrieve less relevant documentation sections. Configure the Voyage key in Settings → AI for semantic search quality.
+**Unit fuzzy-matching:** The import engine automatically resolves common unit strings to their base equivalents (e.g. "pound" → kg, "fl oz" → ml). When a unit is auto-resolved, an amber badge is shown: `was: <original>`. Check these carefully to confirm the conversion is correct.
 
-If session history is not loading: History requires your Auth0 user sub (the stable user ID) to be present. Ensure you are logged in before trying to view history. If turns are missing, they may have been made before session tracking was enabled.
+### Step 3: Categories
 
----
+Map each category name found in the imported data to an existing COGS Manager category, or create a new one.
 
-## Troubleshooting: Login and Auth Issues
+- Select an existing category from the dropdown to map to it
+- Select **+ Create new category** to create a new category inline. When you select this option, the row automatically switches to create mode and pre-fills the suggested name from the imported data. You do not need to use the Action column separately.
 
-If Auth0 login fails with a callback URL mismatch error: In the Auth0 dashboard (manage.auth0.com), go to Applications → your app → Settings. Ensure both https://obscurekitty.com and http://localhost:5173 are listed in Allowed Callback URLs, Allowed Logout URLs, and Allowed Web Origins.
+### Step 4: Vendors
 
-If the login page loads but clicking Google OAuth does nothing: Google OAuth must be configured in the Auth0 dashboard under Authentication → Social. Ensure Google is enabled and the Google client ID and secret are configured.
+Map each vendor name found in the imported data to an existing vendor record, or create a new one. The same inline create pattern applies as in the Categories step.
 
-If users are authenticated but the app shows an empty dashboard: Check the API health at https://obscurekitty.com/api/health. If it returns an error, the Node.js API may be down. SSH to the server and run: pm2 status and pm2 restart menu-cogs-api.
+### Step 5: Execute
 
----
+Click Execute to write all staged and mapped data to the database. A progress indicator shows the import status. A summary is shown on completion.
 
-## Troubleshooting: Deployment and Server Issues
+### Download Templates
 
-If the GitHub Actions CI/CD deploy fails at the health check step:
-1. SSH into the server as the ubuntu user
-2. Run pm2 status — confirm menu-cogs-api is running and online
-3. Run curl http://localhost:3001/api/health — should return {"status":"ok"}
-4. Run pm2 logs menu-cogs-api --lines 50 — look for startup errors
-5. If the API crashed, check for missing environment variables in /var/www/menu-cogs/api/.env
+The Import page provides downloadable CSV templates with the correct column headers for each data type.
 
-If Nginx is not serving the app:
-1. Run sudo nginx -t to test the configuration
-2. Run sudo nginx -s reload to reload
-3. Check logs at /var/log/nginx/error.log
+| Template | Columns |
+|---|---|
+| Ingredients | name, category, base_unit, waste_pct, prep_unit, prep_to_base, notes |
+| Vendors | name, country |
+| Price Quotes | ingredient_name, vendor_name, purchase_price, qty_in_base_units, purchase_unit |
+| Recipes | recipe_name, category, yield_qty, yield_unit, item_type, item_name, qty, unit |
+| Menus | menu_name, country, description |
+| Menu Items | menu_name, item_type, item_name, display_name, sort_order |
 
-If the SSL certificate has expired:
-1. Run sudo certbot renew --dry-run to test
-2. Run sudo certbot renew to force renewal
-3. Reload Nginx after renewal
-
-Exchange rate sync failing: The Frankfurter API (api.frankfurter.app) is free with no key. Test from the server: curl https://api.frankfurter.app/latest. If blocked, check AWS Lightsail networking firewall rules for outbound HTTPS.
-
----
-
-## How to Add a New Page to the Application
-
-Adding a new page requires changes to both the API and the frontend.
-
-Backend steps:
-1. Create api/src/routes/newpage.js with CRUD route handlers
-2. Register it in api/src/routes/index.js: router.use('/newpage', require('./newpage'))
-3. If the page needs new database tables, add them to api/scripts/migrate.js and run npm run migrate
-
-Frontend steps:
-4. Create app/src/pages/NewPage.tsx following the standard page pattern: import useApi, load data in useEffect with useCallback, display with PageHeader and Modal from ui.tsx
-5. Import NewPage in app/src/App.tsx and add: Route path="newpage" element={NewPage}
-6. Add a nav item to app/src/components/Sidebar.tsx in the NAV_ITEMS array with a path, label, and SVG icon path
-
-Deployment:
-7. Push to main branch — GitHub Actions CI/CD auto-builds and deploys
-8. Monitor the Actions tab in GitHub for build status
-9. Verify at https://obscurekitty.com/newpage
+Use these templates to prepare your data before importing. Column headers must match exactly.
 
 ---
 
-## Server Management Commands
+## Pepper AI Assistant
 
-Connect to the server: SSH as ubuntu user to the server IP or domain.
+Pepper is the built-in AI assistant powered by Claude (Anthropic). It can read and write live data in COGS Manager, answer questions, perform calculations, and help you navigate the app. It uses server-sent events (SSE) for streaming responses.
 
-Process management:
-- pm2 status — check if API is running
-- pm2 restart menu-cogs-api — restart after config changes
-- pm2 logs menu-cogs-api --lines 50 — view recent API logs
-- pm2 save — persist PM2 process list across reboots
+### Accessing Pepper
 
-Web server:
-- sudo nginx -t — test Nginx configuration
-- sudo nginx -s reload — reload Nginx after config changes
-- sudo nginx -s stop then sudo nginx — full restart
+Pepper is available on every page of the app.
 
-Database:
-- psql -U mcogs -d mcogs — connect to PostgreSQL
-- cd /var/www/menu-cogs/api and npm run migrate — run DB migrations (safe to repeat)
+- **Floating mode (default):** A green circular button sits in the bottom-right corner. Click it to open the chat panel.
+- **Docked modes:** Use the three layout icons in the Pepper panel header to switch between float, docked-left, and docked-right. Your chosen mode persists across sessions.
 
-SSL:
-- sudo certbot renew --dry-run — test Let's Encrypt renewal
-- sudo certbot renew — force certificate renewal
+### Panel Controls
 
-Health check:
-- curl https://obscurekitty.com/api/health — should return {"status":"ok"}
-- curl http://localhost:3001/api/health — direct API check bypassing Nginx
+| Control | Location | Action |
+|---|---|---|
+| Dock left | Header icon (left) | Attaches Pepper panel to the left edge of the main content area |
+| Float | Header icon (centre) | Returns Pepper to the floating popup mode |
+| Dock right | Header icon (right) | Attaches Pepper panel to the right edge of the main content area |
+| History tab | Panel header | Opens a log of past Pepper conversations stored in the database |
+| Close (X) | Panel header (float mode only) | Collapses the panel back to the floating button |
+
+Switching between dock modes clears the current conversation. The conversation history is saved to the database and accessible via the History tab.
+
+### Sending Messages
+
+- **Text:** Type in the text area and press Enter or click the Send button.
+- **Paste images:** Paste an image directly from your clipboard (Ctrl+V or Cmd+V). Pepper accepts screenshots and photos. An image preview thumbnail appears in the attachment badge.
+- **Upload files:** Click the paperclip icon to attach a file. Supported formats: CSV, XLSX, PNG, JPEG, WEBP. Maximum 5 MB. PDF is not supported.
+- **Screenshot button:** Click the camera icon in the chat input bar to capture the current page view. Pepper's own UI is excluded from the capture. The screenshot is attached to your next message automatically — add your question and send.
+- **Right-click Ask Pepper:** On any data element in the app that supports it, right-click to reveal a context menu with "Ask Pepper". Selecting it opens Pepper with a pre-built contextual prompt and an auto-screenshot of that element. Supported context types include COGS%, coverage, cost per portion, menu COGS summaries, and page tutorials.
+
+### Tutorial Help Buttons
+
+Small help icons (?) appear next to page headers and tab labels throughout the app. Clicking them sends a pre-written tutorial prompt to Pepper for that specific section, walking you through how to use that feature.
+
+### Concise Mode
+
+Toggle Concise Mode in Settings → AI → Response Behaviour. When on:
+
+- Pepper skips narration phrases such as "Let me check that for you…"
+- Tools are called silently without verbal commentary
+- Results are returned as bullet points rather than prose
+
+Useful when you are doing repetitive data tasks and want fast, clean output.
+
+### What Pepper Can Do
+
+Pepper has 74 tools covering every data operation in the app.
+
+**Read / Lookup (15 tools):**
+
+| Tool | What it does |
+|---|---|
+| get_dashboard_stats | Returns the KPI summary figures from the Dashboard |
+| list_ingredients | Lists all ingredients in the master library |
+| get_ingredient | Returns detail for a single ingredient |
+| list_recipes | Lists all recipes |
+| get_recipe | Returns detail and line items for a single recipe |
+| list_menus | Lists all menus |
+| get_menu_cogs | Returns COGS% data for a menu |
+| get_feedback | Retrieves logged feedback entries |
+| submit_feedback | Submits a feedback entry |
+| list_vendors | Lists all vendors |
+| list_markets | Lists all markets |
+| list_categories | Lists all categories |
+| list_units | Lists all measurement units |
+| list_price_levels | Lists all price levels |
+| list_price_quotes | Lists all price quotes |
+
+**Write — Create (10 tools):**
+
+| Tool | What it does |
+|---|---|
+| create_ingredient | Creates a new ingredient record |
+| create_vendor | Creates a new vendor record |
+| create_price_quote | Creates a new price quote |
+| set_preferred_vendor | Sets the preferred vendor for an ingredient in a market |
+| create_recipe | Creates a new recipe header |
+| add_recipe_item | Adds an ingredient or sub-recipe line to a recipe |
+| create_menu | Creates a new menu |
+| add_menu_item | Adds an item to a menu |
+| set_menu_item_price | Sets a sell price for a menu item at a price level |
+| create_category | Creates a new category |
+
+**Write — Update (5 tools):**
+
+| Tool | What it does |
+|---|---|
+| update_ingredient | Updates an ingredient record |
+| update_vendor | Updates a vendor record |
+| update_price_quote | Updates a price quote |
+| update_recipe | Updates a recipe header |
+| update_recipe_item | Updates a recipe line item |
+
+**Write — Delete (5 tools):**
+
+| Tool | What it does |
+|---|---|
+| delete_ingredient | Deletes an ingredient (fails if referenced by active quotes or recipes) |
+| delete_vendor | Deletes a vendor (fails if referenced by active quotes) |
+| delete_price_quote | Deletes a specific price quote |
+| delete_recipe_item | Removes a line item from a recipe |
+| delete_menu | Deletes a menu and all its items and prices (cascade) |
+
+**Market / Brand (9 tools):**
+
+| Tool | What it does |
+|---|---|
+| create_market | Creates a new market record |
+| update_market | Updates a market record |
+| delete_market | Deletes a market (warns about cascade: vendors, menus, tax rates) |
+| assign_brand_partner | Links a brand partner to a market |
+| list_brand_partners | Lists all brand partner records |
+| create_brand_partner | Creates a new brand partner |
+| update_brand_partner | Updates a brand partner |
+| delete_brand_partner | Deletes a brand partner |
+| unassign_brand_partner | Removes a brand partner's link to a market |
+
+**Categories (2 tools):**
+
+| Tool | What it does |
+|---|---|
+| update_category | Updates a category record |
+| delete_category | Deletes a category (fails if in use) |
+
+**Tax Rates (5 tools):**
+
+| Tool | What it does |
+|---|---|
+| list_tax_rates | Lists all tax rates |
+| create_tax_rate | Creates a new tax rate for a market |
+| update_tax_rate | Updates a tax rate |
+| set_default_tax_rate | Marks a tax rate as the default for its market |
+| delete_tax_rate | Deletes a tax rate |
+
+**Price Levels (3 tools):**
+
+| Tool | What it does |
+|---|---|
+| create_price_level | Creates a new price level |
+| update_price_level | Updates a price level |
+| delete_price_level | Deletes a price level |
+
+**Settings (2 tools):**
+
+| Tool | What it does |
+|---|---|
+| get_settings | Reads the current system settings |
+| update_settings | Updates system settings |
+
+**HACCP (8 tools):**
+
+| Tool | What it does |
+|---|---|
+| list_haccp_equipment | Lists registered equipment for a location |
+| create_haccp_equipment | Registers new equipment at a location |
+| update_haccp_equipment | Updates an equipment record |
+| delete_haccp_equipment | Removes an equipment record |
+| log_temperature | Records a temperature reading for a piece of equipment |
+| list_temp_logs | Lists temperature logs for equipment or a location |
+| list_ccp_logs | Lists CCP logs for a location |
+| add_ccp_log | Records a new CCP check |
+
+**Locations (8 tools):**
+
+| Tool | What it does |
+|---|---|
+| list_locations | Lists all store locations |
+| create_location | Creates a new location |
+| update_location | Updates a location record |
+| delete_location | Deletes a location (warns if equipment is assigned) |
+| list_location_groups | Lists all location groups |
+| create_location_group | Creates a new location group |
+| update_location_group | Updates a location group |
+| delete_location_group | Deletes a location group |
+
+**Allergens (4 tools):**
+
+| Tool | What it does |
+|---|---|
+| list_allergens | Lists the 14 FIC regulated allergens |
+| get_ingredient_allergens | Returns the full allergen profile for an ingredient |
+| set_ingredient_allergens | Sets the allergen profile for an ingredient — replaces the entire profile |
+| get_menu_allergens | Returns allergen data for all items in a menu |
+
+**Import (1 tool):**
+
+| Tool | What it does |
+|---|---|
+| start_import | Accepts file content from the conversation, stages an AI import job, and returns a link to the Import Wizard at `/import?job=<id>` |
+
+**Web Search (1 tool):**
+
+| Tool | What it does |
+|---|---|
+| search_web | Searches the web. Uses Brave Search if a key is configured, otherwise DuckDuckGo instant answers. Only called when you explicitly ask Pepper to search the internet. |
+
+### Safety Rules for Write Operations
+
+Pepper always confirms before making any change to your data:
+
+- Before any create, update, or delete action, Pepper describes what it is about to do and asks "Shall I proceed?"
+- For batch operations involving more than three records, Pepper presents a full plan first and asks for a single confirmation before executing.
+- **delete_menu:** Pepper warns that deleting a menu also permanently deletes all menu items and sell prices for that menu (cascade delete).
+- **delete_market:** Pepper warns that deleting a market removes associated vendors, menus, and tax rates.
+- **delete_location:** Pepper warns if equipment is assigned to the location, as it must be removed first.
+- **set_ingredient_allergens:** Pepper warns that this call replaces the entire allergen profile for the ingredient — all previous allergen statuses are overwritten.
+
+### Chatbot to Import Wizard Flow
+
+If you have a spreadsheet open or have already pasted its contents into the chat, Pepper can stage an import job for you:
+
+1. Paste or upload your spreadsheet content in the Pepper chat
+2. Ask Pepper to import it (e.g. "Can you import this spreadsheet?")
+3. Pepper calls `start_import` and the server runs AI extraction and staging
+4. Pepper replies with a link: `/import?job=<id>`
+5. Click the link — the Import Wizard opens directly at the Review step with your data pre-loaded
+
+### Pepper's Knowledge Base (RAG)
+
+Pepper has a knowledge base built from two documents that are indexed at API startup:
+
+1. `claude.md` — Technical project documentation (infrastructure, schema, code architecture)
+2. `docs/user-guide.md` — This document (user tutorials, workflows, field explanations)
+
+Each document is split into sections at `##` heading boundaries. Each section is embedded using Voyage AI (voyage-3-lite model) and stored in memory as a vector. When you send a message, your query is also embedded and compared against all stored sections using cosine similarity. The four most relevant sections are injected into Pepper's context before it replies.
+
+If no Voyage AI key is configured in Settings → AI, the system falls back to keyword frequency scoring, which matches sections based on word overlap. This is less accurate for natural language questions but still functional.
+
+### What Pepper Cannot Do
+
+- Write HACCP records — there are no write tools for HACCP. Use the HACCP page directly.
+- Update Settings values — there is no tool to change settings like the Anthropic API key or COGS thresholds. Use the Settings page.
+- Access conversation history from a different device or browser session unless you open the History tab and load a past session.
+- Search the web autonomously — `search_web` is only invoked when you explicitly ask Pepper to search the internet.
 
 ---
 
-## Exchange Rate Sync and Currency Conversion Explained
+## Core Concepts
 
-Exchange rates are fetched from the Frankfurter API (api.frankfurter.app). This is a free service with no API key required. All rates are relative to USD as the base currency.
+### Waste Percentage
 
-To sync rates: Go to Settings → Exchange Rates → click Sync Exchange Rates. The system fetches current rates for all currencies used in your configured markets and updates them in the database.
+Waste % accounts for ingredient loss during preparation: peeling vegetables, trimming fat, removing bones, or cooking shrinkage. It ensures your COGS reflects the real cost of usable ingredient, not just what you paid for the raw weight.
 
-How rates are stored: Each market/country has an exchange_rate field. This is the number of local currency units per 1 USD. For example: UK (GBP) = 0.79 means £0.79 = $1.00.
+Formula:
+```
+effective_cost_per_base_unit = purchase_price_per_base_unit / (1 - waste_pct / 100)
+```
 
-Display conversion formula: dispRate = market.exchange_rate / targetCurrency.exchange_rate
+Example: Chicken breast purchased at £6.00/kg with 25% waste:
+- effective cost = £6.00 / (1 − 0.25) = £6.00 / 0.75 = **£8.00 per kg usable**
 
-Entering prices in PLT: When you type £12.50 in the PLT for a UK menu, the system stores it as: 12.50 / dispRate (in USD). When displaying it back, it multiplies by dispRate to show the local price again.
+A recipe using 200g of this chicken therefore costs £8.00 × 0.2 = £1.60, not £6.00 × 0.2 = £1.20.
 
-Cross-currency PLT: If you select a different target currency (e.g. viewing a UK menu with EUR prices), dispRate uses both the UK rate and EUR rate to convert between them.
+### Prep Unit Conversion
 
-Why prices look wrong after changing exchange rates: The stored USD values do not change when you update exchange rates. Only the display conversion changes. If rates shift significantly, you may want to re-enter prices in PLT to ensure they are correct at current rates.
+Most suppliers sell ingredients by weight (kg, litre) but chefs measure in smaller prep units (g, ml). The prep unit conversion tells the system how to translate between them.
+
+| Field | Example |
+|---|---|
+| Base unit | kg (what the vendor sells per unit of price) |
+| Prep unit | g (what the chef measures in the recipe) |
+| Prep to base conversion | 1000 (1000 g = 1 kg) |
+
+In a recipe: 150g of an ingredient → 150 ÷ 1000 = 0.15 kg base units → apply waste % → calculate cost.
+
+### Preferred Vendors
+
+One preferred vendor per ingredient per market. Only the preferred vendor's quote is used for COGS calculations in that market.
+
+- If a preferred vendor is set, that vendor's active quote is used
+- If no preferred vendor is set, the system falls back to the lowest active price quote for that ingredient in that market
+- A preferred vendor quote must be marked as active to be included in COGS
+
+Set preferred vendors in Inventory → Price Quotes.
+
+### Currency Conversion
+
+All prices are stored internally in USD. When displaying prices in a market's local currency, the system applies:
+
+```
+dispRate = market.exchange_rate / baseCurrency.exchange_rate
+displayed_price = stored_USD × dispRate
+```
+
+When saving a price entered in local currency (e.g. in the PLT):
+
+```
+stored_USD = displayed_price / dispRate
+```
+
+If prices appear wrong, the most common cause is an incorrect exchange rate on the Markets page. Use Settings → Exchange Rates → Sync to fetch current live rates from the Frankfurter API.
+
+### COGS% Colour Coding
+
+COGS% = recipe cost per portion ÷ net sell price × 100
+
+Colour thresholds (configured in Settings → COGS Thresholds):
+
+| Band | Colour | Applied when |
+|---|---|---|
+| Excellent | Green | COGS% ≤ target |
+| Acceptable | Amber | COGS% between target and target + 10% |
+| Alert | Red | COGS% > target + 10% |
+
+Typical targets: QSR 28–32%, casual dining 30–35%, fine dining 35–40%. Delivery menus often need a lower target to account for platform commission fees.
 
 ---
 
-## Understanding the Coverage Percentage
+## Troubleshooting
 
-Price quote coverage is the percentage of ingredients in the system that have at least one active price quote with a preferred vendor assignment (or at least one active quote if no preferred vendor is set).
+**Recipe shows £0 COGS or zero cost per portion**
 
-Coverage = (ingredients with active quote / total ingredients) × 100
+No preferred vendor (or no active quote) exists for one or more ingredients in the selected market. Go to Inventory → Price Quotes, verify that an active quote exists for the ingredient, and assign a preferred vendor for the market.
 
-Why coverage matters: If coverage is below 100%, some ingredients have no pricing data. Any recipe containing those ingredients will show a partial or zero COGS. The Dashboard Missing Quotes panel shows the most critical gaps.
+**PLT price is displaying incorrectly after editing**
 
-How to improve coverage:
-1. Check the Missing Quotes panel on the Dashboard for the top unpriced ingredients
-2. Go to Inventory → Price Quotes and add a quote from a vendor
-3. Set the quote as active (is_active = true)
-4. Optionally set a preferred vendor in the same tab
+Check that the market's exchange rate is set correctly in Markets. Use Settings → Exchange Rates → Sync to fetch current live rates. Also confirm the base currency is USD and that the target market's currency code matches the ISO 4217 code in the exchange rate table.
 
-Coverage is calculated globally (not per market). An ingredient counts as covered if it has at least one active quote anywhere, even if that vendor does not serve all markets.
+**Allergen matrix is missing an allergen status for an ingredient**
+
+Allergen status is set at ingredient level on the Allergen Matrix page (Inventory tab). Status propagates automatically through recipes to menu items — but only after the ingredient has been tagged. Go to the Inventory matrix, find the ingredient, and set its allergen status.
+
+**Coverage % is low on the Dashboard**
+
+The Missing Quotes panel on the Dashboard shows the top 10 unpriced ingredients. Add active price quotes for these ingredients in Inventory → Price Quotes, and assign a preferred vendor per market.
+
+**Pepper responds with "No API key configured"**
+
+Add your Anthropic API key in Settings → AI → Anthropic API Key. Pepper cannot function without this key.
+
+**Pepper answers are vague or miss relevant detail**
+
+If no Voyage AI key is set in Settings → AI, Pepper's knowledge base uses keyword scoring instead of semantic vector matching. Adding a Voyage AI key significantly improves the relevance of the context injected into Pepper's replies.
+
+**Import wizard shows no data in the Review step**
+
+The uploaded file may not match the expected column headers. Download the CSV template from the Import page and confirm that your column headers exactly match the template. Column names are case-sensitive.
+
+**Import wizard unit badge shows "was: \<original\>"**
+
+The import engine auto-resolved an unrecognised unit string to a base unit. Check that the resolved unit is correct before executing the import. If it is wrong, correct the unit in your source file and re-upload.
+
+**Exchange rate sync fails**
+
+The Frankfurter API is a free external service (api.frankfurter.app) that requires no API key. If the sync fails, check your server's outbound internet access. You can also set exchange rates manually in Markets.
+
+**Menu tiles on the Dashboard show no COGS%**
+
+COGS data for menu tiles loads in the background. If it does not appear after a few seconds, the most likely cause is missing preferred vendor quotes for the recipes in those menus. Check the Missing Quotes panel.
+
+---
+
+*User guide last updated: March 2026*

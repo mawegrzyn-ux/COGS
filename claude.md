@@ -781,7 +781,9 @@ AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and
 
 ## 14. Pepper AI Assistant
 
-Pepper is the in-app AI assistant (Claude Sonnet via Anthropic API). It appears as a floating chat panel (bottom-right) or can be docked to the left or right side of the screen. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
+> **Full AI documentation:** [`docs/AI.md`](docs/AI.md) — covers current implementation, memory system design, voice interface scope, all DB tables, API routes, and cost estimates.
+
+Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appears as a floating chat panel (bottom-right) or can be docked to the left or right side of the screen. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
 
 ### Architecture
 
@@ -1162,9 +1164,68 @@ Currently the Auth0 audience is set to empty string. To add proper API-level JWT
 3. Pass audience in `authorizationParams` in `main.tsx`
 4. Add JWT verification middleware to Express API
 
+### POS Menu Features — Manual Items, Combos & Modifiers
+
+**Full specification:** [`docs/POS_MENU_FEATURES.md`](docs/POS_MENU_FEATURES.md)
+
+Three interconnected features that extend the menu builder towards a full POS backend configuration system. **Do not build until explicitly requested.**
+
+| Feature | Summary |
+|---|---|
+| **Manual Items** | Menu items with no recipe/ingredient link — manually entered cost and allergen tags. `item_type = 'manual'` |
+| **Combos** | `item_type = 'combo'` — ordered steps, each step has 1+ options (fixed or customer choice). COGS = sum of step costs, avg for multi-option steps. |
+| **Modifier Groups** | Global reusable groups (e.g., "Bone In Flavours") with min/max selection, attachable to both standalone menu items and combo step options via many-to-many junctions. |
+
+**7 new DB tables:** `mcogs_modifier_groups`, `mcogs_modifier_options`, `mcogs_menu_item_modifier_groups`, `mcogs_combo_steps`, `mcogs_combo_step_options`, `mcogs_combo_step_option_modifier_groups` + 2 column changes on `mcogs_menu_items`.
+
+**~11 days total** across 5 phases. See full doc for data model, API routes, COGS pseudocode, PLT two-column modifier pricing, allergen matrix changes, Pepper tools, user stories and scenarios.
+
 ### Lightsail Upgrade
 
 Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production with real franchise operators, upgrade to $20/mo (4GB RAM, 2 vCPU). Take a Lightsail snapshot before upgrading.
+
+### Voice Interface for Pepper — PARKED
+
+Full scope documented below. **Do not build until explicitly requested.**
+
+**What it covers:** Two independent capabilities that can ship separately:
+1. **Voice Input** — push-to-talk mic button, live transcript in textarea, auto-send or manual
+2. **Voice Output** — Pepper's responses read aloud sentence-by-sentence as the SSE stream arrives
+
+**Two implementation tiers:**
+
+| Tier | Approach | Cost | Effort |
+|---|---|---|---|
+| **1 — Browser APIs** | `SpeechRecognition` (input) + `speechSynthesis` (output) | Free | ~2 days |
+| **2 — External APIs** | Whisper/Deepgram (input) + OpenAI TTS/ElevenLabs (output) | ~$15–50/mo at moderate usage | +3 days |
+
+**Tier 1 details (browser-only):**
+- `window.SpeechRecognition` — Chrome/Edge only (Chromium). Firefox/Safari unsupported.
+- `window.speechSynthesis` — all browsers, robotic voice but functional
+- No backend changes, no new API keys, no new dependencies
+- HTTPS required — already satisfied by production SSL
+
+**Tier 2 details (quality):**
+- Whisper API (OpenAI) ~$0.006/min or Deepgram ~$0.0043/min for transcription
+- OpenAI TTS ~$15/1M chars or ElevenLabs for playback
+- Requires: new API key fields in Settings → AI, server-side proxy endpoint for audio, streaming audio queue manager
+
+**Key technical challenge — streaming TTS:**
+Pepper's response arrives as SSE text chunks, not complete sentences. For real-time playback, the stream must be buffered, split on sentence boundaries (`. ? !` followed by whitespace), and queued to the TTS engine sentence-by-sentence. Browser `speechSynthesis` handles this acceptably. External TTS APIs require an audio queue manager and playback coordination layer.
+
+**UI changes needed:**
+- Mic button in chat input bar (next to camera/paperclip icons)
+- Pulsing recording indicator while listening
+- Speaker toggle icon in Pepper header (persisted to `localStorage`)
+- Stop/interrupt button during playback
+- Settings → AI: voice engine selector, voice/speed controls (Tier 2)
+
+**Risks:**
+- Browser Speech API is Chromium-only — ~65% browser coverage
+- Kitchen background noise degrades browser API accuracy significantly; Whisper handles it better
+- Anthropic has no speech API — requires mixing in OpenAI or Deepgram alongside existing Anthropic setup
+
+**Recommended start point:** Tier 1 (browser-only, ~2 days, zero cost). Upgrade to Tier 2 if voice quality is a user complaint.
 
 ---
 
@@ -1182,4 +1243,4 @@ Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production wi
 
 ---
 
-*README last updated: March 2026 (session: Allergen notes fields on Inventory + Menu matrices; Right-click Ask Pepper context menu with auto-screenshot; PepperHelpButton tutorial icons on page/tab headers; Pepper panel docking (left/right/float) with mode persistence; Screenshot camera button in chat input; html2canvas integration; AI renamed from McFry to Pepper; System prompt updated with price quote multi-market model, allergen notes, screenshot, and panel mode context)*
+*README last updated: March 2026 (session: Allergen notes fields on Inventory + Menu matrices; Right-click Ask Pepper context menu with auto-screenshot; PepperHelpButton tutorial icons on page/tab headers; Pepper panel docking (left/right/float) with mode persistence; Screenshot camera button in chat input; html2canvas integration; AI renamed from McFry to Pepper; System prompt updated with price quote multi-market model, allergen notes, screenshot, and panel mode context; Voice interface for Pepper scoped and parked in backlog; Internal feedback API with DB-managed Claude Code API key; Claude Code API key field added to Settings → AI tab; POS Menu Features (manual items, combos, modifier groups) fully scoped and documented in docs/POS_MENU_FEATURES.md — not yet built)*
