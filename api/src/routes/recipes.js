@@ -1,5 +1,6 @@
 const router  = require('express').Router();
 const pool = require('../db/pool');
+const { loadAllRecipeItemsDeep } = require('./cogs');
 
 // ── GET /recipes  (list with item count) ──────────────────────────────────────
 router.get('/', async (req, res) => {
@@ -177,36 +178,78 @@ router.get('/:id', async (req, res) => {
       };
     }
 
+    // Load items for every sub-recipe referenced anywhere in this recipe tree
+    const subRecipeIds = [
+      ...globalItems,
+      ...Object.values(varByCountry).flatMap(v => v.items),
+    ]
+      .filter(i => i.item_type === 'recipe' && i.recipe_item_id)
+      .map(i => Number(i.recipe_item_id));
+    const allRecipeItemsMap = subRecipeIds.length
+      ? await loadAllRecipeItemsDeep(subRecipeIds)
+      : {};
+
+    /**
+     * Recursively compute per-line costs for a set of recipe items.
+     * Returns { lines, total_base, preferredCount, quotedCount, leafCount }
+     */
+    function buildCostLines(items, countryId) {
+      let total_base = 0, preferredCount = 0, quotedCount = 0, leafCount = 0;
+
+      const lines = items.map(item => {
+        if (item.item_type === 'ingredient') {
+          leafCount++;
+          const q = quoteLookup[item.ingredient_id]?.[countryId];
+          if (!q) return { ...item, cost: null, quote_is_preferred: null };
+          if (q.is_preferred) preferredCount++;
+          quotedCount++;
+          const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+          const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
+          const cost       = base_qty * waste_mult * q.price_per_base_unit;
+          total_base += cost;
+          return { ...item, cost: Math.round(cost * 10000) / 10000, quote_is_preferred: q.is_preferred };
+
+        } else if (item.item_type === 'recipe' && item.recipe_item_id) {
+          leafCount++;
+          const subId    = Number(item.recipe_item_id);
+          const subItems = allRecipeItemsMap[subId] || [];
+          const subYield = Math.max(1, Number(item.sub_recipe_yield_qty || 1));
+          const sub = buildCostLines(subItems, countryId);
+          const subCostPerPortion = sub.total_base / subYield;
+          const usage = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+          const cost  = subCostPerPortion * usage;
+          total_base += cost;
+          // Coverage: if sub has some preferred, count this line as preferred
+          const isPreferred = sub.leafCount > 0 && sub.preferredCount === sub.leafCount;
+          const isQuoted    = sub.leafCount > 0 && sub.quotedCount    >  0;
+          if (isPreferred) preferredCount++;
+          if (isQuoted)    quotedCount++;
+          return {
+            ...item,
+            cost: cost > 0 ? Math.round(cost * 10000) / 10000 : null,
+            quote_is_preferred: sub.leafCount > 0 ? isPreferred : null,
+          };
+        }
+        return { ...item, cost: null, quote_is_preferred: null };
+      });
+
+      return { lines, total_base, preferredCount, quotedCount, leafCount };
+    }
+
     const cogs_by_country = countries.map(country => {
       // Use variation items for this country if they exist, otherwise global items
       const variation    = varByCountry[country.id];
       const itemsForCost = variation ? variation.items : globalItems;
 
-      let total_base     = 0;
-      let preferredCount = 0;
-      let quotedCount    = 0;
-      const ingItems = itemsForCost.filter(i => i.item_type === 'ingredient');
+      const { lines, total_base, preferredCount, quotedCount, leafCount }
+        = buildCostLines(itemsForCost, country.id);
 
-      const lines = itemsForCost.map(item => {
-        if (item.item_type !== 'ingredient') return { ...item, cost: null, quote_is_preferred: null };
-        const q = quoteLookup[item.ingredient_id]?.[country.id];
-        if (!q) return { ...item, cost: null, quote_is_preferred: null };
-        if (q.is_preferred) preferredCount++;
-        quotedCount++;
-        const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion);
-        const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
-        const cost       = base_qty * waste_mult * q.price_per_base_unit;
-        total_base += cost;
-        return { ...item, cost: Math.round(cost * 10000) / 10000, quote_is_preferred: q.is_preferred };
-      });
-
-      const total = ingItems.length;
       let coverage;
-      if (total === 0)                         coverage = 'fully_preferred';
-      else if (preferredCount === total)       coverage = 'fully_preferred';
-      else if (quotedCount    === total)       coverage = 'fully_quoted';
-      else if (quotedCount    > 0)             coverage = 'partially_quoted';
-      else                                     coverage = 'not_quoted';
+      if (leafCount === 0)                         coverage = 'fully_preferred';
+      else if (preferredCount === leafCount)       coverage = 'fully_preferred';
+      else if (quotedCount    === leafCount)       coverage = 'fully_quoted';
+      else if (quotedCount    > 0)                 coverage = 'partially_quoted';
+      else                                         coverage = 'not_quoted';
 
       const local_rate = Number(country.exchange_rate);
       return {
@@ -219,7 +262,7 @@ router.get('/:id', async (req, res) => {
         variation_id:      variation?.id ?? null,
         total_cost_base:   Math.round(total_base * 10000) / 10000,
         total_cost_local:  Math.round(total_base * local_rate * 10000) / 10000,
-        cost_per_portion:  Math.round((total_base / Number(recipe.yield_qty || 1)) * 10000) / 10000,
+        cost_per_portion:  Math.round((total_base / Math.max(1, Number(recipe.yield_qty || 1))) * 10000) / 10000,
         coverage,
         lines,
       };

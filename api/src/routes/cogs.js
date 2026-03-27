@@ -65,6 +65,44 @@ async function loadQuoteLookup() {
 }
 
 /**
+ * Recursively load recipe items for all given recipe IDs, following
+ * sub-recipe references (item_type = 'recipe') until no new IDs are found.
+ * Also fetches the sub-recipe's yield_qty so calcRecipeCost can portion correctly.
+ * Returns: { [recipe_id]: [items...] }
+ */
+async function loadAllRecipeItemsDeep(topIds) {
+  if (!topIds.length) return {};
+  const seen  = new Set(topIds.map(Number));
+  const queue = [...topIds.map(Number)];
+  const allItems = {};
+
+  while (queue.length) {
+    const batch = queue.splice(0, queue.length);
+    const { rows: riRows } = await pool.query(`
+      SELECT ri.*,
+             ing.waste_pct,
+             ing.base_unit_id,
+             sub_r.yield_qty AS sub_recipe_yield_qty
+      FROM   mcogs_recipe_items ri
+      LEFT JOIN mcogs_ingredients ing  ON ing.id  = ri.ingredient_id
+      LEFT JOIN mcogs_recipes     sub_r ON sub_r.id = ri.recipe_item_id
+      WHERE  ri.recipe_id = ANY($1::int[])
+        AND  ri.variation_id IS NULL
+    `, [batch]);
+
+    for (const ri of riRows) {
+      if (!allItems[ri.recipe_id]) allItems[ri.recipe_id] = [];
+      allItems[ri.recipe_id].push(ri);
+      if (ri.item_type === 'recipe' && ri.recipe_item_id) {
+        const subId = Number(ri.recipe_item_id);
+        if (!seen.has(subId)) { seen.add(subId); queue.push(subId); }
+      }
+    }
+  }
+  return allItems;
+}
+
+/**
  * Load variation items for a set of recipe IDs.
  * Returns: { [recipe_id]: { [country_id]: [items_with_waste_pct...] } }
  */
@@ -74,10 +112,12 @@ async function loadVariationItemsMap(recipeIds) {
     SELECT rv.recipe_id,
            rv.country_id,
            ri.*,
-           i.waste_pct
+           i.waste_pct,
+           sub_r.yield_qty AS sub_recipe_yield_qty
     FROM   mcogs_recipe_variations rv
     JOIN   mcogs_recipe_items ri ON ri.variation_id = rv.id
-    LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
+    LEFT JOIN mcogs_ingredients i     ON i.id     = ri.ingredient_id
+    LEFT JOIN mcogs_recipes     sub_r ON sub_r.id = ri.recipe_item_id
     WHERE  rv.recipe_id = ANY($1::int[])
     ORDER  BY rv.recipe_id, rv.country_id, ri.id ASC
   `, [recipeIds]);
@@ -93,24 +133,47 @@ async function loadVariationItemsMap(recipeIds) {
 
 /**
  * Calculate cost-per-portion for one recipe in one country.
- * If variationMap contains items for this recipe+country, those are used instead of globalItems.
+ * Handles both direct ingredients and sub-recipe items (item_type = 'recipe') recursively.
+ * allRecipeItemsMap must include items for every sub-recipe referenced in the tree.
  */
-function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap) {
+function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap, allRecipeItemsMap = {}) {
   const items = variationMap?.[recipe.id]?.[countryId] || globalItems;
-  const ingItems = items.filter(i => i.item_type === 'ingredient');
-  let total = 0, preferredCount = 0, quotedCount = 0;
+  let total = 0, preferredCount = 0, quotedCount = 0, leafCount = 0;
 
-  for (const item of ingItems) {
-    const q = quoteLookup[item.ingredient_id]?.[countryId];
-    if (!q) continue;
-    if (q.is_preferred) preferredCount++;
-    quotedCount++;
-    const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion);
-    const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
-    total += base_qty * waste_mult * q.price_per_base_unit;
+  for (const item of items) {
+    if (item.item_type === 'ingredient') {
+      leafCount++;
+      const q = quoteLookup[item.ingredient_id]?.[countryId];
+      if (!q) continue;
+      if (q.is_preferred) preferredCount++;
+      quotedCount++;
+      const base_qty   = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+      const waste_mult = 1 + (Number(item.waste_pct ?? 0) / 100);
+      total += base_qty * waste_mult * q.price_per_base_unit;
+
+    } else if (item.item_type === 'recipe' && item.recipe_item_id) {
+      // Sub-recipe: recursively calculate its cost-per-portion then scale by usage qty
+      leafCount++;
+      const subId     = Number(item.recipe_item_id);
+      const subYield  = Number(item.sub_recipe_yield_qty || 1);
+      const subItems  = allRecipeItemsMap[subId] || [];
+      const subResult = calcRecipeCost(
+        { id: subId, yield_qty: subYield },
+        subItems,
+        countryId,
+        quoteLookup,
+        variationMap,
+        allRecipeItemsMap,
+      );
+      const usage = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+      total += subResult.cost * usage;
+      // Propagate coverage from sub-recipe
+      if (subResult.coverage === 'fully_preferred') preferredCount++;
+      if (subResult.coverage !== 'not_quoted')      quotedCount++;
+    }
   }
 
-  const n = ingItems.length;
+  const n = leafCount;
   let coverage;
   if (n === 0)                    coverage = 'fully_preferred';
   else if (preferredCount === n)  coverage = 'fully_preferred';
@@ -193,21 +256,9 @@ router.get('/menu/:menu_id', async (req, res) => {
       ORDER BY mi.id ASC
     `, [menuId]);
 
-    // Recipe items for every recipe referenced on this menu
+    // Recipe items for every recipe referenced on this menu (deep — includes sub-recipes)
     const recipeIds = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
-    let recipeItemsMap = {};
-    if (recipeIds.length) {
-      const { rows: riRows } = await pool.query(`
-        SELECT ri.*, ing.waste_pct, ing.base_unit_id
-        FROM   mcogs_recipe_items ri
-        LEFT JOIN mcogs_ingredients ing ON ing.id = ri.ingredient_id
-        WHERE  ri.recipe_id = ANY($1::int[])
-      `, [recipeIds]);
-      for (const ri of riRows) {
-        if (!recipeItemsMap[ri.recipe_id]) recipeItemsMap[ri.recipe_id] = [];
-        recipeItemsMap[ri.recipe_id].push(ri);
-      }
-    }
+    const recipeItemsMap = await loadAllRecipeItemsDeep(recipeIds);
 
     // Quote lookup & country default taxes
     const [quoteLookup, { rows: defaultTaxRows }] = await Promise.all([
@@ -254,7 +305,7 @@ router.get('/menu/:menu_id', async (req, res) => {
       } else {
         const rItems = recipeItemsMap[item.recipe_id] || [];
         const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
-        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap);
+        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap, recipeItemsMap);
         cpp = cost * qty;
       }
       cpp = Math.round(cpp * Number(menu.exchange_rate) * 10000) / 10000;
@@ -380,21 +431,9 @@ router.get('/report/price-levels', async (req, res) => {
       lpMap[lp.menu_item_id][lp.price_level_id] = lp;
     }
 
-    // Recipe items for every recipe
+    // Recipe items for every recipe (deep — includes sub-recipes)
     const recipeIds = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
-    const recipeItemsMap = {};
-    if (recipeIds.length) {
-      const { rows: riRows } = await pool.query(`
-        SELECT ri.*, ing.waste_pct
-        FROM   mcogs_recipe_items ri
-        LEFT JOIN mcogs_ingredients ing ON ing.id = ri.ingredient_id
-        WHERE  ri.recipe_id = ANY($1::int[])
-      `, [recipeIds]);
-      for (const ri of riRows) {
-        if (!recipeItemsMap[ri.recipe_id]) recipeItemsMap[ri.recipe_id] = [];
-        recipeItemsMap[ri.recipe_id].push(ri);
-      }
-    }
+    const recipeItemsMap = await loadAllRecipeItemsDeep(recipeIds);
 
     // Quote lookup, default taxes, country_level_tax
     const [quoteLookup, { rows: defaultTaxRows }, { rows: cltRows }, { rows: taxRateRows }] = await Promise.all([
@@ -429,7 +468,7 @@ router.get('/report/price-levels', async (req, res) => {
         if (q) cpp = q.price_per_base_unit * qty;
       } else {
         const rItems = recipeItemsMap[item.recipe_id] || [];
-        const { cost } = calcRecipeCost({ id: item.recipe_id, yield_qty: item.yield_qty || 1 }, rItems, countryId, quoteLookup, variationMap);
+        const { cost } = calcRecipeCost({ id: item.recipe_id, yield_qty: item.yield_qty || 1 }, rItems, countryId, quoteLookup, variationMap, recipeItemsMap);
         cpp = cost * qty;
       }
       cpp = Math.round(cpp * Number(country.exchange_rate) * 10000) / 10000;
@@ -518,21 +557,9 @@ router.get('/report/menu-prices', async (req, res) => {
     const defaultTaxMap = {};
     for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = Number(r.rate);
 
-    // Recipe items for all referenced recipes
+    // Recipe items for all referenced recipes (deep — includes sub-recipes)
     const recipeIds = recipes.map(r => r.id);
-    const recipeItemsMap = {};
-    if (recipeIds.length) {
-      const { rows: riRows } = await pool.query(`
-        SELECT ri.*, ing.waste_pct
-        FROM   mcogs_recipe_items ri
-        LEFT JOIN mcogs_ingredients ing ON ing.id = ri.ingredient_id
-        WHERE  ri.recipe_id = ANY($1::int[])
-      `, [recipeIds]);
-      for (const ri of riRows) {
-        if (!recipeItemsMap[ri.recipe_id]) recipeItemsMap[ri.recipe_id] = [];
-        recipeItemsMap[ri.recipe_id].push(ri);
-      }
-    }
+    const recipeItemsMap = await loadAllRecipeItemsDeep(recipeIds);
 
     // All menu items for these recipes (across all menus/countries)
     const { rows: menuItemRows } = await pool.query(`
@@ -599,7 +626,7 @@ router.get('/report/menu-prices', async (req, res) => {
           continue;
         }
 
-        const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup, variationMap);
+        const { cost } = calcRecipeCost(recipe, rItems, cid, quoteLookup, variationMap, recipeItemsMap);
         const cppLocal = cost * Number(country.exchange_rate); // USD base → local currency
         const defaultRate = defaultTaxMap[cid] || 0;
 
@@ -655,4 +682,4 @@ function formatLevel(l) {
   return { id: l.id, name: l.name, sort_order: 0 };
 }
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep };
