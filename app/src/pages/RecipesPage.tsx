@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 
@@ -1525,20 +1525,25 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
   })
 
   // Combo search state
-  const [ingSearch,     setIngSearch]     = useState(() => {
+  const [ingSearch,          setIngSearch]          = useState(() => {
     if (item?.ingredient_id) {
       return ingredients.find(i => i.id === item.ingredient_id)?.name ?? ''
     }
     return ''
   })
-  const [ingOpen,       setIngOpen]       = useState(false)
-  const [recipeSearch,  setRecipeSearch]  = useState(() => {
+  const [ingOpen,            setIngOpen]            = useState(false)
+  const [ingHighlightedIdx,  setIngHighlightedIdx]  = useState(-1)
+  const ingItemRefs = useRef<(HTMLButtonElement | null)[]>([])
+
+  const [recipeSearch,          setRecipeSearch]          = useState(() => {
     if (item?.recipe_item_id) {
       return recipes.find(r => r.id === item.recipe_item_id)?.name ?? ''
     }
     return ''
   })
-  const [recipeOpen,    setRecipeOpen]    = useState(false)
+  const [recipeOpen,            setRecipeOpen]            = useState(false)
+  const [recipeHighlightedIdx,  setRecipeHighlightedIdx]  = useState(-1)
+  const recipeItemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const filteredIngs = ingredients.filter(i =>
     i.name.toLowerCase().includes(ingSearch.toLowerCase()) ||
@@ -1550,6 +1555,54 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
 
   const selIngredient = ingredients.find(i => String(i.id) === form.ingredient_id)
   const selRecipe     = recipes.find(r => String(r.id) === form.recipe_item_id)
+
+  // Scroll highlighted items into view
+  useEffect(() => {
+    if (ingHighlightedIdx >= 0) ingItemRefs.current[ingHighlightedIdx]?.scrollIntoView({ block: 'nearest' })
+  }, [ingHighlightedIdx])
+  useEffect(() => {
+    if (recipeHighlightedIdx >= 0) recipeItemRefs.current[recipeHighlightedIdx]?.scrollIntoView({ block: 'nearest' })
+  }, [recipeHighlightedIdx])
+
+  function handleIngKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    const total = filteredIngs.length
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!ingOpen && total > 0) { setIngOpen(true); setIngHighlightedIdx(0); return }
+      setIngHighlightedIdx(i => Math.min(i + 1, total - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setIngHighlightedIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (!ingOpen || ingHighlightedIdx < 0 || ingHighlightedIdx >= total) return
+      e.preventDefault()
+      const sel = filteredIngs[ingHighlightedIdx]
+      setForm(f => ({ ...f, ingredient_id: String(sel.id) }))
+      setIngSearch(sel.name); setIngOpen(false); setIngHighlightedIdx(-1)
+    } else if (e.key === 'Escape') {
+      setIngOpen(false); setIngHighlightedIdx(-1)
+    }
+  }
+
+  function handleRecipeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    const total = filteredRecipes.length
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!recipeOpen && total > 0) { setRecipeOpen(true); setRecipeHighlightedIdx(0); return }
+      setRecipeHighlightedIdx(i => Math.min(i + 1, total - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setRecipeHighlightedIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (!recipeOpen || recipeHighlightedIdx < 0 || recipeHighlightedIdx >= total) return
+      e.preventDefault()
+      const sel = filteredRecipes[recipeHighlightedIdx]
+      setForm(f => ({ ...f, recipe_item_id: String(sel.id) }))
+      setRecipeSearch(sel.name); setRecipeOpen(false); setRecipeHighlightedIdx(-1)
+    } else if (e.key === 'Escape') {
+      setRecipeOpen(false); setRecipeHighlightedIdx(-1)
+    }
+  }
 
   // Auto-fill prep_unit and conversion from ingredient defaults
   useEffect(() => {
@@ -1572,7 +1625,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
 
   return (
     <Modal title={item ? 'Edit Ingredient' : 'Add Ingredient'} onClose={onClose}>
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4" onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); onSave(form) } }}>
         {/* Type toggle (only for new items) */}
         {!item && (
           <div className="flex gap-2 p-1 bg-surface-2 rounded-lg">
@@ -1595,23 +1648,23 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
                   placeholder="Search ingredients…"
                   value={ingSearch}
                   autoFocus={!item}
-                  onChange={e => { setIngSearch(e.target.value); setIngOpen(true); setForm(f => ({ ...f, ingredient_id: '' })) }}
+                  onChange={e => { setIngSearch(e.target.value); setIngOpen(true); setIngHighlightedIdx(-1); setForm(f => ({ ...f, ingredient_id: '' })) }}
                   onFocus={() => setIngOpen(true)}
-                  onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                  onBlur={() => setTimeout(() => { setIngOpen(false); setIngHighlightedIdx(-1) }, 150)}
+                  onKeyDown={handleIngKeyDown}
                 />
                 {ingOpen && filteredIngs.length > 0 && (
                   <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-modal max-h-52 overflow-y-auto">
-                    {filteredIngs.map(i => (
-                      <button key={i.id} type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 flex items-center justify-between gap-2"
+                    {filteredIngs.map((i, idx) => (
+                      <button key={i.id} ref={el => { ingItemRefs.current[idx] = el }} type="button"
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors ${ingHighlightedIdx === idx ? 'bg-accent-dim text-accent' : 'hover:bg-surface-2'}`}
                         onMouseDown={() => {
                           setForm(f => ({ ...f, ingredient_id: String(i.id) }))
-                          setIngSearch(i.name)
-                          setIngOpen(false)
+                          setIngSearch(i.name); setIngOpen(false); setIngHighlightedIdx(-1)
                         }}
                       >
-                        <span className="font-semibold text-text-1">{i.name}</span>
-                        <span className="text-xs text-text-3 shrink-0">{i.category || ''}{i.base_unit_abbr ? ` · ${i.base_unit_abbr}` : ''}</span>
+                        <span className="font-semibold">{i.name}</span>
+                        <span className="text-xs shrink-0 opacity-70">{i.category || ''}{i.base_unit_abbr ? ` · ${i.base_unit_abbr}` : ''}</span>
                       </button>
                     ))}
                   </div>
@@ -1663,23 +1716,23 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
                   placeholder="Search recipes…"
                   value={recipeSearch}
                   autoFocus
-                  onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true); setForm(f => ({ ...f, recipe_item_id: '' })) }}
+                  onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true); setRecipeHighlightedIdx(-1); setForm(f => ({ ...f, recipe_item_id: '' })) }}
                   onFocus={() => setRecipeOpen(true)}
-                  onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
+                  onBlur={() => setTimeout(() => { setRecipeOpen(false); setRecipeHighlightedIdx(-1) }, 150)}
+                  onKeyDown={handleRecipeKeyDown}
                 />
                 {recipeOpen && filteredRecipes.length > 0 && (
                   <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-modal max-h-52 overflow-y-auto">
-                    {filteredRecipes.map(r => (
-                      <button key={r.id} type="button"
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 flex items-center justify-between gap-2"
+                    {filteredRecipes.map((r, idx) => (
+                      <button key={r.id} ref={el => { recipeItemRefs.current[idx] = el }} type="button"
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors ${recipeHighlightedIdx === idx ? 'bg-accent-dim text-accent' : 'hover:bg-surface-2'}`}
                         onMouseDown={() => {
                           setForm(f => ({ ...f, recipe_item_id: String(r.id) }))
-                          setRecipeSearch(r.name)
-                          setRecipeOpen(false)
+                          setRecipeSearch(r.name); setRecipeOpen(false); setRecipeHighlightedIdx(-1)
                         }}
                       >
-                        <span className="font-semibold text-text-1">{r.name}</span>
-                        <span className="text-xs text-text-3 shrink-0">{r.category || ''}{r.yield_unit_abbr ? ` · ${r.yield_qty} ${r.yield_unit_abbr}` : ''}</span>
+                        <span className="font-semibold">{r.name}</span>
+                        <span className="text-xs shrink-0 opacity-70">{r.category || ''}{r.yield_unit_abbr ? ` · ${r.yield_qty} ${r.yield_unit_abbr}` : ''}</span>
                       </button>
                     ))}
                   </div>
@@ -1702,7 +1755,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>
-            {item ? 'Save Changes' : 'Add to Recipe'}
+            {item ? 'Save Changes' : 'Add to Recipe'} <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd>
           </button>
         </div>
       </div>

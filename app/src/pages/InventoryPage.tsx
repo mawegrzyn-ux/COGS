@@ -527,6 +527,15 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
   const [saving, setSaving] = useState(false)
 
+  const blankQuoteForm = {
+    vendor_id: '', purchase_price: '', purchase_unit: '',
+    qty_in_base_units: '1', is_active: 'true', vendor_product_code: '',
+  }
+  const [withQuote,   setWithQuote]   = useState(false)
+  const [quoteForm,   setQuoteForm]   = useState(blankQuoteForm)
+  const [quoteErrors, setQuoteErrors] = useState<Partial<typeof blankQuoteForm>>({})
+  const [vendors,     setVendors]     = useState<Vendor[]>([])
+
   // Phase 4 — allergen & nutrition state
   type IngModalTab = 'details' | 'allergens' | 'nutrition'
   const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
@@ -547,14 +556,16 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ings, us, cats] = await Promise.all([
+      const [ings, us, cats, vends] = await Promise.all([
         api.get('/ingredients'),
         api.get('/units'),
         api.get('/categories?type=ingredient'),
+        api.get('/vendors'),
       ])
       setIngredients(ings || [])
       setUnits(us || [])
       setDbCategories((cats || []).map((c: any) => c.name).sort())
+      setVendors(vends || [])
     } catch {
       showToast('Failed to load ingredients', 'error')
     } finally {
@@ -612,6 +623,21 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [modal, sorted]) // eslint-disable-line
+
+  // ── Ctrl+Enter → save when ingredient details modal is open ─────────────────
+  useEffect(() => {
+    if (modal === null) return
+    if (modal !== 'new' && ingModalTab !== 'details') return
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        if (!saving) handleSave()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal, ingModalTab, saving, form, withQuote, quoteForm])
 
   // ── Column definitions for DataGrid ─────────────────────────────────────────
 
@@ -675,10 +701,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     return `1 ${prep} = ${form.default_prep_to_base_conversion || '1'} ${base}`
   }
 
-  function openAdd() {
+  function openAdd(wq = false) {
     setModal('new'); setForm(blankForm); setErrors({})
     setIngModalTab('details'); setIngAllergens([]); setNutForm(blankNutForm)
     setDietaryFlags({}); setNutSearch(''); setNutResults([])
+    setWithQuote(wq); setQuoteForm(blankQuoteForm); setQuoteErrors({})
   }
 
   function openEdit(i: Ingredient) {
@@ -718,6 +745,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   async function handleSave() {
     if (!validate()) return
+    if (withQuote && modal === 'new') {
+      const qe: Partial<typeof blankQuoteForm> = {}
+      if (!quoteForm.vendor_id)         qe.vendor_id         = 'Required'
+      if (!quoteForm.purchase_price)    qe.purchase_price    = 'Required'
+      if (!quoteForm.qty_in_base_units) qe.qty_in_base_units = 'Required'
+      setQuoteErrors(qe)
+      if (Object.keys(qe).length > 0) return
+    }
     setSaving(true)
     try {
       const payload = {
@@ -728,8 +763,26 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         waste_pct: Number(form.waste_pct) || 0,
         notes: form.notes.trim() || null,
       }
-      if (modal === 'new') { await api.post('/ingredients', payload); showToast('Ingredient added') }
-      else if (modal != null) { await api.put(`/ingredients/${(modal as Ingredient).id}`, payload); showToast('Ingredient updated') }
+      if (modal === 'new') {
+        const newIng = await api.post('/ingredients', payload)
+        if (withQuote && newIng?.id) {
+          await api.post('/price-quotes', {
+            ingredient_id:     newIng.id,
+            vendor_id:         Number(quoteForm.vendor_id),
+            purchase_price:    Number(quoteForm.purchase_price),
+            qty_in_base_units: Number(quoteForm.qty_in_base_units) || 1,
+            purchase_unit:     quoteForm.purchase_unit.trim() || null,
+            is_active:         quoteForm.is_active === 'true',
+            vendor_product_code: quoteForm.vendor_product_code.trim() || null,
+          })
+          showToast('Ingredient and quote added')
+        } else {
+          showToast('Ingredient added')
+        }
+      } else if (modal != null) {
+        await api.put(`/ingredients/${(modal as Ingredient).id}`, payload)
+        showToast('Ingredient updated')
+      }
       setModal(null); load()
     } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
     finally { setSaving(false) }
@@ -836,8 +889,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
           />
         </div>
         <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />
-        <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
+        <button className="btn-outline px-4 py-2 text-sm flex items-center gap-2" onClick={() => openAdd(false)}>
           <PlusIcon size={14} /> Add Ingredient
+        </button>
+        <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={() => openAdd(true)}>
+          <PlusIcon size={14} /> Add Ingredient & Quote
         </button>
       </div>
 
@@ -953,7 +1009,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         const nextIng   = modalIdx < sorted.length - 1   ? sorted[modalIdx + 1] : null
         return (
         <Modal
-          title={modal === 'new' ? 'Add Ingredient' : `Edit: ${(modal as Ingredient).name}`}
+          title={modal === 'new' ? (withQuote ? 'Add Ingredient & Quote' : 'Add Ingredient') : `Edit: ${(modal as Ingredient).name}`}
           onClose={() => setModal(null)}
           width="max-w-2xl"
         >
@@ -1045,15 +1101,58 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
                 </Field>
               </div>
-              {modal === 'new' && (
+              {modal === 'new' && !withQuote && (
                 <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
                   Save the ingredient first, then reopen to manage allergens and nutrition.
                 </p>
               )}
+
+              {/* ── Quote section (Add Ingredient & Quote mode) ─────────────── */}
+              {modal === 'new' && withQuote && (
+                <div className="border-t border-border pt-4 mt-4">
+                  <p className="text-sm font-semibold text-text-1 mb-3">Price Quote</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Vendor" required error={quoteErrors.vendor_id}>
+                      <select className="select w-full" value={quoteForm.vendor_id} onChange={e => setQuoteForm(f => ({ ...f, vendor_id: e.target.value }))}>
+                        <option value="">Select vendor…</option>
+                        {vendors.map(v => (
+                          <option key={v.id} value={v.id}>{v.name}{v.country_name ? ` (${v.country_name})` : ''}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Purchase Unit">
+                      <input className="input w-full" value={quoteForm.purchase_unit} onChange={e => setQuoteForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. 10 kg bag" />
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Purchase Price" required error={quoteErrors.purchase_price}>
+                      <input className="input w-full font-mono" type="number" min="0" step="0.01" value={quoteForm.purchase_price} onChange={e => setQuoteForm(f => ({ ...f, purchase_price: e.target.value }))} placeholder="0.00" />
+                    </Field>
+                    <Field label={`Qty in ${units.find(u => u.id === Number(form.base_unit_id))?.abbreviation || 'base units'}`} required error={quoteErrors.qty_in_base_units}>
+                      <input className="input w-full font-mono" type="number" min="0.000001" step="0.001" value={quoteForm.qty_in_base_units} onChange={e => setQuoteForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                    </Field>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Vendor Product Code">
+                      <input className="input w-full" value={quoteForm.vendor_product_code} onChange={e => setQuoteForm(f => ({ ...f, vendor_product_code: e.target.value }))} placeholder="Optional…" />
+                    </Field>
+                    <Field label="Status">
+                      <select className="select w-full" value={quoteForm.is_active} onChange={e => setQuoteForm(f => ({ ...f, is_active: e.target.value }))}>
+                        <option value="true">Active</option>
+                        <option value="false">Inactive</option>
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3 justify-end pt-2">
                 <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
                 <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
-                  {saving ? 'Saving…' : 'Save Ingredient'}
+                  {saving ? 'Saving…' : withQuote && modal === 'new'
+                    ? <>Save Ingredient &amp; Quote <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
+                    : <>Save Ingredient <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
+                  }
                 </button>
               </div>
             </>
@@ -1307,13 +1406,17 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
 
   async function handleSaveAndNext() { handleSave(true) }
 
-  // Alt+S → Save & Next when the Add Quote modal is open
+  // Alt+S → Save & Next · Ctrl+Enter → Save when quote modal is open
   useEffect(() => {
-    if (modal !== 'new') return
+    if (modal === null) return
     function onKey(e: KeyboardEvent) {
-      if (e.altKey && (e.key === 's' || e.key === 'S')) {
+      if (modal === 'new' && e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault()
         if (!saving) handleSave(true)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault()
+        if (!saving) handleSave()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1558,7 +1661,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
               </button>
             )}
             <button className="btn-primary px-4 py-2 text-sm" onClick={() => handleSave()} disabled={saving}>
-              {saving ? 'Saving…' : 'Save Quote'}
+              {saving ? 'Saving…' : <>Save Quote <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>}
             </button>
           </div>
         </Modal>
@@ -1581,39 +1684,70 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
 function CategoryCombo({ value, onChange, options }: {
   value: string; onChange: (v: string) => void; options: string[]
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [open,           setOpen]           = useState(false)
+  const [highlightedIdx, setHighlightedIdx] = useState(-1)
+  const ref      = useRef<HTMLDivElement>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const filtered = options.filter(o => o.toLowerCase().includes(value.toLowerCase()))
   const showAdd  = value.trim() !== '' && !options.some(o => o.toLowerCase() === value.toLowerCase().trim())
+  const total    = filtered.length + (showAdd ? 1 : 0)
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setHighlightedIdx(-1) }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
+
+  useEffect(() => {
+    if (highlightedIdx >= 0) itemRefs.current[highlightedIdx]?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIdx])
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open && total > 0) { setOpen(true); setHighlightedIdx(0); return }
+      setHighlightedIdx(i => Math.min(i + 1, total - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (!open || highlightedIdx < 0) return
+      e.preventDefault()
+      if (highlightedIdx < filtered.length) {
+        onChange(filtered[highlightedIdx]); setOpen(false); setHighlightedIdx(-1)
+      } else if (showAdd) {
+        onChange(value.trim()); setOpen(false); setHighlightedIdx(-1)
+      }
+    } else if (e.key === 'Escape') {
+      setOpen(false); setHighlightedIdx(-1)
+    }
+  }
 
   return (
     <div ref={ref} className="relative">
       <input
         className="input w-full"
         value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onChange={e => { onChange(e.target.value); setOpen(true); setHighlightedIdx(-1) }}
         onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
         placeholder="Select or type to add new…"
         autoComplete="off"
       />
       {open && (filtered.length > 0 || showAdd) && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden">
-          {filtered.map(o => (
-            <button key={o} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-text-1"
-              onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false) }}>{o}</button>
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-52 overflow-y-auto">
+          {filtered.map((o, idx) => (
+            <button key={o} ref={el => { itemRefs.current[idx] = el }} type="button"
+              className={`w-full text-left px-3 py-2 text-sm transition-colors text-text-1 ${highlightedIdx === idx ? 'bg-accent-dim text-accent font-semibold' : 'hover:bg-surface-2'}`}
+              onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false); setHighlightedIdx(-1) }}>{o}</button>
           ))}
           {showAdd && (
-            <button type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors text-accent font-semibold border-t border-border"
-              onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false) }}>
+            <button ref={el => { itemRefs.current[filtered.length] = el }} type="button"
+              className={`w-full text-left px-3 py-2 text-sm transition-colors font-semibold border-t border-border ${highlightedIdx === filtered.length ? 'bg-accent-dim text-accent' : 'text-accent hover:bg-surface-2'}`}
+              onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false); setHighlightedIdx(-1) }}>
               + Add "{value.trim()}"
             </button>
           )}
@@ -1629,10 +1763,12 @@ function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
   value: string; onChange: (v: string) => void
   options: { id: string; label: string }[]; placeholder?: string
 }) {
-  const [open,    setOpen]    = useState(false)
-  const [search,  setSearch]  = useState('')
-  const [display, setDisplay] = useState(options.find(o => o.id === value)?.label || '')
-  const ref = useRef<HTMLDivElement>(null)
+  const [open,           setOpen]           = useState(false)
+  const [search,         setSearch]         = useState('')
+  const [display,        setDisplay]        = useState(options.find(o => o.id === value)?.label || '')
+  const [highlightedIdx, setHighlightedIdx] = useState(-1)
+  const ref      = useRef<HTMLDivElement>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   useEffect(() => {
     setDisplay(options.find(o => o.id === value)?.label || '')
@@ -1648,19 +1784,45 @@ function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
         setOpen(false)
         setDisplay(options.find(o => o.id === value)?.label || '')
         setSearch('')
+        setHighlightedIdx(-1)
       }
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [value, options])
 
+  useEffect(() => {
+    if (highlightedIdx >= 0) itemRefs.current[highlightedIdx]?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIdx])
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    const total = filtered.length
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open && total > 0) { setOpen(true); setHighlightedIdx(0); return }
+      setHighlightedIdx(i => Math.min(i + 1, total - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (!open || highlightedIdx < 0 || highlightedIdx >= total) return
+      e.preventDefault()
+      const sel = filtered[highlightedIdx]
+      onChange(sel.id); setDisplay(sel.label); setSearch(''); setOpen(false); setHighlightedIdx(-1)
+    } else if (e.key === 'Escape') {
+      setOpen(false); setSearch(''); setHighlightedIdx(-1)
+      setDisplay(options.find(o => o.id === value)?.label || '')
+    }
+  }
+
   return (
     <div ref={ref} className="relative">
       <input
         className="input w-full"
         value={open ? search : display}
-        onChange={e => { setSearch(e.target.value); setOpen(true) }}
+        onChange={e => { setSearch(e.target.value); setOpen(true); setHighlightedIdx(-1) }}
         onFocus={() => { setOpen(true); setSearch('') }}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         autoComplete="off"
       />
@@ -1668,10 +1830,10 @@ function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
         <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-56 overflow-y-auto">
           {filtered.length === 0
             ? <div className="px-3 py-2 text-sm text-text-3">No results</div>
-            : filtered.map(o => (
-              <button key={o.id} type="button"
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors ${o.id === value ? 'text-accent font-semibold' : 'text-text-1'}`}
-                onMouseDown={e => { e.preventDefault(); onChange(o.id); setDisplay(o.label); setSearch(''); setOpen(false) }}>
+            : filtered.map((o, idx) => (
+              <button key={o.id} ref={el => { itemRefs.current[idx] = el }} type="button"
+                className={`w-full text-left px-3 py-2 text-sm transition-colors ${highlightedIdx === idx ? 'bg-accent-dim text-accent font-semibold' : o.id === value ? 'text-accent font-semibold hover:bg-surface-2' : 'text-text-1 hover:bg-surface-2'}`}
+                onMouseDown={e => { e.preventDefault(); onChange(o.id); setDisplay(o.label); setSearch(''); setOpen(false); setHighlightedIdx(-1) }}>
                 {o.label}
               </button>
             ))
