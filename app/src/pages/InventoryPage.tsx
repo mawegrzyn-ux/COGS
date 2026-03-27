@@ -373,6 +373,137 @@ function VendorCard({ vendor, onEdit, onDelete }: { vendor: Vendor; onEdit: () =
   )
 }
 
+// ── Quote Hover Popover ───────────────────────────────────────────────────────
+// Shows a small floating panel with quote details when hovering the Quotes badge.
+// Fetches data lazily on first hover and caches it. Uses fixed positioning so it
+// never clips inside overflow-x-auto table containers.
+
+function QuoteHoverPopover({ ing, onViewQuotes }: {
+  ing: Ingredient
+  onViewQuotes?: (id: number) => void
+}) {
+  const api                     = useApi()
+  const [open,    setOpen]      = useState(false)
+  const [quotes,  setQuotes]    = useState<Quote[] | null>(null)
+  const [loading, setLoading]   = useState(false)
+  const [pos,     setPos]       = useState({ top: 0, left: 0 })
+  const hideTimer               = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const active = Number(ing.active_quote_count || 0)
+  const total  = Number(ing.quote_count || 0)
+
+  function scheduleClose() {
+    hideTimer.current = setTimeout(() => setOpen(false), 120)
+  }
+  function cancelClose() {
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+  }
+
+  function handleBadgeEnter(e: React.MouseEvent<HTMLButtonElement>) {
+    cancelClose()
+    const rect = e.currentTarget.getBoundingClientRect()
+    // Prefer opening below; if too close to bottom, open above
+    const spaceBelow = window.innerHeight - rect.bottom
+    const top = spaceBelow > 220 ? rect.bottom + 6 : rect.top - 6
+    const left = Math.min(rect.left, window.innerWidth - 320)
+    setPos({ top, left })
+    setOpen(true)
+    if (quotes === null && !loading) {
+      setLoading(true)
+      api.get(`/price-quotes?ingredient_id=${ing.id}`)
+        .then((d: Quote[]) => setQuotes(d || []))
+        .catch(() => setQuotes([]))
+        .finally(() => setLoading(false))
+    }
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button
+        onClick={() => onViewQuotes?.(ing.id)}
+        onMouseEnter={handleBadgeEnter}
+        onMouseLeave={scheduleClose}
+        disabled={!onViewQuotes}
+        className={`text-xs font-bold px-2 py-0.5 rounded-full transition-colors
+          ${onViewQuotes ? 'cursor-pointer hover:opacity-70' : 'cursor-default'}
+          ${active > 0 ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
+        {ing.active_quote_count}/{ing.quote_count}
+      </button>
+
+      {open && total > 0 && (
+        <div
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 99999 }}
+          className="bg-white border border-border rounded-xl shadow-2xl p-3 w-72 pointer-events-auto"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-border">
+            <span className="text-[11px] font-semibold text-text-2 truncate">{ing.name}</span>
+            <span className="text-[10px] text-text-3 ml-2 shrink-0">{active}/{total} active</span>
+          </div>
+
+          {loading ? (
+            <div className="py-4 flex justify-center"><Spinner /></div>
+          ) : !quotes || quotes.length === 0 ? (
+            <p className="py-3 text-xs text-center text-text-3">No quotes found</p>
+          ) : (
+            <div className="space-y-1 max-h-56 overflow-y-auto">
+              {quotes.map(q => (
+                <div key={q.id}
+                  className={`flex items-start gap-2 px-2 py-1.5 rounded-lg text-xs
+                    ${q.is_active ? 'bg-surface-2' : 'bg-surface-2 opacity-50'}
+                    ${q.is_preferred ? 'ring-1 ring-accent/40' : ''}`}>
+                  {/* Left: vendor + country */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="font-semibold text-text-1 truncate">{q.vendor_name}</span>
+                      {q.is_preferred && (
+                        <span className="text-[9px] bg-accent text-white px-1 py-px rounded-full shrink-0">★</span>
+                      )}
+                      {!q.is_active && (
+                        <span className="text-[9px] bg-gray-200 text-gray-500 px-1 py-px rounded-full shrink-0">off</span>
+                      )}
+                    </div>
+                    <div className="text-text-3 truncate">{q.country_name}</div>
+                    {q.vendor_product_code && (
+                      <div className="text-text-3 font-mono text-[10px] truncate">SKU: {q.vendor_product_code}</div>
+                    )}
+                  </div>
+                  {/* Right: prices */}
+                  <div className="text-right shrink-0">
+                    <div className="font-mono font-semibold text-text-1">
+                      {q.currency_symbol}{Number(q.purchase_price).toFixed(2)}
+                      {q.purchase_unit && (
+                        <span className="text-text-3 font-normal text-[10px]"> /{q.purchase_unit}</span>
+                      )}
+                    </div>
+                    {q.price_per_base_unit && (
+                      <div className="font-mono text-[10px] text-text-3">
+                        {q.currency_symbol}{Number(q.price_per_base_unit).toFixed(4)}/{q.base_unit_abbr}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-text-3">
+                      {Number(q.qty_in_base_units).toFixed(3)} {q.base_unit_abbr}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Footer hint */}
+          {quotes && quotes.length > 0 && (
+            <div className="mt-2 pt-1.5 border-t border-border text-[10px] text-text-3 text-center">
+              Click badge to open Quotes tab
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
 function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void }) {
@@ -797,15 +928,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => onViewQuotes?.(ing.id)}
-                      title="View price quotes for this ingredient"
-                      disabled={!onViewQuotes}
-                      className={`text-xs font-bold px-2 py-0.5 rounded-full transition-colors
-                        ${onViewQuotes ? 'cursor-pointer hover:opacity-70' : 'cursor-default'}
-                        ${Number(ing.active_quote_count) > 0 ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
-                      {ing.active_quote_count}/{ing.quote_count}
-                    </button>
+                    <QuoteHoverPopover ing={ing} onViewQuotes={onViewQuotes} />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 justify-end">
