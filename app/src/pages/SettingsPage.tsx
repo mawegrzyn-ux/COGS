@@ -47,7 +47,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'system':         'What is on the System settings tab? What admin information and tools are available here?',
   'thresholds':     'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
   'test-data':      'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
-  'ai':             'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, and the Claude Code Integration key — what each does and when I would configure it.',
+  'ai':             'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'import':         'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
 }
 
@@ -1076,6 +1076,21 @@ interface AiKeyStatus {
   claude_code_key_set: boolean
 }
 
+interface UsageSummary {
+  total_turns: number
+  total_sessions: number
+  total_users: number
+  tokens_in: number
+  tokens_out: number
+  tokens_total: number
+  cost_usd: number
+  first_turn: string | null
+  last_turn: string | null
+}
+interface UsageDaily { day: string; turns: number; tokens_in: number; tokens_out: number; cost_usd: number }
+interface UsageUser  { user: string; turns: number; tokens_in: number; tokens_out: number; cost_usd: number; last_active: string }
+interface UsageData  { summary: UsageSummary; daily: UsageDaily[]; by_user: UsageUser[] }
+
 function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
@@ -1087,6 +1102,8 @@ function AiTab() {
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
+  const [usage,            setUsage]            = useState<UsageData | null>(null)
+  const [usageLoading,     setUsageLoading]     = useState(false)
   const [generatingKey,    setGeneratingKey]    = useState(false)
   const [keyCopied,        setKeyCopied]        = useState(false)
   const [toast,            setToast]            = useState<{ message: string; type: 'success' | 'error' } | null>(null)
@@ -1105,6 +1122,14 @@ function AiTab() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
+  }, [api])
+
+  const loadUsage = useCallback(() => {
+    setUsageLoading(true)
+    api.get('/ai-chat/usage')
+      .then((d: UsageData) => setUsage(d))
+      .catch(() => {})
+      .finally(() => setUsageLoading(false))
   }, [api])
 
   async function handleToggleConciseMode(val: boolean) {
@@ -1346,6 +1371,128 @@ function AiTab() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Token Usage ── */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-base font-bold text-text-1">Token Usage</h2>
+          <button
+            className="btn-outline text-xs px-3 py-1.5"
+            onClick={loadUsage}
+            disabled={usageLoading}
+          >
+            {usageLoading ? 'Loading…' : usage ? '↻ Refresh' : 'Load stats'}
+          </button>
+        </div>
+        <p className="text-sm text-text-3 mb-4">
+          Pepper AI token consumption and estimated cost (Claude Haiku 4.5 — $0.80/M input, $4.00/M output).
+        </p>
+
+        {usageLoading && <div className="py-6 text-center"><Spinner /></div>}
+
+        {!usageLoading && usage && (() => {
+          const s = usage.summary
+          const fmtK = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(2)}M` : n >= 1_000 ? `${(n/1_000).toFixed(1)}k` : String(n)
+          const fmtCost = (c: number) => c < 0.01 ? '<$0.01' : `$${c.toFixed(2)}`
+          const maxDaily = Math.max(...usage.daily.map(d => d.tokens_in + d.tokens_out), 1)
+
+          return (
+            <>
+              {/* Summary tiles */}
+              <div className="grid grid-cols-2 gap-3 mb-5 sm:grid-cols-4">
+                {[
+                  { label: 'Total turns',    value: s.total_turns.toLocaleString() },
+                  { label: 'Total sessions', value: s.total_sessions.toLocaleString() },
+                  { label: 'Total tokens',   value: fmtK(s.tokens_total) },
+                  { label: 'Est. cost',      value: fmtCost(s.cost_usd), highlight: true },
+                ].map(({ label, value, highlight }) => (
+                  <div key={label} className="rounded-xl border border-border bg-surface-2/50 px-4 py-3">
+                    <div className="text-xs text-text-3 mb-0.5">{label}</div>
+                    <div className={`text-lg font-bold ${highlight ? 'text-accent' : 'text-text-1'}`}>{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Token split */}
+              <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-3 mb-5 flex gap-6 flex-wrap text-sm">
+                <div><span className="text-text-3">Input tokens: </span><span className="font-mono font-semibold text-text-1">{fmtK(s.tokens_in)}</span> <span className="text-text-3 text-xs">({fmtCost((s.tokens_in/1_000_000)*0.80)})</span></div>
+                <div><span className="text-text-3">Output tokens: </span><span className="font-mono font-semibold text-text-1">{fmtK(s.tokens_out)}</span> <span className="text-text-3 text-xs">({fmtCost((s.tokens_out/1_000_000)*4.00)})</span></div>
+                {s.first_turn && <div className="ml-auto text-xs text-text-3">Since {new Date(s.first_turn).toLocaleDateString()}</div>}
+              </div>
+
+              {/* Daily bar chart — last 30 days */}
+              {usage.daily.length > 0 && (
+                <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-3 mb-5">
+                  <div className="text-xs font-semibold text-text-2 mb-3">Daily usage — last 30 days</div>
+                  <div className="flex items-end gap-0.5 h-20 w-full">
+                    {usage.daily.map(d => {
+                      const total = d.tokens_in + d.tokens_out
+                      const pct = Math.round((total / maxDaily) * 100)
+                      const inPct = total > 0 ? Math.round((d.tokens_in / total) * 100) : 50
+                      const label = `${new Date(d.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}\n${fmtK(total)} tokens\n${d.turns} turn${d.turns !== 1 ? 's' : ''}\n${fmtCost(d.cost_usd)}`
+                      return (
+                        <div
+                          key={d.day}
+                          className="flex-1 flex flex-col justify-end rounded-sm overflow-hidden cursor-default"
+                          style={{ height: `${Math.max(pct, 2)}%`, minHeight: '2px' }}
+                          title={label}
+                        >
+                          <div style={{ height: `${100 - inPct}%`, minHeight: '1px', background: 'var(--accent)' }} />
+                          <div style={{ height: `${inPct}%`,       minHeight: '1px', background: 'var(--accent-dim)', filter: 'brightness(0.85)' }} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="flex justify-between text-xs text-text-3 mt-1">
+                    <span>{new Date(usage.daily[0].day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                    <span className="flex gap-3">
+                      <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: 'var(--accent)' }} />Output</span>
+                      <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: 'var(--accent-dim)', filter: 'brightness(0.85)' }} />Input</span>
+                    </span>
+                    <span>{new Date(usage.daily[usage.daily.length-1].day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Per-user table */}
+              {usage.by_user.length > 0 && (
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <div className="px-4 py-2.5 bg-surface-2/50 border-b border-border text-xs font-semibold text-text-2">Usage by user</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          {['User', 'Turns', 'Tokens in', 'Tokens out', 'Est. cost', 'Last active'].map(h => (
+                            <th key={h} className="px-3 py-2 text-xs font-semibold text-gray-500 text-left">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {usage.by_user.map(u => (
+                          <tr key={u.user} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 text-xs font-mono text-text-2 max-w-[180px] truncate" title={u.user}>{u.user}</td>
+                            <td className="px-3 py-2 text-xs text-right">{u.turns.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_in)}</td>
+                            <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_out)}</td>
+                            <td className="px-3 py-2 text-xs text-right font-semibold text-accent">{fmtCost(u.cost_usd)}</td>
+                            <td className="px-3 py-2 text-xs text-text-3">{new Date(u.last_active).toLocaleDateString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )
+        })()}
+
+        {!usageLoading && !usage && (
+          <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-6 text-center text-sm text-text-3">
+            Click <strong>Load stats</strong> to see token consumption and cost breakdown.
+          </div>
+        )}
       </div>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

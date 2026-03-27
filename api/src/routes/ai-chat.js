@@ -1,7 +1,9 @@
 // =============================================================================
 // COGS AI Chat — SSE streaming endpoint powered by Claude Haiku 4.5
-// POST /api/ai-chat        — send a message, receive SSE stream
-// GET  /api/ai-chat-log    — paginated chat history
+// POST /api/ai-chat           — send a message, receive SSE stream
+// GET  /api/ai-chat/log       — paginated chat history
+// GET  /api/ai-chat/sessions  — sessions for a user
+// GET  /api/ai-chat/usage     — token consumption + estimated cost summary
 // =============================================================================
 
 const router    = require('express').Router();
@@ -2974,6 +2976,94 @@ router.get('/sessions/:session_id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch session' } });
+  }
+});
+
+// ── Token Usage Report ────────────────────────────────────────────────────────
+// Haiku 4.5 pricing (USD per 1M tokens, as of early 2026)
+const COST_PER_M_IN  = 0.80;
+const COST_PER_M_OUT = 4.00;
+
+router.get('/usage', async (req, res) => {
+  try {
+    const [totals, daily, byUser] = await Promise.all([
+      // All-time totals
+      pool.query(`
+        SELECT
+          COUNT(*)::int                              AS total_turns,
+          COALESCE(SUM(tokens_in),  0)::bigint       AS total_tokens_in,
+          COALESCE(SUM(tokens_out), 0)::bigint       AS total_tokens_out,
+          COUNT(DISTINCT session_id) FILTER (WHERE session_id IS NOT NULL)::int AS total_sessions,
+          COUNT(DISTINCT user_email) FILTER (WHERE user_email IS NOT NULL)::int AS total_users,
+          MIN(created_at)                            AS first_turn,
+          MAX(created_at)                            AS last_turn
+        FROM mcogs_ai_chat_log
+      `),
+
+      // Daily breakdown — last 30 days
+      pool.query(`
+        SELECT
+          DATE(created_at AT TIME ZONE 'UTC')        AS day,
+          COUNT(*)::int                              AS turns,
+          COALESCE(SUM(tokens_in),  0)::bigint       AS tokens_in,
+          COALESCE(SUM(tokens_out), 0)::bigint       AS tokens_out
+        FROM mcogs_ai_chat_log
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `),
+
+      // Per-user breakdown — top 20 by total tokens
+      pool.query(`
+        SELECT
+          COALESCE(user_email, user_sub, 'unknown')  AS user_label,
+          COUNT(*)::int                              AS turns,
+          COALESCE(SUM(tokens_in),  0)::bigint       AS tokens_in,
+          COALESCE(SUM(tokens_out), 0)::bigint       AS tokens_out,
+          MAX(created_at)                            AS last_active
+        FROM mcogs_ai_chat_log
+        GROUP BY COALESCE(user_email, user_sub, 'unknown')
+        ORDER BY (COALESCE(SUM(tokens_in), 0) + COALESCE(SUM(tokens_out), 0)) DESC
+        LIMIT 20
+      `),
+    ]);
+
+    const t = totals.rows[0];
+    const totalIn  = Number(t.total_tokens_in);
+    const totalOut = Number(t.total_tokens_out);
+    const totalCost = (totalIn / 1_000_000) * COST_PER_M_IN + (totalOut / 1_000_000) * COST_PER_M_OUT;
+
+    res.json({
+      summary: {
+        total_turns:    t.total_turns,
+        total_sessions: t.total_sessions,
+        total_users:    t.total_users,
+        tokens_in:      totalIn,
+        tokens_out:     totalOut,
+        tokens_total:   totalIn + totalOut,
+        cost_usd:       Math.round(totalCost * 10000) / 10000,
+        first_turn:     t.first_turn,
+        last_turn:      t.last_turn,
+      },
+      daily: daily.rows.map(r => ({
+        day:        r.day,
+        turns:      r.turns,
+        tokens_in:  Number(r.tokens_in),
+        tokens_out: Number(r.tokens_out),
+        cost_usd:   Math.round(((Number(r.tokens_in) / 1_000_000) * COST_PER_M_IN + (Number(r.tokens_out) / 1_000_000) * COST_PER_M_OUT) * 10000) / 10000,
+      })),
+      by_user: byUser.rows.map(r => ({
+        user:       r.user_label,
+        turns:      r.turns,
+        tokens_in:  Number(r.tokens_in),
+        tokens_out: Number(r.tokens_out),
+        cost_usd:   Math.round(((Number(r.tokens_in) / 1_000_000) * COST_PER_M_IN + (Number(r.tokens_out) / 1_000_000) * COST_PER_M_OUT) * 10000) / 10000,
+        last_active: r.last_active,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch usage stats' } });
   }
 });
 
