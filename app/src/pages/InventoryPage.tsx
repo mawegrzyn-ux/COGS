@@ -934,7 +934,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         <EmptyState
           message={search || hasActiveFilters ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
           action={!search && !hasActiveFilters
-            ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Ingredient</button>
+            ? <button className="btn-primary px-4 py-2 text-sm" onClick={() => openAdd()}>Add Ingredient</button>
             : undefined
           }
         />
