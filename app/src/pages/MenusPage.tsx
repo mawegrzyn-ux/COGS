@@ -2857,69 +2857,182 @@ function ScenarioTool({
     ? 'All levels'
     : (priceLevels.find(l => l.id === levelId)?.name ?? 'No level')
 
-  // Excel Export — HTML table downloaded as .xls (no external deps required) ─
+  // Excel Export — SpreadsheetML with live formulas (no external deps) ─────────
+  //
+  //  Yellow cells = editable inputs (Cost/ptn, Price Gross, Qty Sold)
+  //  Blue cells   = formula cells  (Price Net, Revenue, Mix%, Total Cost, COGS%)
+  //
+  //  ALL levels mode: one worksheet per price level in the same workbook.
 
   function exportExcel() {
-    const dl = (html: string) => {
-      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' })
-      const a    = document.createElement('a')
-      a.href     = URL.createObjectURL(blob)
-      a.download = `${menuName.replace(/[^a-z0-9]/gi, '_')}_scenario.xls`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(a.href)
+    // ── XML / SpreadsheetML helpers ─────────────────────────────────────────
+    const esc = (s: string) =>
+      String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    const toCol = (n: number): string => {
+      let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26) } return s
     }
-    const css = `<style>
-      body{font-family:Arial,sans-serif;font-size:11px}
-      th{background:#146A34;color:#fff;padding:5px 8px}
-      .cat{background:#E8F5ED;font-weight:bold;color:#146A34}
-      .total{background:#f0f0f0;font-weight:bold;border-top:2px solid #999}
-    </style>`
+    const ref  = (col: number, row: number) => `${toCol(col)}${row}`
+    const aref = (col: number, row: number) => `$${toCol(col)}$${row}`  // absolute
 
-    if (levelId === 'ALL') {
-      // 4 cols per level: Qty | Price | Revenue | COGS%
-      const levelHeaders    = allLevelsData.map(({ level }) => `<th colspan="4">${level.name}</th>`).join('')
-      const levelSubHeaders = allLevelsData.map(() => `<th>Qty</th><th>Price</th><th>Revenue (net)</th><th>COGS%</th>`).join('')
-      let rows = ''
-      for (const [cat, catRows] of allLevelCategorised) {
-        const catCols = 2 + allLevelsData.length * 4 + 1 // Item + Cost/ptn + per-level×4 + Total COGS%
-        rows += `<tr class="cat"><td colspan="${catCols}">${cat}</td></tr>`
-        for (const r of catRows) {
-          const totalRev = r.perLevel.reduce((s, p) => s + p.revenue, 0)
-          const totalCogsPct = totalRev > 0 ? (r.total_cost / totalRev) * 100 : null
-          const lvlCols = r.perLevel.map(p =>
-            `<td align="right">${p.qty > 0 ? p.qty : ''}</td><td align="right">${p.price_gross > 0 ? p.price_gross.toFixed(2) : ''}</td><td align="right">${p.revenue > 0 ? p.revenue.toFixed(2) : ''}</td><td align="right">${fmtPct(p.cogs_pct)}</td>`
-          ).join('')
-          rows += `<tr><td style="padding-left:12px">${r.display_name}</td><td align="right">${r.cost.toFixed(2)}</td>${lvlCols}<td align="right">${fmtPct(totalCogsPct)}</td></tr>`
-        }
-      }
-      dl(`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>${css}</head><body>
-        <h2>${menuName} — All Price Levels</h2>
-        <table border="1" cellspacing="0" cellpadding="4">
-          <thead><tr><th rowspan="2">Item</th><th rowspan="2">Cost/ptn</th>${levelHeaders}<th rowspan="2">Total COGS%</th></tr>
-          <tr>${levelSubHeaders}</tr></thead>
-          <tbody>${rows}</tbody>
-        </table></body></html>`)
-    } else {
-      let tableRows = ''
-      for (const [cat, catRows] of categorised) {
-        const cQ = catRows.reduce((s, r) => s + r.qty, 0)
-        const cR = catRows.reduce((s, r) => s + r.net_revenue, 0)
-        const cC = catRows.reduce((s, r) => s + r.total_cost, 0)
-        const cP = cR > 0 ? (cC / cR) * 100 : null
-        tableRows += `<tr class="cat"><td colspan="6">${cat}</td><td align="right">${cQ || ''}</td><td align="right">${cQ ? fmtMix(cQ, totalQty) : ''}</td><td align="right">${cR > 0 ? cR.toFixed(2) : ''}</td><td align="right">${cR > 0 ? fmtMix(cR, totalNet) : ''}</td><td align="right">${cC > 0 ? cC.toFixed(2) : ''}</td><td align="right">${fmtPct(cP)}</td></tr>`
-        for (const r of catRows) {
-          tableRows += `<tr><td style="padding-left:12px">${r.display_name}</td><td>${r.category}</td><td>${r.item_type}</td><td align="right">${r.cost.toFixed(2)}</td><td align="right">${r.price_gross > 0 ? r.price_gross.toFixed(2) : ''}</td><td align="right">${r.price_net > 0 ? r.price_net.toFixed(2) : ''}</td><td align="right">${r.qty || ''}</td><td align="right">${r.qty > 0 ? fmtMix(r.qty, totalQty) : ''}</td><td align="right">${r.net_revenue > 0 ? r.net_revenue.toFixed(2) : ''}</td><td align="right">${r.net_revenue > 0 ? fmtMix(r.net_revenue, totalNet) : ''}</td><td align="right">${r.total_cost > 0 ? r.total_cost.toFixed(2) : ''}</td><td align="right">${fmtPct(r.cogs_pct)}</td></tr>`
-        }
-      }
-      dl(`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head>${css}</head><body>
-        <h2>${menuName} — ${levelName}</h2>
-        <p>Covers: ${totalQty} · Revenue: ${fmtMoney(totalNet)} · Cost: ${fmtMoney(totalCost)} · GP: ${fmtMoney(totalGP)} · COGS: ${fmtPct(overallCogs)}</p>
-        <table border="1" cellspacing="0" cellpadding="4">
-          <thead><tr><th>Item</th><th>Category</th><th>Type</th><th>Cost/ptn</th><th>Price (gross)</th><th>Price (net)</th><th>Qty Sold</th><th>Sales Mix%</th><th>Revenue (net)</th><th>Rev Mix%</th><th>Total Cost</th><th>COGS%</th></tr></thead>
-          <tbody>${tableRows}</tbody>
-          <tfoot><tr class="total"><td colspan="6">Grand Total</td><td>${totalQty}</td><td>100%</td><td>${totalNet.toFixed(2)}</td><td>100%</td><td>${totalCost.toFixed(2)}</td><td>${fmtPct(overallCogs)}</td></tr></tfoot>
-        </table></body></html>`)
+    const cStr  = (st: string, v: string)  => `<Cell ss:StyleID="${st}"><Data ss:Type="String">${esc(v)}</Data></Cell>`
+    const cNum  = (st: string, v: number)  => `<Cell ss:StyleID="${st}"><Data ss:Type="Number">${v}</Data></Cell>`
+    const cFml  = (st: string, f: string)  => `<Cell ss:StyleID="${st}" ss:Formula="${esc('=' + f)}"><Data ss:Type="Number">0</Data></Cell>`
+    const cBlnk = (st: string)             => `<Cell ss:StyleID="${st}"/>`
+    const cMrg  = (st: string, span: number, v: string) =>
+      `<Cell ss:StyleID="${st}" ss:MergeAcross="${span - 1}"><Data ss:Type="String">${esc(v)}</Data></Cell>`
+    const row   = (...cells: string[])             => `<Row>${cells.join('')}</Row>`
+    const rowH  = (h: number, ...cells: string[])  => `<Row ss:Height="${h}">${cells.join('')}</Row>`
+
+    // ── Shared styles ───────────────────────────────────────────────────────
+    const STYLES = `<Styles>
+      <Style ss:ID="s0"/>
+      <Style ss:ID="s_title"><Font ss:Bold="1" ss:Size="13" ss:Color="#146A34"/></Style>
+      <Style ss:ID="s_sub"><Font ss:Size="9" ss:Color="#888888"/></Style>
+      <Style ss:ID="s_ly"><Font ss:Italic="1" ss:Size="8" ss:Color="#7B5800"/><Interior ss:Color="#FFFDE7" ss:Pattern="Solid"/></Style>
+      <Style ss:ID="s_lb"><Font ss:Italic="1" ss:Size="8" ss:Color="#1565C0"/><Interior ss:Color="#E3F2FD" ss:Pattern="Solid"/></Style>
+      <Style ss:ID="s_hl"><Font ss:Bold="1" ss:Color="#FFFFFF" ss:Size="9"/><Interior ss:Color="#146A34" ss:Pattern="Solid"/><Alignment ss:Horizontal="Left"/></Style>
+      <Style ss:ID="s_hc"><Font ss:Bold="1" ss:Color="#FFFFFF" ss:Size="8"/><Interior ss:Color="#146A34" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:WrapText="1"/></Style>
+      <Style ss:ID="s_sp"><NumberFormat ss:Format="0.0%"/></Style>
+      <Style ss:ID="s_en"><Interior ss:Color="#FFFDE7" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/></Style>
+      <Style ss:ID="s_ei"><Interior ss:Color="#FFFDE7" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/></Style>
+      <Style ss:ID="s_fn"><Interior ss:Color="#E3F2FD" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/></Style>
+      <Style ss:ID="s_fp"><Interior ss:Color="#E3F2FD" ss:Pattern="Solid"/><NumberFormat ss:Format="0.0%"/></Style>
+      <Style ss:ID="s_tt"><Font ss:Bold="1"/><Interior ss:Color="#E8E8E8" ss:Pattern="Solid"/></Style>
+      <Style ss:ID="s_tn"><Font ss:Bold="1"/><Interior ss:Color="#E8E8E8" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/></Style>
+      <Style ss:ID="s_ti"><Font ss:Bold="1"/><Interior ss:Color="#E8E8E8" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/></Style>
+      <Style ss:ID="s_tp"><Font ss:Bold="1"/><Interior ss:Color="#E8E8E8" ss:Pattern="Solid"/><NumberFormat ss:Format="0.0%"/></Style>
+    </Styles>`
+
+    // ── Worksheet builder ───────────────────────────────────────────────────
+    interface XRow { display_name: string; category: string; item_type: string; tax_pct: number; cost: number; price_gross: number; qty: number }
+
+    function buildSheet(wsName: string, items: XRow[], currSym: string, lvlName: string): string {
+      if (!items.length) return ''
+      // Column indices (1-based): A=1 … M=13
+      const CD=4, CE=5, CF=6, CG=7, CH=8, CJ=10, CL=12, CM=13
+      // I=9 Sales Mix%, K=11 Rev Mix% — constructed by position in row(), not by ref
+      const NCOLS = 13
+      const DFIRST = 6              // first data row (rows 1–5 are header)
+      const N      = items.length
+      const DLAST  = DFIRST + N - 1
+      const GRAND  = DFIRST + N    // grand-total row
+
+      const sorted = [...items].sort((a,b) => a.category.localeCompare(b.category) || a.display_name.localeCompare(b.display_name))
+
+      let xml = ''
+      // Row 1: title
+      xml += row(cMrg('s_title', NCOLS, `${menuName} — ${lvlName}`))
+      // Row 2: subtitle
+      xml += row(cMrg('s_sub', NCOLS, `Currency: ${currSym} · Generated: ${new Date().toLocaleDateString()}`))
+      // Row 3: colour legend (split across columns A–G and H–M)
+      xml += row(
+        cMrg('s_ly', 7, '✏  Yellow cells are editable inputs — change Cost/ptn, Price Gross and Qty to model scenarios'),
+        cMrg('s_lb', NCOLS - 7, '🔢  Blue cells contain formulas — they recalculate automatically when you edit yellow cells')
+      )
+      // Row 4: spacer
+      xml += `<Row ss:Height="6"/>`
+      // Row 5: column headers
+      xml += rowH(40,
+        cStr('s_hl', 'Item'),
+        cStr('s_hc', 'Category'),
+        cStr('s_hc', 'Type'),
+        cStr('s_hc', 'Tax\nRate'),
+        cStr('s_hc', `Cost/ptn\n(${currSym})\n✏`),
+        cStr('s_hc', `Price Gross\n(${currSym})\n✏`),
+        cStr('s_hc', `Price Net\n(${currSym})\n=`),
+        cStr('s_hc', 'Qty\nSold\n✏'),
+        cStr('s_hc', 'Sales\nMix%\n='),
+        cStr('s_hc', `Revenue\nNet (${currSym})\n=`),
+        cStr('s_hc', 'Rev\nMix%\n='),
+        cStr('s_hc', `Total\nCost (${currSym})\n=`),
+        cStr('s_hc', 'COGS%\n=')
+      )
+
+      // Data rows
+      sorted.forEach((item, i) => {
+        const r = DFIRST + i
+        xml += row(
+          cStr('s0',  item.display_name),                                            // A: item
+          cStr('s0',  item.category),                                                // B: category
+          cStr('s0',  item.item_type),                                               // C: type
+          cNum('s_sp', item.tax_pct / 100),                                          // D: tax rate (decimal, shown as %)
+          cNum('s_en', item.cost),                                                   // E: cost/ptn ✏
+          cNum('s_en', item.price_gross),                                            // F: price gross ✏
+          cFml('s_fn', `${ref(CF,r)}/(1+${ref(CD,r)})`),                              // G: price net  =F/(1+D)  D=tax rate decimal
+          cNum('s_ei', item.qty),                                                    // H: qty ✏
+          cFml('s_fp', `IF(${aref(CH,GRAND)}>0,${ref(CH,r)}/${aref(CH,GRAND)},0)`), // I: sales mix%
+          cFml('s_fn', `${ref(CG,r)}*${ref(CH,r)}`),                                // J: revenue net = PriceNet × Qty
+          cFml('s_fp', `IF(${aref(CJ,GRAND)}>0,${ref(CJ,r)}/${aref(CJ,GRAND)},0)`),// K: rev mix%
+          cFml('s_fn', `${ref(CE,r)}*${ref(CH,r)}`),                                // L: total cost = Cost × Qty
+          cFml('s_fp', `IF(${ref(CJ,r)}>0,${ref(CL,r)}/${ref(CJ,r)},0)`)           // M: COGS%
+        )
+      })
+
+      // Grand-total row
+      xml += row(
+        cStr('s_tt', 'Grand Total'),
+        cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'),
+        cFml('s_ti', `SUM(${ref(CH,DFIRST)}:${ref(CH,DLAST)})`),                    // H: total qty
+        cStr('s_tt', '100%'),                                                       // I
+        cFml('s_tn', `SUM(${ref(CJ,DFIRST)}:${ref(CJ,DLAST)})`),                   // J: total revenue
+        cStr('s_tt', '100%'),                                                       // K
+        cFml('s_tn', `SUM(${ref(CL,DFIRST)}:${ref(CL,DLAST)})`),                   // L: total cost
+        cFml('s_tp', `IF(${ref(CJ,GRAND)}>0,${ref(CL,GRAND)}/${ref(CJ,GRAND)},0)`) // M: overall COGS%
+      )
+
+      // KPI summary strip (2 rows below grand total)
+      xml += `<Row ss:Height="8"/><Row ss:Height="8"/>`
+      xml += row(
+        cStr('s_tt', 'Total Covers'),  cFml('s_ti', ref(CH,GRAND)),
+        cStr('s_tt', 'Revenue (net)'), cFml('s_tn', ref(CJ,GRAND)),
+        cStr('s_tt', 'Total Cost'),    cFml('s_tn', ref(CL,GRAND)),
+        cStr('s_tt', 'Gross Profit'),  cFml('s_tn', `${ref(CJ,GRAND)}-${ref(CL,GRAND)}`),
+        cStr('s_tt', 'Overall COGS%'), cFml('s_tp', ref(CM,GRAND))
+      )
+
+      const colW = [180, 90, 60, 55, 85, 90, 85, 60, 68, 100, 68, 90, 65]
+        .map(w => `<Column ss:Width="${w}"/>`).join('')
+
+      return `<Worksheet ss:Name="${esc(wsName.slice(0, 31))}"><Table>${colW}${xml}</Table></Worksheet>`
     }
+
+    // ── Build workbook ───────────────────────────────────────────────────────
+    let sheets = ''
+
+    if (levelId === 'ALL' && allLevelRows.length) {
+      sheets = allLevelsData.map(({ level }, k) =>
+        buildSheet(
+          level.name,
+          allLevelRows.map(r => {
+            const pl      = r.perLevel[k]
+            const taxFrac = pl.price_gross > 0 && pl.price_net > 0
+              ? pl.price_gross / pl.price_net - 1
+              : 0
+            return { display_name: r.display_name, category: r.category, item_type: r.item_type,
+                     tax_pct: taxFrac * 100, cost: r.cost, price_gross: pl.price_gross, qty: pl.qty }
+          }),
+          dispSym, level.name
+        )
+      ).join('')
+    } else if (rows.length) {
+      sheets = buildSheet(
+        `${menuName} ${levelName}`.slice(0, 31),
+        rows.map(r => ({ display_name: r.display_name, category: r.category, item_type: r.item_type,
+                         tax_pct: r.tax_pct, cost: r.cost, price_gross: r.price_gross, qty: r.qty })),
+        dispSym, levelName
+      )
+    }
+
+    if (!sheets) { showToast('No data to export', 'error'); return }
+
+    const workbook = `<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:x="urn:schemas-microsoft-com:office:excel">\n${STYLES}\n${sheets}\n</Workbook>`
+
+    const blob = new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${menuName.replace(/[^a-z0-9]/gi, '_')}_scenario.xls`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(a.href)
   }
 
   // Print — opens a clean styled window and triggers print dialog ─────────────
