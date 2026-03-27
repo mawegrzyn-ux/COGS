@@ -388,6 +388,26 @@ export default function RecipesPage() {
     }
   }
 
+  // Save & stay open for rapid sequential entry
+  const addItemAndNext = async (form: ItemForm) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/items`, {
+        item_type:              form.item_type,
+        ingredient_id:          form.item_type === 'ingredient' ? Number(form.ingredient_id) : null,
+        recipe_item_id:         form.item_type === 'recipe'     ? Number(form.recipe_item_id) : null,
+        prep_qty:               Number(form.prep_qty),
+        prep_unit:              form.prep_unit.trim() || null,
+        prep_to_base_conversion:Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Ingredient added')
+      loadDetail(selected.id)
+      // modal stays open — ItemFormModal resets itself
+    } catch (err: any) {
+      showToast(err.message || 'Add failed', 'error')
+    }
+  }
+
   const updateItem = async (form: ItemForm) => {
     if (!selected || !editItemModal) return
     try {
@@ -455,6 +475,22 @@ export default function RecipesPage() {
       })
       showToast('Ingredient added to variation')
       setItemModal(false)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Add failed', 'error') }
+  }
+
+  const addVariationItemAndNext = async (varId: number, form: ItemForm) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/variations/${varId}/items`, {
+        item_type:               form.item_type,
+        ingredient_id:           form.item_type === 'ingredient' ? Number(form.ingredient_id) : null,
+        recipe_item_id:          form.item_type === 'recipe'     ? Number(form.recipe_item_id) : null,
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Ingredient added to variation')
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Add failed', 'error') }
   }
@@ -1293,6 +1329,10 @@ export default function RecipesPage() {
               else                               addItem(form)
             }
           }}
+          onSaveAndNext={editItemModal ? undefined : form => {
+            if (itemModalForVariation != null) addVariationItemAndNext(itemModalForVariation, form)
+            else                               addItemAndNext(form)
+          }}
           onClose={() => { setItemModal(false); setEditItemModal(null); setItemModalForVariation(null) }}
         />
       )}
@@ -1432,15 +1472,41 @@ function RecipeFormModal({ recipe, units, categories, onSave, onClose }: {
     yield_qty:    String(recipe?.yield_qty ?? 1),
     yield_unit_id:recipe?.yield_unit_id  ?? '',
   })
-  const [catOpen, setCatOpen] = useState(false)
+  const [catOpen,           setCatOpen]           = useState(false)
+  const [catHighlightedIdx, setCatHighlightedIdx] = useState(-1)
+  const catItemRefs = useRef<(HTMLButtonElement | null)[]>([])
+
   const set = (k: keyof RecipeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
 
   const filteredCats = categories.filter(c => c.toLowerCase().includes(form.category.toLowerCase()))
 
+  useEffect(() => {
+    if (catHighlightedIdx >= 0) catItemRefs.current[catHighlightedIdx]?.scrollIntoView({ block: 'nearest' })
+  }, [catHighlightedIdx])
+
+  function handleCatKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    const total = filteredCats.length
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!catOpen && total > 0) { setCatOpen(true); setCatHighlightedIdx(0); return }
+      setCatHighlightedIdx(i => Math.min(i + 1, total - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setCatHighlightedIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (!catOpen || catHighlightedIdx < 0 || catHighlightedIdx >= total) return
+      e.preventDefault()
+      setForm(f => ({ ...f, category: filteredCats[catHighlightedIdx] }))
+      setCatOpen(false); setCatHighlightedIdx(-1)
+    } else if (e.key === 'Escape') {
+      setCatOpen(false); setCatHighlightedIdx(-1)
+    }
+  }
+
   return (
     <Modal title={recipe ? 'Edit Recipe' : 'New Recipe'} onClose={onClose}>
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4" onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); onSave(form) } }}>
         <Field label="Recipe Name" required>
           <input className="input" value={form.name} onChange={set('name')} placeholder="e.g. Pad Thai" autoFocus />
         </Field>
@@ -1451,18 +1517,19 @@ function RecipeFormModal({ recipe, units, categories, onSave, onClose }: {
             <input
               className="input"
               value={form.category}
-              onChange={e => { setForm(f => ({ ...f, category: e.target.value })); setCatOpen(true) }}
+              onChange={e => { setForm(f => ({ ...f, category: e.target.value })); setCatOpen(true); setCatHighlightedIdx(-1) }}
               onFocus={() => setCatOpen(true)}
-              onBlur={() => setTimeout(() => setCatOpen(false), 150)}
+              onBlur={() => setTimeout(() => { setCatOpen(false); setCatHighlightedIdx(-1) }, 150)}
+              onKeyDown={handleCatKeyDown}
               placeholder="Select or type to add…"
               autoComplete="off"
             />
             {catOpen && filteredCats.length > 0 && (
               <div className="absolute z-50 top-full left-0 right-0 bg-surface border border-border rounded-lg shadow-lg mt-0.5 max-h-40 overflow-y-auto">
-                {filteredCats.map(c => (
-                  <button key={c} type="button"
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 transition-colors"
-                    onMouseDown={() => { setForm(f => ({ ...f, category: c })); setCatOpen(false) }}
+                {filteredCats.map((c, idx) => (
+                  <button key={c} ref={el => { catItemRefs.current[idx] = el }} type="button"
+                    className={`w-full text-left px-3 py-2 text-sm transition-colors ${catHighlightedIdx === idx ? 'bg-accent-dim text-accent font-semibold' : 'hover:bg-surface-2'}`}
+                    onMouseDown={() => { setForm(f => ({ ...f, category: c })); setCatOpen(false); setCatHighlightedIdx(-1) }}
                   >{c}</button>
                 ))}
               </div>
@@ -1489,7 +1556,7 @@ function RecipeFormModal({ recipe, units, categories, onSave, onClose }: {
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>
-            {recipe ? 'Save Recipe' : 'Create Recipe'}
+            {recipe ? 'Save Recipe' : 'Create Recipe'} <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd>
           </button>
         </div>
       </div>
@@ -1508,14 +1575,15 @@ interface ItemForm {
   prep_to_base_conversion: string
 }
 
-function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
+function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onClose }: {
   item: RecipeItem | null
   ingredients: Ingredient[]
   recipes: Recipe[]
   onSave: (f: ItemForm) => void
+  onSaveAndNext?: (f: ItemForm) => void
   onClose: () => void
 }) {
-  const [form, setForm] = useState<ItemForm>({
+  const blankForm = (): ItemForm => ({
     item_type:               item?.item_type ?? 'ingredient',
     ingredient_id:           String(item?.ingredient_id ?? ''),
     recipe_item_id:          String(item?.recipe_item_id ?? ''),
@@ -1523,8 +1591,10 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
     prep_unit:               item?.prep_unit ?? '',
     prep_to_base_conversion: String(item?.prep_to_base_conversion ?? '1'),
   })
+  const [form, setForm] = useState<ItemForm>(blankForm)
 
   // Combo search state
+  const ingInputRef = useRef<HTMLInputElement>(null)
   const [ingSearch,          setIngSearch]          = useState(() => {
     if (item?.ingredient_id) {
       return ingredients.find(i => i.id === item.ingredient_id)?.name ?? ''
@@ -1604,6 +1674,29 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
     }
   }
 
+  // Add & Next — save then reset form for rapid entry
+  function handleSaveAndNext() {
+    if (!onSaveAndNext) return
+    onSaveAndNext(form)
+    // Reset to a blank add-ingredient form, keep item_type
+    const nextType = form.item_type
+    setForm({ item_type: nextType, ingredient_id: '', recipe_item_id: '', prep_qty: '1', prep_unit: '', prep_to_base_conversion: '1' })
+    setIngSearch(''); setIngOpen(false); setIngHighlightedIdx(-1)
+    setRecipeSearch(''); setRecipeOpen(false); setRecipeHighlightedIdx(-1)
+    setTimeout(() => ingInputRef.current?.focus(), 50)
+  }
+
+  // Alt+A → Add & Next shortcut
+  useEffect(() => {
+    if (!onSaveAndNext) return
+    function onKey(e: KeyboardEvent) {
+      if (e.altKey && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); handleSaveAndNext() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSaveAndNext, form])
+
   // Auto-fill prep_unit and conversion from ingredient defaults
   useEffect(() => {
     if (!selIngredient || item) return
@@ -1644,6 +1737,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
             <Field label="Ingredient" required>
               <div className="relative">
                 <input
+                  ref={ingInputRef}
                   className="input w-full"
                   placeholder="Search ingredients…"
                   value={ingSearch}
@@ -1754,6 +1848,12 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onClose }: {
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
+          {!item && onSaveAndNext && (
+            <button className="btn-outline px-4 py-2 text-sm" onClick={handleSaveAndNext}
+              title="Add this ingredient and open a new form (Alt+A)">
+              Add &amp; Next <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Alt+A</kbd>
+            </button>
+          )}
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>
             {item ? 'Save Changes' : 'Add to Recipe'} <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd>
           </button>
