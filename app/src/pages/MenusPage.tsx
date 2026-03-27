@@ -2868,11 +2868,9 @@ function ScenarioTool({
     // ── XML / SpreadsheetML helpers ─────────────────────────────────────────
     const esc = (s: string) =>
       String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-    const toCol = (n: number): string => {
-      let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26) } return s
-    }
-    const ref  = (col: number, row: number) => `${toCol(col)}${row}`
-    const aref = (col: number, row: number) => `$${toCol(col)}$${row}`  // absolute
+    // SpreadsheetML uses R1C1 notation, NOT A1 (A1 causes #NAME? errors)
+    const rAbs   = (row: number, col: number) => `R${row}C${col}` // absolute ref
+    const rRange = (r1: number, r2: number)   => `R${r1}C:R${r2}C` // same-col range
 
     const cStr  = (st: string, v: string)  => `<Cell ss:StyleID="${st}"><Data ss:Type="String">${esc(v)}</Data></Cell>`
     const cNum  = (st: string, v: number)  => `<Cell ss:StyleID="${st}"><Data ss:Type="Number">${v}</Data></Cell>`
@@ -2908,10 +2906,9 @@ function ScenarioTool({
 
     function buildSheet(wsName: string, items: XRow[], currSym: string, lvlName: string): string {
       if (!items.length) return ''
-      // Column indices (1-based): A=1 … M=13
-      const CD=4, CE=5, CF=6, CG=7, CH=8, CJ=10, CL=12, CM=13
-      // I=9 Sales Mix%, K=11 Rev Mix% — constructed by position in row(), not by ref
-      const NCOLS = 13
+      // R1C1 column numbers (1-based): A=1, B=2, C=3, D=4, E=5, F=6, G=7, H=8, I=9, J=10, K=11, L=12, M=13
+      // Col offsets (relative to each formula cell) are hardcoded as comments below.
+      const NCOLS  = 13
       const DFIRST = 6              // first data row (rows 1–5 are header)
       const N      = items.length
       const DLAST  = DFIRST + N - 1
@@ -2948,46 +2945,51 @@ function ScenarioTool({
         cStr('s_hc', 'COGS%\n=')
       )
 
-      // Data rows
-      sorted.forEach((item, i) => {
-        const r = DFIRST + i
+      // Data rows — R1C1 column offsets relative to each formula cell:
+      //   G(7): F=RC[-1], D=RC[-3]
+      //   I(9): H=RC[-1], H_GRAND=R{GRAND}C8
+      //   J(10): G=RC[-3], H=RC[-2]
+      //   K(11): J=RC[-1], J_GRAND=R{GRAND}C10
+      //   L(12): E=RC[-7], H=RC[-4]
+      //   M(13): J=RC[-3], L=RC[-1]
+      sorted.forEach((item) => {
         xml += row(
-          cStr('s0',  item.display_name),                                            // A: item
-          cStr('s0',  item.category),                                                // B: category
-          cStr('s0',  item.item_type),                                               // C: type
-          cNum('s_sp', item.tax_pct / 100),                                          // D: tax rate (decimal, shown as %)
-          cNum('s_en', item.cost),                                                   // E: cost/ptn ✏
-          cNum('s_en', item.price_gross),                                            // F: price gross ✏
-          cFml('s_fn', `${ref(CF,r)}/(1+${ref(CD,r)})`),                              // G: price net  =F/(1+D)  D=tax rate decimal
-          cNum('s_ei', item.qty),                                                    // H: qty ✏
-          cFml('s_fp', `IF(${aref(CH,GRAND)}>0,${ref(CH,r)}/${aref(CH,GRAND)},0)`), // I: sales mix%
-          cFml('s_fn', `${ref(CG,r)}*${ref(CH,r)}`),                                // J: revenue net = PriceNet × Qty
-          cFml('s_fp', `IF(${aref(CJ,GRAND)}>0,${ref(CJ,r)}/${aref(CJ,GRAND)},0)`),// K: rev mix%
-          cFml('s_fn', `${ref(CE,r)}*${ref(CH,r)}`),                                // L: total cost = Cost × Qty
-          cFml('s_fp', `IF(${ref(CJ,r)}>0,${ref(CL,r)}/${ref(CJ,r)},0)`)           // M: COGS%
+          cStr('s0',  item.display_name),
+          cStr('s0',  item.category),
+          cStr('s0',  item.item_type),
+          cNum('s_sp', item.tax_pct / 100),                                        // D: tax rate decimal (shown as %)
+          cNum('s_en', item.cost),                                                 // E: cost/ptn ✏
+          cNum('s_en', item.price_gross),                                          // F: price gross ✏
+          cFml('s_fn', `RC[-1]/(1+RC[-3])`),                                      // G: price net = F/(1+D)
+          cNum('s_ei', item.qty),                                                  // H: qty ✏
+          cFml('s_fp', `IF(${rAbs(GRAND,8)}>0,RC[-1]/${rAbs(GRAND,8)},0)`),      // I: sales mix%  H/H_grand
+          cFml('s_fn', `RC[-3]*RC[-2]`),                                          // J: revenue = G*H
+          cFml('s_fp', `IF(${rAbs(GRAND,10)}>0,RC[-1]/${rAbs(GRAND,10)},0)`),    // K: rev mix%  J/J_grand
+          cFml('s_fn', `RC[-7]*RC[-4]`),                                          // L: total cost = E*H
+          cFml('s_fp', `IF(RC[-3]>0,RC[-1]/RC[-3],0)`)                           // M: COGS% = L/J
         )
       })
 
-      // Grand-total row
+      // Grand-total row — SUM uses R1C1 column-locked range (C = current column)
       xml += row(
         cStr('s_tt', 'Grand Total'),
         cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'), cBlnk('s_tt'),
-        cFml('s_ti', `SUM(${ref(CH,DFIRST)}:${ref(CH,DLAST)})`),                    // H: total qty
-        cStr('s_tt', '100%'),                                                       // I
-        cFml('s_tn', `SUM(${ref(CJ,DFIRST)}:${ref(CJ,DLAST)})`),                   // J: total revenue
-        cStr('s_tt', '100%'),                                                       // K
-        cFml('s_tn', `SUM(${ref(CL,DFIRST)}:${ref(CL,DLAST)})`),                   // L: total cost
-        cFml('s_tp', `IF(${ref(CJ,GRAND)}>0,${ref(CL,GRAND)}/${ref(CJ,GRAND)},0)`) // M: overall COGS%
+        cFml('s_ti', `SUM(${rRange(DFIRST,DLAST)})`),  // H: total qty
+        cStr('s_tt', '100%'),
+        cFml('s_tn', `SUM(${rRange(DFIRST,DLAST)})`),  // J: total revenue
+        cStr('s_tt', '100%'),
+        cFml('s_tn', `SUM(${rRange(DFIRST,DLAST)})`),  // L: total cost
+        cFml('s_tp', `IF(RC[-3]>0,RC[-1]/RC[-3],0)`)   // M: COGS% = L_grand/J_grand
       )
 
-      // KPI summary strip (2 rows below grand total)
+      // KPI summary strip
       xml += `<Row ss:Height="8"/><Row ss:Height="8"/>`
       xml += row(
-        cStr('s_tt', 'Total Covers'),  cFml('s_ti', ref(CH,GRAND)),
-        cStr('s_tt', 'Revenue (net)'), cFml('s_tn', ref(CJ,GRAND)),
-        cStr('s_tt', 'Total Cost'),    cFml('s_tn', ref(CL,GRAND)),
-        cStr('s_tt', 'Gross Profit'),  cFml('s_tn', `${ref(CJ,GRAND)}-${ref(CL,GRAND)}`),
-        cStr('s_tt', 'Overall COGS%'), cFml('s_tp', ref(CM,GRAND))
+        cStr('s_tt', 'Total Covers'),  cFml('s_ti', rAbs(GRAND,8)),
+        cStr('s_tt', 'Revenue (net)'), cFml('s_tn', rAbs(GRAND,10)),
+        cStr('s_tt', 'Total Cost'),    cFml('s_tn', rAbs(GRAND,12)),
+        cStr('s_tt', 'Gross Profit'),  cFml('s_tn', `${rAbs(GRAND,10)}-${rAbs(GRAND,12)}`),
+        cStr('s_tt', 'Overall COGS%'), cFml('s_tp', rAbs(GRAND,13))
       )
 
       const colW = [180, 90, 60, 55, 85, 90, 85, 60, 68, 100, 68, 90, 65]
