@@ -4,7 +4,6 @@ import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Unit       { id: number; name: string; abbreviation: string }
 interface Ingredient { id: number; name: string; category: string | null; base_unit_id: number | null; base_unit_abbr: string | null; default_prep_unit: string | null; default_prep_to_base_conversion: number; waste_pct: number }
 interface Recipe     { id: number; name: string; category: string | null; description: string | null; yield_qty: number; yield_unit_id: number | null; yield_unit_abbr: string | null; item_count: number }
 
@@ -104,7 +103,6 @@ export default function RecipesPage() {
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
-  const [units,        setUnits]        = useState<Unit[]>([])
   const [apiCategories,setApiCategories]= useState<string[]>([])
   const [loading,      setLoading]      = useState(true)
   const [panelWidth,   setPanelWidth]   = useState(288) // px, default w-72
@@ -189,15 +187,13 @@ export default function RecipesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [r, i, u, cats] = await Promise.all([
+      const [r, i, cats] = await Promise.all([
         api.get('/recipes'),
         api.get('/ingredients'),
-        api.get('/units'),
         api.get('/categories?type=recipe'),
       ])
       setRecipes(r || [])
       setIngredients(i || [])
-      setUnits(u || [])
       setApiCategories((cats || []).map((c: { name: string }) => c.name).sort())
     } finally {
       setLoading(false)
