@@ -135,6 +135,10 @@ interface LevelReportData {
 const fmt2 = (n: number | null | undefined) => Number(n ?? 0).toFixed(2)
 const cogsClass = (pct: number): 'green' | 'yellow' | 'red' =>
   pct <= 28 ? 'green' : pct <= 35 ? 'yellow' : 'red'
+const cogsColourClass = (pct: number) => {
+  const c = cogsClass(pct)
+  return c === 'green' ? 'text-emerald-600' : c === 'yellow' ? 'text-amber-500' : 'text-red-500'
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -166,6 +170,7 @@ export default function MenusPage() {
   const [itemFilterQ,     setItemFilterQ]     = useState('')
   const [itemFilterType,  setItemFilterType]  = useState('')
   const [itemFilterStatus,setItemFilterStatus]= useState('')
+  const [itemFilterCat,   setItemFilterCat]   = useState('')
   const [itemSortCol,     setItemSortCol]     = useState('name')
   const [itemSortDir,     setItemSortDir]     = useState<1 | -1>(1)
 
@@ -264,7 +269,7 @@ export default function MenusPage() {
   const openMenu = useCallback(async (id: number) => {
     setSelectedMenuId(id)
     setScenarioMenuId(id)   // keep scenario in sync
-    setItemFilterQ(''); setItemFilterType(''); setItemFilterStatus('')
+    setItemFilterQ(''); setItemFilterType(''); setItemFilterStatus(''); setItemFilterCat('')
     setLoadingCogs(true)
     try {
       const url = activeMenuLevel ? `/cogs/menu/${id}?price_level_id=${activeMenuLevel}` : `/cogs/menu/${id}`
@@ -298,18 +303,20 @@ export default function MenusPage() {
       const name = item.display_name.toLowerCase()
       if (itemFilterQ && !name.includes(itemFilterQ.toLowerCase())) return false
       if (itemFilterType && item.item_type !== itemFilterType) return false
+      if (itemFilterCat && item.category !== itemFilterCat) return false
       if (itemFilterStatus) {
         const hasPrice = item.sell_price_gross > 0
         if (!hasPrice || cogsClass(item.cogs_pct_net) !== itemFilterStatus) return false
       }
       return true
     })
-  }, [cogsData, itemFilterQ, itemFilterType, itemFilterStatus])
+  }, [cogsData, itemFilterQ, itemFilterType, itemFilterCat, itemFilterStatus])
 
   const sortedItems = useMemo(() => {
     return [...filteredItems].sort((a, b) => {
       let av: number | string = 0, bv: number | string = 0
-      if (itemSortCol === 'name')   { av = a.display_name.toLowerCase(); bv = b.display_name.toLowerCase() }
+      if (itemSortCol === 'name')       { av = a.display_name.toLowerCase(); bv = b.display_name.toLowerCase() }
+      else if (itemSortCol === 'cat')   { av = (a.category || '').toLowerCase(); bv = (b.category || '').toLowerCase() }
       else if (itemSortCol === 'type')  { av = a.item_type; bv = b.item_type }
       else if (itemSortCol === 'qty')   { av = a.qty; bv = b.qty }
       else if (itemSortCol === 'cost')  { av = a.cost_per_portion; bv = b.cost_per_portion }
@@ -333,6 +340,12 @@ export default function MenusPage() {
   const selectedMenu = useMemo(() => menus.find(m => m.id === selectedMenuId) ?? null, [menus, selectedMenuId])
   const selectedCountry = useMemo(() => countries.find(c => c.id === selectedMenu?.country_id) ?? null, [countries, selectedMenu])
   const sym = selectedCountry?.currency_symbol ?? ''
+
+  // ── Category list for filter dropdown ────────────────────────────────────
+  const menuItemCategories = useMemo(() => {
+    if (!cogsData) return []
+    return [...new Set(cogsData.items.map(i => i.category).filter(Boolean))].sort()
+  }, [cogsData])
 
   // ── Tax helpers ───────────────────────────────────────────────────────────
 
@@ -410,6 +423,16 @@ export default function MenusPage() {
       setMiLevelInputs(init)
     }
     setMenuItemModal(item)
+  }
+
+  async function saveInlinePrice(menuItemId: number, gross: number, levelId: number | '') {
+    if (!levelId) return
+    await api.post('/menu-item-prices', {
+      menu_item_id:   menuItemId,
+      price_level_id: levelId,
+      sell_price:     Math.round(gross * 10000) / 10000,
+    })
+    if (selectedMenuId) await openMenu(selectedMenuId)
   }
 
   async function saveMenuItem() {
@@ -669,13 +692,17 @@ export default function MenusPage() {
                 itemFilterQ={itemFilterQ}
                 itemFilterType={itemFilterType}
                 itemFilterStatus={itemFilterStatus}
+                itemFilterCat={itemFilterCat}
                 itemSortCol={itemSortCol}
                 itemSortDir={itemSortDir}
+                categories={menuItemCategories}
                 onLevelChange={v => { setActiveMenuLevel(v); setLevelOverridden(true) }}
                 onFilterQ={setItemFilterQ}
                 onFilterType={setItemFilterType}
                 onFilterStatus={setItemFilterStatus}
+                onFilterCat={setItemFilterCat}
                 onSort={toggleSort}
+                onSavePrice={saveInlinePrice}
                 onEdit={m => setMenuModal(m)}
                 onDelete={id => setConfirmDelete({ type: 'menu', id })}
                 onAddItem={openNewItemModal}
@@ -836,19 +863,21 @@ interface MenuDetailProps {
   menu: Menu; country: Country | null; cogsData: CogsData
   sortedItems: CogsItem[]; filteredItems: CogsItem[]
   priceLevels: PriceLevel[]; activeMenuLevel: number | ''; sym: string
-  itemFilterQ: string; itemFilterType: string; itemFilterStatus: string
+  itemFilterQ: string; itemFilterType: string; itemFilterStatus: string; itemFilterCat: string
   itemSortCol: string; itemSortDir: 1 | -1
+  categories: string[]
   onLevelChange(v: number | ''): void
-  onFilterQ(v: string): void; onFilterType(v: string): void; onFilterStatus(v: string): void
+  onFilterQ(v: string): void; onFilterType(v: string): void; onFilterStatus(v: string): void; onFilterCat(v: string): void
   onSort(col: string): void
+  onSavePrice(menuItemId: number, gross: number, levelId: number | ''): Promise<void>
   onEdit(m: Menu): void; onDelete(id: number): void
   onAddItem(): void; onEditItem(item: CogsItem): void; onDeleteItem(id: number): void
   onApplyTax(): void
 }
 
 function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, priceLevels, activeMenuLevel, sym,
-  itemFilterQ, itemFilterType, itemFilterStatus, itemSortCol, itemSortDir,
-  onLevelChange, onFilterQ, onFilterType, onFilterStatus, onSort,
+  itemFilterQ, itemFilterType, itemFilterStatus, itemFilterCat, itemSortCol, itemSortDir, categories,
+  onLevelChange, onFilterQ, onFilterType, onFilterStatus, onFilterCat, onSort, onSavePrice,
   onEdit, onDelete, onAddItem, onEditItem, onDeleteItem, onApplyTax }: MenuDetailProps) {
 
   const hasLevel = !!activeMenuLevel
@@ -860,14 +889,122 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   const avgPrice  = priceVals.length ? priceVals.reduce((a, b) => a + b, 0) / priceVals.length : 0
   const maxPrice  = priceVals.length ? Math.max(...priceVals) : 0
 
-  function sortArrow(col: string) {
-    if (itemSortCol !== col) return <span className="opacity-25 ml-1 text-xs">⇅</span>
-    return itemSortDir === 1
-      ? <span className="text-blue-500 ml-1 text-xs">↑</span>
-      : <span className="text-blue-500 ml-1 text-xs">↓</span>
+  // ── local UI state ──────────────────────────────────────────────────────
+  const [groupByCategory, setGroupByCategory] = useState(false)
+  const [inlineEdit, setInlineEdit] = useState<{ menuItemId: number; value: string } | null>(null)
+  const [savingPrice, setSavingPrice] = useState(false)
+
+  async function commitInlinePrice(menuItemId: number) {
+    if (!inlineEdit || inlineEdit.menuItemId !== menuItemId) return
+    const gross = parseFloat(inlineEdit.value)
+    if (!isNaN(gross) && gross >= 0) {
+      setSavingPrice(true)
+      try { await onSavePrice(menuItemId, gross, activeMenuLevel) }
+      finally { setSavingPrice(false) }
+    }
+    setInlineEdit(null)
   }
 
-  const dash = <span className="text-gray-300">—</span>
+  function sortArrow(col: string) {
+    if (itemSortCol !== col) return <span className="opacity-25 ml-1 text-[10px]">↕</span>
+    return <span className="text-accent ml-1 text-[10px]">{itemSortDir === 1 ? '↑' : '↓'}</span>
+  }
+
+  const dash = <span className="text-text-3">—</span>
+  const colCount = groupByCategory ? 10 : 11
+
+  function renderRow(item: CogsItem, inGroup: boolean) {
+    const hasPrice = item.sell_price_gross > 0
+    const cls = cogsClass(item.cogs_pct_net)
+    const qty = item.qty % 1 === 0 ? String(item.qty) : item.qty.toFixed(2)
+    const qtyLabel = `${qty} ${item.item_type === 'ingredient' ? item.base_unit_abbr : 'ptn'}`
+    const isEditing = inlineEdit?.menuItemId === item.menu_item_id
+    return (
+      <tr key={item.menu_item_id} className={`border-b border-border last:border-0 hover:bg-surface-2/50 ${inGroup ? 'bg-surface' : ''}`}>
+        <td className="px-3 py-2.5 font-medium text-text-1">{item.display_name}</td>
+        {!groupByCategory && (
+          <td className="px-3 py-2.5 text-xs text-text-3">{item.category || dash}</td>
+        )}
+        <td className="px-3 py-2.5">
+          <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded">
+            {item.item_type === 'ingredient' ? 'Ingredient' : 'Recipe'}
+          </span>
+        </td>
+        <td className="px-3 py-2.5 text-right font-mono text-xs whitespace-nowrap text-text-2">{qtyLabel}</td>
+        <td className="px-3 py-2.5 text-right font-mono text-xs text-text-2">{sym}{fmt2(item.cost_per_portion)}</td>
+        {/* Gross Price — inline editable */}
+        <td className="px-3 py-2.5 text-right font-mono text-xs">
+          {isEditing ? (
+            <div className="flex items-center justify-end gap-1">
+              <span className="text-text-3 text-xs">{sym}</span>
+              <input
+                type="number" min="0" step="0.01"
+                className="input text-xs font-mono w-20 py-0.5 px-1 text-right"
+                value={inlineEdit!.value}
+                disabled={savingPrice}
+                autoFocus
+                onChange={e => setInlineEdit(ie => ie ? { ...ie, value: e.target.value } : ie)}
+                onKeyDown={async e => {
+                  if (e.key === 'Enter') await commitInlinePrice(item.menu_item_id)
+                  else if (e.key === 'Escape') setInlineEdit(null)
+                }}
+                onBlur={() => commitInlinePrice(item.menu_item_id)}
+              />
+            </div>
+          ) : (
+            <span
+              className={`${hasLevel ? 'cursor-pointer hover:text-accent transition-colors' : ''} ${hasPrice ? 'text-text-1' : 'text-text-3'}`}
+              title={hasLevel ? `Click to edit gross price (${sym})` : 'Select a price level to edit prices'}
+              onClick={() => {
+                if (!hasLevel) return
+                setInlineEdit({ menuItemId: item.menu_item_id, value: hasPrice ? fmt2(item.sell_price_gross) : '' })
+              }}
+            >
+              {hasPrice ? `${sym}${fmt2(item.sell_price_gross)}` : <span className="text-text-3 text-xs italic">{hasLevel ? 'set price' : '—'}</span>}
+            </span>
+          )}
+        </td>
+        <td className="px-3 py-2.5 text-center text-xs">
+          {hasPrice
+            ? <span className="bg-surface-2 text-text-2 border border-border px-1.5 py-0.5 rounded">{item.tax_rate_pct}%</span>
+            : dash}
+        </td>
+        <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-text-1">{hasPrice ? `${sym}${fmt2(item.sell_price_net)}` : dash}</td>
+        <td className={`px-3 py-2.5 text-right font-mono text-xs ${hasPrice ? (item.gp_net >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
+          {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
+        </td>
+        <td
+          className={`px-3 py-2.5 text-right text-xs font-semibold ${hasPrice ? cogsColourClass(item.cogs_pct_net) : ''}`}
+          data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
+        >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
+        <td className="px-3 py-2.5">
+          {hasPrice ? (
+            <span className={`text-xs font-semibold ${cls === 'green' ? 'text-emerald-600' : cls === 'yellow' ? 'text-amber-500' : 'text-red-500'}`}>
+              {cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
+            </span>
+          ) : dash}
+        </td>
+        <td className="px-3 py-1.5">
+          <div className="flex gap-1 items-center">
+            <button
+              className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+              onClick={() => onEditItem(item)}
+              title="Edit item"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button
+              className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
+              onClick={() => onDeleteItem(item.menu_item_id)}
+              title="Remove from menu"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+            </button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
 
   return (
     <div className="p-6">
@@ -930,23 +1067,37 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       {/* Filter bar */}
       <div className="flex gap-2 mb-3 flex-wrap items-center">
         <input
-          className="input input-sm flex-1 min-w-[160px]"
+          className="input text-sm flex-1 min-w-[160px]"
           placeholder="Search items…"
           value={itemFilterQ}
           onChange={e => onFilterQ(e.target.value)}
         />
-        <select className="select select-sm" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
+        <select className="input text-sm" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
           <option value="">All Types</option>
           <option value="recipe">Recipe</option>
           <option value="ingredient">Ingredient</option>
         </select>
-        <select className="select select-sm" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
+        {categories.length > 0 && (
+          <select className="input text-sm" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
+            <option value="">All Categories</option>
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+        <select className="input text-sm" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="green">✓ Excellent</option>
           <option value="yellow">~ Acceptable</option>
           <option value="red">! Review</option>
         </select>
-        <span className="text-xs text-gray-400 whitespace-nowrap">
+        {/* Group / Column toggle */}
+        <button
+          className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors whitespace-nowrap ${groupByCategory ? 'border-accent bg-accent-dim text-accent font-semibold' : 'border-border text-text-3 hover:border-accent hover:text-accent'}`}
+          onClick={() => setGroupByCategory(g => !g)}
+          title={groupByCategory ? 'Switch to category column view' : 'Group rows by category'}
+        >
+          {groupByCategory ? '⊞ Grouped' : '☰ Group'}
+        </button>
+        <span className="text-xs text-text-3 whitespace-nowrap">
           {filteredItems.length < items.length
             ? `${filteredItems.length} of ${items.length} items`
             : `${items.length} item${items.length !== 1 ? 's' : ''}`}
@@ -954,13 +1105,14 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       </div>
 
       {/* Items table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="bg-surface rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
+            <thead className="bg-surface-2 border-b border-border">
               <tr>
                 {[
                   { key: 'name',  label: 'Item' },
+                  ...(!groupByCategory ? [{ key: 'cat', label: 'Category' }] : []),
                   { key: 'type',  label: 'Type' },
                   { key: 'qty',   label: 'Qty' },
                   { key: 'cost',  label: 'Cost' },
@@ -973,67 +1125,42 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                 ].map(col => (
                   <th
                     key={col.key}
-                    className={`px-3 py-2.5 text-left text-xs font-medium text-gray-500 whitespace-nowrap ${!col.noSort ? 'cursor-pointer select-none hover:text-gray-700' : ''}`}
-                    onClick={() => !col.noSort && onSort(col.key)}
+                    className={`px-3 py-2.5 text-left text-xs font-semibold text-text-2 uppercase tracking-wide whitespace-nowrap ${!(col as any).noSort ? 'cursor-pointer select-none hover:text-text-1' : ''}`}
+                    onClick={() => !(col as any).noSort && onSort(col.key)}
                   >
-                    {col.label}{!col.noSort && sortArrow(col.key)}
+                    {col.label}{!(col as any).noSort && sortArrow(col.key)}
                   </th>
                 ))}
                 <th className="px-3 py-2.5 w-16" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border">
               {sortedItems.length === 0 && (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-sm text-gray-400">
-                  {items.length === 0 ? 'No items yet. Click Add Item above.' : 'No items match the current filter.'}
+                <tr><td colSpan={colCount} className="px-4 py-8 text-center text-sm text-text-3">
+                  {items.length === 0 ? 'No items yet. Click + Add Item above.' : 'No items match the current filter.'}
                 </td></tr>
               )}
-              {sortedItems.map(item => {
-                const hasPrice = item.sell_price_gross > 0
-                const cls = cogsClass(item.cogs_pct_net)
-                const qty = item.qty % 1 === 0 ? String(item.qty) : item.qty.toFixed(2)
-                const qtyLabel = `${qty} ${item.item_type === 'ingredient' ? item.base_unit_abbr : 'ptn'}`
-                return (
-                  <tr key={item.menu_item_id} className="hover:bg-gray-50">
-                    <td className="px-3 py-2.5 font-medium text-gray-900">{item.display_name}</td>
-                    <td className="px-3 py-2.5">
-                      <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
-                        {item.item_type === 'ingredient' ? 'Ingredient' : 'Recipe'}
-                      </span>
+              {(() => {
+                if (!groupByCategory) {
+                  // ── Flat list with Category column ──────────────────────
+                  return sortedItems.map(item => renderRow(item, false))
+                }
+                // ── Grouped by category ─────────────────────────────────
+                const groups: Map<string, CogsItem[]> = new Map()
+                for (const item of sortedItems) {
+                  const cat = item.category || '(Uncategorised)'
+                  if (!groups.has(cat)) groups.set(cat, [])
+                  groups.get(cat)!.push(item)
+                }
+                return [...groups.entries()].flatMap(([cat, catItems]) => [
+                  <tr key={`cat-${cat}`} className="bg-accent-dim/40 border-y border-border">
+                    <td colSpan={10} className="px-3 py-1.5 text-xs font-semibold text-accent uppercase tracking-wider">
+                      {cat} <span className="font-normal text-text-3 normal-case">· {catItems.length} item{catItems.length !== 1 ? 's' : ''}</span>
                     </td>
-                    <td className="px-3 py-2.5 text-right font-mono text-xs whitespace-nowrap">{qtyLabel}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-xs">{sym}{fmt2(item.cost_per_portion)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-xs">{hasPrice ? `${sym}${fmt2(item.sell_price_gross)}` : dash}</td>
-                    <td className="px-3 py-2.5 text-center text-xs">
-                      {hasPrice
-                        ? <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{item.tax_rate_pct}%</span>
-                        : dash}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">{hasPrice ? `${sym}${fmt2(item.sell_price_net)}` : dash}</td>
-                    <td className={`px-3 py-2.5 text-right font-mono text-xs ${item.gp_net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
-                    </td>
-                    <td
-                      className="px-3 py-2.5 text-right text-xs font-semibold"
-                      data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
-                    >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
-                    <td className="px-3 py-2.5">
-                      {hasPrice ? (
-                        <Badge
-                          label={cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
-                          variant="neutral"
-                        />
-                      ) : dash}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex gap-1">
-                        <button className="btn btn-xs btn-ghost" onClick={() => onEditItem(item)}>✏️</button>
-                        <button className="btn btn-xs btn-ghost text-red-500" onClick={() => onDeleteItem(item.menu_item_id)}>🗑</button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
+                  </tr>,
+                  ...catItems.map(item => renderRow(item, true)),
+                ])
+              })()}
             </tbody>
           </table>
         </div>
