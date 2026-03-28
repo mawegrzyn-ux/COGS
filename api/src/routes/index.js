@@ -32,5 +32,7 @@ router.use('/import',              require('./import').router);
 router.use('/ai-chat',             require('./ai-chat').router);
 router.use('/ai-upload',           require('./ai-upload'));
 router.use('/ai-config',           require('./ai-config'));
+router.use('/shared-pages',        require('./shared-pages').router);
+router.use('/public/share',        require('./shared-pages').publicRouter);
 
 module.exports = router;

@@ -529,6 +529,24 @@ const migrations = [
   // ── Recipe Items — manual sort order ──────────────────────────────────────
   `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS sort_order INTEGER`,
 
+  // ── 29. Shared Menu Engineer Pages ───────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_shared_pages (
+    id            SERIAL PRIMARY KEY,
+    slug          CHAR(16)     NOT NULL UNIQUE,
+    name          VARCHAR(200) NOT NULL,
+    mode          VARCHAR(10)  NOT NULL DEFAULT 'view' CHECK (mode IN ('view', 'edit')),
+    password_hash TEXT         NOT NULL,
+    password_salt TEXT         NOT NULL,
+    menu_id       INTEGER REFERENCES mcogs_menus(id) ON DELETE SET NULL,
+    country_id    INTEGER REFERENCES mcogs_countries(id) ON DELETE SET NULL,
+    is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
+    expires_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_pages_slug      ON mcogs_shared_pages(slug)`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_pages_menu_id   ON mcogs_shared_pages(menu_id)  WHERE menu_id  IS NOT NULL`,
+
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
     ('GLUTEN',      'Gluten',              'Cereals containing gluten: wheat, rye, barley, oats and their hybridised strains', 1),

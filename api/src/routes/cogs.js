@@ -696,4 +696,4 @@ function formatLevel(l) {
   return { id: l.id, name: l.name, sort_order: 0 };
 }
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap };

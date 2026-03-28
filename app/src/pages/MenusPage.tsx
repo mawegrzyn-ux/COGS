@@ -130,6 +130,13 @@ interface LevelReportData {
   items: LevelReportItem[]
 }
 
+interface SharedPage {
+  id: number; slug: string; name: string; mode: 'view' | 'edit'
+  menu_id: number | null; country_id: number | null
+  menu_name: string | null; country_name: string | null
+  is_active: boolean; expires_at: string | null; created_at: string
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt2 = (n: number | null | undefined) => Number(n ?? 0).toFixed(2)
@@ -157,7 +164,7 @@ export default function MenusPage() {
   const [loading,         setLoading]         = useState(true)
 
   // tab
-  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report' | 'scenario'>('builder')
+  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report' | 'scenario' | 'shared-links'>('builder')
 
   // builder state
   const [selectedMenuId,  setSelectedMenuId]  = useState<number | null>(null)
@@ -215,6 +222,20 @@ export default function MenusPage() {
   const [lrSaveTimers,       setLrSaveTimers]       = useState<Record<string, ReturnType<typeof setTimeout>>>({})
   const [lrSaving,           setLrSaving]           = useState<Record<string, boolean>>({})
   const [lrSaved,            setLrSaved]            = useState<Record<string, boolean>>({})
+
+  // shared links
+  const [sharedPages,     setSharedPages]     = useState<SharedPage[]>([])
+  const [sharedLoading,   setSharedLoading]   = useState(false)
+  const [sharedModal,     setSharedModal]     = useState<'new' | SharedPage | null>(null)
+  const [sharedConfirm,   setSharedConfirm]   = useState<number | null>(null)
+  const [spName,          setSpName]          = useState('')
+  const [spMode,          setSpMode]          = useState<'view' | 'edit'>('view')
+  const [spPassword,      setSpPassword]      = useState('')
+  const [spMenuId,        setSpMenuId]        = useState<number | ''>('')
+  const [spCountryId,     setSpCountryId]     = useState<number | ''>('')
+  const [spExpires,       setSpExpires]       = useState('')
+  const [spSaving,        setSpSaving]        = useState(false)
+  const [copiedSlug,      setCopiedSlug]      = useState<string | null>(null)
 
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
@@ -355,6 +376,77 @@ export default function MenusPage() {
       if (clt) return taxRates.find(t => t.id === clt.tax_rate_id) ?? null
     }
     return taxRates.find(t => t.country_id === countryId && t.is_default) ?? null
+  }
+
+  // ── Shared pages CRUD ────────────────────────────────────────────────────
+
+  const loadSharedPages = useCallback(async () => {
+    setSharedLoading(true)
+    try {
+      const data = await api.get('/shared-pages')
+      setSharedPages(data || [])
+    } finally {
+      setSharedLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (activeTab === 'shared-links') loadSharedPages()
+  }, [activeTab, loadSharedPages])
+
+  function openNewSharedModal() {
+    setSpName(''); setSpMode('view'); setSpPassword(''); setSpMenuId(''); setSpCountryId(''); setSpExpires('')
+    setSharedModal('new')
+  }
+
+  function openEditSharedModal(p: SharedPage) {
+    setSpName(p.name); setSpMode(p.mode); setSpPassword('')
+    setSpMenuId(p.menu_id ?? ''); setSpCountryId(p.country_id ?? '')
+    setSpExpires(p.expires_at ? p.expires_at.slice(0, 10) : '')
+    setSharedModal(p)
+  }
+
+  async function saveSharedPage() {
+    if (!spName || (!spPassword && sharedModal === 'new')) return
+    setSpSaving(true)
+    try {
+      const body: Record<string, unknown> = {
+        name:       spName,
+        mode:       spMode,
+        menu_id:    spMenuId   || null,
+        country_id: spCountryId || null,
+        expires_at: spExpires   || null,
+      }
+      if (spPassword) body.password = spPassword
+      if (sharedModal === 'new') {
+        const created = await api.post('/shared-pages', body)
+        setSharedPages(prev => [created, ...prev])
+        showToast('Shared link created.')
+      } else if (typeof sharedModal === 'object' && sharedModal) {
+        const updated = await api.put(`/shared-pages/${sharedModal.id}`, body)
+        setSharedPages(prev => prev.map(p => p.id === updated.id ? updated : p))
+        showToast('Shared link updated.')
+      }
+      setSharedModal(null)
+    } catch { showToast('Failed to save shared link.', 'error') }
+    finally { setSpSaving(false) }
+  }
+
+  async function deleteSharedPage(id: number) {
+    try {
+      await api.delete(`/shared-pages/${id}`)
+      setSharedPages(prev => prev.filter(p => p.id !== id))
+      showToast('Shared link deleted.')
+    } catch { showToast('Failed to delete shared link.', 'error') }
+    setSharedConfirm(null)
+  }
+
+  function copySharedLink(slug: string) {
+    const url = `${window.location.origin}/share/${slug}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedSlug(slug)
+      setTimeout(() => setCopiedSlug(null), 2000)
+    })
   }
 
   // ── Menu CRUD ─────────────────────────────────────────────────────────────
@@ -606,6 +698,7 @@ export default function MenusPage() {
           { key: 'scenario',     label: '📊 Menu Engineer',      tutorial: 'How does the Menu Engineer work? Explain the sales mix concept, how to enter quantities sold, what COGS% means in this context, how to use the Mix Manager, and how to save and push scenarios.' },
           { key: 'price-report', label: '📈 Compare Markets',    tutorial: 'What is the Compare Markets (Price Level Table) view? How do I use it to compare and edit sell prices across different markets and price levels, and how does currency conversion work here?' },
           { key: 'level-report', label: '🏷 Market Price Tool',  tutorial: 'What is the Market Price Tool (Menu Performance Table)? How do I read the COGS% grid across price levels and markets, and what should I be looking at to spot pricing problems?' },
+          { key: 'shared-links', label: '🔗 Shared Links',       tutorial: 'What are Shared Links? How do I create a password-protected public link to share a menu with someone outside the app, in view-only or edit mode?' },
         ] as const).map(t => (
           <button
             key={t.key}
@@ -775,6 +868,143 @@ export default function MenusPage() {
           onResetQty={() => setScenarioQty({})}
           onReplaceQty={(qMap) => setScenarioQty(qMap)}
         />
+      )}
+
+      {/* ══ TAB: SHARED LINKS ════════════════════════════════════════════ */}
+      {activeTab === 'shared-links' && (
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-text-1">Shared Links</h2>
+              <p className="text-sm text-text-3 mt-0.5">
+                Generate password-protected public URLs to share menus externally.
+              </p>
+            </div>
+            <button className="btn btn-primary" onClick={openNewSharedModal}>+ New Link</button>
+          </div>
+
+          {sharedLoading && <div className="text-sm text-text-3 py-8 text-center">Loading…</div>}
+
+          {!sharedLoading && sharedPages.length === 0 && (
+            <div className="card p-10 text-center">
+              <div className="text-4xl mb-3">🔗</div>
+              <p className="text-text-2 font-medium mb-1">No shared links yet</p>
+              <p className="text-sm text-text-3 mb-4">Create a link to share a menu with people outside the app.</p>
+              <button className="btn btn-primary" onClick={openNewSharedModal}>+ New Link</button>
+            </div>
+          )}
+
+          {!sharedLoading && sharedPages.length > 0 && (
+            <div className="space-y-3">
+              {sharedPages.map(p => {
+                const url = `${window.location.origin}/share/${p.slug}`
+                const expired = p.expires_at ? new Date(p.expires_at) < new Date() : false
+                return (
+                  <div key={p.id} className={`card p-4 flex items-start justify-between gap-4 ${!p.is_active || expired ? 'opacity-60' : ''}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-text-1">{p.name}</span>
+                        <span className={`badge ${p.mode === 'edit' ? 'badge-yellow' : 'badge-neutral'} text-xs`}>
+                          {p.mode === 'edit' ? '✏️ Edit' : '👁 View'}
+                        </span>
+                        {!p.is_active && <span className="badge badge-neutral text-xs">Disabled</span>}
+                        {expired     && <span className="badge badge-neutral text-xs">Expired</span>}
+                      </div>
+                      <div className="text-xs text-text-3 mt-1 space-y-0.5">
+                        {p.menu_name    && <div>Menu: <span className="text-text-2">{p.menu_name}</span></div>}
+                        {p.country_name && <div>Market: <span className="text-text-2">{p.country_name}</span></div>}
+                        {p.expires_at   && <div>Expires: <span className="text-text-2">{new Date(p.expires_at).toLocaleDateString()}</span></div>}
+                        <div className="font-mono text-[11px] truncate max-w-xs text-text-3 mt-1">{url}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        className="btn btn-outline btn-sm text-xs"
+                        onClick={() => copySharedLink(p.slug)}
+                        title="Copy link"
+                      >
+                        {copiedSlug === p.slug ? '✓ Copied' : '📋 Copy'}
+                      </button>
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-outline btn-sm text-xs"
+                        title="Open link"
+                      >↗ Open</a>
+                      <button
+                        className="btn btn-outline btn-sm text-xs"
+                        onClick={() => openEditSharedModal(p)}
+                        title="Edit"
+                      >Edit</button>
+                      <button
+                        className="btn btn-danger btn-sm text-xs"
+                        onClick={() => setSharedConfirm(p.id)}
+                        title="Delete"
+                      >Delete</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Confirm delete */}
+          {sharedConfirm !== null && (
+            <ConfirmDialog
+              message="Delete this shared link? Anyone with the URL will lose access."
+              onConfirm={() => deleteSharedPage(sharedConfirm)}
+              onCancel={() => setSharedConfirm(null)}
+            />
+          )}
+
+          {/* Create / Edit modal */}
+          {sharedModal !== null && (
+            <Modal
+              title={sharedModal === 'new' ? 'New Shared Link' : 'Edit Shared Link'}
+              onClose={() => setSharedModal(null)}
+            >
+              <div className="space-y-4">
+                <Field label="Link Name" required>
+                  <input className="input w-full" placeholder="e.g. Summer Menu — Partner Preview"
+                    value={spName} onChange={e => setSpName(e.target.value)} />
+                </Field>
+                <Field label="Mode" required>
+                  <select className="input w-full" value={spMode} onChange={e => setSpMode(e.target.value as 'view' | 'edit')}>
+                    <option value="view">👁 View Only</option>
+                    <option value="edit">✏️ Edit (can change prices)</option>
+                  </select>
+                </Field>
+                <Field label={sharedModal === 'new' ? 'Password' : 'New Password (leave blank to keep current)'} required={sharedModal === 'new'}>
+                  <input className="input w-full" type="password" placeholder={sharedModal === 'new' ? 'Required' : 'Leave blank to keep existing'}
+                    value={spPassword} onChange={e => setSpPassword(e.target.value)} autoComplete="new-password" />
+                </Field>
+                <Field label="Lock to Menu (optional)">
+                  <select className="input w-full" value={spMenuId} onChange={e => setSpMenuId(e.target.value ? Number(e.target.value) : '')}>
+                    <option value="">— Any menu (viewer can switch) —</option>
+                    {menus.map(m => <option key={m.id} value={m.id}>{m.name} ({m.country_name})</option>)}
+                  </select>
+                </Field>
+                <Field label="Lock to Market (optional)">
+                  <select className="input w-full" value={spCountryId} onChange={e => setSpCountryId(e.target.value ? Number(e.target.value) : '')}>
+                    <option value="">— Any market —</option>
+                    {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Expiry Date (optional)">
+                  <input className="input w-full" type="date" value={spExpires} onChange={e => setSpExpires(e.target.value)} />
+                </Field>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button className="btn btn-outline" onClick={() => setSharedModal(null)}>Cancel</button>
+                  <button className="btn btn-primary" onClick={saveSharedPage}
+                    disabled={spSaving || !spName || (sharedModal === 'new' && !spPassword)}>
+                    {spSaving ? 'Saving…' : sharedModal === 'new' ? 'Create Link' : 'Save Changes'}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
+        </div>
       )}
 
       {/* ══ MODALS ══════════════════════════════════════════════════════════ */}

@@ -14,6 +14,7 @@ import AllergenMatrixPage from './pages/AllergenMatrixPage'
 import HACCPPage          from './pages/HACCPPage'
 import HelpPage           from './pages/HelpPage'
 import ImportPage         from './pages/ImportPage'
+import SharedMenuPage     from './pages/SharedMenuPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth0()
@@ -52,6 +53,9 @@ export default function App() {
           <Route path="help"       element={<HelpPage />} />
           <Route path="import"     element={<ImportPage />} />
         </Route>
+
+        {/* Public shared pages — no auth */}
+        <Route path="/share/:slug" element={<SharedMenuPage />} />
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
