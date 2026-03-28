@@ -954,6 +954,18 @@ export default function MenusPage() {
                     setLevelPrices([])
                   }
                 }}
+                onEditItem={menuItemId => {
+                  if (scenarioMenuId) {
+                    const item = scenarioData?.items.find(i => i.menu_item_id === menuItemId)
+                    if (item) {
+                      setSelectedMenuId(scenarioMenuId)
+                      openEditItemModal(item)
+                    }
+                  }
+                }}
+                onDeleteItem={(menuItemId) => {
+                  setConfirmDelete({ type: 'item', id: menuItemId })
+                }}
               />
             </div>
             {meChangePanelOpen && meSharedPageId && (
@@ -2462,10 +2474,11 @@ interface SalesMixGenProps {
   currencySymbol: string
   currentQty:     Record<string, string>
   onGenerate(qMap: Record<string, string>): void
+  onReset(): void
   onClose(): void
 }
 
-function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, onGenerate, onClose }: SalesMixGenProps) {
+function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, onGenerate, onReset, onClose }: SalesMixGenProps) {
   const api = useApi()
 
   // Derive categories from current menu data
@@ -2478,18 +2491,23 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
   }, [data])
 
-  // ── Derive existing quantities from currentQty ──────────────────────────
-  const existingRows = useMemo(() => {
-    const rows: { label: string; qty: number; price: string }[] = []
+  // ── Category mix from current quantities ───────────────────────────────
+  const catMix = useMemo(() => {
+    const catQty:   Record<string, number> = {}
+    const catCount: Record<string, number> = {}
     for (const item of data.items) {
-      const key = item.item_type === 'recipe'
-        ? `r_${item.recipe_id}`
-        : `i_${item.ingredient_id}`
-      const q = parseInt(currentQty[key] || '0', 10)
-      if (q > 0) rows.push({ label: item.display_name, qty: q, price: `${currencySymbol}${(item.sell_price_gross || 0).toFixed(2)}` })
+      const cat = item.category || 'Uncategorised'
+      const key = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const q   = parseInt(currentQty[key] || '0', 10)
+      catQty[cat]   = (catQty[cat]   || 0) + q
+      catCount[cat] = (catCount[cat] || 0) + 1
     }
-    return rows
-  }, [data, currentQty, currencySymbol])
+    const totalQty = Object.values(catQty).reduce((s, v) => s + v, 0)
+    const cats = Object.entries(catQty)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([cat, qty]) => ({ cat, qty, count: catCount[cat] || 0, pct: totalQty > 0 ? (qty / totalQty) * 100 : 0 }))
+    return { cats, totalQty }
+  }, [data, currentQty])
 
   const existingRevenue = useMemo(() => {
     let total = 0
@@ -2646,25 +2664,31 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         {/* Body — scrollable */}
         <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
 
-          {/* Current quantities — shown when qty already entered */}
-          {existingRows.length > 0 && (
+          {/* Current category mix — shown when qty already entered */}
+          {catMix.totalQty > 0 && (
             <div className="border border-blue-200 bg-blue-50 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-blue-700 font-semibold text-sm">Current quantities in scenario</span>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-blue-700 font-semibold text-sm">Current category mix</span>
                 <span className="text-xs text-blue-500">
-                  Est. revenue: {currencySymbol}{existingRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  {catMix.totalQty.toLocaleString()} sold · {currencySymbol}{existingRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} est. revenue
                 </span>
               </div>
-              <div className="max-h-28 overflow-y-auto space-y-1">
-                {existingRows.map(row => (
-                  <div key={row.label} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-700 truncate flex-1 min-w-0">{row.label}</span>
-                    <span className="text-gray-400 text-xs mx-3">{row.price}/ptn</span>
-                    <span className="font-semibold tabular-nums text-gray-900 shrink-0">{row.qty.toLocaleString()} sold</span>
+              <div className="space-y-2">
+                {catMix.cats.map((c, i) => (
+                  <div key={c.cat} className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ background: `hsl(${(i * 47) % 360},60%,55%)` }} />
+                    <span className="text-sm text-gray-700 flex-1 min-w-0 truncate">{c.cat}</span>
+                    <span className="text-xs text-gray-400 shrink-0">{c.count} item{c.count !== 1 ? 's' : ''}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="w-20 h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${c.pct}%`, background: `hsl(${(i * 47) % 360},60%,55%)` }} />
+                      </div>
+                      <span className="text-xs font-semibold tabular-nums text-blue-700 w-9 text-right">{c.pct.toFixed(0)}%</span>
+                      <span className="text-xs text-gray-400 tabular-nums w-16 text-right">{c.qty.toLocaleString()} sold</span>
+                    </div>
                   </div>
                 ))}
               </div>
-              <p className="text-xs text-blue-400 mt-2">Generate new quantities below to replace these values</p>
             </div>
           )}
 
@@ -2835,9 +2859,18 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0">
-          <p className="text-xs text-gray-400">
-            Revenue split equally per item within each category — cheaper items receive more units
-          </p>
+          <div className="flex items-center gap-2">
+            {catMix.totalQty > 0 && (
+              <button
+                className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50"
+                onClick={onReset}
+                title="Clear all quantities in the scenario"
+              >↺ Reset Quantities</button>
+            )}
+            <p className="text-xs text-gray-400 hidden sm:block">
+              Revenue split equally per item within each category
+            </p>
+          </div>
           <div className="flex gap-2 items-center">
             <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
             {!preview ? (
@@ -2908,17 +2941,22 @@ interface ScenarioToolProps {
   onResetQty(): void
   onReplaceQty(qMap: Record<string, string>): void
   onAddItem?(): void
+  onEditItem?(menuItemId: number): void
+  onDeleteItem?(menuItemId: number, displayName: string): void
 }
 
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
-  onAddItem, refreshKey = 0,
+  onAddItem, onEditItem, onDeleteItem, refreshKey = 0,
 }: ScenarioToolProps) {
 
   const api = useApi()
   const [scToast, setScToast] = useState<{ msg: string; type?: 'error' } | null>(null)
   const showToast = (msg: string, type?: 'error') => { setScToast({ msg, type }); setTimeout(() => setScToast(null), 3000) }
+
+  // ── Row context menu ────────────────────────────────────────────────────────
+  const [rowCtx, setRowCtx] = useState<{ x: number; y: number; menuItemId: number; displayName: string } | null>(null)
 
   // ── Mix generator ──────────────────────────────────────────────────────────
   const [showMixGen, setShowMixGen] = useState(false)
@@ -3763,21 +3801,14 @@ ${tableHtml}
             <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
           )}
 
-          {/* Add Item */}
-          {menuId && onAddItem && (
-            <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
+          {/* Mix Manager — pushed to far right */}
+          {menuId && (
+            <button className="btn btn-sm btn-primary text-xs ml-auto" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
           )}
 
-          {/* Generate Mix + Reset Qty */}
-          {menuId && (
-            <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
-          )}
-          {(hasQty || Object.values(qty).some(v => parseFloat(v) > 0)) && (
-            <button className="btn btn-sm btn-outline text-xs" onClick={() => {
-              onResetQty()
-              addHistoryEntry('reset_qty', 'Quantities reset')
-              markDirty()
-            }}>↺ Qty</button>
+          {/* Add Item — far right */}
+          {menuId && onAddItem && (
+            <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
           )}
         </div>
 
@@ -3828,8 +3859,40 @@ ${tableHtml}
               setDirty(true)
               setShowMixGen(false)
             }}
+            onReset={() => {
+              onResetQty()
+              addHistoryEntry('reset_qty', 'Quantities reset')
+              markDirty()
+            }}
             onClose={() => setShowMixGen(false)}
           />
+        )}
+
+        {/* ── Row context menu ──────────────────────────────────────────── */}
+        {rowCtx && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setRowCtx(null)} />
+            <div
+              className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-[160px]"
+              style={{ top: Math.min(rowCtx.y, window.innerHeight - 120), left: Math.min(rowCtx.x, window.innerWidth - 180) }}
+            >
+              <div className="px-3 py-1.5 border-b border-gray-100 mb-1">
+                <p className="text-xs font-semibold text-gray-800 truncate max-w-[140px]">{rowCtx.displayName}</p>
+              </div>
+              {onEditItem && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                  onClick={() => { onEditItem(rowCtx.menuItemId); setRowCtx(null) }}
+                >✏️ Edit item</button>
+              )}
+              {onDeleteItem && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                  onClick={() => { onDeleteItem(rowCtx.menuItemId, rowCtx.displayName); setRowCtx(null) }}
+                >🗑 Remove from menu</button>
+              )}
+            </div>
+          </>
         )}
 
         {/* KPI Strip */}
@@ -3872,11 +3935,11 @@ ${tableHtml}
         )}
 
         {menuId && !loading && data && data.items.length > 0 && (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 'calc(100vh - 320px)' }}>
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
+              <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-50">
                     <div className="flex items-center gap-2">
                       Item
                       {allCats.length > 1 && (
@@ -3890,15 +3953,15 @@ ${tableHtml}
                       )}
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500">Type</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px]">Qty Sold</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Sales Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">Rev Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap">Cost{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500">COGS %</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-50">Type</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px] bg-gray-50">Qty Sold</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">Sales Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">Rev Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Cost{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">COGS %</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -3943,7 +4006,11 @@ ${tableHtml}
 
                       {/* ── Item rows ── */}
                       {!collapsedCats.has(cat) && catRows.map(row => (
-                        <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
+                        <tr
+                          key={row.menu_item_id}
+                          className="hover:bg-gray-50/80"
+                          onContextMenu={e => { e.preventDefault(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: row.menu_item_id, displayName: row.display_name }) }}
+                        >
                           <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
                           <td className="px-3 py-2.5">
                             <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>

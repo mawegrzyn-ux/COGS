@@ -113,9 +113,10 @@ const cogsBarCls = (pct: number | null) => {
   return 'bg-red-400'
 }
 
-function tokenKey(slug: string) { return `sp_token_${slug}` }
-function nameKey(slug: string)  { return `sp_name_${slug}` }
-function notesKey(slug: string) { return `sp_notes_seen_${slug}` }
+function tokenKey(slug: string)      { return `sp_token_${slug}` }
+function nameKey(slug: string)       { return `sp_name_${slug}` }
+function notesKey(slug: string)      { return `sp_notes_seen_${slug}` }
+function tilesLayoutKey()            { return `sp_tiles_layout` }
 function fmtTime(iso: string) {
   const d = new Date(iso)
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -161,6 +162,24 @@ export default function SharedMenuPage() {
   // UI
   const [collapsedCats,   setCollapsedCats]   = useState<Set<string>>(new Set())
   const [breakdown,       setBreakdown]       = useState<{ itemId: number; data: BreakdownData | null; loading: boolean } | null>(null)
+
+  // Tiles layout: 'top' | 'left' — persisted
+  const [tilesLayout, setTilesLayout] = useState<'top' | 'left'>(
+    () => (localStorage.getItem(tilesLayoutKey()) as 'top' | 'left' | null) ?? 'top'
+  )
+  function toggleTilesLayout() {
+    setTilesLayout(prev => {
+      const next = prev === 'top' ? 'left' : 'top'
+      localStorage.setItem(tilesLayoutKey(), next)
+      return next
+    })
+  }
+
+  // Context menu (right-click to comment on an item)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: SharedItem } | null>(null)
+  const [inlineComment, setInlineComment] = useState('')
+  const [commentAnchor, setCommentAnchor] = useState<{ itemId: number; displayName: string } | null>(null)
+  const [submittingInlineComment, setSubmittingInlineComment] = useState(false)
 
   // ── Load meta ────────────────────────────────────────────────────────────────
 
@@ -576,15 +595,43 @@ export default function SharedMenuPage() {
       const r = await fetch(`${API_BASE}/public/share/${slug}/comment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ comment: newComment.trim() }),
+        body: JSON.stringify({
+          comment:       newComment.trim(),
+          menu_item_id:  commentAnchor?.itemId    ?? null,
+          display_name:  commentAnchor?.displayName ?? null,
+        }),
       })
       const d = await r.json()
       if (!d.error) {
         setChanges(prev => [d, ...prev])
         setNewComment('')
+        setCommentAnchor(null)
       }
     } catch { /* silent */ }
     finally { setSubmittingComment(false) }
+  }
+
+  async function submitInlineComment() {
+    if (!inlineComment.trim() || !token || !slug || !contextMenu) return
+    setSubmittingInlineComment(true)
+    try {
+      const r = await fetch(`${API_BASE}/public/share/${slug}/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          comment:      inlineComment.trim(),
+          menu_item_id: contextMenu.item.menu_item_id,
+          display_name: contextMenu.item.display_name,
+        }),
+      })
+      const d = await r.json()
+      if (!d.error) {
+        setChanges(prev => [d, ...prev])
+        setInlineComment('')
+        setContextMenu(null)
+      }
+    } catch { /* silent */ }
+    finally { setSubmittingInlineComment(false) }
   }
 
   // ── Render: authenticated ────────────────────────────────────────────────────
@@ -594,7 +641,7 @@ export default function SharedMenuPage() {
   const levels = data?.price_levels ?? []
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
 
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-20">
@@ -617,7 +664,26 @@ export default function SharedMenuPage() {
           </div>
 
           {data && (
-            <div className="flex items-center gap-3 flex-shrink-0">
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Tiles layout toggle */}
+              <button
+                className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${tilesLayout === 'left' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}
+                onClick={toggleTilesLayout}
+                title={tilesLayout === 'top' ? 'Dock summary panel to the left' : 'Move summary to the top'}
+              >
+                {tilesLayout === 'top' ? (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h4v8H4V10zm6 0h10v4H10v-4zm0 6h10v2H10v-2z"/>
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
+                  </svg>
+                )}
+                <span className="hidden sm:inline">{tilesLayout === 'top' ? 'Dock' : 'Top'}</span>
+              </button>
+
+              {/* Changes toggle */}
               <button
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${changePanelOpen ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
                 onClick={() => setChangePanelOpen(p => !p)}
@@ -628,7 +694,7 @@ export default function SharedMenuPage() {
                 </svg>
                 Changes {changes.length > 0 && <span className="font-bold">{changes.filter(c => c.change_type === 'price').length}</span>}
               </button>
-              <div className="text-right">
+              <div className="text-right hidden sm:block">
                 <div className="font-semibold text-gray-800 text-sm">{data.menu.name}</div>
                 <div className="text-xs text-gray-400">{data.menu.country_name} · {data.menu.currency_code}</div>
               </div>
@@ -694,7 +760,87 @@ export default function SharedMenuPage() {
 
       {/* ── Content area ─────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0">
-      <main className={`flex-1 min-w-0 px-4 sm:px-6 py-6 transition-all ${changePanelOpen ? 'max-w-[calc(100%-320px)]' : 'max-w-screen-xl mx-auto w-full'}`}>
+
+        {/* ── Left tiles panel (docked mode) ──────────────────────────────────── */}
+        {tilesLayout === 'left' && data && summary && (
+          <aside className="w-72 flex-shrink-0 bg-white border-r border-gray-100 overflow-y-auto flex flex-col gap-4 p-5">
+            {/* KPI tiles — vertical */}
+            <KpiTile
+              label={summary.hasWeightedData ? 'Weighted COGS' : 'Avg COGS'}
+              value={`${fmt2(summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs)}%`}
+              sub={summary.hasWeightedData ? 'across sold items' : 'all price levels'}
+              colour={
+                (summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
+                : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
+                : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
+                : 'red'
+              }
+            />
+            {summary.hasWeightedData ? (
+              <>
+                <KpiTile label="Total Revenue" value={`${sym}${fmt2(summary.totalRevGross)}`} sub="gross sales" colour="blue" />
+                <KpiTile label="Total Cost"    value={`${sym}${fmt2(summary.totalCost)}`}    sub="ingredient cost" colour="gray" />
+                <KpiTile
+                  label="Gross Profit"
+                  value={`${sym}${fmt2(summary.gp)}`}
+                  sub={summary.totalRevGross > 0 ? `${fmt2(((summary.gp) / summary.totalRevGross) * 100)}% GP` : '—'}
+                  colour={summary.gp >= 0 ? 'green' : 'red'}
+                />
+              </>
+            ) : (
+              <>
+                <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items" colour="blue" />
+                <KpiTile label="Categories"   value={String(categories.length)} sub="item groups" colour="gray" />
+                <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
+              </>
+            )}
+
+            {/* Category chart */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Rev &amp; COGS by Category</h3>
+              <div className="space-y-2.5">
+                {summary.catBreakdown.map(cat => (
+                  <div key={cat.name}>
+                    <div className="flex items-center justify-between mb-0.5 gap-1">
+                      <span className="text-xs font-medium text-gray-700 truncate">{cat.name}</span>
+                      <div className="flex items-center gap-1.5 text-xs flex-shrink-0">
+                        {cat.cogsPct !== null && <span className={cogsCls(cat.cogsPct)}>{fmt2(cat.cogsPct)}%</span>}
+                        <span className="font-semibold text-gray-700">{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`} style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Price level chart */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Rev &amp; COGS by Price Level</h3>
+              <div className="space-y-2.5">
+                {summary.levelBreakdown.map(lvl => (
+                  <div key={lvl.id}>
+                    <div className="flex items-center justify-between mb-0.5 gap-1">
+                      <span className="text-xs font-medium text-gray-700 truncate">{lvl.name}</span>
+                      <div className="flex items-center gap-1.5 text-xs flex-shrink-0">
+                        <span className="text-gray-400">{lvl.priced}/{lvl.total}</span>
+                        {lvl.avgCogs !== null && <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>}
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${cogsBarCls(lvl.avgCogs)}`} style={{ width: `${Math.max(2, lvl.revPct)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
+
+      <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="px-4 sm:px-6 py-6 flex flex-col flex-1 min-h-0 gap-4">
 
         {dataLoading && (
           <div className="flex items-center justify-center py-24 text-gray-400 text-sm animate-pulse">Loading data…</div>
@@ -709,7 +855,7 @@ export default function SharedMenuPage() {
         {!dataLoading && data && data.items.length > 0 && summary && (
           <>
             {/* ── Header ──────────────────────────────────────────────────────── */}
-            <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap flex-shrink-0">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">{data.menu.name}</h2>
                 <p className="text-sm text-gray-400 mt-0.5">
@@ -726,8 +872,9 @@ export default function SharedMenuPage() {
               </div>
             </div>
 
-            {/* ── KPI tiles ────────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            {/* ── KPI tiles (top mode only) ─────────────────────────────────────── */}
+            {tilesLayout === 'top' && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">
               <KpiTile
                 label={summary.hasWeightedData ? 'Weighted COGS' : 'Avg COGS'}
                 value={`${fmt2(summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs)}%`}
@@ -768,9 +915,11 @@ export default function SharedMenuPage() {
                 </>
               )}
             </div>
+            )}  {/* end tilesLayout === 'top' KPI tiles */}
 
-            {/* ── Split charts ─────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+            {/* ── Split charts (top mode only) ─────────────────────────────────── */}
+            {tilesLayout === 'top' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 flex-shrink-0">
 
               {/* Category split */}
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
@@ -833,23 +982,22 @@ export default function SharedMenuPage() {
                 </div>
               </div>
             </div>
+            )}  {/* end tilesLayout === 'top' charts */}
 
-            {/* Table card */}
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-
-              {/* Table header */}
-              <div className="overflow-x-auto">
+            {/* ── Table — flex-1 scroll container with sticky thead ─────────────── */}
+            <div className="flex-1 min-h-0 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+              <div className="flex-1 overflow-auto">
                 <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
-                  <thead>
+                  <thead className="sticky top-0 z-10">
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide sticky left-0 bg-gray-50 whitespace-nowrap min-w-[200px]">
                         Item
                       </th>
-                      <th className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">
+                      <th className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-50 whitespace-nowrap">
                         Cost ({data.menu.currency_code})
                       </th>
                       {levels.map(l => (
-                        <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap min-w-[120px]">
+                        <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-50 whitespace-nowrap min-w-[120px]">
                           {l.name}
                         </th>
                       ))}
@@ -901,11 +1049,18 @@ export default function SharedMenuPage() {
                         ...(isCollapsed ? [] : catItems.map((item, idx) => (
                           <tr
                             key={item.menu_item_id}
-                            className={`border-b border-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'} hover:bg-emerald-50/20 transition-colors`}
+                            className={`border-b border-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'} hover:bg-emerald-50/20 transition-colors group/row`}
+                            onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
                           >
                             {/* Item name */}
                             <td className="px-4 py-3 sticky left-0 bg-inherit">
-                              <span className="font-medium text-gray-800">{item.display_name}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-medium text-gray-800">{item.display_name}</span>
+                                {/* Comment hint — only shown if there are linked comments */}
+                                {changes.some(c => c.change_type === 'comment' && c.menu_item_id === item.menu_item_id) && (
+                                  <span className="text-blue-400 text-xs opacity-70" title="Has comments">💬</span>
+                                )}
+                              </div>
                             </td>
 
                             {/* Cost cell — click to open breakdown modal */}
@@ -1018,36 +1173,46 @@ export default function SharedMenuPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
 
-            {/* Legend */}
-            <div className="mt-3 flex items-center gap-4 text-xs text-gray-400 px-1 flex-wrap">
-              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400" /> ≤ 28% Good</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"   /> 28–35% Watch</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-red-400"     /> &gt; 35% High</span>
-              {data.items.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
-                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> Scenario override</span>
-              )}
-              {isEdit && <span className="text-amber-600 font-medium">Edit mode — changes save to the live database</span>}
-            </div>
+              {/* Legend bar inside table card */}
+              <div className="flex items-center gap-4 text-xs text-gray-400 px-4 py-2.5 border-t border-gray-50 flex-shrink-0 flex-wrap">
+                <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400" /> ≤ 28% Good</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"   /> 28–35% Watch</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-red-400"     /> &gt; 35% High</span>
+                {data.items.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
+                  <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> Scenario override</span>
+                )}
+                {isEdit && <span className="text-amber-600 font-medium">Edit mode — saves to live database</span>}
+                <span className="text-gray-300 ml-auto hidden sm:block">Right-click any row to add a comment</span>
+              </div>
+            </div>  {/* end table card */}
+
           </>
         )}
+        </div>  {/* end px-4 py-6 flex-col */}
       </main>
 
       {/* ── Change log panel ─────────────────────────────────────────────────── */}
       {changePanelOpen && (
         <aside className="w-80 flex-shrink-0 border-l border-gray-100 bg-white flex flex-col overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-800 text-sm">Change Log</h3>
+            <h3 className="font-semibold text-gray-800 text-sm">Changes &amp; Comments</h3>
             <button className="text-gray-300 hover:text-gray-500 transition-colors text-lg leading-none" onClick={() => setChangePanelOpen(false)}>×</button>
           </div>
 
           {/* Comment input */}
           <div className="px-4 py-3 border-b border-gray-100">
+            {commentAnchor && (
+              <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-blue-50 rounded-lg">
+                <span className="text-blue-400 text-xs">💬</span>
+                <span className="text-xs text-blue-700 truncate flex-1 font-medium">{commentAnchor.displayName}</span>
+                <button className="text-blue-300 hover:text-blue-500 text-xs ml-1 flex-shrink-0" onClick={() => setCommentAnchor(null)}>×</button>
+              </div>
+            )}
             <div className="flex gap-2">
               <input
                 className="flex-1 min-w-0 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-                placeholder="Add a comment…"
+                placeholder={commentAnchor ? `Comment on "${commentAnchor.displayName}"…` : 'Add a general comment…'}
                 value={newComment}
                 onChange={e => setNewComment(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitComment() } }}
@@ -1070,10 +1235,13 @@ export default function SharedMenuPage() {
               <div className="py-8 text-center text-gray-300 text-xs">No changes yet</div>
             )}
             {!changesLoading && changes.map(c => (
-              <div key={c.id} className={`px-4 py-3 border-b border-gray-50 ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-gray-700">{c.user_name}</span>
-                  <span className="text-xs text-gray-300">{fmtTime(c.created_at)}</span>
+              <div key={c.id} className={`px-4 py-3 border-b border-gray-50 ${c.change_type === 'comment' ? 'bg-blue-50/20' : ''}`}>
+                <div className="flex items-center justify-between mb-1 gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {c.change_type === 'comment' ? <span className="text-blue-400 text-xs flex-shrink-0">💬</span> : <span className="text-emerald-500 text-xs flex-shrink-0">✏️</span>}
+                    <span className="text-xs font-semibold text-gray-700 truncate">{c.user_name}</span>
+                  </div>
+                  <span className="text-xs text-gray-300 flex-shrink-0">{fmtTime(c.created_at)}</span>
                 </div>
                 {c.change_type === 'price' ? (
                   <div>
@@ -1081,14 +1249,17 @@ export default function SharedMenuPage() {
                     <p className="text-xs text-gray-400">{c.level_name}: <span className="line-through">{c.old_value !== null ? `${sym}${Number(c.old_value).toFixed(2)}` : 'unset'}</span> → <span className="text-emerald-600 font-semibold">{sym}{Number(c.new_value ?? 0).toFixed(2)}</span></p>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-600 italic">"{c.comment}"</p>
+                  <div>
+                    {c.display_name && <p className="text-xs text-blue-600 font-medium truncate mb-0.5">{c.display_name}</p>}
+                    <p className="text-xs text-gray-600 italic">"{c.comment}"</p>
+                  </div>
                 )}
               </div>
             ))}
           </div>
         </aside>
       )}
-      </div>
+      </div>  {/* end flex flex-1 min-h-0 content area */}
 
       {/* ── Ingredient breakdown modal ───────────────────────────────────────── */}
       {breakdown && (
@@ -1168,9 +1339,60 @@ export default function SharedMenuPage() {
       )}
 
       {/* Footer */}
-      <footer className="py-6 text-center text-xs text-gray-300">
+      <footer className="py-4 text-center text-xs text-gray-300 flex-shrink-0">
         Powered by <span className="font-semibold text-emerald-600">COGS Manager</span>
       </footer>
+
+      {/* ── Right-click context menu ─────────────────────────────────────────── */}
+      {contextMenu && (
+        <>
+          {/* Backdrop to dismiss */}
+          <div className="fixed inset-0 z-40" onClick={() => { setContextMenu(null); setInlineComment('') }} />
+          {/* Popover */}
+          <div
+            className="fixed z-50 bg-white border border-gray-100 shadow-2xl rounded-xl overflow-hidden"
+            style={{ left: Math.min(contextMenu.x, window.innerWidth - 300), top: Math.min(contextMenu.y, window.innerHeight - 180) }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Item label */}
+            <div className="px-4 pt-3 pb-2 border-b border-gray-100">
+              <p className="text-xs font-semibold text-gray-700 truncate max-w-[260px]">💬 {contextMenu.item.display_name}</p>
+              <p className="text-xs text-gray-400 mt-0.5">Add a comment for this item</p>
+            </div>
+            {/* Comment textarea */}
+            <div className="px-4 py-3">
+              <textarea
+                autoFocus
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 resize-none"
+                rows={3}
+                placeholder="Type your comment…"
+                maxLength={500}
+                style={{ minWidth: 260 }}
+                value={inlineComment}
+                onChange={e => setInlineComment(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInlineComment() }
+                  if (e.key === 'Escape') { setContextMenu(null); setInlineComment('') }
+                }}
+              />
+              <div className="flex items-center justify-between mt-2 gap-2">
+                <span className="text-xs text-gray-300">{inlineComment.length}/500</span>
+                <div className="flex gap-2">
+                  <button
+                    className="text-xs text-gray-400 hover:text-gray-600 transition px-2 py-1"
+                    onClick={() => { setContextMenu(null); setInlineComment('') }}
+                  >Cancel</button>
+                  <button
+                    className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition disabled:opacity-40"
+                    onClick={submitInlineComment}
+                    disabled={submittingInlineComment || !inlineComment.trim()}
+                  >{submittingInlineComment ? 'Posting…' : 'Post'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -422,18 +422,21 @@ publicRouter.get('/:slug/changes', requirePublicToken, async (req, res) => {
 });
 
 // POST /api/public/share/:slug/comment — add a manual comment (Bearer required)
+// Accepts optional menu_item_id and display_name to link comment to a specific item
 publicRouter.post('/:slug/comment', requirePublicToken, async (req, res) => {
-  const { comment } = req.body;
+  const { comment, menu_item_id, display_name } = req.body;
   if (!comment || !comment.trim()) return res.status(400).json({ error: { message: 'comment is required' } });
   try {
     const page = await fetchPage(req.params.slug);
     if (!page) return res.status(404).json({ error: { message: 'Not found' } });
     const { rows: [row] } = await pool.query(`
       INSERT INTO mcogs_shared_page_changes
-        (shared_page_id, user_name, change_type, comment)
-      VALUES ($1, $2, 'comment', $3)
+        (shared_page_id, user_name, change_type, comment, menu_item_id, display_name)
+      VALUES ($1, $2, 'comment', $3, $4, $5)
       RETURNING *
-    `, [page.id, req.tokenPayload.user_name || 'Anonymous', comment.trim()]);
+    `, [page.id, req.tokenPayload.user_name || 'Anonymous', comment.trim(),
+        menu_item_id ? Number(menu_item_id) : null,
+        display_name ? String(display_name).slice(0, 200) : null]);
     res.json(row);
   } catch (err) {
     console.error(err);
