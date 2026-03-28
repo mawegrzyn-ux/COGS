@@ -4149,9 +4149,8 @@ ${tableHtml}
                       )}
                     </div>
                   </th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-500 whitespace-nowrap" rowSpan={2}>Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   {allLevelsData.map(({ level }) => (
-                    <th key={level.id} colSpan={allLevelsCompact ? 3 : 4}
+                    <th key={level.id} colSpan={allLevelsCompact ? 4 : 5}
                       className="px-3 py-2 text-center font-semibold text-accent border-l border-gray-300 bg-accent-dim/30 whitespace-nowrap">
                       {level.name}{level.is_default ? ' ★' : ''}
                     </th>
@@ -4161,7 +4160,8 @@ ${tableHtml}
                 <tr>
                   {allLevelsData.map(({ level }) => (
                     <>
-                      <th key={`${level.id}-qh`} className="px-2 py-1.5 text-center font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
+                      <th key={`${level.id}-costh`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 whitespace-nowrap normal-case">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                      <th key={`${level.id}-qh`} className="px-2 py-1.5 text-center font-medium text-gray-500 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
                       <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                       {!allLevelsCompact && (
                         <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
@@ -4191,7 +4191,6 @@ ${tableHtml}
                             )}
                           </span>
                         </td>
-                        <td />
                         {allLevelsData.map(({ level }) => {
                           const cLvlQ = catRows.reduce((s, r) => s + r.total_qty, 0)
                           const cR    = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
@@ -4199,10 +4198,11 @@ ${tableHtml}
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
-                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-center font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
+                              <td key={`${level.id}-ccost`} className="border-l border-gray-200" />
+                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-center font-mono font-semibold text-gray-700 text-xs">
                                 {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
                               </td>
-                              <td key={`${level.id}-cp`} className="border-gray-200" />
+                              <td key={`${level.id}-cp`} />
                               {!allLevelsCompact && (
                                 <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
                                   {cR > 0 ? fmtMoney(cR) : '—'}
@@ -4224,34 +4224,34 @@ ${tableHtml}
                         return (
                           <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
                             <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
-                            {/* Cost/ptn — editable */}
-                            <td className="px-1 py-1 text-right">
-                              <div className="inline-flex items-center">
-                                <input
-                                  type="number" min="0" step="0.01"
-                                  value={costOverrides[row.cost_override_key] ?? ''}
-                                  onChange={e => {
-                                    const v = e.target.value
-                                    setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
-                                    markDirty()
-                                  }}
-                                  onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
-                                  placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
-                                  className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
-                                    ${row.is_cost_overridden
-                                      ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                      : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                                />
-                                {row.is_cost_overridden && (
-                                  <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
-                                    onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
-                                )}
-                              </div>
-                            </td>
                             {row.perLevel.map(p => (
                               <>
+                                {/* Cost/ptn per level — editable (all levels share same value) */}
+                                <td key={`${p.level.id}-icost`} className="px-1 py-1 border-l border-gray-100">
+                                  <div className="inline-flex items-center justify-end w-full">
+                                    <input
+                                      type="number" min="0" step="0.01"
+                                      value={costOverrides[row.cost_override_key] ?? ''}
+                                      onChange={e => {
+                                        const v = e.target.value
+                                        setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
+                                        markDirty()
+                                      }}
+                                      onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
+                                      placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
+                                      className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
+                                        ${row.is_cost_overridden
+                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                          : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                    />
+                                    {row.is_cost_overridden && (
+                                      <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
+                                        onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                    )}
+                                  </div>
+                                </td>
                                 {/* Qty per level */}
-                                <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
+                                <td key={`${p.level.id}-iq`} className="px-1 py-1">
                                   <div className="flex justify-center">
                                     <input
                                       type="number" min="0" step="1"
@@ -4317,7 +4317,6 @@ ${tableHtml}
                   return (
                     <tr>
                       <td className="px-3 py-3 font-bold text-gray-900">Grand Total</td>
-                      <td />
                       {allLevelsData.map(({ level }) => {
                         const tQ = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
                         const tR = allLevelRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
@@ -4325,7 +4324,8 @@ ${tableHtml}
                         const tP = tR > 0 ? (tC / tR) * 100 : null
                         return (
                           <>
-                            <td key={`${level.id}-fq`} className="px-3 py-3 text-center font-mono font-bold text-gray-900 border-l border-gray-200">
+                            <td key={`${level.id}-fcost`} className="border-l border-gray-200" />
+                            <td key={`${level.id}-fq`} className="px-3 py-3 text-center font-mono font-bold text-gray-900">
                               {tQ > 0 ? tQ.toLocaleString() : '—'}
                             </td>
                             <td key={`${level.id}-fp`} className="border-gray-200" />

@@ -810,32 +810,45 @@ export default function SharedMenuPage() {
         {tilesLayout === 'left' && data && summary && (
           <aside className="w-72 flex-shrink-0 bg-white border-r border-gray-100 overflow-y-auto flex flex-col gap-4 p-5">
             {/* KPI tiles — vertical */}
-            <KpiTile
-              label={summary.hasWeightedData ? 'Weighted COGS' : 'Avg COGS'}
-              value={`${fmt2(summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs)}%`}
-              sub={summary.hasWeightedData ? 'across sold items' : 'all price levels'}
-              colour={
-                (summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
-                : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
-                : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
-                : 'red'
-              }
-            />
             {summary.hasWeightedData ? (
               <>
-                <KpiTile label="Total Revenue" value={`${sym}${fmt2(summary.totalRevGross)}`} sub="gross sales" colour="blue" />
-                <KpiTile label="Total Cost"    value={`${sym}${fmt2(summary.totalCost)}`}    sub="ingredient cost" colour="gray" />
+                <KpiTile label="Total Covers"     value={summary.qtyTotal.toLocaleString()}        sub="sold"                colour="gray" />
+                <KpiTile label="Revenue (gross)"  value={`${sym}${fmt2(summary.totalRevGross)}`}   sub="inc. tax"            colour="blue" />
+                <KpiTile label="Revenue (ex-tax)" value={`${sym}${fmt2(summary.totalRevNet)}`}     sub="net sales"           colour="blue" />
+                <KpiTile label="Total Cost"       value={`${sym}${fmt2(summary.totalCost)}`}       sub="ingredient cost"     colour="gray" />
                 <KpiTile
-                  label="Gross Profit"
-                  value={`${sym}${fmt2(summary.gp)}`}
-                  sub={summary.totalRevGross > 0 ? `${fmt2(((summary.gp) / summary.totalRevGross) * 100)}% GP` : '—'}
-                  colour={summary.gp >= 0 ? 'green' : 'red'}
+                  label="GP (net)"
+                  value={`${sym}${fmt2(summary.netGp)}`}
+                  sub={summary.totalRevNet > 0 ? `${fmt2((summary.netGp / summary.totalRevNet) * 100)}% GP` : '—'}
+                  colour={summary.netGp >= 0 ? 'green' : 'red'}
+                />
+                <KpiTile
+                  label="Overall COGS %"
+                  value={`${fmt2(summary.weightedCogs)}%`}
+                  sub="based on scenario mix"
+                  colour={
+                    summary.weightedCogs === null ? 'gray'
+                    : summary.weightedCogs <= 28  ? 'green'
+                    : summary.weightedCogs <= 35  ? 'amber'
+                    : 'red'
+                  }
                 />
               </>
             ) : (
               <>
-                <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items" colour="blue" />
-                <KpiTile label="Categories"   value={String(categories.length)} sub="item groups" colour="gray" />
+                <KpiTile
+                  label="Avg COGS"
+                  value={`${fmt2(summary.avgCogs)}%`}
+                  sub="all price levels"
+                  colour={
+                    summary.avgCogs === null ? 'gray'
+                    : summary.avgCogs <= 28  ? 'green'
+                    : summary.avgCogs <= 35  ? 'amber'
+                    : 'red'
+                  }
+                />
+                <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
+                <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
                 <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
               </>
             )}
@@ -901,44 +914,47 @@ export default function SharedMenuPage() {
           <>
             {/* ── KPI tiles (top mode only) ─────────────────────────────────────── */}
             {tilesLayout === 'top' && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">
-              <KpiTile
-                label={summary.hasWeightedData ? 'Weighted COGS' : 'Avg COGS'}
-                value={`${fmt2(summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs)}%`}
-                sub={summary.hasWeightedData ? 'across sold items' : 'across all price levels'}
-                colour={
-                  (summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
-                  : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
-                  : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
-                  : 'red'
-                }
-              />
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
               {summary.hasWeightedData ? (
                 <>
+                  <KpiTile label="Total Covers"      value={summary.qtyTotal.toLocaleString()}         sub="sold"                colour="gray" />
+                  <KpiTile label="Revenue (gross)"   value={`${sym}${fmt2(summary.totalRevGross)}`}    sub="inc. tax"            colour="blue" />
+                  <KpiTile label="Revenue (ex-tax)"  value={`${sym}${fmt2(summary.totalRevNet)}`}      sub="net sales"           colour="blue" />
+                  <KpiTile label="Total Cost"        value={`${sym}${fmt2(summary.totalCost)}`}        sub="ingredient cost"     colour="gray" />
                   <KpiTile
-                    label="Total Revenue"
-                    value={`${sym}${fmt2(summary.totalRevNet)}`}
-                    sub="net sales (ex-tax)"
-                    colour="blue"
-                  />
-                  <KpiTile
-                    label="Total Cost"
-                    value={`${sym}${fmt2(summary.totalCost)}`}
-                    sub="ingredient cost"
-                    colour="gray"
-                  />
-                  <KpiTile
-                    label="Net Profit"
+                    label="GP (net)"
                     value={`${sym}${fmt2(summary.netGp)}`}
                     sub={summary.totalRevNet > 0 ? `${fmt2((summary.netGp / summary.totalRevNet) * 100)}% GP` : '—'}
                     colour={summary.netGp >= 0 ? 'green' : 'red'}
                   />
+                  <KpiTile
+                    label="Overall COGS %"
+                    value={`${fmt2(summary.weightedCogs)}%`}
+                    sub="based on scenario mix"
+                    colour={
+                      summary.weightedCogs === null ? 'gray'
+                      : summary.weightedCogs <= 28  ? 'green'
+                      : summary.weightedCogs <= 35  ? 'amber'
+                      : 'red'
+                    }
+                  />
                 </>
               ) : (
                 <>
-                  <KpiTile label="Menu Items"  value={String(data.items.length)} sub="total items" colour="blue" />
-                  <KpiTile label="Categories"  value={String(categories.length)} sub="item groups" colour="gray" />
-                  <KpiTile label="Price Levels" value={String(levels.length)} sub="pricing tiers" colour="gray" />
+                  <KpiTile
+                    label="Avg COGS"
+                    value={`${fmt2(summary.avgCogs)}%`}
+                    sub="all price levels"
+                    colour={
+                      summary.avgCogs === null ? 'gray'
+                      : summary.avgCogs <= 28  ? 'green'
+                      : summary.avgCogs <= 35  ? 'amber'
+                      : 'red'
+                    }
+                  />
+                  <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
+                  <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
+                  <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
                 </>
               )}
             </div>
