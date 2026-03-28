@@ -430,13 +430,21 @@ export default function SharedMenuPage() {
     const totalCatCost    = Object.values(catMap).reduce((s, c) => s + c.cost, 0)
 
     const catBreakdown = Object.entries(catMap)
-      .map(([name, v]) => ({
-        name,
-        items:      v.items,
-        revPct:     totalCatRevenue > 0 ? (v.revenue / totalCatRevenue) * 100 : 0,
-        costPct:    totalCatCost    > 0 ? (v.cost    / totalCatCost)    * 100 : 0,
-        cogsPct:    v.revenue > 0 ? (v.cost / v.revenue) * 100 : null,
-      }))
+      .map(([name, v]) => {
+        // Average COGS% per category: average of all set cogs_pct entries for items in this category
+        // (avoids the multi-level price double-counting bug in cost/revenue ratio)
+        const cogsVals = items
+          .filter(i => (i.category || 'Uncategorised') === name)
+          .flatMap(i => levels.map(l => i.levels[l.id]?.cogs_pct).filter((x): x is number => x !== null && x !== undefined))
+        const cogsPct = cogsVals.length > 0 ? cogsVals.reduce((a, b) => a + b, 0) / cogsVals.length : null
+        return {
+          name,
+          items:   v.items,
+          revPct:  totalCatRevenue > 0 ? (v.revenue / totalCatRevenue) * 100 : 0,
+          costPct: totalCatCost    > 0 ? (v.cost    / totalCatCost)    * 100 : 0,
+          cogsPct,
+        }
+      })
       .sort((a, b) => b.revPct - a.revPct)
 
     // ── Price level breakdown ─────────────────────────────────────────────────
@@ -825,7 +833,7 @@ export default function SharedMenuPage() {
                     <div className="flex items-center justify-between mb-0.5 gap-1">
                       <span className="text-xs font-medium text-gray-700 truncate">{lvl.name}</span>
                       <div className="flex items-center gap-1.5 text-xs flex-shrink-0">
-                        <span className="text-gray-400">{lvl.priced}/{lvl.total}</span>
+                        {lvl.revPct > 0 && <span className="text-gray-400">{fmt2(lvl.revPct)}% mix</span>}
                         {lvl.avgCogs !== null && <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>}
                       </div>
                     </div>
@@ -962,7 +970,7 @@ export default function SharedMenuPage() {
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-medium text-gray-700">{lvl.name}</span>
                         <div className="flex items-center gap-3 text-xs flex-shrink-0">
-                          <span className="text-gray-400">{lvl.priced}/{lvl.total} priced</span>
+                          {lvl.revPct > 0 && <span className="text-gray-400">{fmt2(lvl.revPct)}% mix</span>}
                           {lvl.avgCogs !== null && (
                             <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}% COGS</span>
                           )}
@@ -992,9 +1000,6 @@ export default function SharedMenuPage() {
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide sticky left-0 bg-gray-50 whitespace-nowrap min-w-[200px]">
                         Item
-                      </th>
-                      <th className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-50 whitespace-nowrap">
-                        Cost ({data.menu.currency_code})
                       </th>
                       {levels.map(l => (
                         <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-50 whitespace-nowrap min-w-[120px]">
@@ -1031,9 +1036,6 @@ export default function SharedMenuPage() {
                               </span>
                             </div>
                           </td>
-                          <td className="px-4 py-2.5 text-right">
-                            {/* empty — cost */}
-                          </td>
                           {levels.map(l => (
                             <td key={l.id} className="px-4 py-2.5 text-right">
                               {avgCogs !== null && (
@@ -1052,28 +1054,22 @@ export default function SharedMenuPage() {
                             className={`border-b border-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'} hover:bg-emerald-50/20 transition-colors group/row`}
                             onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
                           >
-                            {/* Item name */}
+                            {/* Item name — click to open breakdown for recipes */}
                             <td className="px-4 py-3 sticky left-0 bg-inherit">
                               <div className="flex items-center gap-1.5">
-                                <span className="font-medium text-gray-800">{item.display_name}</span>
+                                <button
+                                  className={`font-medium text-gray-800 text-left ${item.item_type === 'recipe' ? 'hover:text-emerald-600 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer' : 'cursor-default'}`}
+                                  onClick={() => item.item_type === 'recipe' && openBreakdown(item.menu_item_id)}
+                                  title={item.item_type === 'recipe' ? 'Click for ingredient breakdown' : undefined}
+                                  disabled={item.item_type !== 'recipe'}
+                                >
+                                  {item.display_name}
+                                </button>
                                 {/* Comment hint — only shown if there are linked comments */}
                                 {changes.some(c => c.change_type === 'comment' && c.menu_item_id === item.menu_item_id) && (
                                   <span className="text-blue-400 text-xs opacity-70" title="Has comments">💬</span>
                                 )}
                               </div>
-                            </td>
-
-                            {/* Cost cell — click to open breakdown modal */}
-                            <td className="px-4 py-3 text-right">
-                              <button
-                                className="group relative text-right"
-                                onClick={() => item.item_type === 'recipe' && openBreakdown(item.menu_item_id)}
-                                title={item.item_type === 'recipe' ? 'Click for ingredient breakdown' : undefined}
-                              >
-                                <span className={`font-mono text-gray-700 ${item.item_type === 'recipe' ? 'group-hover:text-emerald-600 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer' : ''}`}>
-                                  {sym}{fmt2(item.cost)}
-                                </span>
-                              </button>
                             </td>
 
                             {/* Price level columns */}
@@ -1137,6 +1133,9 @@ export default function SharedMenuPage() {
                                           <span className="font-semibold text-gray-800 tabular-nums">
                                             {sym}{fmt2(entry.gross)}
                                           </span>
+                                        </div>
+                                        <div className="text-xs tabular-nums text-gray-400 mt-0.5">
+                                          cost {sym}{fmt2(item.cost)}
                                         </div>
                                         <div className={`text-xs tabular-nums mt-0.5 ${cogsCls(entry.cogs_pct)}`}>
                                           {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
