@@ -301,8 +301,7 @@ publicRouter.post('/:slug/auth', async (req, res) => {
 // ── POST /api/public/share/:slug/price — save sell price (edit mode) ──────────
 
 publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
-  const { mode, menu_id: tokenMenuId } = req.tokenPayload;
-  if (mode !== 'edit') return res.status(403).json({ error: { message: 'This link is view-only' } });
+  const { menu_id: tokenMenuId } = req.tokenPayload;
 
   const { menu_item_id, price_level_id, sell_price } = req.body;
   if (!menu_item_id || !price_level_id || sell_price === undefined) {
@@ -310,6 +309,11 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
   }
 
   try {
+    // Re-read mode from DB — token may have been issued before an admin changed the mode
+    const page = await fetchPage(req.params.slug);
+    if (!page || !page.is_active) return res.status(403).json({ error: { message: 'Page not found or disabled' } });
+    if (page.mode !== 'edit') return res.status(403).json({ error: { message: 'This link is view-only' } });
+
     if (tokenMenuId) {
       const { rows: [mi] } = await pool.query(
         `SELECT id FROM mcogs_menu_items WHERE id = $1 AND menu_id = $2`,

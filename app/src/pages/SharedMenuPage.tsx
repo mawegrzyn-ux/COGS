@@ -367,6 +367,11 @@ export default function SharedMenuPage() {
       }
     })
 
+    // hasWeightedData: qty exists AND a specific price level is set → can compute revenue
+    // hasQty without scenLvlId means ALL-levels scenario: charts use price sums as fallback,
+    // but KPI tiles must not show zeros — fall back to the count/avg view instead
+    const hasWeightedData = hasQty && scenLvlId !== null
+
     const weightedCogs = totalRevNet > 0 ? (totalCost / totalRevNet) * 100 : null
     const avgCogs = (() => {
       let sum = 0, n = 0
@@ -378,6 +383,7 @@ export default function SharedMenuPage() {
 
     return {
       hasQty,
+      hasWeightedData,
       totalCost:      Math.round(totalCost      * 100) / 100,
       totalRevGross:  Math.round(totalRevGross   * 100) / 100,
       totalRevNet:    Math.round(totalRevNet     * 100) / 100,
@@ -570,7 +576,7 @@ export default function SharedMenuPage() {
                 <p className="text-sm text-gray-400 mt-0.5">
                   {data.menu.country_name} · {data.menu.currency_code} ({sym})
                   {data.scenario && <span className="ml-2 px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full font-medium">📊 {data.scenario.name}</span>}
-                  {summary.hasQty && <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full font-medium">{summary.qtyTotal} covers</span>}
+                  {summary.hasWeightedData && <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full font-medium">{summary.qtyTotal} covers</span>}
                 </p>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -584,17 +590,17 @@ export default function SharedMenuPage() {
             {/* ── KPI tiles ────────────────────────────────────────────────────── */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
               <KpiTile
-                label={summary.hasQty ? 'Weighted COGS' : 'Avg COGS'}
-                value={`${fmt2(summary.hasQty ? summary.weightedCogs : summary.avgCogs)}%`}
-                sub={summary.hasQty ? 'across sold items' : 'across all price levels'}
+                label={summary.hasWeightedData ? 'Weighted COGS' : 'Avg COGS'}
+                value={`${fmt2(summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs)}%`}
+                sub={summary.hasWeightedData ? 'across sold items' : 'across all price levels'}
                 colour={
-                  (summary.hasQty ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
-                  : ((summary.hasQty ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
-                  : ((summary.hasQty ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
+                  (summary.hasWeightedData ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
+                  : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
+                  : ((summary.hasWeightedData ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
                   : 'red'
                 }
               />
-              {summary.hasQty ? (
+              {summary.hasWeightedData ? (
                 <>
                   <KpiTile
                     label="Total Revenue"
