@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { useSortFilter } from '../hooks/useSortFilter'
 
