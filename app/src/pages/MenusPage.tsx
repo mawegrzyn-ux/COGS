@@ -423,8 +423,8 @@ export default function MenusPage() {
   }, [api])
 
   useEffect(() => {
-    if (activeTab === 'shared-links') loadSharedPages()
-  }, [activeTab, loadSharedPages])
+    if (activeTab === 'shared-links' || sharedModal === 'new') loadSharedPages()
+  }, [activeTab, sharedModal, loadSharedPages])
 
   function openNewSharedModal() {
     setSpName(''); setSpMode('view'); setSpPassword(''); setSpNotes('')
