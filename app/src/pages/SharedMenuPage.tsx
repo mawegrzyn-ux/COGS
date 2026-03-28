@@ -651,28 +651,60 @@ export default function SharedMenuPage() {
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
 
-      {/* ── Top bar ─────────────────────────────────────────────────────────── */}
+      {/* ── Top bar (single combined header) ────────────────────────────────── */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-20">
-        <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+        <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4 min-w-0">
+
+          {/* Left: logo + view name → menu name + subtitle */}
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center flex-shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center flex-shrink-0">
               <span className="text-white font-bold text-xs">C</span>
             </div>
             <div className="min-w-0">
-              <h1 className="font-bold text-gray-900 text-sm truncate">{meta?.name}</h1>
-              <div className="flex items-center gap-2 text-xs text-gray-400 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs text-gray-400 font-medium whitespace-nowrap">{meta?.name}</span>
+                {data?.menu.name && (
+                  <>
+                    <span className="text-gray-200 text-xs">›</span>
+                    <h1 className="font-bold text-gray-900 text-sm truncate">{data.menu.name}</h1>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-gray-400 flex-wrap mt-0.5">
                 {isEdit
-                  ? <span className="text-amber-600 font-medium">✏ Edit mode</span>
-                  : <span>👁 View only</span>}
-                {data?.scenario && (
-                  <span className="text-amber-600 font-medium">· Scenario: {data.scenario.name}</span>
+                  ? <span className="text-amber-600 font-medium">✏ Edit</span>
+                  : <span>👁 View</span>}
+                {data && (
+                  <>
+                    <span className="text-gray-200">·</span>
+                    <span>{data.menu.country_name} · {data.menu.currency_code} ({sym})</span>
+                    {data.scenario && (
+                      <>
+                        <span className="text-gray-200">·</span>
+                        <span className="text-amber-600 font-medium">📊 {data.scenario.name}</span>
+                      </>
+                    )}
+                    {summary?.hasWeightedData && (
+                      <>
+                        <span className="text-gray-200">·</span>
+                        <span className="text-blue-500 font-medium">{summary.qtyTotal} covers</span>
+                      </>
+                    )}
+                    {data.items.length > 0 && (
+                      <>
+                        <span className="text-gray-200">·</span>
+                        <span>{data.items.length} items · {categories.length} categories</span>
+                      </>
+                    )}
+                  </>
                 )}
               </div>
             </div>
           </div>
 
+          {/* Right: dock, changes, expand/collapse */}
           {data && (
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-1.5 flex-shrink-0">
               {/* Tiles layout toggle */}
               <button
                 className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${tilesLayout === 'left' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}
@@ -693,7 +725,7 @@ export default function SharedMenuPage() {
 
               {/* Changes toggle */}
               <button
-                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${changePanelOpen ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${changePanelOpen ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
                 onClick={() => setChangePanelOpen(p => !p)}
                 title="Toggle change log"
               >
@@ -702,10 +734,14 @@ export default function SharedMenuPage() {
                 </svg>
                 Changes {changes.length > 0 && <span className="font-bold">{changes.filter(c => c.change_type === 'price').length}</span>}
               </button>
-              <div className="text-right hidden sm:block">
-                <div className="font-semibold text-gray-800 text-sm">{data.menu.name}</div>
-                <div className="text-xs text-gray-400">{data.menu.country_name} · {data.menu.currency_code}</div>
-              </div>
+
+              {/* Expand / Collapse all */}
+              {data.items.length > 0 && (
+                <>
+                  <button onClick={expandAll}   className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-emerald-600 hover:border-emerald-300 hover:bg-emerald-50 transition-colors">Expand</button>
+                  <button onClick={collapseAll} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 hover:border-gray-300 hover:bg-gray-50 transition-colors">Collapse</button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -862,24 +898,6 @@ export default function SharedMenuPage() {
 
         {!dataLoading && data && data.items.length > 0 && summary && (
           <>
-            {/* ── Header ──────────────────────────────────────────────────────── */}
-            <div className="flex items-start justify-between gap-4 flex-wrap flex-shrink-0">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">{data.menu.name}</h2>
-                <p className="text-sm text-gray-400 mt-0.5">
-                  {data.menu.country_name} · {data.menu.currency_code} ({sym})
-                  {data.scenario && <span className="ml-2 px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full font-medium">📊 {data.scenario.name}</span>}
-                  {summary.hasWeightedData && <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full font-medium">{summary.qtyTotal} covers</span>}
-                </p>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-gray-400">
-                <span>{data.items.length} items · {categories.length} categories</span>
-                <button onClick={expandAll}  className="text-emerald-600 hover:underline">Expand all</button>
-                <span className="text-gray-200">|</span>
-                <button onClick={collapseAll} className="text-emerald-600 hover:underline">Collapse all</button>
-              </div>
-            </div>
-
             {/* ── KPI tiles (top mode only) ─────────────────────────────────────── */}
             {tilesLayout === 'top' && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">
