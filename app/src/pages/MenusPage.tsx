@@ -4233,10 +4233,9 @@ ${tableHtml}
                         </td>
                       </tr>
                       {!collapsedCats.has(cat) && catRows.map(row => {
-                        // sum(cost per level) / sum(revenue per level)
-                        const sumCostAllLevels = row.perLevel.reduce((s) => s + row.total_cost, 0)
+                        // total_cost is already Σ(qty_l × cost) across levels — just divide by total revenue
                         const sumRevAllLevels  = row.perLevel.reduce((s, p) => s + p.revenue, 0)
-                        const totalCogsPct = sumRevAllLevels > 0 ? (sumCostAllLevels / sumRevAllLevels) * 100 : null
+                        const totalCogsPct = sumRevAllLevels > 0 ? (row.total_cost / sumRevAllLevels) * 100 : null
                         return (
                           <tr
                             key={row.menu_item_id}
