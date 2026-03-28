@@ -17,6 +17,7 @@ const {
   calcRecipeCost,
   loadAllRecipeItemsDeep,
   loadVariationItemsMap,
+  loadPlVariationItemsMap,
 } = require('./cogs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -637,8 +638,11 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
     }
 
     const recipeIds      = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
-    const recipeItemsMap = await loadAllRecipeItemsDeep(recipeIds);
-    const variationMap   = await loadVariationItemsMap(recipeIds);
+    const [recipeItemsMap, variationMap, plVariationMap] = await Promise.all([
+      loadAllRecipeItemsDeep(recipeIds),
+      loadVariationItemsMap(recipeIds),
+      loadPlVariationItemsMap(recipeIds),
+    ]);
 
     const [quoteLookup, { rows: defaultTaxRows }, { rows: cltRows }, { rows: taxRateRows }] = await Promise.all([
       loadQuoteLookup(),
@@ -671,19 +675,23 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
                        (itemType === 'ingredient' ? item.ingredient_name : item.recipe_name) || '—';
       const qty      = Number(item.qty || 1);
 
-      let cpp = 0;
-      if (itemType === 'ingredient') {
-        const q = quoteLookup[item.ingredient_id]?.[countryId];
-        if (q) cpp = q.price_per_base_unit * qty;
-      } else {
+      // Per-level cost helper — ingredients are the same for every level;
+      // recipes use the PL variant items for that level when they exist.
+      function getCppForLevel(levelId) {
+        if (itemType === 'ingredient') {
+          const q = quoteLookup[item.ingredient_id]?.[countryId];
+          return q ? Math.round(q.price_per_base_unit * qty * exchangeRate * 10000) / 10000 : 0;
+        }
         const rItems = recipeItemsMap[item.recipe_id] || [];
         const { cost } = calcRecipeCost(
           { id: item.recipe_id, yield_qty: item.yield_qty || 1 },
-          rItems, countryId, quoteLookup, variationMap, recipeItemsMap
+          rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, levelId, plVariationMap,
         );
-        cpp = cost * qty;
+        return Math.round(cost * qty * exchangeRate * 10000) / 10000;
       }
-      cpp = Math.round(cpp * exchangeRate * 10000) / 10000;
+
+      // Base cost (no price level) — shown in the Cost column
+      const cpp = getCppForLevel(null);
 
       const rowLevels = {};
       for (const level of levels) {
@@ -700,15 +708,16 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
           continue;
         }
 
+        const levelCpp = getCppForLevel(lid);
         const { rate: taxRate } = getEffectiveTax(lp?.tax_rate_id, lid);
         const net     = taxRate > 0 ? gross / (1 + taxRate) : gross;
-        const cogsPct = net > 0 && cpp > 0 ? Math.round((cpp / net) * 10000) / 100 : null;
+        const cogsPct = net > 0 && levelCpp > 0 ? Math.round((levelCpp / net) * 10000) / 100 : null;
         rowLevels[lid] = {
           set:                  true,
-          gross:                Math.round(gross * 10000) / 10000,
-          net:                  Math.round(net   * 10000) / 10000,
+          gross:                Math.round(gross    * 10000) / 10000,
+          net:                  Math.round(net      * 10000) / 10000,
           cogs_pct:             cogsPct,
-          gp_net:               Math.round((net - cpp) * 10000) / 10000,
+          gp_net:               Math.round((net - levelCpp) * 10000) / 10000,
           lp_id:                lp?.id ?? null,
           is_scenario_override: hasScenarioOv,
         };

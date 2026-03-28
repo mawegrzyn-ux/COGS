@@ -583,6 +583,20 @@ const migrations = [
     ('LUPIN',       'Lupin',               'Lupin and lupin products', 13),
     ('MOLLUSCS',    'Molluscs',            'Molluscs and mollusc products (e.g. clams, mussels, oysters, squid)', 14)
   ON CONFLICT (code) DO NOTHING`,
+
+  // ── 31. Recipe Price-Level Variations ────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_recipe_pl_variations (
+  id              SERIAL PRIMARY KEY,
+  recipe_id       INTEGER NOT NULL REFERENCES mcogs_recipes(id) ON DELETE CASCADE,
+  price_level_id  INTEGER NOT NULL REFERENCES mcogs_price_levels(id) ON DELETE CASCADE,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(recipe_id, price_level_id)
+)`,
+
+  // ── 31b. Add pl_variation_id column to mcogs_recipe_items ─────────────────
+  `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS pl_variation_id INTEGER REFERENCES mcogs_recipe_pl_variations(id) ON DELETE CASCADE`,
 ];
 
 async function migrate() {
