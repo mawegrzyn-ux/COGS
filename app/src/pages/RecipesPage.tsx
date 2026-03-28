@@ -68,6 +68,8 @@ interface RecipeDetail extends Recipe {
   cogs_by_country:  CogsByCountry[]
 }
 
+type ItemSortField = 'custom' | 'name' | 'qty' | 'cost'
+
 interface MenuAssignment {
   menu_id: number
   menu_name: string
@@ -119,6 +121,12 @@ export default function RecipesPage() {
   const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [showComparison,        setShowComparison]        = useState(false)
+
+  // ── Ingredient list sort + drag-to-reorder ────────────────────────────────
+  const [itemSortField, setItemSortField] = useState<ItemSortField>('custom')
+  const [itemSortDir,   setItemSortDir]   = useState<'asc' | 'desc'>('asc')
+  const [dragId,        setDragId]        = useState<number | null>(null)
+  const [dragOverId,    setDragOverId]    = useState<number | null>(null)
 
   const [menus,               setMenus]               = useState<SimpleMenu[]>([])
   const [menuAssignments,     setMenuAssignments]      = useState<MenuAssignment[]>([])
@@ -305,6 +313,28 @@ export default function RecipesPage() {
     activeVariation ? activeVariation.items : (selected?.items ?? [])
   , [activeVariation, selected])
 
+  // Sorted view of activeItems — 'custom' preserves DB sort_order
+  const displayItems = useMemo(() => {
+    if (itemSortField === 'custom') return activeItems
+    const costFor = (item: RecipeItem) => {
+      const line = activeCogs?.lines.find(l => l.id === item.id)
+      return line?.cost ?? -1
+    }
+    return [...activeItems].sort((a, b) => {
+      let cmp = 0
+      if (itemSortField === 'name') {
+        const an = (a.ingredient_name || a.sub_recipe_name || '').toLowerCase()
+        const bn = (b.ingredient_name || b.sub_recipe_name || '').toLowerCase()
+        cmp = an < bn ? -1 : an > bn ? 1 : 0
+      } else if (itemSortField === 'qty') {
+        cmp = Number(a.prep_qty) - Number(b.prep_qty)
+      } else if (itemSortField === 'cost') {
+        cmp = costFor(a) - costFor(b)
+      }
+      return itemSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [activeItems, itemSortField, itemSortDir, activeCogs])
+
   // Unique currencies for the selector (deduplicated by code)
   const currencyOptions = useMemo(() => {
     const seen = new Set<string>()
@@ -330,11 +360,11 @@ export default function RecipesPage() {
   const saveRecipe = async (form: RecipeForm) => {
     const isNew = recipeModal === 'new'
     const payload = {
-      name:         form.name.trim(),
-      category:     form.category.trim() || null,
-      description:  form.description.trim() || null,
-      yield_qty:    Number(form.yield_qty) || 1,
-      yield_unit_id:form.yield_unit_id || null,
+      name:            form.name.trim(),
+      category:        form.category.trim() || null,
+      description:     form.description.trim() || null,
+      yield_qty:       Number(form.yield_qty) || 1,
+      yield_unit_text: form.yield_unit_text.trim() || null,
     }
     if (!payload.name) return showToast('Name is required', 'error')
     try {
@@ -423,6 +453,50 @@ export default function RecipesPage() {
       showToast(err.message || 'Update failed', 'error')
     }
   }
+
+  // ── Column sort toggle ────────────────────────────────────────────────────
+  function cycleItemSort(field: ItemSortField) {
+    if (itemSortField === field) {
+      if (itemSortDir === 'asc') { setItemSortDir('desc') }
+      else { setItemSortField('custom'); setItemSortDir('asc') }
+    } else {
+      setItemSortField(field); setItemSortDir('asc')
+    }
+  }
+
+  // ── Drag-to-reorder ───────────────────────────────────────────────────────
+  const reorderItems = useCallback(async (fromId: number, toId: number) => {
+    if (!selected || fromId === toId) return
+    const list = activeVariation ? activeVariation.items : selected.items
+    const fromIdx = list.findIndex(i => i.id === fromId)
+    const toIdx   = list.findIndex(i => i.id === toId)
+    if (fromIdx < 0 || toIdx < 0) return
+
+    const next = [...list]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+
+    // Optimistic update
+    setSelected(prev => {
+      if (!prev) return prev
+      if (activeVariation) {
+        return {
+          ...prev,
+          variations: prev.variations.map(v =>
+            v.id === activeVariation.id ? { ...v, items: next } : v
+          ),
+        }
+      }
+      return { ...prev, items: next }
+    })
+
+    try {
+      await api.patch(`/recipes/${selected.id}/items/reorder`, { order: next.map(i => i.id) })
+    } catch {
+      showToast('Failed to save order', 'error')
+      loadDetail(selected.id)
+    }
+  }, [selected, activeVariation, api, loadDetail])
 
   const deleteItem = async (itemId: number) => {
     if (!selected) return
@@ -547,11 +621,15 @@ export default function RecipesPage() {
         }
         tutorialPrompt="Walk me through building a Recipe in COGS Manager. How do I create a recipe, add ingredients with quantities and units, use sub-recipes, set yield, and what does the COGS cost-per-portion figure mean and how is it calculated?"
         action={
-          <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={() => setRecipeModal('new')}>
-            <PlusIcon /> New Recipe
+          <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={() => setRecipeModal('new')}
+            title="New Recipe (Alt+N)">
+            <PlusIcon /> New Recipe <kbd className="ml-0.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Alt+N</kbd>
           </button>
         }
       />
+
+      {/* Alt+N → New Recipe */}
+      <AltNShortcut onTrigger={() => setRecipeModal('new')} active={recipeModal === null} />
 
       {/* Split layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -1067,19 +1145,40 @@ export default function RecipesPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
-                          <th className="px-4 py-2.5 text-left font-semibold">Ingredient</th>
-                          <th className="px-4 py-2.5 text-left font-semibold">Qty</th>
+                          {/* drag handle spacer */}
+                          {itemSortField === 'custom' && <th className="w-6" />}
+                          <SortTh label="Ingredient" field="name" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
+                          <SortTh label="Qty"        field="qty"  sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
                           <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
-                          {activeCogs && <th className="px-4 py-2.5 text-right font-semibold">Cost ({activeCogs.currency_code})</th>}
+                          {activeCogs && <SortTh label={`Cost (${activeCogs.currency_code})`} field="cost" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="right" className="px-4 py-2.5" />}
                           <th className="w-16" />
                         </tr>
                       </thead>
                       <tbody>
-                        {activeItems.map(item => {
+                        {displayItems.map(item => {
                           const cogLine   = activeCogs?.lines.find(l => l.id === item.id)
                           const localCost = cogLine?.cost != null ? cogLine.cost * (activeCogs?.exchange_rate ?? 1) : null
+                          const isDragging = dragId === item.id
+                          const isOver    = dragOverId === item.id && dragId !== item.id
                           return (
-                            <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-2/50 group">
+                            <tr
+                              key={item.id}
+                              className={`border-b border-border last:border-0 group transition-colors
+                                ${isDragging ? 'opacity-40' : ''}
+                                ${isOver ? 'border-t-2 border-t-accent bg-accent-dim/30' : 'hover:bg-surface-2/50'}
+                              `}
+                              draggable={itemSortField === 'custom'}
+                              onDragStart={itemSortField === 'custom' ? () => setDragId(item.id) : undefined}
+                              onDragOver={itemSortField === 'custom' ? e => { e.preventDefault(); setDragOverId(item.id) } : undefined}
+                              onDragLeave={itemSortField === 'custom' ? () => setDragOverId(null) : undefined}
+                              onDrop={itemSortField === 'custom' ? e => { e.preventDefault(); if (dragId !== null) reorderItems(dragId, item.id); setDragId(null); setDragOverId(null) } : undefined}
+                            >
+                              {/* Drag handle — only in custom sort mode */}
+                              {itemSortField === 'custom' && (
+                                <td className="pl-2 pr-0 py-2.5 text-text-3 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing">
+                                  <DragHandleIcon size={14} />
+                                </td>
+                              )}
                               <td className="px-4 py-2.5">
                                 <div className="font-medium text-text-1 flex items-center flex-wrap gap-x-1">
                                   {item.item_type === 'ingredient' ? item.ingredient_name : `↳ ${item.sub_recipe_name}`}
@@ -1160,7 +1259,7 @@ export default function RecipesPage() {
                             setAddToMenuDisplayName(selected?.name ?? '')
                             setAddToMenuModal(true)
                           }}
-                          className="px-2.5 py-1 text-xs btn-primary rounded-lg"
+                          className="px-2.5 py-1 text-xs btn-outline rounded-lg"
                         >+ Add to Menu</button>
                       )}
                     </div>
@@ -1314,7 +1413,6 @@ export default function RecipesPage() {
       {recipeModal !== null && (
         <RecipeFormModal
           recipe={recipeModal === 'new' ? null : recipeModal}
-          units={units}
           categories={categories}
           onSave={saveRecipe}
           onClose={() => setRecipeModal(null)}
@@ -1461,22 +1559,21 @@ export default function RecipesPage() {
 // ── Recipe Form Modal ─────────────────────────────────────────────────────────
 
 interface RecipeForm {
-  name: string; category: string; description: string; yield_qty: string; yield_unit_id: number | ''
+  name: string; category: string; description: string; yield_qty: string; yield_unit_text: string
 }
 
-function RecipeFormModal({ recipe, units, categories, onSave, onClose }: {
+function RecipeFormModal({ recipe, categories, onSave, onClose }: {
   recipe: Recipe | null
-  units: Unit[]
   categories: string[]
   onSave: (f: RecipeForm) => void
   onClose: () => void
 }) {
   const [form, setForm] = useState<RecipeForm>({
-    name:         recipe?.name          ?? '',
-    category:     recipe?.category      ?? '',
-    description:  '',
-    yield_qty:    String(recipe?.yield_qty ?? 1),
-    yield_unit_id:recipe?.yield_unit_id  ?? '',
+    name:            recipe?.name           ?? '',
+    category:        recipe?.category       ?? '',
+    description:     recipe?.description    ?? '',
+    yield_qty:       String(recipe?.yield_qty ?? 1),
+    yield_unit_text: recipe?.yield_unit_abbr ?? '',
   })
   const [catOpen,           setCatOpen]           = useState(false)
   const [catHighlightedIdx, setCatHighlightedIdx] = useState(-1)
@@ -1548,10 +1645,8 @@ function RecipeFormModal({ recipe, units, categories, onSave, onClose }: {
             <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.yield_qty} onChange={set('yield_qty')} />
           </Field>
           <Field label="Yield Unit">
-            <select className="input" value={form.yield_unit_id} onChange={set('yield_unit_id') as any}>
-              <option value="">— portions —</option>
-              {units.map(u => <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>)}
-            </select>
+            <input className="input" value={form.yield_unit_text} onChange={set('yield_unit_text')}
+              placeholder="portions, kg, litres…" autoComplete="off" />
           </Field>
         </div>
 
@@ -1873,6 +1968,20 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
 // KpiCard removed — stats now inline in PageHeader subtitle
 
+// ── Alt+N shortcut helper ─────────────────────────────────────────────────────
+
+function AltNShortcut({ onTrigger, active }: { onTrigger: () => void; active: boolean }) {
+  useEffect(() => {
+    if (!active) return
+    function onKey(e: KeyboardEvent) {
+      if (e.altKey && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); onTrigger() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [active, onTrigger])
+  return null
+}
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function PlusIcon({ size = 14 }: { size?: number }) {
@@ -1889,6 +1998,46 @@ function SearchIcon({ className }: { className?: string }) {
 }
 function BookOpenIcon({ size = 24 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+}
+function DragHandleIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="9"  cy="5"  r="1.5"/><circle cx="15" cy="5"  r="1.5"/>
+      <circle cx="9"  cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+      <circle cx="9"  cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+    </svg>
+  )
+}
+function SortTh({ label, field, sortField, sortDir, onSort, align = 'left', className = '' }: {
+  label: string
+  field: ItemSortField
+  sortField: ItemSortField
+  sortDir: 'asc' | 'desc'
+  onSort: (f: ItemSortField) => void
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  const active = sortField === field
+  return (
+    <th
+      className={`${className} font-semibold select-none cursor-pointer whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}
+      onClick={() => onSort(field)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {align === 'right' && (
+          <span className="text-[10px] leading-none text-text-3">
+            {active ? (sortDir === 'asc' ? '↑' : '↓') : <span className="opacity-30">↕</span>}
+          </span>
+        )}
+        {label}
+        {align !== 'right' && (
+          <span className="text-[10px] leading-none text-text-3">
+            {active ? (sortDir === 'asc' ? '↑' : '↓') : <span className="opacity-30">↕</span>}
+          </span>
+        )}
+      </span>
+    </th>
+  )
 }
 
 // ── Allergen badge ─────────────────────────────────────────────────────────────

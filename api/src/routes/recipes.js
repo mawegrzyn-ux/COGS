@@ -7,7 +7,7 @@ router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT r.*,
-             u.abbreviation AS yield_unit_abbr,
+             COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr,
              COUNT(ri.id) FILTER (WHERE ri.variation_id IS NULL)::int AS item_count
       FROM   mcogs_recipes r
       LEFT JOIN mcogs_units u        ON u.id = r.yield_unit_id
@@ -27,7 +27,7 @@ router.get('/:id', async (req, res) => {
   try {
     // Recipe header
     const { rows: [recipe] } = await pool.query(`
-      SELECT r.*, u.abbreviation AS yield_unit_abbr
+      SELECT r.*, COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr
       FROM   mcogs_recipes r
       LEFT JOIN mcogs_units u ON u.id = r.yield_unit_id
       WHERE  r.id = $1
@@ -49,7 +49,7 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN mcogs_units ub       ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
       WHERE  ri.recipe_id = $1 AND ri.variation_id IS NULL
-      ORDER BY ri.id ASC
+      ORDER BY COALESCE(ri.sort_order, ri.id) ASC, ri.id ASC
     `, [req.params.id]);
 
     // Variations with their items
@@ -81,7 +81,7 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN mcogs_units ub        ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr      ON sr.id = ri.recipe_item_id
       WHERE  rv.recipe_id = $1
-      ORDER BY rv.id ASC, ri.id ASC NULLS LAST
+      ORDER BY rv.id ASC, COALESCE(ri.sort_order, ri.id) ASC NULLS LAST, ri.id ASC NULLS LAST
     `, [req.params.id]);
 
     // Assemble variations map: var_id → { id, country_id, country_name, items[] }
@@ -277,14 +277,15 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /recipes ─────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_id } = req.body;
+  const { name, category, description, yield_qty, yield_unit_text } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
-      INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_id)
-      VALUES ($1,$2,$3,$4,$5) RETURNING *
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_id||null]);
-    res.status(201).json(r);
+      INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_text)
+      VALUES ($1,$2,$3,$4,$5) RETURNING *,
+             COALESCE(yield_unit_text) AS yield_unit_abbr
+    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null]);
+    res.status(201).json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create recipe' } });
@@ -293,19 +294,45 @@ router.post('/', async (req, res) => {
 
 // ── PUT /recipes/:id ──────────────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_id } = req.body;
+  const { name, category, description, yield_qty, yield_unit_text } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
       UPDATE mcogs_recipes SET name=$1, category=$2, description=$3,
-             yield_qty=$4, yield_unit_id=$5, updated_at=NOW()
+             yield_qty=$4, yield_unit_text=$5, updated_at=NOW()
       WHERE id=$6 RETURNING *
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_id||null, req.params.id]);
+    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, req.params.id]);
     if (!r) return res.status(404).json({ error: { message: 'Not found' } });
-    res.json(r);
+    res.json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to update recipe' } });
+  }
+});
+
+// ── PATCH /recipes/:id/items/reorder — persist manual drag-and-drop order ─────
+router.patch('/:id/items/reorder', async (req, res) => {
+  const { order } = req.body; // array of recipe_item ids in new order
+  if (!Array.isArray(order) || !order.length) {
+    return res.status(400).json({ error: { message: 'order must be a non-empty array of IDs' } });
+  }
+  const client = await require('../db/pool').connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < order.length; i++) {
+      await client.query(
+        `UPDATE mcogs_recipe_items SET sort_order=$1 WHERE id=$2 AND recipe_id=$3`,
+        [i, order[i], req.params.id]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to reorder items' } });
+  } finally {
+    client.release();
   }
 });
 
