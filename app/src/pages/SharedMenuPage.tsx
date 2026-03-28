@@ -930,7 +930,7 @@ export default function SharedMenuPage() {
                                 const changeKey = `${item.menu_item_id}_l${l.id}`
                                 const cellChange = changedCells[changeKey]
                                 return (
-                                  <td key={l.id} className="px-4 py-3 text-center">
+                                  <td key={l.id} className={`px-4 py-3 text-center ${cellChange ? 'bg-amber-50/40' : ''}`}>
                                     {isEdit ? (
                                       isEditing ? (
                                         <InlineInput
