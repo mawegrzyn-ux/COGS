@@ -4031,7 +4031,7 @@ ${tableHtml}
                                 className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                   ${row.nat_key in costOverrides
                                     ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                    : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                    : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                               />
                               {row.nat_key in costOverrides && (
                                 <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to recipe cost"
@@ -4059,7 +4059,7 @@ ${tableHtml}
                                     className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                       ${isOv
                                         ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                        : 'border border-transparent bg-transparent text-gray-700 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                        : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                   />
                                   {isOv && (
                                     <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to menu price"
@@ -4077,13 +4077,13 @@ ${tableHtml}
                               value={qty[row.nat_key] ?? ''}
                               onChange={e => onQtyChange(row.nat_key, e.target.value)}
                               placeholder="0"
-                              className="w-16 text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                              className="w-16 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-2 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
                             />
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
                             {row.qty > 0 ? fmtMix(row.qty, totalQty) : <span className="text-gray-200">—</span>}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold">
+                          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-gray-400">
                             {row.net_revenue > 0 ? fmtMoney(row.net_revenue) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
@@ -4242,7 +4242,7 @@ ${tableHtml}
                                       className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
                                         ${row.is_cost_overridden
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-500 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                     />
                                     {row.is_cost_overridden && (
                                       <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
@@ -4258,7 +4258,7 @@ ${tableHtml}
                                       value={qty[p.qty_key] ?? ''}
                                       onChange={e => onQtyChange(p.qty_key, e.target.value)}
                                       placeholder="0"
-                                      className="w-12 text-right font-mono text-sm border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+                                      className="w-12 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-1.5 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
                                     />
                                   </div>
                                 </td>
@@ -4278,7 +4278,7 @@ ${tableHtml}
                                       className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
                                         ${p.is_price_overridden
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-700 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                     />
                                     {p.is_price_overridden && (
                                       <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset price"
@@ -4287,7 +4287,7 @@ ${tableHtml}
                                   </div>
                                 </td>
                                 {!allLevelsCompact && (
-                                  <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold">
+                                  <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold text-gray-400">
                                     {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
                                   </td>
                                 )}
