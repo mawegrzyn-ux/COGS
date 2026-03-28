@@ -4184,8 +4184,10 @@ ${tableHtml}
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {allLevelCategorised.map(([cat, catRows]) => {
-                  const catCogs = catRows.flatMap(r => r.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null))
-                  const cTotalCogsPct = catCogs.length > 0 ? catCogs.reduce((a, b) => a + b, 0) / catCogs.length : null
+                  // sum(cost per level) / sum(revenue per level) across all items in category
+                  const cSumCost = catRows.reduce((s, r) => s + r.perLevel.reduce((ss) => ss + r.total_cost, 0), 0)
+                  const cSumRev  = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const cTotalCogsPct = cSumRev > 0 ? (cSumCost / cSumRev) * 100 : null
                   return (
                     <>
                       <tr key={`cat-${cat}`}
@@ -4229,8 +4231,10 @@ ${tableHtml}
                         </td>
                       </tr>
                       {!collapsedCats.has(cat) && catRows.map(row => {
-                        const rowCogs = row.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null)
-                        const totalCogsPct = rowCogs.length > 0 ? rowCogs.reduce((a, b) => a + b, 0) / rowCogs.length : null
+                        // sum(cost per level) / sum(revenue per level)
+                        const sumCostAllLevels = row.perLevel.reduce((s) => s + row.total_cost, 0)
+                        const sumRevAllLevels  = row.perLevel.reduce((s, p) => s + p.revenue, 0)
+                        const totalCogsPct = sumRevAllLevels > 0 ? (sumCostAllLevels / sumRevAllLevels) * 100 : null
                         return (
                           <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
                             <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
@@ -4321,8 +4325,10 @@ ${tableHtml}
               </tbody>
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                 {(() => {
-                  const allCogs = allLevelRows.flatMap(r => r.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null))
-                  const gtTotalCogsPct = allCogs.length > 0 ? allCogs.reduce((a, b) => a + b, 0) / allCogs.length : null
+                  // sum(cost per level) / sum(revenue per level) across all items and all levels
+                  const gtSumCost = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss) => ss + r.total_cost, 0), 0)
+                  const gtSumRev  = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
+                  const gtTotalCogsPct = gtSumRev > 0 ? (gtSumCost / gtSumRev) * 100 : null
                   return (
                     <tr>
                       <td className="px-3 py-3 font-bold text-gray-900">Grand Total</td>
