@@ -259,10 +259,9 @@ export default function MenusPage() {
   const [allScenarios,    setAllScenarios]    = useState<ScenarioSummary[]>([])
 
   // Menu Engineer change panel
-  const [meChanges,          setMeChanges]          = useState<MeChange[]>([])
-  const [meChangesLoading,   setMeChangesLoading]   = useState(false)
-  const [meChangePanelOpen,  setMeChangePanelOpen]  = useState(false)
-  const [meSharedPageId,     setMeSharedPageId]     = useState<number | null>(null)
+  const [meChanges,        setMeChanges]        = useState<MeChange[]>([])
+  const [meChangesLoading, setMeChangesLoading] = useState(false)
+  const [meSharedPageId,   setMeSharedPageId]   = useState<number | null>(null)
 
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
@@ -4020,7 +4019,7 @@ ${tableHtml}
                         <tr
                           key={row.menu_item_id}
                           className="hover:bg-gray-50/80"
-                          onContextMenu={e => { e.preventDefault(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: row.menu_item_id, displayName: row.display_name }) }}
+                          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: row.menu_item_id, displayName: row.display_name }) }}
                         >
                           <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
                           <td className="px-3 py-2.5">
@@ -4239,7 +4238,11 @@ ${tableHtml}
                         const sumRevAllLevels  = row.perLevel.reduce((s, p) => s + p.revenue, 0)
                         const totalCogsPct = sumRevAllLevels > 0 ? (sumCostAllLevels / sumRevAllLevels) * 100 : null
                         return (
-                          <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
+                          <tr
+                            key={row.menu_item_id}
+                            className="hover:bg-gray-50/80"
+                            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: row.menu_item_id, displayName: row.display_name }) }}
+                          >
                             <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
                             {row.perLevel.map(p => (
                               <>
