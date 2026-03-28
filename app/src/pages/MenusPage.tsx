@@ -954,7 +954,7 @@ export default function MenusPage() {
                       {c.change_type === 'price' ? (
                         <div>
                           <p className="text-xs text-text-2 truncate font-medium">{c.display_name}</p>
-                          <p className="text-xs text-text-3">{c.level_name}: <span className="line-through">{c.old_value !== null ? c.old_value.toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{(c.new_value ?? 0).toFixed(2)}</span></p>
+                          <p className="text-xs text-text-3">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
                         </div>
                       ) : (
                         <p className="text-xs text-text-2 italic">"{c.comment}"</p>

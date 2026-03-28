@@ -1001,7 +1001,7 @@ export default function SharedMenuPage() {
                                             <p className="font-semibold mb-0.5">{cellChange.user_name}</p>
                                             <p className="text-gray-300">{fmtTime(cellChange.created_at)}</p>
                                             {cellChange.old_value !== null && (
-                                              <p className="mt-1 text-amber-300">{sym}{cellChange.old_value.toFixed(2)} → {sym}{(cellChange.new_value ?? 0).toFixed(2)}</p>
+                                              <p className="mt-1 text-amber-300">{sym}{Number(cellChange.old_value).toFixed(2)} → {sym}{Number(cellChange.new_value ?? 0).toFixed(2)}</p>
                                             )}
                                           </div>
                                         </div>
@@ -1078,7 +1078,7 @@ export default function SharedMenuPage() {
                 {c.change_type === 'price' ? (
                   <div>
                     <p className="text-xs text-gray-600 truncate font-medium">{c.display_name}</p>
-                    <p className="text-xs text-gray-400">{c.level_name}: <span className="line-through">{c.old_value !== null ? `${sym}${c.old_value.toFixed(2)}` : 'unset'}</span> → <span className="text-emerald-600 font-semibold">{sym}{(c.new_value ?? 0).toFixed(2)}</span></p>
+                    <p className="text-xs text-gray-400">{c.level_name}: <span className="line-through">{c.old_value !== null ? `${sym}${Number(c.old_value).toFixed(2)}` : 'unset'}</span> → <span className="text-emerald-600 font-semibold">{sym}{Number(c.new_value ?? 0).toFixed(2)}</span></p>
                   </div>
                 ) : (
                   <p className="text-xs text-gray-600 italic">"{c.comment}"</p>
