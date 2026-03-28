@@ -11,6 +11,7 @@ import { useParams } from 'react-router-dom'
 interface PageMeta {
   name:          string
   mode:          'view' | 'edit'
+  notes:         string | null
   menu_locked:   boolean
   menu_id:       number | null
   menu_name:     string | null
@@ -80,6 +81,20 @@ interface BreakdownData {
   total_local:  number
 }
 
+interface ChangeEntry {
+  id:             number
+  user_name:      string
+  change_type:    'price' | 'comment'
+  menu_item_id:   number | null
+  price_level_id: number | null
+  display_name:   string | null
+  level_name:     string | null
+  old_value:      number | null
+  new_value:      number | null
+  comment:        string | null
+  created_at:     string
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const API_BASE = (import.meta.env.VITE_API_URL || '/api') as string
@@ -99,6 +114,12 @@ const cogsBarCls = (pct: number | null) => {
 }
 
 function tokenKey(slug: string) { return `sp_token_${slug}` }
+function nameKey(slug: string)  { return `sp_name_${slug}` }
+function notesKey(slug: string) { return `sp_notes_seen_${slug}` }
+function fmtTime(iso: string) {
+  const d = new Date(iso)
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -125,6 +146,17 @@ export default function SharedMenuPage() {
   const [saving,    setSaving]    = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveOk,    setSaveOk]    = useState<string | null>(null)
+
+  // auth extras
+  const [userName,    setUserName]    = useState(() => (slug ? sessionStorage.getItem(nameKey(slug)) || '' : ''))
+  const [showNotes,   setShowNotes]   = useState(false)
+
+  // changes
+  const [changes,          setChanges]          = useState<ChangeEntry[]>([])
+  const [changesLoading,   setChangesLoading]   = useState(false)
+  const [changePanelOpen,  setChangePanelOpen]  = useState(false)
+  const [newComment,       setNewComment]       = useState('')
+  const [submittingComment, setSubmittingComment] = useState(false)
 
   // UI
   const [collapsedCats,   setCollapsedCats]   = useState<Set<string>>(new Set())
@@ -173,26 +205,34 @@ export default function SharedMenuPage() {
   }, [slug, selectedMenuId, meta?.menu_id])
 
   useEffect(() => {
-    if (token) loadData(token)
+    if (token) {
+      loadData(token)
+      loadChanges(token)
+    }
   }, [token]) // eslint-disable-line
 
   // ── Auth ─────────────────────────────────────────────────────────────────────
 
   async function handleAuth(e: React.FormEvent) {
     e.preventDefault()
-    if (!slug || !password) return
+    if (!slug || !password || !userName.trim()) return
     setAuthLoading(true)
     setAuthError('')
     try {
       const r = await fetch(`${API_BASE}/public/share/${slug}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password, user_name: userName.trim() }),
       })
       const d = await r.json()
       if (d.error) { setAuthError(d.error.message); return }
       sessionStorage.setItem(tokenKey(slug), d.token)
+      sessionStorage.setItem(nameKey(slug), userName.trim())
       setToken(d.token)
+      // Show notes modal once per browser if notes exist
+      if (meta?.notes && !localStorage.getItem(notesKey(slug))) {
+        setShowNotes(true)
+      }
     } catch {
       setAuthError('Authentication failed. Please try again.')
     } finally {
@@ -224,7 +264,7 @@ export default function SharedMenuPage() {
       if (d.error) { setSaveError(d.error.message); return }
       setSaveOk('✓ Saved')
       setTimeout(() => setSaveOk(null), 2000)
-      await loadData(token, selectedMenuId)
+      await Promise.all([loadData(token, selectedMenuId), loadChanges(token)])
     } catch {
       setSaveError('Failed to save price.')
     } finally {
@@ -250,6 +290,21 @@ export default function SharedMenuPage() {
     }
   }
 
+  // ── Load changes ─────────────────────────────────────────────────────────────
+
+  const loadChanges = useCallback(async (tok: string) => {
+    if (!slug) return
+    setChangesLoading(true)
+    try {
+      const r = await fetch(`${API_BASE}/public/share/${slug}/changes`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      const d = await r.json()
+      if (!d.error) setChanges(d)
+    } catch { /* silent */ }
+    finally { setChangesLoading(false) }
+  }, [slug])
+
   // ── Category helpers ─────────────────────────────────────────────────────────
 
   const categories = useMemo(() => {
@@ -269,6 +324,19 @@ export default function SharedMenuPage() {
 
   function collapseAll()  { setCollapsedCats(new Set(categories)) }
   function expandAll()    { setCollapsedCats(new Set()) }
+
+  // ── Changed cells lookup ──────────────────────────────────────────────────────
+  // keyed: "${menu_item_id}_l${price_level_id}" → most recent ChangeEntry
+  const changedCells = useMemo(() => {
+    const map: Record<string, ChangeEntry> = {}
+    // changes are ordered DESC, so first hit per key is most recent
+    for (const c of [...changes].reverse()) {
+      if (c.change_type === 'price' && c.menu_item_id && c.price_level_id) {
+        map[`${c.menu_item_id}_l${c.price_level_id}`] = c
+      }
+    }
+    return map
+  }, [changes])
 
   // ── Summary metrics ──────────────────────────────────────────────────────────
 
@@ -414,6 +482,33 @@ export default function SharedMenuPage() {
     </div>
   )
 
+  // ── Notes modal (shown once after first successful auth) ──────────────────────
+  if (showNotes && meta?.notes) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 max-w-md w-full p-8">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center flex-shrink-0 text-xl">📋</div>
+          <div>
+            <h2 className="font-bold text-gray-900 text-lg leading-tight">{meta.name}</h2>
+            <p className="text-xs text-gray-400">Notes from the organiser</p>
+          </div>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed mb-6">
+          {meta.notes}
+        </div>
+        <button
+          className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition"
+          onClick={() => {
+            if (slug) localStorage.setItem(notesKey(slug), '1')
+            setShowNotes(false)
+          }}
+        >
+          Got it — View Menu →
+        </button>
+      </div>
+    </div>
+  )
+
   // ── Render: password gate ────────────────────────────────────────────────────
 
   if (!token) return (
@@ -434,13 +529,24 @@ export default function SharedMenuPage() {
 
         <form onSubmit={handleAuth} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Access password</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Your name <span className="text-red-400">*</span></label>
+            <input
+              type="text"
+              className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition"
+              value={userName}
+              onChange={e => setUserName(e.target.value)}
+              autoFocus
+              placeholder="e.g. John Smith"
+              maxLength={80}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Access password <span className="text-red-400">*</span></label>
             <input
               type="password"
               className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              autoFocus
               placeholder="Enter password"
             />
           </div>
@@ -448,7 +554,7 @@ export default function SharedMenuPage() {
           <button
             type="submit"
             className="w-full py-2.5 px-4 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-50"
-            disabled={authLoading || !password}
+            disabled={authLoading || !password || !userName.trim()}
           >
             {authLoading ? 'Checking…' : 'View Menu →'}
           </button>
@@ -461,6 +567,26 @@ export default function SharedMenuPage() {
     </div>
   )
 
+  // ── Comment submit ────────────────────────────────────────────────────────────
+
+  async function submitComment() {
+    if (!newComment.trim() || !token || !slug) return
+    setSubmittingComment(true)
+    try {
+      const r = await fetch(`${API_BASE}/public/share/${slug}/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ comment: newComment.trim() }),
+      })
+      const d = await r.json()
+      if (!d.error) {
+        setChanges(prev => [d, ...prev])
+        setNewComment('')
+      }
+    } catch { /* silent */ }
+    finally { setSubmittingComment(false) }
+  }
+
   // ── Render: authenticated ────────────────────────────────────────────────────
 
   const isEdit = meta?.mode === 'edit'
@@ -468,7 +594,7 @@ export default function SharedMenuPage() {
   const levels = data?.price_levels ?? []
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
 
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-20">
@@ -491,9 +617,21 @@ export default function SharedMenuPage() {
           </div>
 
           {data && (
-            <div className="text-right flex-shrink-0">
-              <div className="font-semibold text-gray-800 text-sm">{data.menu.name}</div>
-              <div className="text-xs text-gray-400">{data.menu.country_name} · {data.menu.currency_code}</div>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <button
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${changePanelOpen ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                onClick={() => setChangePanelOpen(p => !p)}
+                title="Toggle change log"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Changes {changes.length > 0 && <span className="font-bold">{changes.filter(c => c.change_type === 'price').length}</span>}
+              </button>
+              <div className="text-right">
+                <div className="font-semibold text-gray-800 text-sm">{data.menu.name}</div>
+                <div className="text-xs text-gray-400">{data.menu.country_name} · {data.menu.currency_code}</div>
+              </div>
             </div>
           )}
         </div>
@@ -555,7 +693,8 @@ export default function SharedMenuPage() {
       </div>
 
       {/* ── Content area ─────────────────────────────────────────────────────── */}
-      <main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6">
+      <div className="flex flex-1 min-h-0">
+      <main className={`flex-1 min-w-0 px-4 sm:px-6 py-6 transition-all ${changePanelOpen ? 'max-w-[calc(100%-320px)]' : 'max-w-screen-xl mx-auto w-full'}`}>
 
         {dataLoading && (
           <div className="flex items-center justify-center py-24 text-gray-400 text-sm animate-pulse">Loading data…</div>
@@ -788,6 +927,8 @@ export default function SharedMenuPage() {
                               const isEditing = editCell?.itemId === item.menu_item_id && editCell?.levelId === l.id
 
                               if (!entry?.set) {
+                                const changeKey = `${item.menu_item_id}_l${l.id}`
+                                const cellChange = changedCells[changeKey]
                                 return (
                                   <td key={l.id} className="px-4 py-3 text-center">
                                     {isEdit ? (
@@ -813,8 +954,10 @@ export default function SharedMenuPage() {
                                 )
                               }
 
+                              const changeKey = `${item.menu_item_id}_l${l.id}`
+                              const cellChange = changedCells[changeKey]
                               return (
-                                <td key={l.id} className="px-4 py-3">
+                                <td key={l.id} className={`px-4 py-3 ${cellChange ? 'relative' : ''}`}>
                                   {isEdit && isEditing ? (
                                     <InlineInput
                                       value={editCell!.value}
@@ -823,31 +966,47 @@ export default function SharedMenuPage() {
                                       onCancel={() => setEditCell(null)}
                                     />
                                   ) : (
-                                    <button
-                                      className={`w-full text-right ${isEdit ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default'}`}
-                                      onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross) }) : undefined}
-                                      disabled={!isEdit}
-                                    >
-                                      <div className="flex items-center justify-end gap-1">
-                                        {entry.is_scenario_override && (
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Scenario override" />
+                                    <div className={`group relative ${cellChange ? 'rounded-md ring-1 ring-amber-300 bg-amber-50/40 px-1' : ''}`}>
+                                      <button
+                                        className={`w-full text-right ${isEdit ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default'}`}
+                                        onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross) }) : undefined}
+                                        disabled={!isEdit}
+                                      >
+                                        <div className="flex items-center justify-end gap-1">
+                                          {cellChange && (
+                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Recently changed" />
+                                          )}
+                                          {entry.is_scenario_override && (
+                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Scenario override" />
+                                          )}
+                                          <span className="font-semibold text-gray-800 tabular-nums">
+                                            {sym}{fmt2(entry.gross)}
+                                          </span>
+                                        </div>
+                                        <div className={`text-xs tabular-nums mt-0.5 ${cogsCls(entry.cogs_pct)}`}>
+                                          {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                        </div>
+                                        {entry.cogs_pct !== null && (
+                                          <div className="mt-1 h-1 rounded-full bg-gray-100 overflow-hidden flex justify-end">
+                                            <div
+                                              className={`h-full rounded-full ${cogsBarCls(entry.cogs_pct)} transition-all`}
+                                              style={{ width: `${Math.min(100, Math.max(0, 100 - (entry.cogs_pct ?? 0)))}%` }}
+                                            />
+                                          </div>
                                         )}
-                                        <span className="font-semibold text-gray-800 tabular-nums">
-                                          {sym}{fmt2(entry.gross)}
-                                        </span>
-                                      </div>
-                                      <div className={`text-xs tabular-nums mt-0.5 ${cogsCls(entry.cogs_pct)}`}>
-                                        {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
-                                      </div>
-                                      {entry.cogs_pct !== null && (
-                                        <div className="mt-1 h-1 rounded-full bg-gray-100 overflow-hidden">
-                                          <div
-                                            className={`h-full rounded-full ${cogsBarCls(entry.cogs_pct)} transition-all`}
-                                            style={{ width: `${Math.min(100, entry.cogs_pct)}%` }}
-                                          />
+                                      </button>
+                                      {cellChange && (
+                                        <div className="absolute right-0 bottom-full mb-1.5 z-30 hidden group-hover:block pointer-events-none">
+                                          <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-xl">
+                                            <p className="font-semibold mb-0.5">{cellChange.user_name}</p>
+                                            <p className="text-gray-300">{fmtTime(cellChange.created_at)}</p>
+                                            {cellChange.old_value !== null && (
+                                              <p className="mt-1 text-amber-300">{sym}{cellChange.old_value.toFixed(2)} → {sym}{(cellChange.new_value ?? 0).toFixed(2)}</p>
+                                            )}
+                                          </div>
                                         </div>
                                       )}
-                                    </button>
+                                    </div>
                                   )}
                                 </td>
                               )
@@ -874,6 +1033,62 @@ export default function SharedMenuPage() {
           </>
         )}
       </main>
+
+      {/* ── Change log panel ─────────────────────────────────────────────────── */}
+      {changePanelOpen && (
+        <aside className="w-80 flex-shrink-0 border-l border-gray-100 bg-white flex flex-col overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-800 text-sm">Change Log</h3>
+            <button className="text-gray-300 hover:text-gray-500 transition-colors text-lg leading-none" onClick={() => setChangePanelOpen(false)}>×</button>
+          </div>
+
+          {/* Comment input */}
+          <div className="px-4 py-3 border-b border-gray-100">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 min-w-0 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                placeholder="Add a comment…"
+                value={newComment}
+                onChange={e => setNewComment(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitComment() } }}
+                maxLength={500}
+              />
+              <button
+                className="flex-shrink-0 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition disabled:opacity-40"
+                onClick={submitComment}
+                disabled={submittingComment || !newComment.trim()}
+              >Post</button>
+            </div>
+          </div>
+
+          {/* Change list */}
+          <div className="flex-1 overflow-y-auto">
+            {changesLoading && (
+              <div className="py-8 text-center text-gray-300 text-xs animate-pulse">Loading…</div>
+            )}
+            {!changesLoading && changes.length === 0 && (
+              <div className="py-8 text-center text-gray-300 text-xs">No changes yet</div>
+            )}
+            {!changesLoading && changes.map(c => (
+              <div key={c.id} className={`px-4 py-3 border-b border-gray-50 ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-gray-700">{c.user_name}</span>
+                  <span className="text-xs text-gray-300">{fmtTime(c.created_at)}</span>
+                </div>
+                {c.change_type === 'price' ? (
+                  <div>
+                    <p className="text-xs text-gray-600 truncate font-medium">{c.display_name}</p>
+                    <p className="text-xs text-gray-400">{c.level_name}: <span className="line-through">{c.old_value !== null ? `${sym}${c.old_value.toFixed(2)}` : 'unset'}</span> → <span className="text-emerald-600 font-semibold">{sym}{(c.new_value ?? 0).toFixed(2)}</span></p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-600 italic">"{c.comment}"</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+      )}
+      </div>
 
       {/* ── Ingredient breakdown modal ───────────────────────────────────────── */}
       {breakdown && (

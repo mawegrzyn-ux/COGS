@@ -167,17 +167,19 @@ export function ConfirmDialog({ message, onConfirm, onCancel, danger = true }: C
 // ── Form Field ────────────────────────────────────────────────────────────────
 interface FieldProps {
   label:     string
+  hint?:     string
   error?:    string
   required?: boolean
   children:  React.ReactNode
 }
 
-export function Field({ label, error, required, children }: FieldProps) {
+export function Field({ label, hint, error, required, children }: FieldProps) {
   return (
     <div className="mb-4">
       <label className="block text-sm font-semibold text-text-2 mb-1.5">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
+      {hint && <p className="text-xs text-text-3 mb-1.5 -mt-1">{hint}</p>}
       {children}
       {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
     </div>

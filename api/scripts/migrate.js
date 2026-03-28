@@ -548,6 +548,24 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_shared_pages_menu_id   ON mcogs_shared_pages(menu_id)  WHERE menu_id  IS NOT NULL`,
   `ALTER TABLE mcogs_shared_pages ADD COLUMN IF NOT EXISTS scenario_id INTEGER REFERENCES mcogs_menu_scenarios(id) ON DELETE SET NULL`,
 
+  // ── 30. Shared page: notes + changes table ────────────────────────────────
+  `ALTER TABLE mcogs_shared_pages ADD COLUMN IF NOT EXISTS notes TEXT`,
+  `CREATE TABLE IF NOT EXISTS mcogs_shared_page_changes (
+    id              SERIAL PRIMARY KEY,
+    shared_page_id  INTEGER NOT NULL REFERENCES mcogs_shared_pages(id) ON DELETE CASCADE,
+    user_name       VARCHAR(100) NOT NULL DEFAULT 'Anonymous',
+    change_type     VARCHAR(20) NOT NULL DEFAULT 'price' CHECK (change_type IN ('price', 'comment')),
+    menu_item_id    INTEGER,
+    price_level_id  INTEGER,
+    display_name    VARCHAR(200),
+    level_name      VARCHAR(100),
+    old_value       NUMERIC(18,4),
+    new_value       NUMERIC(18,4),
+    comment         TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sp_changes_page ON mcogs_shared_page_changes(shared_page_id, created_at DESC)`,
+
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES
     ('GLUTEN',      'Gluten',              'Cereals containing gluten: wheat, rye, barley, oats and their hybridised strains', 1),

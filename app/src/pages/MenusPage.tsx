@@ -130,8 +130,23 @@ interface LevelReportData {
   items: LevelReportItem[]
 }
 
+interface MeChange {
+  id:             number
+  user_name:      string
+  change_type:    'price' | 'comment'
+  menu_item_id:   number | null
+  price_level_id: number | null
+  display_name:   string | null
+  level_name:     string | null
+  old_value:      number | null
+  new_value:      number | null
+  comment:        string | null
+  created_at:     string
+}
+
 interface SharedPage {
   id: number; slug: string; name: string; mode: 'view' | 'edit'
+  notes: string | null
   menu_id: number | null; country_id: number | null; scenario_id: number | null
   menu_name: string | null; country_name: string | null; scenario_name: string | null
   is_active: boolean; expires_at: string | null; created_at: string
@@ -237,9 +252,16 @@ export default function MenusPage() {
   const [spCountryId,     setSpCountryId]     = useState<number | ''>('')
   const [spScenarioId,    setSpScenarioId]    = useState<number | ''>('')
   const [spExpires,       setSpExpires]       = useState('')
+  const [spNotes,         setSpNotes]         = useState('')
   const [spSaving,        setSpSaving]        = useState(false)
   const [copiedSlug,      setCopiedSlug]      = useState<string | null>(null)
   const [allScenarios,    setAllScenarios]    = useState<ScenarioSummary[]>([])
+
+  // Menu Engineer change panel
+  const [meChanges,          setMeChanges]          = useState<MeChange[]>([])
+  const [meChangesLoading,   setMeChangesLoading]   = useState(false)
+  const [meChangePanelOpen,  setMeChangePanelOpen]  = useState(false)
+  const [meSharedPageId,     setMeSharedPageId]     = useState<number | null>(null)
 
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
@@ -405,13 +427,13 @@ export default function MenusPage() {
   }, [activeTab, loadSharedPages])
 
   function openNewSharedModal() {
-    setSpName(''); setSpMode('view'); setSpPassword('')
+    setSpName(''); setSpMode('view'); setSpPassword(''); setSpNotes('')
     setSpMenuId(''); setSpCountryId(''); setSpScenarioId(''); setSpExpires('')
     setSharedModal('new')
   }
 
   function openEditSharedModal(p: SharedPage) {
-    setSpName(p.name); setSpMode(p.mode); setSpPassword('')
+    setSpName(p.name); setSpMode(p.mode); setSpPassword(''); setSpNotes(p.notes ?? '')
     setSpMenuId(p.menu_id ?? ''); setSpCountryId(p.country_id ?? '')
     setSpScenarioId(p.scenario_id ?? '')
     setSpExpires(p.expires_at ? p.expires_at.slice(0, 10) : '')
@@ -425,6 +447,7 @@ export default function MenusPage() {
       const body: Record<string, unknown> = {
         name:        spName,
         mode:        spMode,
+        notes:       spNotes       || null,
         menu_id:     spMenuId      || null,
         country_id:  spCountryId   || null,
         scenario_id: spScenarioId  || null,
@@ -649,6 +672,19 @@ export default function MenusPage() {
   }, [activeTab, lrCountryId]) // eslint-disable-line
 
   useEffect(() => {
+    // When ME menu changes, check if a shared page exists and load its changes
+    if (activeTab !== 'scenario' || !scenarioMenuId) { setMeChanges([]); setMeSharedPageId(null); return }
+    const linked = sharedPages.find(p => p.menu_id === scenarioMenuId && p.is_active)
+    if (!linked) { setMeChanges([]); setMeSharedPageId(null); return }
+    setMeSharedPageId(linked.id)
+    setMeChangesLoading(true)
+    api.get(`/shared-pages/${linked.id}/changes`)
+      .then((ch: MeChange[]) => setMeChanges(ch))
+      .catch(() => {})
+      .finally(() => setMeChangesLoading(false))
+  }, [activeTab, scenarioMenuId, sharedPages, api])
+
+  useEffect(() => {
     if (activeTab !== 'scenario' || !scenarioMenuId) { setScenarioData(null); return }
     // 'ALL' mode: ScenarioTool fetches per-level data internally; parent doesn't load
     if (scenarioLevelId === 'ALL') { setScenarioData(null); return }
@@ -866,21 +902,70 @@ export default function MenusPage() {
 
       {/* ══ TAB: SCENARIO ═══════════════════════════════════════════════════ */}
       {activeTab === 'scenario' && (
-        <ScenarioTool
-          menus={menus}
-          countries={countries}
-          priceLevels={priceLevels}
-          data={scenarioData}
-          loading={scenarioLoading}
-          menuId={scenarioMenuId}
-          levelId={scenarioLevelId}
-          qty={scenarioQty}
-          onMenuChange={id => { setScenarioMenuId(id); setSelectedMenuId(id) }}
-          onLevelChange={setScenarioLevelId}
-          onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
-          onResetQty={() => setScenarioQty({})}
-          onReplaceQty={(qMap) => setScenarioQty(qMap)}
-        />
+        <>
+          {/* ME change panel toggle */}
+          {meSharedPageId && (
+            <div className="flex items-center justify-end mb-2 px-6 pt-4">
+              <button
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${meChangePanelOpen ? 'bg-accent-dim border-accent text-accent' : 'bg-white border-border text-text-3 hover:border-text-3'}`}
+                onClick={() => setMeChangePanelOpen(p => !p)}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                External changes {meChanges.filter(c => c.change_type === 'price').length > 0 && <span className="font-bold text-accent">{meChanges.filter(c => c.change_type === 'price').length}</span>}
+              </button>
+            </div>
+          )}
+
+          <div className={`flex gap-4 ${meChangePanelOpen ? 'items-start' : ''}`}>
+            <div className="flex-1 min-w-0">
+              <ScenarioTool
+                menus={menus}
+                countries={countries}
+                priceLevels={priceLevels}
+                data={scenarioData}
+                loading={scenarioLoading}
+                menuId={scenarioMenuId}
+                levelId={scenarioLevelId}
+                qty={scenarioQty}
+                onMenuChange={id => { setScenarioMenuId(id); setSelectedMenuId(id) }}
+                onLevelChange={setScenarioLevelId}
+                onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
+                onResetQty={() => setScenarioQty({})}
+                onReplaceQty={(qMap) => setScenarioQty(qMap)}
+              />
+            </div>
+            {meChangePanelOpen && meSharedPageId && (
+              <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-border shadow-sm overflow-hidden flex flex-col mx-6 mb-6" style={{ maxHeight: '70vh' }}>
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                  <h3 className="font-semibold text-text-1 text-sm">External Changes</h3>
+                  <button className="text-text-3 hover:text-text-1 transition-colors text-lg leading-none" onClick={() => setMeChangePanelOpen(false)}>×</button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {meChangesLoading && <div className="py-8 text-center text-text-3 text-xs animate-pulse">Loading…</div>}
+                  {!meChangesLoading && meChanges.length === 0 && <div className="py-8 text-center text-text-3 text-xs">No external changes yet</div>}
+                  {!meChangesLoading && meChanges.map(c => (
+                    <div key={c.id} className={`px-4 py-3 border-b border-border ${c.change_type === 'comment' ? 'bg-blue-50/20' : ''}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-text-1">{c.user_name}</span>
+                        <span className="text-xs text-text-3">{new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      {c.change_type === 'price' ? (
+                        <div>
+                          <p className="text-xs text-text-2 truncate font-medium">{c.display_name}</p>
+                          <p className="text-xs text-text-3">{c.level_name}: <span className="line-through">{c.old_value !== null ? c.old_value.toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{(c.new_value ?? 0).toFixed(2)}</span></p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-text-2 italic">"{c.comment}"</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* ══ TAB: SHARED LINKS ════════════════════════════════════════════ */}
@@ -1015,6 +1100,14 @@ export default function MenusPage() {
                     ))}
                   </select>
                   {spScenarioId && <p className="text-xs text-amber-600 mt-1">Scenario price overrides will be shown instead of live prices.</p>}
+                </Field>
+                <Field label="Welcome Notes (optional)" hint="Shown to users once after entering the password">
+                  <textarea
+                    className="input w-full h-24 resize-none"
+                    placeholder="e.g. Please review the pricing for Q3 and update delivery prices where needed."
+                    value={spNotes}
+                    onChange={e => setSpNotes(e.target.value)}
+                  />
                 </Field>
                 <Field label="Expiry Date (optional)">
                   <input className="input w-full" type="date" value={spExpires} onChange={e => setSpExpires(e.target.value)} />

@@ -122,7 +122,7 @@ router.get('/', async (req, res) => {
 
 // POST /api/shared-pages
 router.post('/', async (req, res) => {
-  const { name, mode = 'view', password, menu_id, country_id, scenario_id, expires_at } = req.body;
+  const { name, mode = 'view', password, menu_id, country_id, scenario_id, expires_at, notes } = req.body;
   if (!name)     return res.status(400).json({ error: { message: 'name is required' } });
   if (!password) return res.status(400).json({ error: { message: 'password is required' } });
   if (!['view', 'edit'].includes(mode)) return res.status(400).json({ error: { message: 'mode must be view or edit' } });
@@ -134,14 +134,15 @@ router.post('/', async (req, res) => {
 
     const { rows: [row] } = await pool.query(`
       INSERT INTO mcogs_shared_pages
-        (slug, name, mode, password_hash, password_salt, menu_id, country_id, scenario_id, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (slug, name, mode, password_hash, password_salt, menu_id, country_id, scenario_id, expires_at, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *
     `, [slug, name, mode, hash, salt,
         menu_id     || null,
         country_id  || null,
         scenario_id || null,
-        expires_at  || null]);
+        expires_at  || null,
+        notes       || null]);
 
     res.status(201).json({ ...row, url: `/share/${slug}` });
   } catch (err) {
@@ -153,7 +154,7 @@ router.post('/', async (req, res) => {
 // PUT /api/shared-pages/:id
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, mode, password, menu_id, country_id, scenario_id, is_active, expires_at } = req.body;
+  const { name, mode, password, menu_id, country_id, scenario_id, is_active, expires_at, notes } = req.body;
 
   try {
     const { rows: [existing] } = await pool.query(
@@ -179,6 +180,7 @@ router.put('/:id', async (req, res) => {
         scenario_id   = $7,
         is_active     = COALESCE($8, is_active),
         expires_at    = $9,
+        notes         = $11,
         updated_at    = NOW()
       WHERE id = $10
       RETURNING *
@@ -192,6 +194,7 @@ router.put('/:id', async (req, res) => {
       is_active  !== undefined ? is_active             : null,
       expires_at !== undefined ? (expires_at || null)  : existing.expires_at,
       id,
+      notes      !== undefined ? (notes      || null)  : existing.notes,
     ]);
 
     res.json({ ...row, url: `/share/${row.slug}` });
@@ -212,6 +215,22 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete shared page' } });
+  }
+});
+
+// GET /api/shared-pages/:id/changes — management: view change log for a shared page
+router.get('/:id/changes', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT * FROM mcogs_shared_page_changes
+      WHERE shared_page_id = $1
+      ORDER BY created_at DESC
+      LIMIT 200
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch changes' } });
   }
 });
 
@@ -247,6 +266,7 @@ publicRouter.get('/:slug', async (req, res) => {
     res.json({
       name:          page.name,
       mode:          page.mode,
+      notes:         page.notes || null,
       menu_locked:   !!page.menu_id,
       menu_id:       page.menu_id,
       menu_name:     page.menu_name,
@@ -265,8 +285,9 @@ publicRouter.get('/:slug', async (req, res) => {
 // ── POST /api/public/share/:slug/auth — password → token ─────────────────────
 
 publicRouter.post('/:slug/auth', async (req, res) => {
-  const { password } = req.body;
-  if (!password) return res.status(400).json({ error: { message: 'password is required' } });
+  const { password, user_name } = req.body;
+  if (!password)   return res.status(400).json({ error: { message: 'password is required' } });
+  if (!user_name || !user_name.trim()) return res.status(400).json({ error: { message: 'Your name is required' } });
 
   try {
     const page = await fetchPage(req.params.slug);
@@ -288,10 +309,11 @@ publicRouter.post('/:slug/auth', async (req, res) => {
       menu_id:     page.menu_id,
       country_id:  page.country_id,
       scenario_id: page.scenario_id,
+      user_name:   user_name.trim(),
       exp:         Date.now() + TOKEN_TTL_MS,
     });
 
-    res.json({ token, mode: page.mode });
+    res.json({ token, mode: page.mode, user_name: user_name.trim() });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Server error' } });
@@ -322,6 +344,13 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
       if (!mi) return res.status(403).json({ error: { message: 'Menu item not on this menu' } });
     }
 
+    // Fetch old price for change log
+    const { rows: [oldRow] } = await pool.query(
+      `SELECT sell_price FROM mcogs_menu_item_prices WHERE menu_item_id = $1 AND price_level_id = $2`,
+      [menu_item_id, price_level_id]
+    );
+    const oldValue = oldRow ? Number(oldRow.sell_price) : null;
+
     await pool.query(`
       INSERT INTO mcogs_menu_item_prices (menu_item_id, price_level_id, sell_price)
       VALUES ($1, $2, $3)
@@ -329,10 +358,71 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
       DO UPDATE SET sell_price = EXCLUDED.sell_price, updated_at = NOW()
     `, [menu_item_id, price_level_id, Math.round(sell_price * 10000) / 10000]);
 
+    // Log the change
+    const { rows: [miRow] } = await pool.query(`
+      SELECT mi.display_name, pl.name AS level_name
+      FROM   mcogs_menu_items mi
+      JOIN   mcogs_price_levels pl ON pl.id = $2
+      WHERE  mi.id = $1
+    `, [menu_item_id, price_level_id]);
+
+    await pool.query(`
+      INSERT INTO mcogs_shared_page_changes
+        (shared_page_id, user_name, change_type, menu_item_id, price_level_id, display_name, level_name, old_value, new_value)
+      VALUES ($1,$2,'price',$3,$4,$5,$6,$7,$8)
+    `, [
+      page.id,
+      req.tokenPayload.user_name || 'Anonymous',
+      menu_item_id,
+      price_level_id,
+      miRow?.display_name || null,
+      miRow?.level_name   || null,
+      oldValue,
+      Math.round(sell_price * 10000) / 10000,
+    ]);
+
     res.json({ saved: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to save price' } });
+  }
+});
+
+// GET /api/public/share/:slug/changes — return change log (Bearer required)
+publicRouter.get('/:slug/changes', requirePublicToken, async (req, res) => {
+  try {
+    const page = await fetchPage(req.params.slug);
+    if (!page) return res.status(404).json({ error: { message: 'Not found' } });
+    const { rows } = await pool.query(`
+      SELECT * FROM mcogs_shared_page_changes
+      WHERE shared_page_id = $1
+      ORDER BY created_at DESC
+      LIMIT 200
+    `, [page.id]);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch changes' } });
+  }
+});
+
+// POST /api/public/share/:slug/comment — add a manual comment (Bearer required)
+publicRouter.post('/:slug/comment', requirePublicToken, async (req, res) => {
+  const { comment } = req.body;
+  if (!comment || !comment.trim()) return res.status(400).json({ error: { message: 'comment is required' } });
+  try {
+    const page = await fetchPage(req.params.slug);
+    if (!page) return res.status(404).json({ error: { message: 'Not found' } });
+    const { rows: [row] } = await pool.query(`
+      INSERT INTO mcogs_shared_page_changes
+        (shared_page_id, user_name, change_type, comment)
+      VALUES ($1, $2, 'comment', $3)
+      RETURNING *
+    `, [page.id, req.tokenPayload.user_name || 'Anonymous', comment.trim()]);
+    res.json(row);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to add comment' } });
   }
 });
 
