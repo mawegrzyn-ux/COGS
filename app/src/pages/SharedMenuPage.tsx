@@ -775,7 +775,7 @@ export default function SharedMenuPage() {
               {/* Category split */}
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                  {summary.hasQty ? 'Revenue by Category' : 'Items by Category'}
+                  Revenue &amp; COGS by Category
                 </h3>
                 <div className="space-y-2.5">
                   {summary.catBreakdown.map(cat => (
@@ -786,8 +786,8 @@ export default function SharedMenuPage() {
                           {cat.cogsPct !== null && (
                             <span className={cogsCls(cat.cogsPct)}>{fmt2(cat.cogsPct)}% COGS</span>
                           )}
-                          <span className="font-semibold text-gray-700 w-10 text-right">
-                            {fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%
+                          <span className="font-semibold text-gray-700 text-right">
+                            <span className="text-gray-400 font-normal mr-0.5">{summary.hasQty ? 'rev' : 'cost'}</span>{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%
                           </span>
                         </div>
                       </div>
@@ -805,7 +805,7 @@ export default function SharedMenuPage() {
               {/* Price level split */}
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                  Revenue Split & COGS by Price Level
+                  Revenue &amp; COGS by Price Level
                 </h3>
                 <div className="space-y-2.5">
                   {summary.levelBreakdown.map(lvl => (
@@ -815,10 +815,10 @@ export default function SharedMenuPage() {
                         <div className="flex items-center gap-3 text-xs flex-shrink-0">
                           <span className="text-gray-400">{lvl.priced}/{lvl.total} priced</span>
                           {lvl.avgCogs !== null && (
-                            <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>
+                            <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}% COGS</span>
                           )}
-                          <span className="text-gray-700 font-semibold w-10 text-right">
-                            {lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}
+                          <span className="text-gray-700 font-semibold text-right">
+                            {lvl.revPct > 0 ? <><span className="text-gray-400 font-normal mr-0.5">rev</span>{fmt2(lvl.revPct)}%</> : '—'}
                           </span>
                         </div>
                       </div>

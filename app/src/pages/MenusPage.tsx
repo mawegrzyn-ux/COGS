@@ -225,11 +225,12 @@ export default function MenusPage() {
 
 
   // scenario tool
-  const [scenarioMenuId,  setScenarioMenuId]  = useState<number | null>(null)
-  const [scenarioLevelId, setScenarioLevelId] = useState<number | '' | 'ALL'>('ALL')
-  const [scenarioData,    setScenarioData]    = useState<CogsData | null>(null)
-  const [scenarioLoading, setScenarioLoading] = useState(false)
-  const [scenarioQty,     setScenarioQty]     = useState<Record<string, string>>({})
+  const [scenarioMenuId,    setScenarioMenuId]    = useState<number | null>(null)
+  const [scenarioLevelId,   setScenarioLevelId]   = useState<number | '' | 'ALL'>('ALL')
+  const [scenarioData,      setScenarioData]      = useState<CogsData | null>(null)
+  const [scenarioLoading,   setScenarioLoading]   = useState(false)
+  const [scenarioQty,       setScenarioQty]       = useState<Record<string, string>>({})
+  const [scenarioRefreshKey, setScenarioRefreshKey] = useState(0)
 
   // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
@@ -601,6 +602,7 @@ export default function MenusPage() {
       }))
       setMenuItemModal(null)
       await openMenu(selectedMenuId)
+      setScenarioRefreshKey(k => k + 1)
       showToast(isEdit ? 'Item updated.' : 'Item added to menu.')
     } catch { showToast('Failed to save item.', 'error') }
   }
@@ -684,6 +686,15 @@ export default function MenusPage() {
       .finally(() => setMeChangesLoading(false))
   }, [activeTab, scenarioMenuId, sharedPages, api])
 
+  async function clearMeComments() {
+    if (!meSharedPageId) return
+    try {
+      await api.delete(`/shared-pages/${meSharedPageId}/changes/comments`)
+      setMeChanges(prev => prev.filter(c => c.change_type !== 'comment'))
+      showToast('Comments cleared.')
+    } catch { showToast('Failed to clear comments.', 'error') }
+  }
+
   useEffect(() => {
     if (activeTab !== 'scenario' || !scenarioMenuId) { setScenarioData(null); return }
     // 'ALL' mode: ScenarioTool fetches per-level data internally; parent doesn't load
@@ -696,7 +707,7 @@ export default function MenusPage() {
       .then((d: CogsData) => setScenarioData(d))
       .catch(() => {})
       .finally(() => setScenarioLoading(false))
-  }, [activeTab, scenarioMenuId, scenarioLevelId, api]) // eslint-disable-line
+  }, [activeTab, scenarioMenuId, scenarioLevelId, api, scenarioRefreshKey]) // eslint-disable-line
 
   // saveLrPrice: saves gross price, converting from display currency back to local if needed
   async function saveLrPrice(menuItemId: number, levelId: number, grossInDisplay: number) {
@@ -913,7 +924,7 @@ export default function MenusPage() {
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                External changes {meChanges.filter(c => c.change_type === 'price').length > 0 && <span className="font-bold text-accent">{meChanges.filter(c => c.change_type === 'price').length}</span>}
+                Changes &amp; Comments {meChanges.length > 0 && <span className="font-bold text-accent">{meChanges.length}</span>}
               </button>
             </div>
           )}
@@ -929,27 +940,51 @@ export default function MenusPage() {
                 menuId={scenarioMenuId}
                 levelId={scenarioLevelId}
                 qty={scenarioQty}
+                refreshKey={scenarioRefreshKey}
                 onMenuChange={id => { setScenarioMenuId(id); setSelectedMenuId(id) }}
                 onLevelChange={setScenarioLevelId}
                 onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
                 onResetQty={() => setScenarioQty({})}
                 onReplaceQty={(qMap) => setScenarioQty(qMap)}
+                onAddItem={() => {
+                  if (scenarioMenuId) {
+                    setSelectedMenuId(scenarioMenuId)
+                    resetMiModal()
+                    setMenuItemModal('new')
+                    setLevelPrices([])
+                  }
+                }}
               />
             </div>
             {meChangePanelOpen && meSharedPageId && (
               <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-border shadow-sm overflow-hidden flex flex-col mx-6 mb-6" style={{ maxHeight: '70vh' }}>
-                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                  <h3 className="font-semibold text-text-1 text-sm">External Changes</h3>
-                  <button className="text-text-3 hover:text-text-1 transition-colors text-lg leading-none" onClick={() => setMeChangePanelOpen(false)}>×</button>
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+                  <h3 className="font-semibold text-text-1 text-sm">Changes &amp; Comments</h3>
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    {meChanges.some(c => c.change_type === 'comment') && (
+                      <button
+                        className="text-xs text-text-3 hover:text-red-500 transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-red-200"
+                        onClick={clearMeComments}
+                        title="Delete all comments"
+                      >Clear comments</button>
+                    )}
+                    <button className="text-text-3 hover:text-text-1 transition-colors text-lg leading-none" onClick={() => setMeChangePanelOpen(false)}>×</button>
+                  </div>
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {meChangesLoading && <div className="py-8 text-center text-text-3 text-xs animate-pulse">Loading…</div>}
-                  {!meChangesLoading && meChanges.length === 0 && <div className="py-8 text-center text-text-3 text-xs">No external changes yet</div>}
+                  {!meChangesLoading && meChanges.length === 0 && <div className="py-8 text-center text-text-3 text-xs">No changes or comments yet</div>}
                   {!meChangesLoading && meChanges.map(c => (
-                    <div key={c.id} className={`px-4 py-3 border-b border-border ${c.change_type === 'comment' ? 'bg-blue-50/20' : ''}`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-semibold text-text-1">{c.user_name}</span>
-                        <span className="text-xs text-text-3">{new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                    <div key={c.id} className={`px-4 py-3 border-b border-border ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
+                      <div className="flex items-center justify-between mb-1 gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {c.change_type === 'comment'
+                            ? <span className="text-blue-400 flex-shrink-0" title="Comment">💬</span>
+                            : <span className="text-accent flex-shrink-0" title="Price change">✏️</span>
+                          }
+                          <span className="text-xs font-semibold text-text-1 truncate">{c.user_name}</span>
+                        </div>
+                        <span className="text-xs text-text-3 flex-shrink-0">{new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                       {c.change_type === 'price' ? (
                         <div>
@@ -957,7 +992,10 @@ export default function MenusPage() {
                           <p className="text-xs text-text-3">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
                         </div>
                       ) : (
-                        <p className="text-xs text-text-2 italic">"{c.comment}"</p>
+                        <div>
+                          <p className="text-xs text-text-2 truncate font-medium">{c.display_name}</p>
+                          <p className="text-xs text-blue-600 italic mt-0.5">"{c.comment}"</p>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -1413,25 +1451,25 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       )}
 
       {/* Filter bar */}
-      <div className="flex gap-2 mb-3 flex-wrap items-center">
+      <div className="flex gap-2 mb-3 items-center min-w-0">
         <input
-          className="input text-sm flex-1 min-w-[160px]"
+          className="input text-sm flex-1 min-w-0"
           placeholder="Search items…"
           value={itemFilterQ}
           onChange={e => onFilterQ(e.target.value)}
         />
-        <select className="input text-sm" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
+        <select className="input text-sm shrink-0" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
           <option value="">All Types</option>
           <option value="recipe">Recipe</option>
           <option value="ingredient">Ingredient</option>
         </select>
         {categories.length > 0 && (
-          <select className="input text-sm" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
+          <select className="input text-sm shrink-0" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
             <option value="">All Categories</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
-        <select className="input text-sm" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
+        <select className="input text-sm shrink-0" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="green">✓ Excellent</option>
           <option value="yellow">~ Acceptable</option>
@@ -2564,15 +2602,8 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
           const key   = item.item_type === 'recipe'
             ? `r_${item.recipe_id}`
             : `i_${item.ingredient_id}`
-          // Plain key — used by single-level view
+          // Single shared qty key — used by both single-level and All Levels views
           qMap[key] = String(qty)
-          // Per-level keys — used by All Levels view (format: natKey__lLevelId)
-          for (const level of activeLevels) {
-            if (level.id === 0) continue // placeholder level, skip
-            const pct      = activeLevels.length === 1 ? 100 : (parseFloat(String(levelPcts[level.id])) || 0)
-            const levelQty = Math.max(0, Math.round(qty * pct / 100))
-            if (levelQty > 0) qMap[`${key}__l${level.id}`] = String(levelQty)
-          }
           previewRows.push({
             label: item.display_name,
             qty,
@@ -2728,7 +2759,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
                 </div>
               </div>
               <p className="text-xs text-gray-400 mb-2">
-                Used to compute a weighted average price per item — higher-level prices affect quantity distribution
+                Weights the effective price per item for the revenue target calculation — doesn't split quantities per level
               </p>
               <div className="space-y-2">
                 {priceLevels.map((l, i) => {
@@ -2870,16 +2901,19 @@ interface ScenarioToolProps {
   menuId:      number | null
   levelId:     number | '' | 'ALL'
   qty:         Record<string, string>
+  refreshKey?: number
   onMenuChange(id: number | null): void
   onLevelChange(id: number | '' | 'ALL'): void
   onQtyChange(key: string, q: string): void
   onResetQty(): void
   onReplaceQty(qMap: Record<string, string>): void
+  onAddItem?(): void
 }
 
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
+  onAddItem, refreshKey = 0,
 }: ScenarioToolProps) {
 
   const api = useApi()
@@ -2910,7 +2944,7 @@ function ScenarioTool({
     .then(results => setAllLevelsData(results))
     .catch(() => {})
     .finally(() => setAllLevelsLoading(false))
-  }, [levelId, menuId, priceLevels, api]) // eslint-disable-line
+  }, [levelId, menuId, priceLevels, api, refreshKey]) // eslint-disable-line
 
   // ── Display currency ───────────────────────────────────────────────────────
   const [dispCurrCode, setDispCurrCode] = useState<string>('')
@@ -3276,10 +3310,12 @@ function ScenarioTool({
       const costOvVal      = costOverrides[costOvKey]
       const cost           = costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp
       const isCostOv       = costOvKey in costOverrides
+      // One shared qty for this item — same key used by single-level view
+      const q_shared       = Math.max(0, parseFloat(qty[natKey] || '0') || 0)
       const perLevel = allLevelsData.map(({ level, data }) => {
         const li             = data.items.find(i => i.menu_item_id === item.menu_item_id)
-        const qty_key        = `${natKey}__l${level.id}`
-        const q              = Math.max(0, parseFloat(qty[qty_key] || '0') || 0)
+        const qty_key        = natKey   // shared key — same as single-level view
+        const q              = q_shared
         const basePriceGross = (li?.sell_price_gross ?? 0) * dispRate
         const basePriceNet   = (li?.sell_price_net   ?? 0) * dispRate
         const taxRatio       = basePriceGross > 0 ? basePriceNet / basePriceGross : 1
@@ -3296,7 +3332,7 @@ function ScenarioTool({
           cogs_pct: revenue > 0 ? (q * cost / revenue) * 100 : null,
         }
       })
-      const total_qty = perLevel.reduce((s, p) => s + p.qty, 0)
+      // total_qty is the shared qty (not a sum across levels — that would multiply by level count)
       return {
         menu_item_id: item.menu_item_id,
         nat_key:      natKey,
@@ -3305,7 +3341,7 @@ function ScenarioTool({
         item_type:    item.item_type,
         cost, base_cost_display: baseCostDisp,
         cost_override_key: costOvKey, is_cost_overridden: isCostOv,
-        total_qty, total_cost: total_qty * cost,
+        total_qty: q_shared, total_cost: q_shared * cost,
         perLevel,
       }
     })
@@ -3727,6 +3763,11 @@ ${tableHtml}
             <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
           )}
 
+          {/* Add Item */}
+          {menuId && onAddItem && (
+            <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
+          )}
+
           {/* Generate Mix + Reset Qty */}
           {menuId && (
             <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
@@ -4085,9 +4126,9 @@ ${tableHtml}
                         </td>
                         <td />
                         {allLevelsData.map(({ level }) => {
-                          const cLvlQ = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
+                          const cLvlQ = catRows.reduce((s, r) => s + r.total_qty, 0)
                           const cR    = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
-                          const cCost = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0) * r.cost, 0)
+                          const cCost = catRows.reduce((s, r) => s + r.total_qty * r.cost, 0)
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>

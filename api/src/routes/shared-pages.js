@@ -235,6 +235,20 @@ router.get('/:id/changes', async (req, res) => {
   }
 });
 
+// DELETE /api/shared-pages/:id/changes/comments — clear all comments for a shared page
+router.delete('/:id/changes/comments', async (req, res) => {
+  try {
+    await pool.query(`
+      DELETE FROM mcogs_shared_page_changes
+      WHERE shared_page_id = $1 AND change_type = 'comment'
+    `, [req.params.id]);
+    res.json({ cleared: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to clear comments' } });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  PUBLIC ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
