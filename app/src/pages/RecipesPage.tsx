@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 
@@ -99,7 +100,8 @@ const fmtCost = (n: number | string | null | undefined) => Number(n ?? 0).toFixe
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RecipesPage() {
-  const api = useApi()
+  const api      = useApi()
+  const navigate = useNavigate()
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -763,10 +765,15 @@ export default function RecipesPage() {
                       value={selectedCountryId}
                       onChange={e => {
                         const v = e.target.value
-                        if (v === 'GLOBAL') setSelectedCountryId('GLOBAL')
-                        else setSelectedCountryId(Number(v))
+                        const newId = v === 'GLOBAL' ? 'GLOBAL' : Number(v)
+                        setSelectedCountryId(newId)
                         setSelectedCurrencyCode('')
                         setShowComparison(false)
+                        // Reset tile menu selector to first menu in the new market
+                        const firstInMarket = typeof newId === 'number'
+                          ? menuAssignments.find(m => m.country_id === newId)
+                          : menuAssignments[0]
+                        setSelectedMenuId(firstInMarket?.menu_id ?? null)
                       }}
                       className="input text-sm"
                       style={{ minWidth: 160 }}
@@ -835,8 +842,12 @@ export default function RecipesPage() {
 
               {/* ── COGS KPIs ── */}
               {activeCogs && (() => {
-                const showBase = activeCogs.currency_code !== 'USD'
-                const activeMenu = menuAssignments.find(m => m.menu_id === selectedMenuId) ?? menuAssignments[0] ?? null
+                const showBase = displayCurrency.code !== 'USD'
+                // Only show menus that belong to the currently selected market in the Price tile
+                const tileMenus = typeof selectedCountryId === 'number'
+                  ? menuAssignments.filter(m => m.country_id === selectedCountryId)
+                  : menuAssignments
+                const activeMenu = tileMenus.find(m => m.menu_id === selectedMenuId) ?? tileMenus[0] ?? null
                 return (
                   <div className="bg-surface border border-border rounded-xl p-4 mb-5">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -844,7 +855,7 @@ export default function RecipesPage() {
                       <div className="bg-surface-2 rounded-lg p-3">
                         <div className="text-xs text-text-3 mb-1">Per Portion</div>
                         <div className="text-lg font-bold font-mono text-text-1">
-                          {activeCogs.currency_symbol}{fmtCost(activeCogs.cost_per_portion * activeCogs.exchange_rate)}
+                          {displayCurrency.symbol}{fmtCost(activeCogs.cost_per_portion * displayCurrency.rate)}
                         </div>
                         {showBase && (
                           <div className="text-xs font-mono text-text-3 mt-0.5">${fmtCost(activeCogs.cost_per_portion)}</div>
@@ -855,7 +866,7 @@ export default function RecipesPage() {
                       <div className="bg-surface-2 rounded-lg p-3">
                         <div className="text-xs text-text-3 mb-1">Total Cost</div>
                         <div className="text-lg font-bold font-mono text-text-1">
-                          {activeCogs.currency_symbol}{fmtCost(activeCogs.total_cost_base * activeCogs.exchange_rate)}
+                          {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                         </div>
                         {showBase && (
                           <div className="text-xs font-mono text-text-3 mt-0.5">${fmtCost(activeCogs.total_cost_base)}</div>
@@ -867,19 +878,19 @@ export default function RecipesPage() {
                         <div className="flex items-center justify-between mb-1 gap-1">
                           <div className="text-xs text-text-3 shrink-0">Price</div>
                           <div className="flex items-center gap-1">
-                            {/* Menu selector */}
-                            {menuAssignments.length > 1 ? (
+                            {/* Menu selector — filtered to active market */}
+                            {tileMenus.length > 1 ? (
                               <select
                                 value={selectedMenuId ?? ''}
                                 onChange={e => setSelectedMenuId(Number(e.target.value))}
                                 className="text-xs text-text-3 bg-transparent border border-border rounded px-1 py-0 max-w-[120px]"
                               >
-                                {menuAssignments.map(m => (
-                                  <option key={m.menu_id} value={m.menu_id}>{m.country_name} — {m.menu_name}</option>
+                                {tileMenus.map(m => (
+                                  <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>
                                 ))}
                               </select>
-                            ) : menuAssignments.length === 1 ? (
-                              <span className="text-xs text-text-3 truncate max-w-[110px]" title={`${menuAssignments[0].country_name} — ${menuAssignments[0].menu_name}`}>{menuAssignments[0].menu_name}</span>
+                            ) : tileMenus.length === 1 ? (
+                              <span className="text-xs text-text-3 truncate max-w-[110px]" title={tileMenus[0].menu_name}>{tileMenus[0].menu_name}</span>
                             ) : null}
                           </div>
                         </div>
@@ -1084,7 +1095,7 @@ export default function RecipesPage() {
                               const name     = item.ingredient_name || item.sub_recipe_name || ''
                               const added    = !comparisonData.globalNames.has(name)
                               const cogLine  = activeCogs?.lines.find(l => l.id === item.id)
-                              const localCost = cogLine?.cost != null ? cogLine.cost * (activeCogs?.exchange_rate ?? 1) : null
+                              const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
                               return (
                                 <tr key={item.id} className={`border-b border-border last:border-0 ${added ? 'bg-emerald-50' : 'hover:bg-surface-2/40'}`}>
                                   <td className="px-3 py-2.5">
@@ -1104,7 +1115,7 @@ export default function RecipesPage() {
                                   <td className="px-3 py-2.5 text-right font-mono text-xs">
                                     {localCost != null
                                       ? <div className="flex flex-col items-end">
-                                          <span className="text-text-1">{activeCogs?.currency_symbol}{fmtCost(localCost)}</span>
+                                          <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
                                           {cogLine?.quote_is_preferred === false && <span className="text-[10px] text-amber-400 mt-0.5">best avail.</span>}
                                         </div>
                                       : <span className="text-red-400">—</span>
@@ -1119,7 +1130,7 @@ export default function RecipesPage() {
                               <tr className="border-t-2 border-border bg-blue-50/30">
                                 <td className="px-3 py-2 font-semibold text-text-2 text-xs" colSpan={2}>Total</td>
                                 <td className="px-3 py-2 text-right font-mono font-bold text-text-1 text-xs">
-                                  {activeCogs.currency_symbol}{fmtCost(activeCogs.total_cost_base * activeCogs.exchange_rate)}
+                                  {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                                 </td>
                               </tr>
                             </tfoot>
@@ -1146,14 +1157,14 @@ export default function RecipesPage() {
                           <SortTh label="Ingredient" field="name" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
                           <SortTh label="Qty"        field="qty"  sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
                           <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
-                          {activeCogs && <SortTh label={`Cost (${activeCogs.currency_code})`} field="cost" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="right" className="px-4 py-2.5" />}
+                          {activeCogs && <SortTh label={`Cost (${displayCurrency.code})`} field="cost" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="right" className="px-4 py-2.5" />}
                           <th className="w-16" />
                         </tr>
                       </thead>
                       <tbody>
                         {displayItems.map(item => {
                           const cogLine   = activeCogs?.lines.find(l => l.id === item.id)
-                          const localCost = cogLine?.cost != null ? cogLine.cost * (activeCogs?.exchange_rate ?? 1) : null
+                          const localCost = cogLine?.cost != null ? cogLine.cost * displayCurrency.rate : null
                           const isDragging = dragId === item.id
                           const isOver    = dragOverId === item.id && dragId !== item.id
                           return (
@@ -1198,7 +1209,7 @@ export default function RecipesPage() {
                                 <td className="px-4 py-2.5 text-right font-mono">
                                   {localCost != null
                                     ? <div className="flex flex-col items-end">
-                                        <span className="text-text-1">{activeCogs.currency_symbol}{fmtCost(localCost)}</span>
+                                        <span className="text-text-1">{displayCurrency.symbol}{fmtCost(localCost)}</span>
                                         {cogLine?.quote_is_preferred === false && (
                                           <span className="text-[10px] text-amber-400 leading-none mt-0.5">best available</span>
                                         )}
@@ -1228,7 +1239,7 @@ export default function RecipesPage() {
                           <tr className="border-t-2 border-border bg-surface-2">
                             <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={3}>Total</td>
                             <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
-                              {activeCogs.currency_symbol}{fmtCost(activeCogs.total_cost_base * activeCogs.exchange_rate)}
+                              {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                             </td>
                             <td />
                           </tr>
@@ -1286,7 +1297,13 @@ export default function RecipesPage() {
                           return (
                             <tr key={m.menu_id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
                               <td className="px-4 py-2.5 text-text-3 text-xs">{m.country_name}</td>
-                              <td className="px-4 py-2.5 font-medium text-text-1">{m.menu_name}</td>
+                              <td className="px-4 py-2.5 font-medium">
+                                <button
+                                  className="text-accent hover:underline text-left"
+                                  onClick={() => navigate(`/menus?menu=${m.menu_id}`)}
+                                  title="Open in Menu Builder"
+                                >{m.menu_name}</button>
+                              </td>
                               <td className="px-4 py-2.5 text-text-2">{m.display_name}</td>
                               <td className="px-4 py-2.5 text-right font-mono text-text-2">
                                 {isEditing ? (

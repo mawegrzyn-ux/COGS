@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import { ColumnHeader } from '../components/ColumnHeader'
@@ -139,6 +140,7 @@ const cogsClass = (pct: number): 'green' | 'yellow' | 'red' =>
 
 export default function MenusPage() {
   const api = useApi()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // shared data
   const [countries,       setCountries]       = useState<Country[]>([])
@@ -243,6 +245,19 @@ export default function MenusPage() {
   }, [api])
 
   useEffect(() => { load() }, [load])
+
+  // ── Auto-open menu from ?menu=<id> URL param (e.g. linked from Recipes page) ─
+  useEffect(() => {
+    if (loading) return
+    const paramId = searchParams.get('menu')
+    if (!paramId) return
+    const id = Number(paramId)
+    if (!isNaN(id) && id > 0) {
+      openMenu(id)
+      setSearchParams({}, { replace: true })  // clean the URL after consuming the param
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading])
 
   // ── Open menu / load COGS ──────────────────────────────────────────────────
 
