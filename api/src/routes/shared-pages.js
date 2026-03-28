@@ -484,17 +484,22 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
     const countryId    = menu.country_id;
     const exchangeRate = Number(menu.exchange_rate) || 1;
 
-    // Load scenario price overrides (keyed: `${menu_item_id}_l${level_id}` → local price)
-    let scenarioPriceOv = {};
-    let scenarioName    = null;
-    const scenarioId    = tokenScenarioId || null;
+    // Load scenario data (price overrides + qty_data for summary tiles)
+    let scenarioPriceOv      = {};
+    let scenarioQtyData      = {};
+    let scenarioPriceLevelId = null;
+    let scenarioName         = null;
+    const scenarioId         = tokenScenarioId || null;
     if (scenarioId) {
       const { rows: [sc] } = await pool.query(
-        `SELECT name, price_overrides FROM mcogs_menu_scenarios WHERE id = $1`, [scenarioId]
+        `SELECT name, price_overrides, qty_data, price_level_id FROM mcogs_menu_scenarios WHERE id = $1`,
+        [scenarioId]
       );
       if (sc) {
-        scenarioPriceOv = sc.price_overrides || {};
-        scenarioName    = sc.name;
+        scenarioPriceOv      = sc.price_overrides  || {};
+        scenarioQtyData      = sc.qty_data          || {};
+        scenarioPriceLevelId = sc.price_level_id    || null;
+        scenarioName         = sc.name;
       }
     }
 
@@ -615,8 +620,13 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         };
       }
 
+      const natKey = itemType === 'recipe'
+        ? `r_${item.recipe_id}`
+        : `i_${item.ingredient_id}`;
+
       return {
         menu_item_id: item.id,
+        nat_key:      natKey,
         display_name: display,
         item_type:    itemType,
         category:     item.recipe_category || '',
@@ -639,10 +649,12 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         country_id:      countryId,
         country_name:    menu.country_name,
       },
-      price_levels: levels.map(l => ({ id: l.id, name: l.name })),
-      items:        outItems,
-      menus:        marketMenus,
-      scenario:     scenarioName ? { id: scenarioId, name: scenarioName } : null,
+      price_levels:             levels.map(l => ({ id: l.id, name: l.name })),
+      items:                    outItems,
+      menus:                    marketMenus,
+      scenario:                 scenarioName ? { id: scenarioId, name: scenarioName } : null,
+      scenario_qty_data:        scenarioQtyData,
+      scenario_price_level_id:  scenarioPriceLevelId,
     });
   } catch (err) {
     console.error(err);

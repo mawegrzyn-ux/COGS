@@ -35,6 +35,7 @@ interface LevelEntry {
 
 interface SharedItem {
   menu_item_id: number
+  nat_key:      string
   display_name: string
   item_type:    'recipe' | 'ingredient'
   category:     string
@@ -53,11 +54,13 @@ interface SharedMenuInfo {
 }
 
 interface SharedData {
-  menu:         SharedMenuInfo
-  price_levels: PriceLevel[]
-  items:        SharedItem[]
-  menus:        { id: number; name: string }[]
-  scenario:     { id: number; name: string } | null
+  menu:                    SharedMenuInfo
+  price_levels:            PriceLevel[]
+  items:                   SharedItem[]
+  menus:                   { id: number; name: string }[]
+  scenario:                { id: number; name: string } | null
+  scenario_qty_data:       Record<string, number>   // nat_key → qty sold
+  scenario_price_level_id: number | null            // which price level the qty applies to
 }
 
 interface BreakdownLine {
@@ -267,6 +270,126 @@ export default function SharedMenuPage() {
   function collapseAll()  { setCollapsedCats(new Set(categories)) }
   function expandAll()    { setCollapsedCats(new Set()) }
 
+  // ── Summary metrics ──────────────────────────────────────────────────────────
+
+  const summary = useMemo(() => {
+    if (!data || !data.items.length) return null
+
+    const qtyData    = data.scenario_qty_data       || {}
+    const scenLvlId  = data.scenario_price_level_id || null
+    const levels     = data.price_levels
+    const items      = data.items
+    const hasQty     = Object.values(qtyData).some(v => Number(v) > 0)
+
+    // ── KPI aggregates ────────────────────────────────────────────────────────
+    // Weighted (by scenario qty) or simple average (no qty)
+    let totalCost    = 0
+    let totalRevGross = 0
+    let totalRevNet  = 0
+    let qtyTotal     = 0
+
+    if (hasQty && scenLvlId) {
+      for (const item of items) {
+        const qty   = Number(qtyData[item.nat_key] ?? 0)
+        if (!qty) continue
+        const entry = item.levels[scenLvlId]
+        if (!entry?.set) continue
+        totalCost     += item.cost      * qty
+        totalRevGross += (entry.gross ?? 0) * qty
+        totalRevNet   += (entry.net   ?? 0) * qty
+        qtyTotal      += qty
+      }
+    }
+
+    // Avg COGS% per level — simple average across all priced items
+    const levelStats: Record<number, { sum: number; count: number; revenue: number; cost: number }> = {}
+    for (const l of levels) {
+      levelStats[l.id] = { sum: 0, count: 0, revenue: 0, cost: 0 }
+    }
+    for (const item of items) {
+      for (const l of levels) {
+        const entry = item.levels[l.id]
+        if (!entry?.set || entry.gross === null) continue
+        levelStats[l.id].sum     += entry.cogs_pct ?? 0
+        levelStats[l.id].count   += 1
+        levelStats[l.id].revenue += entry.gross
+        levelStats[l.id].cost    += item.cost
+      }
+    }
+
+    // ── Category breakdown ────────────────────────────────────────────────────
+    // Revenue or cost per category (use qty-weighted if available, else item-count)
+    const catMap: Record<string, { cost: number; revenue: number; items: number }> = {}
+    for (const item of items) {
+      const cat = item.category || 'Uncategorised'
+      if (!catMap[cat]) catMap[cat] = { cost: 0, revenue: 0, items: 0 }
+      catMap[cat].items += 1
+      catMap[cat].cost  += item.cost
+
+      if (hasQty && scenLvlId) {
+        const qty   = Number(qtyData[item.nat_key] ?? 0)
+        const entry = item.levels[scenLvlId]
+        if (entry?.set) catMap[cat].revenue += (entry.gross ?? 0) * qty
+      } else {
+        // Use sum of all set prices as proxy
+        for (const l of levels) {
+          const entry = item.levels[l.id]
+          if (entry?.set) catMap[cat].revenue += entry.gross ?? 0
+        }
+      }
+    }
+
+    const totalCatRevenue = Object.values(catMap).reduce((s, c) => s + c.revenue, 0)
+    const totalCatCost    = Object.values(catMap).reduce((s, c) => s + c.cost, 0)
+
+    const catBreakdown = Object.entries(catMap)
+      .map(([name, v]) => ({
+        name,
+        items:      v.items,
+        revPct:     totalCatRevenue > 0 ? (v.revenue / totalCatRevenue) * 100 : 0,
+        costPct:    totalCatCost    > 0 ? (v.cost    / totalCatCost)    * 100 : 0,
+        cogsPct:    v.revenue > 0 ? (v.cost / v.revenue) * 100 : null,
+      }))
+      .sort((a, b) => b.revPct - a.revPct)
+
+    // ── Price level breakdown ─────────────────────────────────────────────────
+    const maxRevenue = Math.max(...Object.values(levelStats).map(s => s.revenue), 0.001)
+    const levelBreakdown = levels.map(l => {
+      const s = levelStats[l.id]
+      return {
+        id:       l.id,
+        name:     l.name,
+        avgCogs:  s.count > 0 ? s.sum / s.count : null,
+        revenue:  s.revenue,
+        revPct:   maxRevenue > 0 ? (s.revenue / maxRevenue) * 100 : 0,
+        priced:   s.count,
+        total:    items.length,
+      }
+    })
+
+    const weightedCogs = totalRevNet > 0 ? (totalCost / totalRevNet) * 100 : null
+    const avgCogs = (() => {
+      let sum = 0, n = 0
+      for (const l of levels) {
+        if (levelStats[l.id].count > 0) { sum += levelStats[l.id].sum; n += levelStats[l.id].count }
+      }
+      return n > 0 ? sum / n : null
+    })()
+
+    return {
+      hasQty,
+      totalCost:      Math.round(totalCost      * 100) / 100,
+      totalRevGross:  Math.round(totalRevGross   * 100) / 100,
+      totalRevNet:    Math.round(totalRevNet     * 100) / 100,
+      gp:             Math.round((totalRevGross - totalCost) * 100) / 100,
+      weightedCogs:   weightedCogs !== null ? Math.round(weightedCogs * 10) / 10 : null,
+      avgCogs:        avgCogs      !== null ? Math.round(avgCogs      * 10) / 10 : null,
+      qtyTotal,
+      catBreakdown,
+      levelBreakdown,
+    }
+  }, [data])
+
   // ── Render: loading / error ───────────────────────────────────────────────────
 
   if (metaLoading) return (
@@ -386,11 +509,44 @@ export default function SharedMenuPage() {
         </div>
       )}
 
-      {/* ── Notifications ────────────────────────────────────────────────────── */}
-      {saving    && <div className="bg-blue-50  text-blue-700  text-sm px-6 py-2 text-center">Saving…</div>}
-      {saveOk    && <div className="bg-green-50 text-green-700 text-sm px-6 py-2 text-center font-medium">{saveOk}</div>}
-      {saveError && <div className="bg-red-50   text-red-600   text-sm px-6 py-2 text-center">{saveError}</div>}
-      {dataError && <div className="bg-red-50   text-red-600   text-sm px-6 py-2 text-center">{dataError}</div>}
+      {/* ── Toast notifications (fixed overlay, non-intrusive) ──────────────── */}
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+        {saving && (
+          <div className="flex items-center gap-2.5 bg-gray-800 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg pointer-events-auto animate-fade-in">
+            <svg className="w-4 h-4 animate-spin text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+            </svg>
+            Saving…
+          </div>
+        )}
+        {saveOk && !saving && (
+          <div className="flex items-center gap-2.5 bg-emerald-700 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg pointer-events-auto">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/>
+            </svg>
+            {saveOk}
+          </div>
+        )}
+        {saveError && (
+          <div className="flex items-center gap-2.5 bg-red-600 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg max-w-xs pointer-events-auto">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            <span className="truncate">{saveError}</span>
+            <button className="ml-auto flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity" onClick={() => setSaveError('')}>✕</button>
+          </div>
+        )}
+        {dataError && (
+          <div className="flex items-center gap-2.5 bg-red-600 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg max-w-xs pointer-events-auto">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span className="truncate">{dataError}</span>
+            <button className="ml-auto flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity" onClick={() => setDataError('')}>✕</button>
+          </div>
+        )}
+      </div>
 
       {/* ── Content area ─────────────────────────────────────────────────────── */}
       <main className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6">
@@ -405,23 +561,130 @@ export default function SharedMenuPage() {
           </div>
         )}
 
-        {!dataLoading && data && data.items.length > 0 && (
+        {!dataLoading && data && data.items.length > 0 && summary && (
           <>
-            {/* Summary card */}
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mb-4">
-              <div className="flex items-start justify-between gap-4 flex-wrap">
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900">{data.menu.name}</h2>
-                  <p className="text-sm text-gray-400 mt-0.5">
-                    {data.menu.country_name} · {data.menu.currency_code} ({sym})
-                    {data.scenario && <span className="ml-2 text-amber-600 font-medium">Scenario: {data.scenario.name}</span>}
-                  </p>
+            {/* ── Header ──────────────────────────────────────────────────────── */}
+            <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">{data.menu.name}</h2>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  {data.menu.country_name} · {data.menu.currency_code} ({sym})
+                  {data.scenario && <span className="ml-2 px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full font-medium">📊 {data.scenario.name}</span>}
+                  {summary.hasQty && <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full font-medium">{summary.qtyTotal} covers</span>}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span>{data.items.length} items · {categories.length} categories</span>
+                <button onClick={expandAll}  className="text-emerald-600 hover:underline">Expand all</button>
+                <span className="text-gray-200">|</span>
+                <button onClick={collapseAll} className="text-emerald-600 hover:underline">Collapse all</button>
+              </div>
+            </div>
+
+            {/* ── KPI tiles ────────────────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <KpiTile
+                label={summary.hasQty ? 'Weighted COGS' : 'Avg COGS'}
+                value={`${fmt2(summary.hasQty ? summary.weightedCogs : summary.avgCogs)}%`}
+                sub={summary.hasQty ? 'across sold items' : 'across all price levels'}
+                colour={
+                  (summary.hasQty ? summary.weightedCogs : summary.avgCogs) === null ? 'gray'
+                  : ((summary.hasQty ? summary.weightedCogs! : summary.avgCogs!) <= 28) ? 'green'
+                  : ((summary.hasQty ? summary.weightedCogs! : summary.avgCogs!) <= 35) ? 'amber'
+                  : 'red'
+                }
+              />
+              {summary.hasQty ? (
+                <>
+                  <KpiTile
+                    label="Total Revenue"
+                    value={`${sym}${fmt2(summary.totalRevGross)}`}
+                    sub="gross sales"
+                    colour="blue"
+                  />
+                  <KpiTile
+                    label="Total Cost"
+                    value={`${sym}${fmt2(summary.totalCost)}`}
+                    sub="ingredient cost"
+                    colour="gray"
+                  />
+                  <KpiTile
+                    label="Gross Profit"
+                    value={`${sym}${fmt2(summary.gp)}`}
+                    sub={summary.totalRevGross > 0 ? `${fmt2(((summary.gp) / summary.totalRevGross) * 100)}% GP` : '—'}
+                    colour={summary.gp >= 0 ? 'green' : 'red'}
+                  />
+                </>
+              ) : (
+                <>
+                  <KpiTile label="Menu Items"  value={String(data.items.length)} sub="total items" colour="blue" />
+                  <KpiTile label="Categories"  value={String(categories.length)} sub="item groups" colour="gray" />
+                  <KpiTile label="Price Levels" value={String(levels.length)} sub="pricing tiers" colour="gray" />
+                </>
+              )}
+            </div>
+
+            {/* ── Split charts ─────────────────────────────────────────────────── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+
+              {/* Category split */}
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  {summary.hasQty ? 'Revenue by Category' : 'Items by Category'}
+                </h3>
+                <div className="space-y-2.5">
+                  {summary.catBreakdown.map(cat => (
+                    <div key={cat.name}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700 truncate max-w-[160px]">{cat.name}</span>
+                        <div className="flex items-center gap-3 text-xs text-gray-500 flex-shrink-0">
+                          {cat.cogsPct !== null && (
+                            <span className={cogsCls(cat.cogsPct)}>{fmt2(cat.cogsPct)}% COGS</span>
+                          )}
+                          <span className="font-semibold text-gray-700 w-10 text-right">
+                            {fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${cogsBarCls(cat.cogsPct)}`}
+                          style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-400">{data.items.length} items across {categories.length} categories</span>
-                  <button onClick={expandAll}  className="text-xs text-emerald-600 hover:underline">Expand all</button>
-                  <span className="text-gray-200">|</span>
-                  <button onClick={collapseAll} className="text-xs text-emerald-600 hover:underline">Collapse all</button>
+              </div>
+
+              {/* Price level split */}
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  COGS & Revenue by Price Level
+                </h3>
+                <div className="space-y-2.5">
+                  {summary.levelBreakdown.map(lvl => (
+                    <div key={lvl.id}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700">{lvl.name}</span>
+                        <div className="flex items-center gap-3 text-xs flex-shrink-0">
+                          <span className="text-gray-400">{lvl.priced}/{lvl.total} priced</span>
+                          {lvl.avgCogs !== null && (
+                            <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>
+                          )}
+                          <span className="text-gray-700 font-semibold w-16 text-right">
+                            {sym}{(lvl.revenue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${cogsBarCls(lvl.avgCogs)}`}
+                          style={{ width: `${Math.max(2, lvl.revPct)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -687,6 +950,33 @@ export default function SharedMenuPage() {
       <footer className="py-6 text-center text-xs text-gray-300">
         Powered by <span className="font-semibold text-emerald-600">COGS Manager</span>
       </footer>
+    </div>
+  )
+}
+
+// ── KPI tile ─────────────────────────────────────────────────────────────────
+
+function KpiTile({ label, value, sub, colour }: {
+  label:  string
+  value:  string
+  sub:    string
+  colour: 'green' | 'amber' | 'red' | 'blue' | 'gray'
+}) {
+  const bg   = colour === 'green' ? 'bg-emerald-50'
+             : colour === 'amber' ? 'bg-amber-50'
+             : colour === 'red'   ? 'bg-red-50'
+             : colour === 'blue'  ? 'bg-blue-50'
+             : 'bg-gray-50'
+  const text = colour === 'green' ? 'text-emerald-700'
+             : colour === 'amber' ? 'text-amber-700'
+             : colour === 'red'   ? 'text-red-600'
+             : colour === 'blue'  ? 'text-blue-700'
+             : 'text-gray-700'
+  return (
+    <div className={`${bg} rounded-xl p-4`}>
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+      <p className={`text-2xl font-bold ${text} tabular-nums`}>{value}</p>
+      <p className="text-xs text-gray-400 mt-0.5">{sub}</p>
     </div>
   )
 }
