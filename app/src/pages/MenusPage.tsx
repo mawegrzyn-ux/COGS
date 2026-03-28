@@ -3129,7 +3129,6 @@ function ScenarioTool({
 
   function loadScenario(s: SavedScenario) {
     dirtyRef.current = false
-    if (s.price_level_id) onLevelChange(s.price_level_id)
     // Qty
     const qMap: Record<string, string> = {}
     for (const [k, v] of Object.entries(s.qty_data || {})) {
@@ -3759,7 +3758,12 @@ ${tableHtml}
         {/* Toolbar — row 2: scenario picker + actions */}
         <div className="px-4 py-2 border-b border-gray-100 flex flex-wrap gap-1.5 items-center">
 
-          {/* What If — first item on this row */}
+          {/* Mix Manager — first on this row */}
+          {menuId && (
+            <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
+          )}
+
+          {/* What If */}
           {menuId && (
             <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
           )}
@@ -3801,14 +3805,9 @@ ${tableHtml}
             <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
           )}
 
-          {/* Mix Manager — pushed to far right */}
-          {menuId && (
-            <button className="btn btn-sm btn-primary text-xs ml-auto" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
-          )}
-
           {/* Add Item — far right */}
           {menuId && onAddItem && (
-            <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
+            <button className="btn btn-sm btn-primary text-xs ml-auto" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
           )}
         </div>
 
