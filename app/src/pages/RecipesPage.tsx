@@ -805,7 +805,7 @@ export default function RecipesPage() {
                   )}
 
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Menu Price Currency</span>
+                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Display Currency</span>
                     <select
                       value={selectedCurrencyCode || '__MARKET__'}
                       onChange={e => setSelectedCurrencyCode(e.target.value === '__MARKET__' ? '' : e.target.value)}
@@ -894,10 +894,14 @@ export default function RecipesPage() {
                             ) : null}
                           </div>
                         </div>
-                        {activeMenu ? (
-                          editingTilePrice !== null ? (
+                        {activeMenu ? (() => {
+                          // Convert menu's local price → display currency
+                          const menuRate = activeMenu.exchange_rate || 1
+                          const dispGross = activeMenu.sell_price_gross / menuRate * displayCurrency.rate
+                          const dispNet   = activeMenu.sell_price_net   / menuRate * displayCurrency.rate
+                          return editingTilePrice !== null ? (
                             <div className="flex items-center gap-1 mt-1">
-                              <span className="text-sm text-text-3">{activeMenu.currency_symbol}</span>
+                              <span className="text-sm text-text-3">{displayCurrency.symbol}</span>
                               <input
                                 type="number" min="0" step="0.01"
                                 className="input text-sm font-mono w-24 py-0.5 px-1"
@@ -905,9 +909,11 @@ export default function RecipesPage() {
                                 onChange={e => setEditingTilePrice(e.target.value)}
                                 onKeyDown={async e => {
                                   if (e.key === 'Enter') {
-                                    const gross = parseFloat(editingTilePrice)
-                                    if (!isNaN(gross) && gross >= 0 && selectedPriceLevelId) {
-                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(gross * 10000) / 10000 })
+                                    const grossDisp = parseFloat(editingTilePrice)
+                                    if (!isNaN(grossDisp) && grossDisp >= 0 && selectedPriceLevelId) {
+                                      // Convert from display currency back to menu's local currency for storage
+                                      const localPrice = grossDisp / displayCurrency.rate * menuRate
+                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(localPrice * 10000) / 10000 })
                                       setMenuAssignVersion(v => v + 1)
                                       showToast('Price updated')
                                     }
@@ -925,9 +931,9 @@ export default function RecipesPage() {
                               <div
                                 className="text-lg font-bold font-mono text-text-1 cursor-pointer hover:text-accent transition-colors"
                                 title="Click to edit price"
-                                onClick={() => setEditingTilePrice(fmtCost(activeMenu.sell_price_gross))}
+                                onClick={() => setEditingTilePrice(fmtCost(dispGross > 0 ? dispGross : 0))}
                               >
-                                {activeMenu.currency_symbol}{fmtCost(activeMenu.sell_price_net)}
+                                {displayCurrency.symbol}{fmtCost(dispNet)}
                               </div>
                               <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                 <span className="text-xs text-text-3">net ex-tax</span>
@@ -939,7 +945,7 @@ export default function RecipesPage() {
                               </div>
                             </>
                           )
-                        ) : loadingMenuAssign ? (
+                        })() : loadingMenuAssign ? (
                           <div className="text-xs text-text-3 mt-1">Loading…</div>
                         ) : (
                           <div className="text-sm font-mono text-text-3 italic mt-1">Not on menu</div>
