@@ -3007,6 +3007,17 @@ function ScenarioTool({
 
   useEffect(() => { loadScenarioList() }, [loadScenarioList])
 
+  // Auto-load first scenario for selected menu when ME tab mounts
+  const autoLoadedRef = useRef(false)
+  useEffect(() => {
+    if (autoLoadedRef.current || !menuId || loadingScenarios || savedScenarios.length === 0) return
+    const first = savedScenarios.find(s => s.menu_id === menuId)
+    if (first) {
+      autoLoadedRef.current = true
+      loadScenario(first) // eslint-disable-line react-hooks/exhaustive-deps
+    }
+  }, [menuId, loadingScenarios, savedScenarios]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Mark dirty when qty changes (skip programmatic loads via dirtyRef)
   const dirtyRef = useRef(false)
   useEffect(() => {
@@ -3129,6 +3140,7 @@ function ScenarioTool({
 
   function loadScenario(s: SavedScenario) {
     dirtyRef.current = false
+    if (s.menu_id) onMenuChange(s.menu_id)
     // Qty
     const qMap: Record<string, string> = {}
     for (const [k, v] of Object.entries(s.qty_data || {})) {
@@ -3689,6 +3701,25 @@ ${tableHtml}
         <div className="px-4 pt-4 pb-2 border-b border-gray-100 flex flex-wrap gap-3 items-center">
           <span className="font-semibold text-gray-700 text-sm shrink-0">📊 Scenario</span>
 
+          {/* Scenario picker — before menu */}
+          <div className="flex items-center gap-1.5">
+            <button
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium
+                ${savedId ? 'border-accent bg-accent-dim text-accent' : 'border-gray-200 bg-white text-gray-600'} hover:border-accent`}
+              onClick={() => setShowScenarioModal(true)}
+              disabled={loadingScenarios}
+            >
+              <span className="truncate max-w-[200px]">{savedName || '— New scenario —'}</span>
+              {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />}
+              <span className="text-gray-400 text-xs">▾</span>
+            </button>
+            <button
+              className="btn btn-sm btn-primary text-xs"
+              onClick={() => setShowScenarioModal(true)}
+              title="Save or update scenario"
+            >💾 {savedId ? 'Update' : 'Save'}</button>
+          </div>
+
           {/* Menu */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400">Menu</span>
@@ -3767,25 +3798,6 @@ ${tableHtml}
           {menuId && (
             <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
           )}
-
-          {/* Scenario picker */}
-          <button
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm font-medium
-              ${savedId ? 'border-accent bg-accent-dim text-accent' : 'border-gray-200 bg-white text-gray-600'} hover:border-accent`}
-            onClick={() => setShowScenarioModal(true)}
-            disabled={loadingScenarios}
-          >
-            <span className="truncate max-w-[180px]">{savedName || '— New scenario —'}</span>
-            {dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />}
-            <span className="text-gray-400 text-xs">▾</span>
-          </button>
-
-          {/* Save */}
-          <button
-            className="btn btn-sm btn-primary text-xs"
-            onClick={() => setShowScenarioModal(true)}
-            title="Save or update scenario"
-          >💾 {savedId ? 'Update' : 'Save'}</button>
 
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (
@@ -4172,9 +4184,8 @@ ${tableHtml}
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {allLevelCategorised.map(([cat, catRows]) => {
-                  const cC           = catRows.reduce((s, r) => s + r.total_cost, 0)
-                  const cTotalRev    = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
-                  const cTotalCogsPct = cTotalRev > 0 ? (cC / cTotalRev) * 100 : null
+                  const catCogs = catRows.flatMap(r => r.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null))
+                  const cTotalCogsPct = catCogs.length > 0 ? catCogs.reduce((a, b) => a + b, 0) / catCogs.length : null
                   return (
                     <>
                       <tr key={`cat-${cat}`}
@@ -4218,8 +4229,8 @@ ${tableHtml}
                         </td>
                       </tr>
                       {!collapsedCats.has(cat) && catRows.map(row => {
-                        const totalRev     = row.perLevel.reduce((s, p) => s + p.revenue, 0)
-                        const totalCogsPct = totalRev > 0 ? (row.total_cost / totalRev) * 100 : null
+                        const rowCogs = row.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null)
+                        const totalCogsPct = rowCogs.length > 0 ? rowCogs.reduce((a, b) => a + b, 0) / rowCogs.length : null
                         return (
                           <tr key={row.menu_item_id} className="hover:bg-gray-50/80">
                             <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
@@ -4310,9 +4321,8 @@ ${tableHtml}
               </tbody>
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                 {(() => {
-                  const gtTotalCost    = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
-                  const gtTotalRev     = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
-                  const gtTotalCogsPct = gtTotalRev > 0 ? (gtTotalCost / gtTotalRev) * 100 : null
+                  const allCogs = allLevelRows.flatMap(r => r.perLevel.map(p => p.cogs_pct).filter((v): v is number => v !== null))
+                  const gtTotalCogsPct = allCogs.length > 0 ? allCogs.reduce((a, b) => a + b, 0) / allCogs.length : null
                   return (
                     <tr>
                       <td className="px-3 py-3 font-bold text-gray-900">Grand Total</td>
