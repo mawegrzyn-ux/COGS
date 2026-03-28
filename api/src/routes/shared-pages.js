@@ -1,9 +1,11 @@
 // =============================================================================
 // Shared Menu Engineer Pages
 // Management: GET/POST/PUT/DELETE /api/shared-pages   (authenticated)
-// Public:     GET  /api/public/share/:slug            (meta, no auth)
+// Public:     GET  /api/public/share/:slug            (meta)
 //             POST /api/public/share/:slug/auth       (password → token)
-//             GET  /api/public/share/:slug/data       (cogs data, Bearer token)
+//             GET  /api/public/share/:slug/data       (cogs data, Bearer)
+//             POST /api/public/share/:slug/price      (save price, Bearer, edit mode)
+//             GET  /api/public/share/:slug/breakdown/:menu_item_id  (ingredient cost modal)
 // =============================================================================
 
 const router    = require('express').Router();
@@ -20,7 +22,7 @@ const {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const HMAC_SECRET = process.env.SHARED_PAGE_SECRET || 'mcogs-shared-page-secret-change-me';
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
 
@@ -33,8 +35,10 @@ function signToken(payload) {
 
 function verifyToken(token) {
   if (!token || typeof token !== 'string') return null;
-  const [b64, sig] = token.split('.');
-  if (!b64 || !sig) return null;
+  const dotIdx = token.lastIndexOf('.');
+  if (dotIdx < 1) return null;
+  const b64 = token.slice(0, dotIdx);
+  const sig  = token.slice(dotIdx + 1);
   const expected = crypto.createHmac('sha256', HMAC_SECRET).update(b64).digest('base64url');
   const sigBuf      = Buffer.from(sig,      'base64url');
   const expectedBuf = Buffer.from(expected, 'base64url');
@@ -72,8 +76,26 @@ async function verifyPassword(password, storedHash, storedSalt) {
   return crypto.timingSafeEqual(hashBuf, storedBuf);
 }
 
+// ── Shared page loader ────────────────────────────────────────────────────────
+
+async function fetchPage(slug) {
+  const { rows: [page] } = await pool.query(`
+    SELECT sp.*,
+           m.name  AS menu_name,
+           c.name  AS country_name,
+           s.name  AS scenario_name,
+           s.price_overrides AS scenario_price_overrides
+    FROM   mcogs_shared_pages sp
+    LEFT JOIN mcogs_menus            m ON m.id = sp.menu_id
+    LEFT JOIN mcogs_countries        c ON c.id = sp.country_id
+    LEFT JOIN mcogs_menu_scenarios   s ON s.id = sp.scenario_id
+    WHERE  sp.slug = $1
+  `, [slug]);
+  return page || null;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-//  MANAGEMENT ROUTES (authenticated — called from within the app)
+//  MANAGEMENT ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /api/shared-pages
@@ -83,10 +105,12 @@ router.get('/', async (req, res) => {
       SELECT sp.*,
              m.name  AS menu_name,
              c.name  AS country_name,
-             c.currency_symbol
+             c.currency_symbol,
+             s.name  AS scenario_name
       FROM   mcogs_shared_pages sp
-      LEFT JOIN mcogs_menus     m ON m.id = sp.menu_id
-      LEFT JOIN mcogs_countries c ON c.id = sp.country_id
+      LEFT JOIN mcogs_menus            m ON m.id = sp.menu_id
+      LEFT JOIN mcogs_countries        c ON c.id = sp.country_id
+      LEFT JOIN mcogs_menu_scenarios   s ON s.id = sp.scenario_id
       ORDER BY sp.created_at DESC
     `);
     res.json(rows);
@@ -98,25 +122,26 @@ router.get('/', async (req, res) => {
 
 // POST /api/shared-pages
 router.post('/', async (req, res) => {
-  const { name, mode = 'view', password, menu_id, country_id, expires_at } = req.body;
+  const { name, mode = 'view', password, menu_id, country_id, scenario_id, expires_at } = req.body;
   if (!name)     return res.status(400).json({ error: { message: 'name is required' } });
   if (!password) return res.status(400).json({ error: { message: 'password is required' } });
   if (!['view', 'edit'].includes(mode)) return res.status(400).json({ error: { message: 'mode must be view or edit' } });
 
   try {
-    const slug = crypto.randomBytes(8).toString('hex'); // 16-char hex
+    const slug = crypto.randomBytes(8).toString('hex');
     const salt = generateSalt();
     const hash = await hashPassword(password, salt);
 
     const { rows: [row] } = await pool.query(`
       INSERT INTO mcogs_shared_pages
-        (slug, name, mode, password_hash, password_salt, menu_id, country_id, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (slug, name, mode, password_hash, password_salt, menu_id, country_id, scenario_id, expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       RETURNING *
     `, [slug, name, mode, hash, salt,
-        menu_id   || null,
-        country_id || null,
-        expires_at || null]);
+        menu_id     || null,
+        country_id  || null,
+        scenario_id || null,
+        expires_at  || null]);
 
     res.status(201).json({ ...row, url: `/share/${slug}` });
   } catch (err) {
@@ -128,7 +153,7 @@ router.post('/', async (req, res) => {
 // PUT /api/shared-pages/:id
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, mode, password, menu_id, country_id, is_active, expires_at } = req.body;
+  const { name, mode, password, menu_id, country_id, scenario_id, is_active, expires_at } = req.body;
 
   try {
     const { rows: [existing] } = await pool.query(
@@ -138,7 +163,6 @@ router.put('/:id', async (req, res) => {
 
     let hash = existing.password_hash;
     let salt = existing.password_salt;
-
     if (password) {
       salt = generateSalt();
       hash = await hashPassword(password, salt);
@@ -152,10 +176,11 @@ router.put('/:id', async (req, res) => {
         password_salt = $4,
         menu_id       = $5,
         country_id    = $6,
-        is_active     = COALESCE($7, is_active),
-        expires_at    = $8,
+        scenario_id   = $7,
+        is_active     = COALESCE($8, is_active),
+        expires_at    = $9,
         updated_at    = NOW()
-      WHERE id = $9
+      WHERE id = $10
       RETURNING *
     `, [
       name       ?? null,
@@ -163,8 +188,9 @@ router.put('/:id', async (req, res) => {
       hash, salt,
       menu_id    !== undefined ? (menu_id    || null) : existing.menu_id,
       country_id !== undefined ? (country_id || null) : existing.country_id,
+      scenario_id !== undefined ? (scenario_id || null) : existing.scenario_id,
       is_active  !== undefined ? is_active             : null,
-      expires_at !== undefined ? (expires_at || null) : existing.expires_at,
+      expires_at !== undefined ? (expires_at || null)  : existing.expires_at,
       id,
     ]);
 
@@ -190,40 +216,45 @@ router.delete('/:id', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PUBLIC ROUTES (no authentication — open to the world)
+//  PUBLIC ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const publicRouter = require('express').Router();
 
-// GET /api/public/share/:slug — meta (name, mode, locked menu/market)
+// ── Middleware: validate Bearer token for protected public routes ──────────────
+
+function requirePublicToken(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const rawToken   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const payload    = verifyToken(rawToken);
+  if (!payload || payload.slug !== req.params.slug) {
+    return res.status(401).json({ error: { message: 'Invalid or expired token' } });
+  }
+  req.tokenPayload = payload;
+  next();
+}
+
+// ── GET /api/public/share/:slug — meta ────────────────────────────────────────
+
 publicRouter.get('/:slug', async (req, res) => {
   try {
-    const { rows: [page] } = await pool.query(`
-      SELECT sp.id, sp.slug, sp.name, sp.mode, sp.menu_id, sp.country_id,
-             sp.is_active, sp.expires_at,
-             m.name  AS menu_name,
-             c.name  AS country_name
-      FROM   mcogs_shared_pages sp
-      LEFT JOIN mcogs_menus     m ON m.id = sp.menu_id
-      LEFT JOIN mcogs_countries c ON c.id = sp.country_id
-      WHERE  sp.slug = $1
-    `, [req.params.slug]);
-
-    if (!page)             return res.status(404).json({ error: { message: 'Page not found' } });
-    if (!page.is_active)   return res.status(403).json({ error: { message: 'This link is disabled' } });
+    const page = await fetchPage(req.params.slug);
+    if (!page)           return res.status(404).json({ error: { message: 'Page not found' } });
+    if (!page.is_active) return res.status(403).json({ error: { message: 'This link is disabled' } });
     if (page.expires_at && new Date(page.expires_at) < new Date()) {
       return res.status(403).json({ error: { message: 'This link has expired' } });
     }
-
     res.json({
-      name:         page.name,
-      mode:         page.mode,
-      menu_locked:  !!page.menu_id,
-      menu_id:      page.menu_id,
-      menu_name:    page.menu_name,
+      name:          page.name,
+      mode:          page.mode,
+      menu_locked:   !!page.menu_id,
+      menu_id:       page.menu_id,
+      menu_name:     page.menu_name,
       market_locked: !!page.country_id,
-      country_id:   page.country_id,
-      country_name: page.country_name,
+      country_id:    page.country_id,
+      country_name:  page.country_name,
+      scenario_id:   page.scenario_id,
+      scenario_name: page.scenario_name,
     });
   } catch (err) {
     console.error(err);
@@ -231,19 +262,14 @@ publicRouter.get('/:slug', async (req, res) => {
   }
 });
 
-// POST /api/public/share/:slug/auth — password → token
+// ── POST /api/public/share/:slug/auth — password → token ─────────────────────
+
 publicRouter.post('/:slug/auth', async (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: { message: 'password is required' } });
 
   try {
-    const { rows: [page] } = await pool.query(
-      `SELECT id, slug, mode, password_hash, password_salt, menu_id, country_id,
-              is_active, expires_at
-       FROM   mcogs_shared_pages WHERE slug = $1`,
-      [req.params.slug]
-    );
-
+    const page = await fetchPage(req.params.slug);
     if (!page)           return res.status(404).json({ error: { message: 'Page not found' } });
     if (!page.is_active) return res.status(403).json({ error: { message: 'This link is disabled' } });
     if (page.expires_at && new Date(page.expires_at) < new Date()) {
@@ -252,17 +278,17 @@ publicRouter.post('/:slug/auth', async (req, res) => {
 
     const ok = await verifyPassword(password, page.password_hash, page.password_salt);
     if (!ok) {
-      // Artificial delay to slow brute-force
       await new Promise(r => setTimeout(r, 500));
       return res.status(401).json({ error: { message: 'Incorrect password' } });
     }
 
     const token = signToken({
-      slug:       page.slug,
-      mode:       page.mode,
-      menu_id:    page.menu_id,
-      country_id: page.country_id,
-      exp:        Date.now() + TOKEN_TTL_MS,
+      slug:        page.slug,
+      mode:        page.mode,
+      menu_id:     page.menu_id,
+      country_id:  page.country_id,
+      scenario_id: page.scenario_id,
+      exp:         Date.now() + TOKEN_TTL_MS,
     });
 
     res.json({ token, mode: page.mode });
@@ -272,18 +298,11 @@ publicRouter.post('/:slug/auth', async (req, res) => {
   }
 });
 
-// POST /api/public/share/:slug/price — save a sell price (edit mode only, requires Bearer token)
-publicRouter.post('/:slug/price', async (req, res) => {
-  const authHeader = req.headers.authorization || '';
-  const rawToken   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const payload    = verifyToken(rawToken);
+// ── POST /api/public/share/:slug/price — save sell price (edit mode) ──────────
 
-  if (!payload || payload.slug !== req.params.slug) {
-    return res.status(401).json({ error: { message: 'Invalid or expired token' } });
-  }
-  if (payload.mode !== 'edit') {
-    return res.status(403).json({ error: { message: 'This link is view-only' } });
-  }
+publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
+  const { mode, menu_id: tokenMenuId } = req.tokenPayload;
+  if (mode !== 'edit') return res.status(403).json({ error: { message: 'This link is view-only' } });
 
   const { menu_item_id, price_level_id, sell_price } = req.body;
   if (!menu_item_id || !price_level_id || sell_price === undefined) {
@@ -291,11 +310,10 @@ publicRouter.post('/:slug/price', async (req, res) => {
   }
 
   try {
-    // Verify the menu item belongs to the locked menu (if applicable)
-    if (payload.menu_id) {
+    if (tokenMenuId) {
       const { rows: [mi] } = await pool.query(
         `SELECT id FROM mcogs_menu_items WHERE id = $1 AND menu_id = $2`,
-        [menu_item_id, payload.menu_id]
+        [menu_item_id, tokenMenuId]
       );
       if (!mi) return res.status(403).json({ error: { message: 'Menu item not on this menu' } });
     }
@@ -314,32 +332,147 @@ publicRouter.post('/:slug/price', async (req, res) => {
   }
 });
 
-// GET /api/public/share/:slug/data — full COGS data (requires Bearer token)
-publicRouter.get('/:slug/data', async (req, res) => {
-  const authHeader = req.headers.authorization || '';
-  const rawToken   = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const payload    = verifyToken(rawToken);
+// ── GET /api/public/share/:slug/breakdown/:menu_item_id ──────────────────────
+// Returns per-ingredient cost breakdown for a recipe item. Used for hover modal.
 
-  if (!payload || payload.slug !== req.params.slug) {
-    return res.status(401).json({ error: { message: 'Invalid or expired token' } });
+publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (req, res) => {
+  const menuItemId = Number(req.params.menu_item_id);
+
+  try {
+    // Load menu item
+    const { rows: [mi] } = await pool.query(`
+      SELECT mi.id, mi.item_type, mi.recipe_id, mi.ingredient_id, mi.qty,
+             mi.display_name,
+             m.country_id, c.exchange_rate,
+             r.name  AS recipe_name,  r.yield_qty,
+             ing.name AS ingredient_name, ing.waste_pct,
+             u.abbreviation AS base_unit_abbr
+      FROM   mcogs_menu_items mi
+      JOIN   mcogs_menus      m   ON m.id   = mi.menu_id
+      JOIN   mcogs_countries  c   ON c.id   = m.country_id
+      LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
+      LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
+      LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
+      WHERE  mi.id = $1
+    `, [menuItemId]);
+
+    if (!mi) return res.status(404).json({ error: { message: 'Menu item not found' } });
+
+    const countryId    = mi.country_id;
+    const exchangeRate = Number(mi.exchange_rate) || 1;
+    const qty          = Number(mi.qty || 1);
+
+    // Single ingredient item — return trivial breakdown
+    if (mi.item_type === 'ingredient') {
+      const quoteLookup = await loadQuoteLookup();
+      const q = quoteLookup[mi.ingredient_id]?.[countryId];
+      const costUsd = q ? q.price_per_base_unit * qty : 0;
+      return res.json({
+        display_name: mi.display_name || mi.ingredient_name || '—',
+        item_type:    'ingredient',
+        lines: [{
+          name:    mi.ingredient_name || '—',
+          qty,
+          unit:    mi.base_unit_abbr || '',
+          waste_pct: Number(mi.waste_pct || 0),
+          cost_local: Math.round(costUsd * exchangeRate * 10000) / 10000,
+          is_sub_recipe: false,
+        }],
+        total_local: Math.round(costUsd * exchangeRate * 10000) / 10000,
+      });
+    }
+
+    // Recipe item — load all ingredients (deep)
+    const recipeId = mi.recipe_id;
+    const recipeItemsMap = await loadAllRecipeItemsDeep([recipeId]);
+    const variationMap   = await loadVariationItemsMap([recipeId]);
+    const quoteLookup    = await loadQuoteLookup();
+
+    // Get ingredient names for all items in this recipe (top level only)
+    const topItems = recipeItemsMap[recipeId] || [];
+    const ingIds   = [...new Set(topItems.filter(i => i.ingredient_id).map(i => Number(i.ingredient_id)))];
+    const subIds   = [...new Set(topItems.filter(i => i.recipe_item_id).map(i => Number(i.recipe_item_id)))];
+
+    const [ingNames, subNames] = await Promise.all([
+      ingIds.length
+        ? pool.query(`SELECT id, name FROM mcogs_ingredients WHERE id = ANY($1::int[])`, [ingIds])
+            .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
+        : Promise.resolve({}),
+      subIds.length
+        ? pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [subIds])
+            .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
+        : Promise.resolve({}),
+    ]);
+
+    // Use the variation items for this country if available
+    const items = variationMap?.[recipeId]?.[countryId] || topItems;
+    const yieldQty = Math.max(1, Number(mi.yield_qty || 1));
+
+    const lines = [];
+    for (const item of items) {
+      if (item.item_type === 'ingredient') {
+        const q       = quoteLookup[item.ingredient_id]?.[countryId];
+        const baseQty = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+        const waste   = 1 + (Number(item.waste_pct ?? 0) / 100);
+        const costUsd = q ? baseQty * waste * q.price_per_base_unit : 0;
+        lines.push({
+          name:          ingNames[item.ingredient_id] || `Ingredient #${item.ingredient_id}`,
+          qty:           Number(item.prep_qty),
+          unit:          item.prep_unit || '',
+          waste_pct:     Number(item.waste_pct || 0),
+          cost_local:    Math.round((costUsd / yieldQty) * qty * exchangeRate * 10000) / 10000,
+          is_sub_recipe: false,
+        });
+      } else if (item.item_type === 'recipe' && item.recipe_item_id) {
+        const subId    = Number(item.recipe_item_id);
+        const subItems = recipeItemsMap[subId] || [];
+        const subYield = Number(item.sub_recipe_yield_qty || 1);
+        const usage    = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
+        const { cost: subCostPerPortion } = calcRecipeCost(
+          { id: subId, yield_qty: subYield },
+          subItems, countryId, quoteLookup, variationMap, recipeItemsMap
+        );
+        const costUsd = subCostPerPortion * usage;
+        lines.push({
+          name:          subNames[subId] || `Sub-recipe #${subId}`,
+          qty:           Number(item.prep_qty),
+          unit:          item.prep_unit || '',
+          waste_pct:     0,
+          cost_local:    Math.round((costUsd / yieldQty) * qty * exchangeRate * 10000) / 10000,
+          is_sub_recipe: true,
+        });
+      }
+    }
+
+    const totalLocal = lines.reduce((s, l) => s + l.cost_local, 0);
+
+    res.json({
+      display_name: mi.display_name || mi.recipe_name || '—',
+      item_type:    'recipe',
+      recipe_name:  mi.recipe_name || '—',
+      yield_qty:    yieldQty,
+      lines,
+      total_local:  Math.round(totalLocal * 10000) / 10000,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to load ingredient breakdown' } });
   }
+});
 
-  const { menu_id: tokenMenuId, country_id: tokenCountryId } = payload;
+// ── GET /api/public/share/:slug/data — full COGS data ────────────────────────
+
+publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
+  const payload = req.tokenPayload;
+  const { menu_id: tokenMenuId, country_id: tokenCountryId, scenario_id: tokenScenarioId } = payload;
   const queryMenuId    = req.query.menu_id    ? Number(req.query.menu_id)    : tokenMenuId;
   const queryCountryId = req.query.country_id ? Number(req.query.country_id) : tokenCountryId;
 
-  // If the page has a locked menu/country, enforce it
   if (tokenMenuId    && queryMenuId    !== tokenMenuId)    return res.status(403).json({ error: { message: 'Menu locked' } });
   if (tokenCountryId && queryCountryId !== tokenCountryId) return res.status(403).json({ error: { message: 'Market locked' } });
+  if (!queryMenuId) return res.status(400).json({ error: { message: 'menu_id is required' } });
 
   try {
-    // --- Resolve what to show ---
-    // Need either menu_id (show single menu) OR country_id (show all menus in market)
-    // For the shared page we require menu_id
-    if (!queryMenuId) {
-      return res.status(400).json({ error: { message: 'menu_id is required' } });
-    }
-
     const { rows: [menu] } = await pool.query(`
       SELECT m.*, c.currency_symbol, c.currency_code, c.exchange_rate, c.name AS country_name
       FROM   mcogs_menus m
@@ -348,7 +481,22 @@ publicRouter.get('/:slug/data', async (req, res) => {
     `, [queryMenuId]);
     if (!menu) return res.status(404).json({ error: { message: 'Menu not found' } });
 
-    const countryId = menu.country_id;
+    const countryId    = menu.country_id;
+    const exchangeRate = Number(menu.exchange_rate) || 1;
+
+    // Load scenario price overrides (keyed: `${menu_item_id}_l${level_id}` → local price)
+    let scenarioPriceOv = {};
+    let scenarioName    = null;
+    const scenarioId    = tokenScenarioId || null;
+    if (scenarioId) {
+      const { rows: [sc] } = await pool.query(
+        `SELECT name, price_overrides FROM mcogs_menu_scenarios WHERE id = $1`, [scenarioId]
+      );
+      if (sc) {
+        scenarioPriceOv = sc.price_overrides || {};
+        scenarioName    = sc.name;
+      }
+    }
 
     // All items on this menu
     const { rows: items } = await pool.query(`
@@ -369,20 +517,16 @@ publicRouter.get('/:slug/data', async (req, res) => {
     if (!items.length) {
       return res.json({
         menu: { id: menu.id, name: menu.name, currency_code: menu.currency_code,
-                currency_symbol: menu.currency_symbol, exchange_rate: Number(menu.exchange_rate),
+                currency_symbol: menu.currency_symbol, exchange_rate: exchangeRate,
                 country_id: countryId, country_name: menu.country_name },
-        price_levels: [],
-        items: [],
-        menus: [],
+        price_levels: [], items: [], menus: [],
+        scenario: scenarioName ? { id: scenarioId, name: scenarioName } : null,
       });
     }
 
-    // Get all price levels
-    const { rows: levels } = await pool.query(
-      `SELECT * FROM mcogs_price_levels ORDER BY name`
-    );
+    const { rows: levels } = await pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`);
 
-    // All level prices for these items
+    // All level prices in one query
     const itemIds = items.map(i => i.id);
     const { rows: lpRows } = await pool.query(`
       SELECT * FROM mcogs_menu_item_prices WHERE menu_item_id = ANY($1::int[])
@@ -393,12 +537,10 @@ publicRouter.get('/:slug/data', async (req, res) => {
       lpMap[lp.menu_item_id][lp.price_level_id] = lp;
     }
 
-    // Recipe items deep
-    const recipeIds = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
+    const recipeIds      = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
     const recipeItemsMap = await loadAllRecipeItemsDeep(recipeIds);
     const variationMap   = await loadVariationItemsMap(recipeIds);
 
-    // Tax data
     const [quoteLookup, { rows: defaultTaxRows }, { rows: cltRows }, { rows: taxRateRows }] = await Promise.all([
       loadQuoteLookup(),
       pool.query(`SELECT country_id, rate, name FROM mcogs_country_tax_rates WHERE is_default = true`),
@@ -442,27 +584,34 @@ publicRouter.get('/:slug/data', async (req, res) => {
         );
         cpp = cost * qty;
       }
-      cpp = Math.round(cpp * Number(menu.exchange_rate) * 10000) / 10000;
+      cpp = Math.round(cpp * exchangeRate * 10000) / 10000;
 
       const rowLevels = {};
       for (const level of levels) {
-        const lid = level.id;
-        const lp  = lpMap[item.id]?.[lid];
-        if (!lp) {
-          rowLevels[lid] = { set: false, gross: null, net: null, cogs_pct: null, gp_net: null };
+        const lid         = level.id;
+        const ovKey       = `${item.id}_l${lid}`;
+        const lp          = lpMap[item.id]?.[lid];
+        const hasScenarioOv = ovKey in scenarioPriceOv;
+        const gross       = hasScenarioOv
+          ? Number(scenarioPriceOv[ovKey])
+          : (lp ? Number(lp.sell_price) : null);
+
+        if (gross === null) {
+          rowLevels[lid] = { set: false, gross: null, net: null, cogs_pct: null, gp_net: null, is_scenario_override: false };
           continue;
         }
-        const gross = Number(lp.sell_price);
-        const { rate: taxRate } = getEffectiveTax(lp.tax_rate_id, lid);
+
+        const { rate: taxRate } = getEffectiveTax(lp?.tax_rate_id, lid);
         const net     = taxRate > 0 ? gross / (1 + taxRate) : gross;
         const cogsPct = net > 0 && cpp > 0 ? Math.round((cpp / net) * 10000) / 100 : null;
         rowLevels[lid] = {
-          set:      true,
-          gross:    Math.round(gross * 10000) / 10000,
-          net:      Math.round(net   * 10000) / 10000,
-          cogs_pct: cogsPct,
-          gp_net:   Math.round((net - cpp) * 10000) / 10000,
-          lp_id:    lp.id,
+          set:                  true,
+          gross:                Math.round(gross * 10000) / 10000,
+          net:                  Math.round(net   * 10000) / 10000,
+          cogs_pct:             cogsPct,
+          gp_net:               Math.round((net - cpp) * 10000) / 10000,
+          lp_id:                lp?.id ?? null,
+          is_scenario_override: hasScenarioOv,
         };
       }
 
@@ -476,10 +625,9 @@ publicRouter.get('/:slug/data', async (req, res) => {
       };
     });
 
-    // Menus for the same market (if market is not locked the viewer can switch menus)
-    const { rows: marketMenus } = await pool.query(`
-      SELECT id, name FROM mcogs_menus WHERE country_id = $1 ORDER BY name
-    `, [countryId]);
+    const { rows: marketMenus } = await pool.query(
+      `SELECT id, name FROM mcogs_menus WHERE country_id = $1 ORDER BY name`, [countryId]
+    );
 
     res.json({
       menu: {
@@ -487,13 +635,14 @@ publicRouter.get('/:slug/data', async (req, res) => {
         name:            menu.name,
         currency_code:   menu.currency_code,
         currency_symbol: menu.currency_symbol,
-        exchange_rate:   Number(menu.exchange_rate),
+        exchange_rate:   exchangeRate,
         country_id:      countryId,
         country_name:    menu.country_name,
       },
       price_levels: levels.map(l => ({ id: l.id, name: l.name })),
       items:        outItems,
       menus:        marketMenus,
+      scenario:     scenarioName ? { id: scenarioId, name: scenarioName } : null,
     });
   } catch (err) {
     console.error(err);

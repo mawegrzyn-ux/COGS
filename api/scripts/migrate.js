@@ -546,6 +546,7 @@ const migrations = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_shared_pages_slug      ON mcogs_shared_pages(slug)`,
   `CREATE INDEX IF NOT EXISTS idx_shared_pages_menu_id   ON mcogs_shared_pages(menu_id)  WHERE menu_id  IS NOT NULL`,
+  `ALTER TABLE mcogs_shared_pages ADD COLUMN IF NOT EXISTS scenario_id INTEGER REFERENCES mcogs_menu_scenarios(id) ON DELETE SET NULL`,
 
   // ── Seed: 14 EU/UK regulated allergens (FIC Regulation 1169/2011) ─────────
   `INSERT INTO mcogs_allergens (code, name, description, sort_order) VALUES

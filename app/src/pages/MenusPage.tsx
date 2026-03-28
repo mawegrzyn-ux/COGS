@@ -132,10 +132,12 @@ interface LevelReportData {
 
 interface SharedPage {
   id: number; slug: string; name: string; mode: 'view' | 'edit'
-  menu_id: number | null; country_id: number | null
-  menu_name: string | null; country_name: string | null
+  menu_id: number | null; country_id: number | null; scenario_id: number | null
+  menu_name: string | null; country_name: string | null; scenario_name: string | null
   is_active: boolean; expires_at: string | null; created_at: string
 }
+
+interface ScenarioSummary { id: number; name: string; menu_id: number | null; menu_name: string | null }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -233,9 +235,11 @@ export default function MenusPage() {
   const [spPassword,      setSpPassword]      = useState('')
   const [spMenuId,        setSpMenuId]        = useState<number | ''>('')
   const [spCountryId,     setSpCountryId]     = useState<number | ''>('')
+  const [spScenarioId,    setSpScenarioId]    = useState<number | ''>('')
   const [spExpires,       setSpExpires]       = useState('')
   const [spSaving,        setSpSaving]        = useState(false)
   const [copiedSlug,      setCopiedSlug]      = useState<string | null>(null)
+  const [allScenarios,    setAllScenarios]    = useState<ScenarioSummary[]>([])
 
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
@@ -383,8 +387,14 @@ export default function MenusPage() {
   const loadSharedPages = useCallback(async () => {
     setSharedLoading(true)
     try {
-      const data = await api.get('/shared-pages')
-      setSharedPages(data || [])
+      const [pages, scenarios] = await Promise.all([
+        api.get('/shared-pages'),
+        api.get('/scenarios'),
+      ])
+      setSharedPages(pages || [])
+      setAllScenarios((scenarios || []).map((s: { id: number; name: string; menu_id: number | null; menu_name: string | null }) => ({
+        id: s.id, name: s.name, menu_id: s.menu_id, menu_name: s.menu_name,
+      })))
     } finally {
       setSharedLoading(false)
     }
@@ -395,13 +405,15 @@ export default function MenusPage() {
   }, [activeTab, loadSharedPages])
 
   function openNewSharedModal() {
-    setSpName(''); setSpMode('view'); setSpPassword(''); setSpMenuId(''); setSpCountryId(''); setSpExpires('')
+    setSpName(''); setSpMode('view'); setSpPassword('')
+    setSpMenuId(''); setSpCountryId(''); setSpScenarioId(''); setSpExpires('')
     setSharedModal('new')
   }
 
   function openEditSharedModal(p: SharedPage) {
     setSpName(p.name); setSpMode(p.mode); setSpPassword('')
     setSpMenuId(p.menu_id ?? ''); setSpCountryId(p.country_id ?? '')
+    setSpScenarioId(p.scenario_id ?? '')
     setSpExpires(p.expires_at ? p.expires_at.slice(0, 10) : '')
     setSharedModal(p)
   }
@@ -411,11 +423,12 @@ export default function MenusPage() {
     setSpSaving(true)
     try {
       const body: Record<string, unknown> = {
-        name:       spName,
-        mode:       spMode,
-        menu_id:    spMenuId   || null,
-        country_id: spCountryId || null,
-        expires_at: spExpires   || null,
+        name:        spName,
+        mode:        spMode,
+        menu_id:     spMenuId      || null,
+        country_id:  spCountryId   || null,
+        scenario_id: spScenarioId  || null,
+        expires_at:  spExpires     || null,
       }
       if (spPassword) body.password = spPassword
       if (sharedModal === 'new') {
@@ -911,9 +924,10 @@ export default function MenusPage() {
                         {expired     && <span className="badge badge-neutral text-xs">Expired</span>}
                       </div>
                       <div className="text-xs text-text-3 mt-1 space-y-0.5">
-                        {p.menu_name    && <div>Menu: <span className="text-text-2">{p.menu_name}</span></div>}
-                        {p.country_name && <div>Market: <span className="text-text-2">{p.country_name}</span></div>}
-                        {p.expires_at   && <div>Expires: <span className="text-text-2">{new Date(p.expires_at).toLocaleDateString()}</span></div>}
+                        {p.menu_name     && <div>Menu: <span className="text-text-2">{p.menu_name}</span></div>}
+                        {p.country_name  && <div>Market: <span className="text-text-2">{p.country_name}</span></div>}
+                        {p.scenario_name && <div>Scenario: <span className="text-amber-600 font-medium">{p.scenario_name}</span></div>}
+                        {p.expires_at    && <div>Expires: <span className="text-text-2">{new Date(p.expires_at).toLocaleDateString()}</span></div>}
                         <div className="font-mono text-[11px] truncate max-w-xs text-text-3 mt-1">{url}</div>
                       </div>
                     </div>
@@ -990,6 +1004,17 @@ export default function MenusPage() {
                     <option value="">— Any market —</option>
                     {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
+                </Field>
+                <Field label="Load Scenario (optional)">
+                  <select className="input w-full" value={spScenarioId} onChange={e => setSpScenarioId(e.target.value ? Number(e.target.value) : '')}>
+                    <option value="">— No scenario (live prices) —</option>
+                    {allScenarios.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.menu_name ? ` (${s.menu_name})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {spScenarioId && <p className="text-xs text-amber-600 mt-1">Scenario price overrides will be shown instead of live prices.</p>}
                 </Field>
                 <Field label="Expiry Date (optional)">
                   <input className="input w-full" type="date" value={spExpires} onChange={e => setSpExpires(e.target.value)} />
