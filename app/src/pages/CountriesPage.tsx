@@ -322,20 +322,26 @@ export default function CountriesPage() {
     <div className="flex flex-col h-full">
       <PageHeader
         title="Countries & Currencies"
-        subtitle="Register franchise markets with their local currency and exchange rate."
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-1">
+            <span>Register franchise markets with their local currency and exchange rate.</span>
+            {countries.length > 0 && (
+              <span className="flex items-center gap-x-2 ml-2 text-text-3">
+                <span><span className="font-semibold text-text-1">{countries.length}</span> markets</span>
+                <span className="text-border select-none">·</span>
+                <span><span className="font-semibold text-text-1">{uniqueCurrencies}</span> currencies</span>
+                <span className="text-border select-none">·</span>
+                <span>base <span className="font-semibold text-text-1">{baseCurrency}</span></span>
+              </span>
+            )}
+          </span>
+        }
         action={
           <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAddCountry}>
             <PlusIcon /> Add Country
           </button>
         }
       />
-
-      {/* KPI strip */}
-      <div className="flex gap-4 px-6 py-4 border-b border-border bg-surface">
-        <KpiCard label="Markets"    value={countries.length} />
-        <KpiCard label="Currencies" value={uniqueCurrencies} />
-        <KpiCard label="Base Currency" value={baseCurrency} />
-      </div>
 
       {/* Search */}
       <div className="px-6 py-3 border-b border-border bg-surface">
@@ -665,16 +671,7 @@ function CountryCard({
   )
 }
 
-// ── KPI Card ──────────────────────────────────────────────────────────────────
-
-function KpiCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-surface-2 rounded-lg px-5 py-3 min-w-[100px]">
-      <div className="text-xs text-text-3 font-medium mb-1">{label}</div>
-      <div className="text-xl font-extrabold text-text-1">{value}</div>
-    </div>
-  )
-}
+// KpiCard removed — stats now inline in PageHeader subtitle
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 

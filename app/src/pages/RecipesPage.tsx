@@ -531,7 +531,20 @@ export default function RecipesPage() {
     <div className="flex flex-col h-full">
       <PageHeader
         title="Recipes"
-        subtitle="Build recipes from your ingredient library. COGS is calculated via preferred vendor quotes per country."
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-1">
+            <span>Build recipes from your ingredient library. COGS is calculated via preferred vendor quotes per country.</span>
+            {recipes.length > 0 && (
+              <span className="flex items-center gap-x-2 ml-2 text-text-3">
+                <span><span className="font-semibold text-text-1">{recipes.length}</span> recipes</span>
+                <span className="text-border select-none">·</span>
+                <span><span className="font-semibold text-text-1">{ingredients.length}</span> ingredients</span>
+                <span className="text-border select-none">·</span>
+                <span><span className="font-semibold text-text-1">{categories.length}</span> categories</span>
+              </span>
+            )}
+          </span>
+        }
         tutorialPrompt="Walk me through building a Recipe in COGS Manager. How do I create a recipe, add ingredients with quantities and units, use sub-recipes, set yield, and what does the COGS cost-per-portion figure mean and how is it calculated?"
         action={
           <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={() => setRecipeModal('new')}>
@@ -539,13 +552,6 @@ export default function RecipesPage() {
           </button>
         }
       />
-
-      {/* KPI strip */}
-      <div className="flex gap-4 px-6 py-3 border-b border-border bg-surface">
-        <KpiCard label="Recipes"     value={recipes.length} />
-        <KpiCard label="Ingredients" value={ingredients.length} />
-        <KpiCard label="Categories"  value={categories.length} />
-      </div>
 
       {/* Split layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -1865,14 +1871,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
 // ── Small components ──────────────────────────────────────────────────────────
 
-function KpiCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-surface border border-border rounded-lg px-4 py-2.5 min-w-[100px]">
-      <div className="text-xs text-text-3 font-medium">{label}</div>
-      <div className="text-xl font-extrabold text-text-1 mt-0.5">{value}</div>
-    </div>
-  )
-}
+// KpiCard removed — stats now inline in PageHeader subtitle
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 

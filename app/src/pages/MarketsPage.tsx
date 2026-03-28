@@ -747,7 +747,20 @@ export default function MarketsPage() {
     <div className="flex flex-col h-full">
       <PageHeader
         title="Markets"
-        subtitle="Manage franchise markets, local currencies, tax rates and brand partners."
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-1">
+            <span>Manage franchise markets, local currencies, tax rates and brand partners.</span>
+            {markets.length > 0 && (
+              <span className="flex items-center gap-x-2 ml-2 text-text-3">
+                <span><span className="font-semibold text-text-1">{markets.length}</span> markets</span>
+                <span className="text-border select-none">·</span>
+                <span><span className="font-semibold text-text-1">{uniqueCurrencies}</span> currencies</span>
+                <span className="text-border select-none">·</span>
+                <span>base <span className="font-semibold text-text-1">{baseCurrency}</span></span>
+              </span>
+            )}
+          </span>
+        }
         tutorialPrompt="What are Markets in COGS Manager and how do they connect to everything else? Explain countries, currencies, exchange rates, tax rates, brand partners, and locations — and how selecting a market drives vendor scoping and COGS calculations."
         action={
           activeTab === 'Markets' ? (
@@ -796,13 +809,6 @@ export default function MarketsPage() {
         <div className="flex-1 flex items-center justify-center"><Spinner /></div>
       ) : activeTab === 'Markets' ? (
         <>
-          {/* KPI strip */}
-          <div className="flex gap-4 px-6 py-4 border-b border-border bg-surface">
-            <KpiCard label="Markets"       value={markets.length} />
-            <KpiCard label="Currencies"    value={uniqueCurrencies} />
-            <KpiCard label="Base Currency" value={baseCurrency} />
-          </div>
-
           {/* Search */}
           <div className="px-6 py-3 border-b border-border bg-surface">
             <div className="relative max-w-sm">
@@ -1649,16 +1655,7 @@ function MarketCard({
   )
 }
 
-// ── KPI Card ──────────────────────────────────────────────────────────────────
-
-function KpiCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-surface-2 rounded-lg px-5 py-3 min-w-[100px]">
-      <div className="text-xs text-text-3 font-medium mb-1">{label}</div>
-      <div className="text-xl font-extrabold text-text-1">{value}</div>
-    </div>
-  )
-}
+// KpiCard removed — stats now inline in PageHeader subtitle
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 

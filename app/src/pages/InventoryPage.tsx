@@ -142,16 +142,24 @@ export default function InventoryPage() {
     <div className="flex flex-col h-full">
       <PageHeader
         title="Inventory"
-        subtitle="Manage ingredients, vendor price quotes, and preferred suppliers per country."
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-1">
+            <span>Manage ingredients, vendor price quotes, and preferred suppliers per country.</span>
+            {ingredientCount > 0 && (
+              <span className="flex items-center gap-x-2 ml-2 text-text-3">
+                <StatPill value={ingredientCount} label="ingredients" />
+                <span className="text-border select-none">·</span>
+                <StatPill value={quoteCount} label="active quotes" />
+                <span className="text-border select-none">·</span>
+                <StatPill value={vendorCount} label="vendors" />
+                <span className="text-border select-none">·</span>
+                <StatPill value={countryCount} label="countries" />
+              </span>
+            )}
+          </span>
+        }
         tutorialPrompt="Give me an overview of the Inventory section. What are the three tabs — Ingredients, Price Quotes, and Vendors — and how do they connect to build a complete cost picture for each market?"
       />
-
-      <div className="flex gap-4 px-6 py-4 border-b border-border bg-surface">
-        <KpiCard label="Ingredients"       value={ingredientCount} />
-        <KpiCard label="Active Quotes"     value={quoteCount} />
-        <KpiCard label="Vendors"           value={vendorCount} />
-        <KpiCard label="Countries Covered" value={countryCount} />
-      </div>
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border">
         {(['ingredients', 'quotes', 'vendors'] as Tab[]).map(t => (
@@ -1844,14 +1852,14 @@ function SearchCombo({ value, onChange, options, placeholder = 'Search…' }: {
   )
 }
 
-// ── KPI Card ──────────────────────────────────────────────────────────────────
+// ── Stat Pill (inline subtitle stat) ─────────────────────────────────────────
 
-function KpiCard({ label, value }: { label: string; value: number }) {
+function StatPill({ value, label }: { value: number; label: string }) {
   return (
-    <div className="bg-surface-2 rounded-lg px-5 py-3 min-w-[120px]">
-      <div className="text-xs text-text-3 font-medium mb-1">{label}</div>
-      <div className="text-xl font-extrabold text-text-1">{value}</div>
-    </div>
+    <span>
+      <span className="font-semibold text-text-1">{value}</span>
+      {' '}{label}
+    </span>
   )
 }
 

@@ -67,7 +67,7 @@ export function PepperHelpButton({ prompt, size = 14 }: { prompt: string; size?:
 // ── Page Header ───────────────────────────────────────────────────────────────
 interface PageHeaderProps {
   title:          string
-  subtitle?:      string
+  subtitle?:      React.ReactNode
   action?:        React.ReactNode
   tutorialPrompt?: string
 }
@@ -75,13 +75,13 @@ interface PageHeaderProps {
 export function PageHeader({ title, subtitle, action, tutorialPrompt }: PageHeaderProps) {
   return (
     <div
-      className="flex items-center justify-between px-6 py-5 border-b border-border bg-surface"
+      className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface"
       data-ai-context={tutorialPrompt ? JSON.stringify({ type: 'tutorial', prompt: tutorialPrompt }) : undefined}
     >
       <div className="flex items-start gap-2">
         <div>
           <h1 className="text-xl font-extrabold text-text-1">{title}</h1>
-          {subtitle && <p className="text-sm text-text-3 mt-0.5">{subtitle}</p>}
+          {subtitle && <div className="text-sm text-text-3 mt-0.5">{subtitle}</div>}
         </div>
         {tutorialPrompt && <PepperHelpButton prompt={tutorialPrompt} size={14} />}
       </div>
