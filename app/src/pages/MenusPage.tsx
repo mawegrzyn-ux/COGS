@@ -966,6 +966,11 @@ export default function MenusPage() {
                 onDeleteItem={(menuItemId) => {
                   setConfirmDelete({ type: 'item', id: menuItemId })
                 }}
+                onShare={(mId, sId) => {
+                  setSpName(''); setSpMode('view'); setSpPassword(''); setSpNotes('')
+                  setSpMenuId(mId); setSpCountryId(''); setSpScenarioId(sId ?? ''); setSpExpires('')
+                  setSharedModal('new')
+                }}
               />
             </div>
             {meChangePanelOpen && meSharedPageId && (
@@ -2943,12 +2948,13 @@ interface ScenarioToolProps {
   onAddItem?(): void
   onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
+  onShare?(menuId: number, scenarioId: number | null): void
 }
 
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
-  onAddItem, onEditItem, onDeleteItem, refreshKey = 0,
+  onAddItem, onEditItem, onDeleteItem, onShare, refreshKey = 0,
 }: ScenarioToolProps) {
 
   const api = useApi()
@@ -3031,9 +3037,10 @@ function ScenarioTool({
   const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({})
   const [costOverrides,  setCostOverrides]  = useState<Record<string, string>>({})
 
-  // ── Change history ─────────────────────────────────────────────────────────
-  const [history,     setHistory]     = useState<HistoryEntry[]>([])
-  const [showHistory, setShowHistory] = useState(false)
+  // ── Change history + notes ─────────────────────────────────────────────────
+  const [history,          setHistory]          = useState<HistoryEntry[]>([])
+  const [scenarioNotes,    setScenarioNotes]    = useState('')
+  const [showHistoryNotes, setShowHistoryNotes] = useState(false)
 
   function addHistoryEntry(action: string, detail: string) {
     setHistory(prev => [...prev, { ts: new Date().toISOString(), action, detail }])
@@ -3120,6 +3127,7 @@ function ScenarioTool({
         price_overrides: toUsd(priceOverrides),
         cost_overrides:  toUsd(costOverrides),
         history,
+        notes: scenarioNotes || null,
       }
       let row: SavedScenario
       if (savedId) {
@@ -3163,6 +3171,7 @@ function ScenarioTool({
     }
     setCostOverrides(cOv)
     setHistory(s.history || [])
+    setScenarioNotes(s.notes || '')
     setTimeout(() => {
       setSavedId(s.id); setSavedName(s.name); setDirty(false)
       dirtyRef.current = false
@@ -3767,21 +3776,30 @@ ${tableHtml}
             </div>
           )}
 
-          {/* Compact + Excel / Print — aligned right in the selector row */}
+          {/* Compact + Excel / Print / Share — aligned right in the selector row */}
           {(levelId === 'ALL' || !!data) && (
-            <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden ml-auto">
-              {levelId === 'ALL' && (
+            <div className="flex items-center gap-1.5 ml-auto">
+              <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
+                {levelId === 'ALL' && (
+                  <button
+                    className={`px-2.5 py-1.5 text-xs border-r border-gray-200 hover:bg-gray-50 ${allLevelsCompact ? 'bg-accent text-white hover:bg-accent' : ''}`}
+                    onClick={() => setAllLevelsCompact(v => !v)}
+                    title={allLevelsCompact ? 'Expand all levels' : 'Compact all levels'}
+                  >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
+                )}
+                {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
+                  <>
+                    <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200" onClick={exportExcel}>📊 Excel</button>
+                    <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50" onClick={handlePrint}>🖨 Print</button>
+                  </>
+                )}
+              </div>
+              {onShare && menuId && (
                 <button
-                  className={`px-2.5 py-1.5 text-xs border-r border-gray-200 hover:bg-gray-50 ${allLevelsCompact ? 'bg-accent text-white hover:bg-accent' : ''}`}
-                  onClick={() => setAllLevelsCompact(v => !v)}
-                  title={allLevelsCompact ? 'Expand all levels' : 'Compact all levels'}
-                >{allLevelsCompact ? '⊞ Expand' : '⊟ Compact'}</button>
-              )}
-              {(data || (levelId === 'ALL' && allLevelRows.length > 0)) && (
-                <>
-                  <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50 border-r border-gray-200" onClick={exportExcel}>📊 Excel</button>
-                  <button className="px-2.5 py-1.5 text-xs hover:bg-gray-50" onClick={handlePrint}>🖨 Print</button>
-                </>
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50"
+                  title="Create a shared link for this menu / scenario"
+                  onClick={() => onShare(menuId, savedId)}
+                >🔗 Share</button>
               )}
             </div>
           )}
@@ -3813,10 +3831,15 @@ ${tableHtml}
             <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
           )}
 
-          {/* History */}
-          {history.length > 0 && (
-            <button className="btn btn-sm btn-ghost text-xs text-gray-400" title="View change history" onClick={() => setShowHistory(true)}>🕐 History</button>
-          )}
+          {/* Notes & History */}
+          <button
+            className={`btn btn-sm btn-ghost text-xs ${scenarioNotes || history.length > 0 ? 'text-gray-600' : 'text-gray-400'}`}
+            title="Notes & change history"
+            onClick={() => setShowHistoryNotes(true)}
+          >
+            📋 {scenarioNotes ? 'Notes' : 'Notes & History'}
+            {history.length > 0 && <span className="ml-1 text-[10px] text-gray-400">({history.length})</span>}
+          </button>
 
           {/* Add Item — far right */}
           {menuId && onAddItem && (
@@ -3848,12 +3871,14 @@ ${tableHtml}
           />
         )}
 
-        {/* ── History Modal ──────────────────────────────────────────────── */}
-        {showHistory && (
-          <HistoryModal
+        {/* ── Notes & History Modal ──────────────────────────────────────── */}
+        {showHistoryNotes && (
+          <HistoryNotesModal
             entries={history}
+            notes={scenarioNotes}
+            onNotesChange={n => { setScenarioNotes(n); markDirty() }}
             onClear={() => { setHistory([]); markDirty() }}
-            onClose={() => setShowHistory(false)}
+            onClose={() => setShowHistoryNotes(false)}
           />
         )}
 
@@ -4556,9 +4581,19 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
   )
 }
 
-// ── HistoryModal ───────────────────────────────────────────────────────────────
+// ── HistoryNotesModal ──────────────────────────────────────────────────────────
 
-function HistoryModal({ entries, onClear, onClose }: { entries: HistoryEntry[]; onClear(): void; onClose(): void }) {
+function HistoryNotesModal({
+  entries, notes, onNotesChange, onClear, onClose,
+}: {
+  entries: HistoryEntry[]
+  notes: string
+  onNotesChange(n: string): void
+  onClear(): void
+  onClose(): void
+}) {
+  const [tab, setTab] = useState<'notes' | 'history'>('notes')
+
   function fmtAction(a: string) {
     const map: Record<string, string> = {
       reset_prices: '↺ Prices reset',
@@ -4575,30 +4610,67 @@ function HistoryModal({ entries, onClear, onClose }: { entries: HistoryEntry[]; 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-[440px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-800">🕐 Change History</h3>
+          <div className="flex gap-1">
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${tab === 'notes' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('notes')}
+            >📋 Notes</button>
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors flex items-center gap-1.5 ${tab === 'history' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('history')}
+            >
+              🕐 History
+              {entries.length > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'history' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{entries.length}</span>}
+            </button>
+          </div>
           <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
         </div>
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          {entries.length === 0 ? (
-            <div className="text-center text-sm text-gray-400 py-8">No history yet.</div>
-          ) : (
-            <ul className="space-y-1">
-              {[...entries].reverse().map((e, i) => (
-                <li key={i} className="flex gap-3 text-sm py-1.5 border-b border-gray-50 last:border-0">
-                  <span className="text-gray-400 text-xs shrink-0 mt-0.5 w-28">{fmt(e.ts)}</span>
-                  <div>
-                    <span className="font-medium text-gray-700">{fmtAction(e.action)}</span>
-                    {e.detail && <span className="text-gray-500 ml-1.5 text-xs">{e.detail}</span>}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+
+        {/* Notes tab */}
+        {tab === 'notes' && (
+          <div className="flex-1 px-5 py-4 flex flex-col gap-2">
+            <p className="text-xs text-gray-400">Notes are saved with the scenario. Use for assumptions, pricing rationale, or review comments.</p>
+            <textarea
+              className="input flex-1 resize-none text-sm min-h-[200px]"
+              placeholder="Add notes about this scenario…"
+              value={notes}
+              onChange={e => onNotesChange(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
+
+        {/* History tab */}
+        {tab === 'history' && (
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            {entries.length === 0 ? (
+              <div className="text-center text-sm text-gray-400 py-8">No changes recorded yet.</div>
+            ) : (
+              <ul className="space-y-1">
+                {[...entries].reverse().map((e, i) => (
+                  <li key={i} className="flex gap-3 text-sm py-1.5 border-b border-gray-50 last:border-0">
+                    <span className="text-gray-400 text-xs shrink-0 mt-0.5 w-28">{fmt(e.ts)}</span>
+                    <div>
+                      <span className="font-medium text-gray-700">{fmtAction(e.action)}</span>
+                      {e.detail && <span className="text-gray-500 ml-1.5 text-xs">{e.detail}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Footer */}
         <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-between">
-          <button className="btn btn-sm btn-ghost text-xs text-red-400 hover:text-red-600" onClick={onClear}>Clear history</button>
+          {tab === 'history' && entries.length > 0 ? (
+            <button className="btn btn-sm btn-ghost text-xs text-red-400 hover:text-red-600" onClick={onClear}>Clear history</button>
+          ) : (
+            <div />
+          )}
           <button className="btn btn-sm btn-outline" onClick={onClose}>Close</button>
         </div>
       </div>
