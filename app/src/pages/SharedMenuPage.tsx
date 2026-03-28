@@ -483,6 +483,7 @@ export default function SharedMenuPage() {
       totalRevGross:  Math.round(totalRevGross   * 100) / 100,
       totalRevNet:    Math.round(totalRevNet     * 100) / 100,
       gp:             Math.round((totalRevGross - totalCost) * 100) / 100,
+      netGp:          Math.round((totalRevNet   - totalCost) * 100) / 100,
       weightedCogs:   weightedCogs !== null ? Math.round(weightedCogs * 10) / 10 : null,
       avgCogs:        avgCogs      !== null ? Math.round(avgCogs      * 10) / 10 : null,
       qtyTotal,
@@ -869,8 +870,8 @@ export default function SharedMenuPage() {
                     <div className="flex items-center justify-between mb-0.5 gap-1">
                       <span className="text-xs font-medium text-gray-700 truncate">{lvl.name}</span>
                       <div className="flex items-center gap-1.5 text-xs flex-shrink-0">
-                        {lvl.revPct > 0 && <span className="text-gray-400">{fmt2(lvl.revPct)}% mix</span>}
-                        {lvl.avgCogs !== null && <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>}
+                        {lvl.avgCogs !== null && <span className={cogsCls(lvl.avgCogs)}>{fmt2(lvl.avgCogs)}%</span>}
+                        <span className="font-semibold text-gray-700">{fmt2(lvl.revPct)}%</span>
                       </div>
                     </div>
                     <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
@@ -916,8 +917,8 @@ export default function SharedMenuPage() {
                 <>
                   <KpiTile
                     label="Total Revenue"
-                    value={`${sym}${fmt2(summary.totalRevGross)}`}
-                    sub="gross sales"
+                    value={`${sym}${fmt2(summary.totalRevNet)}`}
+                    sub="net sales (ex-tax)"
                     colour="blue"
                   />
                   <KpiTile
@@ -927,10 +928,10 @@ export default function SharedMenuPage() {
                     colour="gray"
                   />
                   <KpiTile
-                    label="Gross Profit"
-                    value={`${sym}${fmt2(summary.gp)}`}
-                    sub={summary.totalRevGross > 0 ? `${fmt2(((summary.gp) / summary.totalRevGross) * 100)}% GP` : '—'}
-                    colour={summary.gp >= 0 ? 'green' : 'red'}
+                    label="Net Profit"
+                    value={`${sym}${fmt2(summary.netGp)}`}
+                    sub={summary.totalRevNet > 0 ? `${fmt2((summary.netGp / summary.totalRevNet) * 100)}% GP` : '—'}
+                    colour={summary.netGp >= 0 ? 'green' : 'red'}
                   />
                 </>
               ) : (
@@ -987,12 +988,11 @@ export default function SharedMenuPage() {
                     <div key={lvl.id}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-medium text-gray-700">{lvl.name}</span>
-                        <div className="flex items-center gap-3 text-xs flex-shrink-0">
-                          {lvl.revPct > 0 && <span className="text-gray-400">{fmt2(lvl.revPct)}% mix</span>}
+                        <div className="flex items-center gap-3 text-xs text-gray-500 flex-shrink-0">
                           {lvl.avgCogs !== null && (
-                            <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}% COGS</span>
+                            <span className={cogsCls(lvl.avgCogs)}>{fmt2(lvl.avgCogs)}% COGS</span>
                           )}
-                          <span className="text-gray-700 font-semibold text-right">
+                          <span className="font-semibold text-gray-700 text-right">
                             {lvl.revPct > 0 ? <><span className="text-gray-400 font-normal mr-0.5">rev</span>{fmt2(lvl.revPct)}%</> : '—'}
                           </span>
                         </div>
