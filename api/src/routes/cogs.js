@@ -136,7 +136,12 @@ async function loadVariationItemsMap(recipeIds) {
  * Handles both direct ingredients and sub-recipe items (item_type = 'recipe') recursively.
  * allRecipeItemsMap must include items for every sub-recipe referenced in the tree.
  */
-function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap, allRecipeItemsMap = {}) {
+function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap, allRecipeItemsMap = {}, _visited = null) {
+  // Guard against circular references (A → B → A). Clone on first call so each
+  // top-level invocation gets its own visited set and sibling sub-recipes are
+  // allowed to appear more than once at different branches.
+  const visited = _visited ? new Set(_visited) : new Set([Number(recipe.id)]);
+
   const items = variationMap?.[recipe.id]?.[countryId] || globalItems;
   let total = 0, preferredCount = 0, quotedCount = 0, leafCount = 0;
 
@@ -154,9 +159,17 @@ function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMa
     } else if (item.item_type === 'recipe' && item.recipe_item_id) {
       // Sub-recipe: recursively calculate its cost-per-portion then scale by usage qty
       leafCount++;
-      const subId     = Number(item.recipe_item_id);
+      const subId = Number(item.recipe_item_id);
+
+      // Skip this branch if it would create a cycle — treat it as uncosted
+      if (visited.has(subId)) continue;
+
       const subYield  = Number(item.sub_recipe_yield_qty || 1);
       const subItems  = allRecipeItemsMap[subId] || [];
+      // Pass visited with the current recipe already in it so the child
+      // cannot recurse back up through any ancestor in this branch.
+      const subVisited = new Set(visited);
+      subVisited.add(subId);
       const subResult = calcRecipeCost(
         { id: subId, yield_qty: subYield },
         subItems,
@@ -164,6 +177,7 @@ function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMa
         quoteLookup,
         variationMap,
         allRecipeItemsMap,
+        subVisited,
       );
       const usage = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
       total += subResult.cost * usage;

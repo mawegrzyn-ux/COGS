@@ -1125,6 +1125,10 @@ When `border-collapse` is set on a table, `position: sticky` on `<th>` and `<td>
 
 This project deploys via GitHub Actions to Lightsail. There is no local dev server workflow. Claude Code hooks that require a running local server (e.g., the Claude Preview plugin Stop hook) are suppressed via `"disableAllHooks": true` in `.claude/settings.local.json`.
 
+### Git / Deploy Workflow — Claude Does Not Run Git Commands
+
+The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
+
 ---
 
 ## 17. Backlog
