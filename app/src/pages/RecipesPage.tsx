@@ -895,13 +895,13 @@ export default function RecipesPage() {
                           </div>
                         </div>
                         {activeMenu ? (() => {
-                          // Convert menu's local price → display currency
+                          // Convert menu's local price → display currency for read-only display
                           const menuRate = activeMenu.exchange_rate || 1
-                          const dispGross = activeMenu.sell_price_gross / menuRate * displayCurrency.rate
-                          const dispNet   = activeMenu.sell_price_net   / menuRate * displayCurrency.rate
+                          const dispNet  = activeMenu.sell_price_net / menuRate * displayCurrency.rate
                           return editingTilePrice !== null ? (
+                            // Edit always in the menu's own market currency to avoid conversion rounding
                             <div className="flex items-center gap-1 mt-1">
-                              <span className="text-sm text-text-3">{displayCurrency.symbol}</span>
+                              <span className="text-sm text-text-3">{activeMenu.currency_symbol}</span>
                               <input
                                 type="number" min="0" step="0.01"
                                 className="input text-sm font-mono w-24 py-0.5 px-1"
@@ -909,11 +909,10 @@ export default function RecipesPage() {
                                 onChange={e => setEditingTilePrice(e.target.value)}
                                 onKeyDown={async e => {
                                   if (e.key === 'Enter') {
-                                    const grossDisp = parseFloat(editingTilePrice)
-                                    if (!isNaN(grossDisp) && grossDisp >= 0 && selectedPriceLevelId) {
-                                      // Convert from display currency back to menu's local currency for storage
-                                      const localPrice = grossDisp / displayCurrency.rate * menuRate
-                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(localPrice * 10000) / 10000 })
+                                    const gross = parseFloat(editingTilePrice)
+                                    if (!isNaN(gross) && gross >= 0 && selectedPriceLevelId) {
+                                      // Store directly in menu's local currency — no conversion
+                                      await api.post('/menu-item-prices', { menu_item_id: activeMenu.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(gross * 10000) / 10000 })
                                       setMenuAssignVersion(v => v + 1)
                                       showToast('Price updated')
                                     }
@@ -930,8 +929,8 @@ export default function RecipesPage() {
                             <>
                               <div
                                 className="text-lg font-bold font-mono text-text-1 cursor-pointer hover:text-accent transition-colors"
-                                title="Click to edit price"
-                                onClick={() => setEditingTilePrice(fmtCost(dispGross > 0 ? dispGross : 0))}
+                                title={`Click to edit price (${activeMenu.currency_symbol})`}
+                                onClick={() => setEditingTilePrice(fmtCost(activeMenu.sell_price_gross > 0 ? activeMenu.sell_price_gross : 0))}
                               >
                                 {displayCurrency.symbol}{fmtCost(dispNet)}
                               </div>
