@@ -4027,7 +4027,7 @@ ${tableHtml}
                                 }}
                                 onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
                                 placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
-                                className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                   ${row.nat_key in costOverrides
                                     ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                     : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
@@ -4055,7 +4055,7 @@ ${tableHtml}
                                     }}
                                     onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} → ${e.target.value}`) }}
                                     placeholder={row.base_price_gross > 0 ? String(Math.round(row.base_price_gross * 100) / 100) : '—'}
-                                    className={`w-20 text-right font-mono text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                    className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                       ${isOv
                                         ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                         : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
@@ -4238,7 +4238,7 @@ ${tableHtml}
                                       }}
                                       onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
                                       placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
-                                      className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
+                                      className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
                                         ${row.is_cost_overridden
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                           : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
@@ -4257,7 +4257,7 @@ ${tableHtml}
                                       value={qty[p.qty_key] ?? ''}
                                       onChange={e => onQtyChange(p.qty_key, e.target.value)}
                                       placeholder="0"
-                                      className="w-12 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-1.5 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                                      className="w-16 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-1.5 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
                                     />
                                   </div>
                                 </td>
@@ -4274,7 +4274,7 @@ ${tableHtml}
                                       }}
                                       onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} [${p.level.name}] → ${e.target.value}`) }}
                                       placeholder={p.base_price_gross > 0 ? String(Math.round(p.base_price_gross * 100) / 100) : ''}
-                                      className={`w-16 text-right font-mono text-xs rounded px-1 py-1 focus:outline-none focus:ring-1
+                                      className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
                                         ${p.is_price_overridden
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                           : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
