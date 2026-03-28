@@ -914,22 +914,7 @@ export default function MenusPage() {
       {/* ══ TAB: SCENARIO ═══════════════════════════════════════════════════ */}
       {activeTab === 'scenario' && (
         <>
-          {/* ME change panel toggle */}
-          {meSharedPageId && (
-            <div className="flex items-center justify-end mb-2 px-6 pt-4">
-              <button
-                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${meChangePanelOpen ? 'bg-accent-dim border-accent text-accent' : 'bg-white border-border text-text-3 hover:border-text-3'}`}
-                onClick={() => setMeChangePanelOpen(p => !p)}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                Changes &amp; Comments {meChanges.length > 0 && <span className="font-bold text-accent">{meChanges.length}</span>}
-              </button>
-            </div>
-          )}
-
-          <div className={`flex gap-4 ${meChangePanelOpen ? 'items-start' : ''}`}>
+          <div className="flex gap-4">
             <div className="flex-1 min-w-0">
               <ScenarioTool
                 menus={menus}
@@ -971,54 +956,11 @@ export default function MenusPage() {
                   setSpMenuId(mId); setSpCountryId(''); setSpScenarioId(sId ?? ''); setSpExpires('')
                   setSharedModal('new')
                 }}
+                comments={meSharedPageId ? meChanges : undefined}
+                commentsLoading={meChangesLoading}
+                onClearComments={clearMeComments}
               />
             </div>
-            {meChangePanelOpen && meSharedPageId && (
-              <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-border shadow-sm overflow-hidden flex flex-col mx-6 mb-6" style={{ maxHeight: '70vh' }}>
-                <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-                  <h3 className="font-semibold text-text-1 text-sm">Changes &amp; Comments</h3>
-                  <div className="flex items-center gap-1.5 ml-auto">
-                    {meChanges.some(c => c.change_type === 'comment') && (
-                      <button
-                        className="text-xs text-text-3 hover:text-red-500 transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-red-200"
-                        onClick={clearMeComments}
-                        title="Delete all comments"
-                      >Clear comments</button>
-                    )}
-                    <button className="text-text-3 hover:text-text-1 transition-colors text-lg leading-none" onClick={() => setMeChangePanelOpen(false)}>×</button>
-                  </div>
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  {meChangesLoading && <div className="py-8 text-center text-text-3 text-xs animate-pulse">Loading…</div>}
-                  {!meChangesLoading && meChanges.length === 0 && <div className="py-8 text-center text-text-3 text-xs">No changes or comments yet</div>}
-                  {!meChangesLoading && meChanges.map(c => (
-                    <div key={c.id} className={`px-4 py-3 border-b border-border ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
-                      <div className="flex items-center justify-between mb-1 gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          {c.change_type === 'comment'
-                            ? <span className="text-blue-400 flex-shrink-0" title="Comment">💬</span>
-                            : <span className="text-accent flex-shrink-0" title="Price change">✏️</span>
-                          }
-                          <span className="text-xs font-semibold text-text-1 truncate">{c.user_name}</span>
-                        </div>
-                        <span className="text-xs text-text-3 flex-shrink-0">{new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                      {c.change_type === 'price' ? (
-                        <div>
-                          <p className="text-xs text-text-2 truncate font-medium">{c.display_name}</p>
-                          <p className="text-xs text-text-3">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
-                        </div>
-                      ) : (
-                        <div>
-                          <p className="text-xs text-text-2 truncate font-medium">{c.display_name}</p>
-                          <p className="text-xs text-blue-600 italic mt-0.5">"{c.comment}"</p>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </>
       )}
@@ -1103,84 +1045,85 @@ export default function MenusPage() {
             </div>
           )}
 
-          {/* Confirm delete */}
-          {sharedConfirm !== null && (
-            <ConfirmDialog
-              message="Delete this shared link? Anyone with the URL will lose access."
-              onConfirm={() => deleteSharedPage(sharedConfirm)}
-              onCancel={() => setSharedConfirm(null)}
-            />
-          )}
-
-          {/* Create / Edit modal */}
-          {sharedModal !== null && (
-            <Modal
-              title={sharedModal === 'new' ? 'New Shared Link' : 'Edit Shared Link'}
-              onClose={() => setSharedModal(null)}
-            >
-              <div className="space-y-4">
-                <Field label="Link Name" required>
-                  <input className="input w-full" placeholder="e.g. Summer Menu — Partner Preview"
-                    value={spName} onChange={e => setSpName(e.target.value)} />
-                </Field>
-                <Field label="Mode" required>
-                  <select className="input w-full" value={spMode} onChange={e => setSpMode(e.target.value as 'view' | 'edit')}>
-                    <option value="view">👁 View Only</option>
-                    <option value="edit">✏️ Edit (can change prices)</option>
-                  </select>
-                </Field>
-                <Field label={sharedModal === 'new' ? 'Password' : 'New Password (leave blank to keep current)'} required={sharedModal === 'new'}>
-                  <input className="input w-full" type="password" placeholder={sharedModal === 'new' ? 'Required' : 'Leave blank to keep existing'}
-                    value={spPassword} onChange={e => setSpPassword(e.target.value)} autoComplete="new-password" />
-                </Field>
-                <Field label="Lock to Menu (optional)">
-                  <select className="input w-full" value={spMenuId} onChange={e => setSpMenuId(e.target.value ? Number(e.target.value) : '')}>
-                    <option value="">— Any menu (viewer can switch) —</option>
-                    {menus.map(m => <option key={m.id} value={m.id}>{m.name} ({m.country_name})</option>)}
-                  </select>
-                </Field>
-                <Field label="Lock to Market (optional)">
-                  <select className="input w-full" value={spCountryId} onChange={e => setSpCountryId(e.target.value ? Number(e.target.value) : '')}>
-                    <option value="">— Any market —</option>
-                    {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </Field>
-                <Field label="Load Scenario (optional)">
-                  <select className="input w-full" value={spScenarioId} onChange={e => setSpScenarioId(e.target.value ? Number(e.target.value) : '')}>
-                    <option value="">— No scenario (live prices) —</option>
-                    {allScenarios.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}{s.menu_name ? ` (${s.menu_name})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {spScenarioId && <p className="text-xs text-amber-600 mt-1">Scenario price overrides will be shown instead of live prices.</p>}
-                </Field>
-                <Field label="Welcome Notes (optional)" hint="Shown to users once after entering the password">
-                  <textarea
-                    className="input w-full h-24 resize-none"
-                    placeholder="e.g. Please review the pricing for Q3 and update delivery prices where needed."
-                    value={spNotes}
-                    onChange={e => setSpNotes(e.target.value)}
-                  />
-                </Field>
-                <Field label="Expiry Date (optional)">
-                  <input className="input w-full" type="date" value={spExpires} onChange={e => setSpExpires(e.target.value)} />
-                </Field>
-                <div className="flex justify-end gap-2 pt-2">
-                  <button className="btn btn-outline" onClick={() => setSharedModal(null)}>Cancel</button>
-                  <button className="btn btn-primary" onClick={saveSharedPage}
-                    disabled={spSaving || !spName || (sharedModal === 'new' && !spPassword)}>
-                    {spSaving ? 'Saving…' : sharedModal === 'new' ? 'Create Link' : 'Save Changes'}
-                  </button>
-                </div>
-              </div>
-            </Modal>
-          )}
         </div>
       )}
 
       {/* ══ MODALS ══════════════════════════════════════════════════════════ */}
+
+      {/* Shared link — confirm delete */}
+      {sharedConfirm !== null && (
+        <ConfirmDialog
+          message="Delete this shared link? Anyone with the URL will lose access."
+          onConfirm={() => deleteSharedPage(sharedConfirm)}
+          onCancel={() => setSharedConfirm(null)}
+        />
+      )}
+
+      {/* Shared link — create / edit (global so it can be opened from any tab) */}
+      {sharedModal !== null && (
+        <Modal
+          title={sharedModal === 'new' ? 'New Shared Link' : 'Edit Shared Link'}
+          onClose={() => setSharedModal(null)}
+        >
+          <div className="space-y-4">
+            <Field label="Link Name" required>
+              <input className="input w-full" placeholder="e.g. Summer Menu — Partner Preview"
+                value={spName} onChange={e => setSpName(e.target.value)} />
+            </Field>
+            <Field label="Mode" required>
+              <select className="input w-full" value={spMode} onChange={e => setSpMode(e.target.value as 'view' | 'edit')}>
+                <option value="view">👁 View Only</option>
+                <option value="edit">✏️ Edit (can change prices)</option>
+              </select>
+            </Field>
+            <Field label={sharedModal === 'new' ? 'Password' : 'New Password (leave blank to keep current)'} required={sharedModal === 'new'}>
+              <input className="input w-full" type="password" placeholder={sharedModal === 'new' ? 'Required' : 'Leave blank to keep existing'}
+                value={spPassword} onChange={e => setSpPassword(e.target.value)} autoComplete="new-password" />
+            </Field>
+            <Field label="Lock to Menu (optional)">
+              <select className="input w-full" value={spMenuId} onChange={e => setSpMenuId(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">— Any menu (viewer can switch) —</option>
+                {menus.map(m => <option key={m.id} value={m.id}>{m.name} ({m.country_name})</option>)}
+              </select>
+            </Field>
+            <Field label="Lock to Market (optional)">
+              <select className="input w-full" value={spCountryId} onChange={e => setSpCountryId(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">— Any market —</option>
+                {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Load Scenario (optional)">
+              <select className="input w-full" value={spScenarioId} onChange={e => setSpScenarioId(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">— No scenario (live prices) —</option>
+                {allScenarios.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}{s.menu_name ? ` (${s.menu_name})` : ''}
+                  </option>
+                ))}
+              </select>
+              {spScenarioId && <p className="text-xs text-amber-600 mt-1">Scenario price overrides will be shown instead of live prices.</p>}
+            </Field>
+            <Field label="Welcome Notes (optional)" hint="Shown to users once after entering the password">
+              <textarea
+                className="input w-full h-24 resize-none"
+                placeholder="e.g. Please review the pricing for Q3 and update delivery prices where needed."
+                value={spNotes}
+                onChange={e => setSpNotes(e.target.value)}
+              />
+            </Field>
+            <Field label="Expiry Date (optional)">
+              <input className="input w-full" type="date" value={spExpires} onChange={e => setSpExpires(e.target.value)} />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn btn-outline" onClick={() => setSharedModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveSharedPage}
+                disabled={spSaving || !spName || (sharedModal === 'new' && !spPassword)}>
+                {spSaving ? 'Saving…' : sharedModal === 'new' ? 'Create Link' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Menu modal */}
       {menuModal !== null && (
@@ -2501,9 +2444,11 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
     const catQty:   Record<string, number> = {}
     const catCount: Record<string, number> = {}
     for (const item of data.items) {
-      const cat = item.category || 'Uncategorised'
-      const key = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
-      const q   = parseInt(currentQty[key] || '0', 10)
+      const cat    = item.category || 'Uncategorised'
+      const natKey = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      // Sum per-level keys (e.g. "r_1__l2") falling back to shared key for single-level view
+      const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
+      const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
       catQty[cat]   = (catQty[cat]   || 0) + q
       catCount[cat] = (catCount[cat] || 0) + 1
     }
@@ -2512,17 +2457,18 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([cat, qty]) => ({ cat, qty, count: catCount[cat] || 0, pct: totalQty > 0 ? (qty / totalQty) * 100 : 0 }))
     return { cats, totalQty }
-  }, [data, currentQty])
+  }, [data, currentQty, priceLevels])
 
   const existingRevenue = useMemo(() => {
     let total = 0
     for (const item of data.items) {
-      const key = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
-      const q = parseInt(currentQty[key] || '0', 10)
+      const natKey = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
+      const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
       total += q * (item.sell_price_gross || 0)
     }
     return total
-  }, [data, currentQty])
+  }, [data, currentQty, priceLevels])
 
   // ── State ────────────────────────────────────────────────────────────────
   const [targetRevenue, setTargetRevenue] = useState(() =>
@@ -2620,16 +2566,31 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         const itemRevShare = catRevenue / pricedItems.length
 
         for (const item of pricedItems) {
-          const price = effectivePrice[item.menu_item_id]
-          const qty   = Math.max(1, Math.round(itemRevShare / price))
-          const key   = item.item_type === 'recipe'
+          const price   = effectivePrice[item.menu_item_id]
+          const totalQty = Math.max(1, Math.round(itemRevShare / price))
+          const natKey  = item.item_type === 'recipe'
             ? `r_${item.recipe_id}`
             : `i_${item.ingredient_id}`
-          // Single shared qty key — used by both single-level and All Levels views
-          qMap[key] = String(qty)
+
+          if (activeLevels.length === 1 && activeLevels[0].id === 0) {
+            // No price levels configured — use shared key
+            qMap[natKey] = String(totalQty)
+          } else {
+            // Distribute totalQty across levels according to levelPcts
+            let remaining = totalQty
+            activeLevels.forEach((level, idx) => {
+              const pct      = parseFloat(String(levelPcts[level.id])) || 0
+              const levelQty = idx === activeLevels.length - 1
+                ? remaining   // last level absorbs rounding remainder
+                : Math.round(totalQty * pct / 100)
+              remaining -= levelQty
+              if (levelQty > 0) qMap[`${natKey}__l${level.id}`] = String(levelQty)
+            })
+          }
+
           previewRows.push({
             label: item.display_name,
-            qty,
+            qty:   totalQty,
             price: `${currencySymbol}${price.toFixed(2)}`,
           })
         }
@@ -2949,12 +2910,17 @@ interface ScenarioToolProps {
   onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
   onShare?(menuId: number, scenarioId: number | null): void
+  comments?: MeChange[]
+  commentsLoading?: boolean
+  onClearComments?(): void
 }
 
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
-  onAddItem, onEditItem, onDeleteItem, onShare, refreshKey = 0,
+  onAddItem, onEditItem, onDeleteItem, onShare,
+  comments, commentsLoading, onClearComments,
+  refreshKey = 0,
 }: ScenarioToolProps) {
 
   const api = useApi()
@@ -3111,7 +3077,7 @@ function ScenarioTool({
     }
   }
 
-  async function saveScenario(name: string) {
+  async function saveScenario(name: string, forceNew = false) {
     setSaving(true)
     const safeRate = dispRate || 1
     try {
@@ -3130,7 +3096,7 @@ function ScenarioTool({
         notes: scenarioNotes || null,
       }
       let row: SavedScenario
-      if (savedId) {
+      if (savedId && !forceNew) {
         row = await api.put(`/scenarios/${savedId}`, payload)
       } else {
         row = await api.post('/scenarios', payload)
@@ -3369,12 +3335,11 @@ function ScenarioTool({
       const costOvVal      = costOverrides[costOvKey]
       const cost           = costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp
       const isCostOv       = costOvKey in costOverrides
-      // One shared qty for this item — same key used by single-level view
-      const q_shared       = Math.max(0, parseFloat(qty[natKey] || '0') || 0)
+      // Per-level qty — each level has its own qty key e.g. "r_1__l2"
       const perLevel = allLevelsData.map(({ level, data }) => {
         const li             = data.items.find(i => i.menu_item_id === item.menu_item_id)
-        const qty_key        = natKey   // shared key — same as single-level view
-        const q              = q_shared
+        const qty_key        = `${natKey}__l${level.id}`   // per-level key
+        const q              = Math.max(0, parseFloat(qty[qty_key] || '0') || 0)
         const basePriceGross = (li?.sell_price_gross ?? 0) * dispRate
         const basePriceNet   = (li?.sell_price_net   ?? 0) * dispRate
         const taxRatio       = basePriceGross > 0 ? basePriceNet / basePriceGross : 1
@@ -3391,7 +3356,9 @@ function ScenarioTool({
           cogs_pct: revenue > 0 ? (q * cost / revenue) * 100 : null,
         }
       })
-      // total_qty is the shared qty (not a sum across levels — that would multiply by level count)
+      // total_qty / total_cost sum across all levels (each level may have different qty)
+      const total_qty  = perLevel.reduce((s, p) => s + p.qty, 0)
+      const total_cost = perLevel.reduce((s, p) => s + p.qty * cost, 0)
       return {
         menu_item_id: item.menu_item_id,
         nat_key:      natKey,
@@ -3400,7 +3367,7 @@ function ScenarioTool({
         item_type:    item.item_type,
         cost, base_cost_display: baseCostDisp,
         cost_override_key: costOvKey, is_cost_overridden: isCostOv,
-        total_qty: q_shared, total_cost: q_shared * cost,
+        total_qty, total_cost,
         perLevel,
       }
     })
@@ -3831,14 +3798,18 @@ ${tableHtml}
             <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
           )}
 
-          {/* Notes & History */}
+          {/* Notes, History & Comments */}
           <button
-            className={`btn btn-sm btn-ghost text-xs ${scenarioNotes || history.length > 0 ? 'text-gray-600' : 'text-gray-400'}`}
-            title="Notes & change history"
+            className={`btn btn-sm btn-ghost text-xs ${scenarioNotes || history.length > 0 || (comments && comments.length > 0) ? 'text-gray-600' : 'text-gray-400'}`}
+            title="Notes, change history & comments"
             onClick={() => setShowHistoryNotes(true)}
           >
-            📋 {scenarioNotes ? 'Notes' : 'Notes & History'}
-            {history.length > 0 && <span className="ml-1 text-[10px] text-gray-400">({history.length})</span>}
+            📋 Notes
+            {(history.length > 0 || (comments && comments.length > 0)) && (
+              <span className="ml-1 text-[10px] text-gray-400">
+                ({history.length + (comments?.length ?? 0)})
+              </span>
+            )}
           </button>
 
           {/* Add Item — far right */}
@@ -3879,6 +3850,9 @@ ${tableHtml}
             onNotesChange={n => { setScenarioNotes(n); markDirty() }}
             onClear={() => { setHistory([]); markDirty() }}
             onClose={() => setShowHistoryNotes(false)}
+            comments={comments}
+            commentsLoading={commentsLoading}
+            onClearComments={onClearComments}
           />
         )}
 
@@ -4214,7 +4188,7 @@ ${tableHtml}
               <tbody className="divide-y divide-gray-100">
                 {allLevelCategorised.map(([cat, catRows]) => {
                   // sum(cost per level) / sum(revenue per level) across all items in category
-                  const cSumCost = catRows.reduce((s, r) => s + r.perLevel.reduce((ss) => ss + r.total_cost, 0), 0)
+                  const cSumCost = catRows.reduce((s, r) => s + r.total_cost, 0)
                   const cSumRev  = catRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
                   const cTotalCogsPct = cSumRev > 0 ? (cSumCost / cSumRev) * 100 : null
                   return (
@@ -4233,9 +4207,9 @@ ${tableHtml}
                           </span>
                         </td>
                         {allLevelsData.map(({ level }) => {
-                          const cLvlQ = catRows.reduce((s, r) => s + r.total_qty, 0)
+                          const cLvlQ = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
                           const cR    = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
-                          const cCost = catRows.reduce((s, r) => s + r.total_qty * r.cost, 0)
+                          const cCost = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0) * r.cost, 0)
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
@@ -4358,7 +4332,7 @@ ${tableHtml}
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                 {(() => {
                   // sum(cost per level) / sum(revenue per level) across all items and all levels
-                  const gtSumCost = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss) => ss + r.total_cost, 0), 0)
+                  const gtSumCost = allLevelRows.reduce((s, r) => s + r.total_cost, 0)
                   const gtSumRev  = allLevelRows.reduce((s, r) => s + r.perLevel.reduce((ss, p) => ss + p.revenue, 0), 0)
                   const gtTotalCogsPct = gtSumRev > 0 ? (gtSumCost / gtSumRev) * 100 : null
                   return (
@@ -4412,7 +4386,7 @@ interface ScenarioModalProps {
   currentName: string
   onLoad(s: SavedScenario): void
   onDelete(id: number): void
-  onSave(name: string): void
+  onSave(name: string, forceNew?: boolean): void
   onNew(): void
   onClose(): void
 }
@@ -4507,10 +4481,15 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
               disabled={!nameInput.trim() || saving}
               onClick={() => onSave(nameInput.trim())}
             >{saving ? 'Saving…' : currentId ? 'Update' : 'Save'}</button>
+            {currentId && (
+              <button
+                className="btn btn-sm btn-outline shrink-0"
+                disabled={!nameInput.trim() || saving}
+                onClick={() => onSave(nameInput.trim(), true)}
+                title="Save current state as a new scenario"
+              >Save as New</button>
+            )}
           </div>
-          {currentId && nameInput === currentName && (
-            <p className="text-xs text-gray-400">Updates "{currentName}" — or change name to save as new</p>
-          )}
           <div className="flex gap-2 justify-between">
             <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={onNew}>+ New scenario</button>
             <button className="btn btn-sm btn-outline text-xs" onClick={onClose}>Close</button>
@@ -4585,14 +4564,19 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
 
 function HistoryNotesModal({
   entries, notes, onNotesChange, onClear, onClose,
+  comments, commentsLoading, onClearComments,
 }: {
   entries: HistoryEntry[]
   notes: string
   onNotesChange(n: string): void
   onClear(): void
   onClose(): void
+  comments?: MeChange[]
+  commentsLoading?: boolean
+  onClearComments?(): void
 }) {
-  const [tab, setTab] = useState<'notes' | 'history'>('notes')
+  const hasComments = comments !== undefined
+  const [tab, setTab] = useState<'notes' | 'history' | 'comments'>('notes')
 
   function fmtAction(a: string) {
     const map: Record<string, string> = {
@@ -4625,6 +4609,15 @@ function HistoryNotesModal({
               🕐 History
               {entries.length > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'history' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{entries.length}</span>}
             </button>
+            {hasComments && (
+              <button
+                className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors flex items-center gap-1.5 ${tab === 'comments' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+                onClick={() => setTab('comments')}
+              >
+                💬 Comments
+                {(comments?.length ?? 0) > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'comments' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{comments!.length}</span>}
+              </button>
+            )}
           </div>
           <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
         </div>
@@ -4664,10 +4657,48 @@ function HistoryNotesModal({
           </div>
         )}
 
+        {/* Comments tab */}
+        {tab === 'comments' && hasComments && (
+          <div className="flex-1 overflow-y-auto">
+            {commentsLoading && <div className="py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</div>}
+            {!commentsLoading && (!comments || comments.length === 0) && (
+              <div className="py-8 text-center text-sm text-gray-400">No changes or comments yet.</div>
+            )}
+            {!commentsLoading && comments && comments.map(c => (
+              <div key={c.id} className={`px-4 py-3 border-b border-gray-100 ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
+                <div className="flex items-center justify-between mb-1 gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {c.change_type === 'comment'
+                      ? <span className="text-blue-400 flex-shrink-0">💬</span>
+                      : <span className="text-accent flex-shrink-0">✏️</span>}
+                    <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
+                  </div>
+                  <span className="text-xs text-gray-400 flex-shrink-0">
+                    {new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                {c.change_type === 'price' ? (
+                  <div>
+                    <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
+                    <p className="text-xs text-gray-500">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
+                    <p className="text-xs text-blue-600 italic mt-0.5">"{c.comment}"</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Footer */}
         <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-between">
           {tab === 'history' && entries.length > 0 ? (
             <button className="btn btn-sm btn-ghost text-xs text-red-400 hover:text-red-600" onClick={onClear}>Clear history</button>
+          ) : tab === 'comments' && comments && comments.some(c => c.change_type === 'comment') && onClearComments ? (
+            <button className="btn btn-sm btn-ghost text-xs text-red-400 hover:text-red-600" onClick={onClearComments}>Clear comments</button>
           ) : (
             <div />
           )}
