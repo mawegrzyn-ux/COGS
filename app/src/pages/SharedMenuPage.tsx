@@ -421,7 +421,7 @@ export default function SharedMenuPage() {
       .sort((a, b) => b.revPct - a.revPct)
 
     // ── Price level breakdown ─────────────────────────────────────────────────
-    const maxRevenue = Math.max(...Object.values(levelStats).map(s => s.revenue), 0.001)
+    const totalLevelRevenue = Object.values(levelStats).reduce((s, v) => s + v.revenue, 0)
     const levelBreakdown = levels.map(l => {
       const s = levelStats[l.id]
       return {
@@ -429,7 +429,7 @@ export default function SharedMenuPage() {
         name:     l.name,
         avgCogs:  s.count > 0 ? s.sum / s.count : null,
         revenue:  s.revenue,
-        revPct:   maxRevenue > 0 ? (s.revenue / maxRevenue) * 100 : 0,
+        revPct:   totalLevelRevenue > 0 ? (s.revenue / totalLevelRevenue) * 100 : 0,
         priced:   s.count,
         total:    items.length,
       }
@@ -805,7 +805,7 @@ export default function SharedMenuPage() {
               {/* Price level split */}
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                  COGS & Revenue by Price Level
+                  Revenue Split & COGS by Price Level
                 </h3>
                 <div className="space-y-2.5">
                   {summary.levelBreakdown.map(lvl => (
@@ -817,8 +817,8 @@ export default function SharedMenuPage() {
                           {lvl.avgCogs !== null && (
                             <span className={`font-semibold ${cogsCls(lvl.avgCogs)}`}>{fmt2(lvl.avgCogs)}%</span>
                           )}
-                          <span className="text-gray-700 font-semibold w-16 text-right">
-                            {sym}{(lvl.revenue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          <span className="text-gray-700 font-semibold w-10 text-right">
+                            {lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}
                           </span>
                         </div>
                       </div>
