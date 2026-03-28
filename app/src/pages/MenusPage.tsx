@@ -3112,6 +3112,7 @@ function ScenarioTool({
         Object.fromEntries(Object.entries(displayVals).map(([k, v]) => [k, (parseFloat(v) || 0) / safeRate]).filter(([, v]) => (v as number) > 0))
       const payload = {
         name,
+        menu_id: menuId ?? null,
         price_level_id: (levelId && levelId !== 'ALL') ? levelId : null,
         qty_data: Object.fromEntries(
           Object.entries(qty).map(([k, v]) => [k, parseFloat(v) || 0]).filter(([, v]) => (v as number) > 0)
@@ -4088,7 +4089,10 @@ ${tableHtml}
                               value={qty[row.nat_key] ?? ''}
                               onChange={e => onQtyChange(row.nat_key, e.target.value)}
                               placeholder="0"
-                              className="w-16 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-2 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                              className={`w-16 text-right font-mono text-sm rounded px-2 py-1 focus:outline-none focus:ring-1
+                                ${qty[row.nat_key]
+                                  ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                  : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                             />
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
@@ -4272,7 +4276,10 @@ ${tableHtml}
                                       value={qty[p.qty_key] ?? ''}
                                       onChange={e => onQtyChange(p.qty_key, e.target.value)}
                                       placeholder="0"
-                                      className="w-16 text-right font-mono text-sm border border-transparent bg-transparent text-gray-800 rounded px-1.5 py-1 hover:border-gray-300 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                                      className={`w-16 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                        ${qty[p.qty_key]
+                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                     />
                                   </div>
                                 </td>

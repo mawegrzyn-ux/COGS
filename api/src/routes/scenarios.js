@@ -237,16 +237,17 @@ router.post('/push-prices', async (req, res) => {
 
 // ── POST /scenarios ───────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, price_level_id, qty_data, price_overrides, cost_overrides, history, notes } = req.body;
+  const { name, menu_id, price_level_id, qty_data, price_overrides, cost_overrides, history, notes } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'Name is required' } });
   try {
     const { rows: [inserted] } = await pool.query(`
       INSERT INTO mcogs_menu_scenarios
-        (name, price_level_id, qty_data, price_overrides, cost_overrides, history, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+        (name, menu_id, price_level_id, qty_data, price_overrides, cost_overrides, history, notes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id
     `, [
       name.trim(),
+      menu_id || null,
       price_level_id || null,
       JSON.stringify(qty_data         || {}),
       JSON.stringify(price_overrides  || {}),
@@ -264,17 +265,18 @@ router.post('/', async (req, res) => {
 
 // ── PUT /scenarios/:id ────────────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
-  const { name, price_level_id, qty_data, price_overrides, cost_overrides, history, notes } = req.body;
+  const { name, menu_id, price_level_id, qty_data, price_overrides, cost_overrides, history, notes } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'Name is required' } });
   try {
     const { rowCount } = await pool.query(`
       UPDATE mcogs_menu_scenarios
-      SET name=$1, price_level_id=$2, qty_data=$3,
-          price_overrides=$4, cost_overrides=$5, history=$6,
-          notes=$7, updated_at=NOW()
-      WHERE id=$8
+      SET name=$1, menu_id=$2, price_level_id=$3, qty_data=$4,
+          price_overrides=$5, cost_overrides=$6, history=$7,
+          notes=$8, updated_at=NOW()
+      WHERE id=$9
     `, [
       name.trim(),
+      menu_id || null,
       price_level_id || null,
       JSON.stringify(qty_data         || {}),
       JSON.stringify(price_overrides  || {}),
