@@ -4127,7 +4127,7 @@ ${tableHtml}
                               min="0"
                               step="1"
                               value={qty[row.nat_key] ?? ''}
-                              onChange={e => { setManualQtyKeys(prev => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
+                              onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
                               placeholder="0"
                               className={`w-16 text-right font-mono text-sm rounded px-2 py-1 focus:outline-none focus:ring-1
                                 ${manualQtyKeys.has(row.nat_key)
@@ -4317,7 +4317,7 @@ ${tableHtml}
                                     <input
                                       type="number" min="0" step="1"
                                       value={qty[p.qty_key] ?? ''}
-                                      onChange={e => { setManualQtyKeys(prev => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
+                                      onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
                                       placeholder="0"
                                       className={`w-16 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
                                         ${manualQtyKeys.has(p.qty_key)
