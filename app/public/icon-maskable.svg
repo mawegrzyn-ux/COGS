@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Full green background for maskable icon -->
+  <rect width="512" height="512" fill="#146A34"/>
+  <!-- Plant icon centered and scaled to fit within the 80% safe zone -->
+  <g transform="translate(256, 256) scale(1.8)">
+    <circle cx="0" cy="0" r="54" fill="white"/>
+    <line x1="0" y1="30" x2="0" y2="-16" stroke="#146A34" stroke-width="6" stroke-linecap="round"/>
+    <path d="M 0,6 C -4,-10 -26,-16 -26,-4 C -26,8 -8,12 0,6 Z" fill="#1E8A44"/>
+    <path d="M 0,-4 C 4,-20 26,-26 26,-14 C 26,-2 8,2 0,-4 Z" fill="#146A34"/>
+    <circle cx="0" cy="-16" r="6" fill="#1E8A44"/>
+  </g>
+</svg>
