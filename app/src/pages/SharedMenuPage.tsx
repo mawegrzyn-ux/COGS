@@ -1048,10 +1048,15 @@ export default function SharedMenuPage() {
                       const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
                       const isCollapsed = collapsedCats.has(cat)
                       const setPriced   = catItems.filter(i => levels.some(l => i.levels[l.id]?.set))
-                      const avgCogs     = (() => {
-                        const vals = catItems.flatMap(i => levels.map(l => i.levels[l.id]?.cogs_pct).filter((v): v is number => v !== null && v !== undefined))
-                        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
-                      })()
+                      // Per-level average COGS for category header row
+                      const avgCogsPerLevel = Object.fromEntries(
+                        levels.map(l => {
+                          const vals = catItems
+                            .map(i => i.levels[l.id]?.cogs_pct)
+                            .filter((v): v is number => v !== null && v !== undefined)
+                          return [l.id, vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null]
+                        })
+                      )
 
                       return [
                         // Category header row
@@ -1070,15 +1075,18 @@ export default function SharedMenuPage() {
                               </span>
                             </div>
                           </td>
-                          {levels.map(l => (
-                            <td key={l.id} className="px-4 py-2.5 text-right">
-                              {avgCogs !== null && (
-                                <span className={`text-xs font-medium ${cogsCls(avgCogs)}`}>
-                                  avg {fmt2(avgCogs)}%
-                                </span>
-                              )}
-                            </td>
-                          ))}
+                          {levels.map(l => {
+                            const lvlAvg = avgCogsPerLevel[l.id] ?? null
+                            return (
+                              <td key={l.id} className="px-4 py-2.5 text-right">
+                                {lvlAvg !== null && (
+                                  <span className={`text-xs font-medium ${cogsCls(lvlAvg)}`}>
+                                    avg {fmt2(lvlAvg)}%
+                                  </span>
+                                )}
+                              </td>
+                            )
+                          })}
                         </tr>,
 
                         // Item rows
