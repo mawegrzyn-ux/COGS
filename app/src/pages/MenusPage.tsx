@@ -3828,7 +3828,19 @@ ${tableHtml}
             onLoad={s => { loadScenario(s); setShowScenarioModal(false) }}
             onDelete={deleteScenario}
             onSave={saveScenario}
-            onNew={() => { setSavedId(null); setSavedName(''); setDirty(false); setShowScenarioModal(false) }}
+            onNew={name => {
+              onReplaceQty({})
+              setPriceOverrides({})
+              setCostOverrides({})
+              setHistory([])
+              setScenarioNotes('')
+              onMenuChange(null)
+              setSavedId(null)
+              setSavedName(name)
+              setDirty(false)
+              dirtyRef.current = false
+              setShowScenarioModal(false)
+            }}
             onClose={() => setShowScenarioModal(false)}
           />
         )}
@@ -4389,13 +4401,15 @@ interface ScenarioModalProps {
   onLoad(s: SavedScenario): void
   onDelete(id: number): void
   onSave(name: string, forceNew?: boolean): void
-  onNew(): void
+  onNew(name: string): void
   onClose(): void
 }
 
 function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onLoad, onDelete, onSave, onNew, onClose }: ScenarioModalProps) {
-  const [nameInput, setNameInput] = useState(currentName || '')
-  const [search,    setSearch]    = useState('')
+  const [nameInput,    setNameInput]    = useState(currentName || '')
+  const [search,       setSearch]       = useState('')
+  const [subForm,      setSubForm]      = useState<'saveAs' | 'new' | null>(null)
+  const [subName,      setSubName]      = useState('')
 
   const filtered = scenarios.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -4467,35 +4481,97 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
           )}
         </div>
 
-        {/* Save form */}
-        <div className="border-t border-gray-100 px-5 py-4 bg-gray-50/50 rounded-b-xl space-y-3">
-          <div className="flex gap-2 items-center">
-            <input
-              className="input flex-1 text-sm"
-              placeholder="Scenario name…"
-              value={nameInput}
-              onChange={e => setNameInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && nameInput.trim()) onSave(nameInput.trim()) }}
-              autoFocus={scenarios.length === 0}
-            />
-            <button
-              className="btn btn-sm btn-primary shrink-0"
-              disabled={!nameInput.trim() || saving}
-              onClick={() => onSave(nameInput.trim())}
-            >{saving ? 'Saving…' : currentId ? 'Update' : 'Save'}</button>
-            {currentId && (
-              <button
-                className="btn btn-sm btn-outline shrink-0"
-                disabled={!nameInput.trim() || saving}
-                onClick={() => onSave(nameInput.trim(), true)}
-                title="Save current state as a new scenario"
-              >Save as New</button>
-            )}
-          </div>
-          <div className="flex gap-2 justify-between">
-            <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={onNew}>+ New scenario</button>
-            <button className="btn btn-sm btn-outline text-xs" onClick={onClose}>Close</button>
-          </div>
+        {/* Footer */}
+        <div className="border-t border-gray-100 px-5 py-4 bg-gray-50/50 rounded-b-xl">
+
+          {/* ── Sub-form: Save as New ── */}
+          {subForm === 'saveAs' && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Save as New Scenario</p>
+              <input
+                className="input w-full text-sm"
+                placeholder="New scenario name…"
+                value={subName}
+                autoFocus
+                onChange={e => setSubName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && subName.trim()) { onSave(subName.trim(), true); setSubForm(null) }
+                  if (e.key === 'Escape') setSubForm(null)
+                }}
+              />
+              <div className="flex gap-2 justify-between">
+                <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={() => setSubForm(null)}>← Back</button>
+                <button
+                  className="btn btn-sm btn-primary shrink-0"
+                  disabled={!subName.trim() || saving}
+                  onClick={() => { onSave(subName.trim(), true); setSubForm(null) }}
+                >{saving ? 'Saving…' : '💾 Save Copy'}</button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Sub-form: New Scenario ── */}
+          {subForm === 'new' && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">New Scenario</p>
+              <p className="text-xs text-gray-400">All quantities, prices and overrides will be cleared.</p>
+              <input
+                className="input w-full text-sm"
+                placeholder="Scenario name…"
+                value={subName}
+                autoFocus
+                onChange={e => setSubName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && subName.trim()) { onNew(subName.trim()); setSubForm(null) }
+                  if (e.key === 'Escape') setSubForm(null)
+                }}
+              />
+              <div className="flex gap-2 justify-between">
+                <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={() => setSubForm(null)}>← Back</button>
+                <button
+                  className="btn btn-sm btn-primary shrink-0"
+                  disabled={!subName.trim()}
+                  onClick={() => { onNew(subName.trim()); setSubForm(null) }}
+                >✓ Create</button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Normal footer ── */}
+          {!subForm && (
+            <div className="space-y-3">
+              <div className="flex gap-2 items-center">
+                <input
+                  className="input flex-1 text-sm"
+                  placeholder="Scenario name…"
+                  value={nameInput}
+                  onChange={e => setNameInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && nameInput.trim()) onSave(nameInput.trim()) }}
+                  autoFocus={scenarios.length === 0}
+                />
+                <button
+                  className="btn btn-sm btn-primary shrink-0"
+                  disabled={!nameInput.trim() || saving}
+                  onClick={() => onSave(nameInput.trim())}
+                >{saving ? 'Saving…' : currentId ? 'Update' : 'Save'}</button>
+              </div>
+              <div className="flex gap-2 items-center justify-between">
+                {currentId ? (
+                  <button
+                    className="btn btn-sm btn-ghost text-xs text-gray-500"
+                    onClick={() => { setSubName(nameInput); setSubForm('saveAs') }}
+                  >Save as New…</button>
+                ) : <div />}
+                <div className="flex gap-2">
+                  <button
+                    className="btn btn-sm btn-primary text-xs"
+                    onClick={() => { setSubName(''); setSubForm('new') }}
+                  >+ New Scenario</button>
+                  <button className="btn btn-sm btn-outline text-xs" onClick={onClose}>Close</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
