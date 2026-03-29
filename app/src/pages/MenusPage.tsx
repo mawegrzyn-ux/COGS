@@ -4674,7 +4674,7 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
 
 function HistoryNotesModal({
   entries, notes, onNotesChange, onClear, onClose,
-  comments, commentsLoading, onClearComments,
+  comments, commentsLoading, onAddComment, onClearComments,
 }: {
   entries: HistoryEntry[]
   notes: string
