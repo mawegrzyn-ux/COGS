@@ -134,7 +134,7 @@ interface LevelReportData {
 interface MeChange {
   id:             number
   user_name:      string
-  change_type:    'price' | 'comment'
+  change_type:    'price' | 'qty' | 'comment'
   menu_item_id:   number | null
   price_level_id: number | null
   display_name:   string | null
@@ -144,6 +144,7 @@ interface MeChange {
   comment:        string | null
   parent_id:      number | null
   created_at:     string
+  shared_page_id?: number  // which shared view this entry came from (tagged client-side)
 }
 
 interface SharedPage {
@@ -688,7 +689,11 @@ export default function MenusPage() {
     // Use first page as the "write" target for new comments posted from ME
     setMeSharedPageId(active[0].id)
     setMeChangesLoading(true)
-    Promise.all(active.map(p => api.get(`/shared-pages/${p.id}/changes`).catch(() => [])))
+    Promise.all(active.map(p =>
+      api.get(`/shared-pages/${p.id}/changes`)
+        .then((rows: MeChange[]) => rows.map(r => ({ ...r, shared_page_id: p.id })))
+        .catch(() => [] as MeChange[])
+    ))
       .then((results: MeChange[][]) => {
         const merged = results.flat().sort((a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -711,15 +716,16 @@ export default function MenusPage() {
     } catch { showToast('Failed to clear comments.', 'error') }
   }
 
-  async function addMeComment(text: string, parentId?: number) {
-    if (!meSharedPageId || !text.trim()) return
+  async function addMeComment(text: string, parentId?: number, sharedPageId?: number) {
+    const targetPageId = sharedPageId ?? meSharedPageId
+    if (!targetPageId || !text.trim()) return
     try {
-      const row: MeChange = await api.post(`/shared-pages/${meSharedPageId}/changes`, {
+      const row: MeChange = await api.post(`/shared-pages/${targetPageId}/changes`, {
         comment:   text.trim(),
         user_name: 'Admin',
         parent_id: parentId ?? null,
       })
-      setMeChanges(prev => [row, ...prev])
+      setMeChanges(prev => [{ ...row, shared_page_id: targetPageId }, ...prev])
     } catch { showToast('Failed to post comment.', 'error') }
   }
 
@@ -2947,7 +2953,7 @@ interface ScenarioToolProps {
   onScenarioChange?(scenarioId: number | null): void
   comments?: MeChange[]
   commentsLoading?: boolean
-  onAddComment?(text: string, parentId?: number): Promise<void>
+  onAddComment?(text: string, parentId?: number, sharedPageId?: number): Promise<void>
   onClearComments?(): void
 }
 
@@ -4701,7 +4707,7 @@ function HistoryNotesModal({
   onClose(): void
   comments?: MeChange[]
   commentsLoading?: boolean
-  onAddComment?(text: string, parentId?: number): Promise<void>
+  onAddComment?(text: string, parentId?: number, sharedPageId?: number): Promise<void>
   onClearComments?(): void
 }) {
   const hasComments = comments !== undefined
@@ -4736,7 +4742,12 @@ function HistoryNotesModal({
   async function postReply() {
     if (!replyText.trim() || !replyTo || !onAddComment) return
     setPostingReply(true)
-    try { await onAddComment(replyText.trim(), replyTo.id); setReplyText(''); setReplyTo(null) }
+    try {
+      // Route the reply to whichever shared view the parent comment came from
+      await onAddComment(replyText.trim(), replyTo.id, replyTo.shared_page_id)
+      setReplyText('')
+      setReplyTo(null)
+    }
     finally { setPostingReply(false) }
   }
 
@@ -4773,7 +4784,7 @@ function HistoryNotesModal({
               onClick={() => setTab('history')}
             >
               🕐 History
-              {entries.length > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'history' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{entries.length}</span>}
+              {(() => { const n = entries.length + (comments?.filter(c => c.change_type !== 'comment').length ?? 0); return n > 0 ? <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'history' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{n}</span> : null })()}
             </button>
             {hasComments && (
               <button
@@ -4781,7 +4792,7 @@ function HistoryNotesModal({
                 onClick={() => setTab('comments')}
               >
                 💬 Comments
-                {(comments?.length ?? 0) > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'comments' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{comments!.length}</span>}
+                {(comments?.filter(c => c.change_type === 'comment').length ?? 0) > 0 && <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${tab === 'comments' ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-400'}`}>{comments!.filter(c => c.change_type === 'comment').length}</span>}
               </button>
             )}
           </div>
@@ -4804,9 +4815,10 @@ function HistoryNotesModal({
 
         {/* History tab */}
         {tab === 'history' && (
-          <div className="flex-1 overflow-y-auto px-4 py-3">
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+            {/* Local scenario history */}
             {entries.length === 0 ? (
-              <div className="text-center text-sm text-gray-400 py-8">No changes recorded yet.</div>
+              <div className="text-center text-sm text-gray-400 py-4">No local changes recorded yet.</div>
             ) : (
               <ul className="space-y-1">
                 {[...entries].reverse().map((e, i) => (
@@ -4819,6 +4831,31 @@ function HistoryNotesModal({
                   </li>
                 ))}
               </ul>
+            )}
+            {/* Shared view price/qty edits */}
+            {comments && comments.filter(c => c.change_type !== 'comment').length > 0 && (
+              <div>
+                <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <span>✏️</span> Shared View Edits
+                </div>
+                <ul className="space-y-1">
+                  {comments.filter(c => c.change_type !== 'comment').map(c => (
+                    <li key={c.id} className="flex gap-3 text-sm py-1.5 border-b border-gray-50 last:border-0">
+                      <span className="text-gray-400 text-xs shrink-0 mt-0.5 w-28">{fmtTime(c.created_at)}</span>
+                      <div className="min-w-0">
+                        <span className="font-medium text-gray-700 text-xs">{c.user_name}</span>
+                        {c.display_name && <span className="text-gray-500 ml-1.5 text-xs truncate">· {c.display_name}</span>}
+                        {c.level_name && (
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span>
+                            {' → '}<span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span>
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         )}
@@ -4850,87 +4887,71 @@ function HistoryNotesModal({
             {/* Comment feed */}
             <div className="flex-1 overflow-y-auto">
               {commentsLoading && <div className="py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</div>}
-              {!commentsLoading && comments && comments.filter(c => !c.parent_id).length === 0 && (
+              {!commentsLoading && comments && comments.filter(c => c.change_type === 'comment' && !c.parent_id).length === 0 && (
                 <div className="py-8 text-center text-sm text-gray-400">No comments yet.</div>
               )}
               {!commentsLoading && commentTree.map(c => (
                 <div key={c.id} className="border-b border-gray-100 last:border-0">
-                  {/* Price change entries (not commentable) */}
-                  {c.change_type === 'price' ? (
-                    <div className="px-4 py-2.5">
-                      <div className="flex items-center justify-between mb-0.5 gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-accent flex-shrink-0 text-xs">✏️</span>
-                          <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
-                        </div>
-                        <span className="text-xs text-gray-400 flex-shrink-0">{fmtTime(c.created_at)}</span>
+                  <div className="px-4 py-2.5 bg-blue-50/20">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-blue-400 text-xs flex-shrink-0">💬</span>
+                        <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
+                        {c.display_name && <span className="text-xs text-gray-400 truncate">· {c.display_name}</span>}
                       </div>
-                      <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
-                      <p className="text-xs text-gray-500">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-xs text-gray-400">{fmtTime(c.created_at)}</span>
+                        {onAddComment && (
+                          <button
+                            className="text-xs text-blue-400 hover:text-blue-600 transition-colors"
+                            onClick={() => { setReplyTo(replyTo?.id === c.id ? null : c); setReplyText('') }}
+                          >↩ Reply</button>
+                        )}
+                      </div>
                     </div>
-                  ) : (
-                    /* Comment entries */
-                    <div className="px-4 py-2.5 bg-blue-50/20">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-blue-400 text-xs flex-shrink-0">💬</span>
-                          <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
-                          {c.display_name && <span className="text-xs text-gray-400 truncate">· {c.display_name}</span>}
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <span className="text-xs text-gray-400">{fmtTime(c.created_at)}</span>
-                          {onAddComment && (
-                            <button
-                              className="text-xs text-blue-400 hover:text-blue-600 transition-colors"
-                              onClick={() => { setReplyTo(replyTo?.id === c.id ? null : c); setReplyText('') }}
-                            >↩ Reply</button>
-                          )}
+                    <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words">{c.comment}</p>
+
+                    {/* Reply input */}
+                    {replyTo?.id === c.id && onAddComment && (
+                      <div className="mt-2 pl-3 border-l-2 border-blue-200">
+                        <textarea
+                          className="input w-full text-xs resize-none"
+                          rows={2}
+                          placeholder={`Reply to ${c.user_name}…`}
+                          value={replyText}
+                          onChange={e => setReplyText(e.target.value)}
+                          autoFocus
+                          onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postReply() }}
+                        />
+                        <div className="flex gap-1.5 justify-end mt-1">
+                          <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={() => setReplyTo(null)}>Cancel</button>
+                          <button
+                            className="btn btn-sm btn-primary text-xs"
+                            disabled={!replyText.trim() || postingReply}
+                            onClick={postReply}
+                          >{postingReply ? 'Posting…' : '↩ Reply'}</button>
                         </div>
                       </div>
-                      <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words">{c.comment}</p>
+                    )}
 
-                      {/* Reply input */}
-                      {replyTo?.id === c.id && onAddComment && (
-                        <div className="mt-2 pl-3 border-l-2 border-blue-200">
-                          <textarea
-                            className="input w-full text-xs resize-none"
-                            rows={2}
-                            placeholder={`Reply to ${c.user_name}…`}
-                            value={replyText}
-                            onChange={e => setReplyText(e.target.value)}
-                            autoFocus
-                            onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postReply() }}
-                          />
-                          <div className="flex gap-1.5 justify-end mt-1">
-                            <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={() => setReplyTo(null)}>Cancel</button>
-                            <button
-                              className="btn btn-sm btn-primary text-xs"
-                              disabled={!replyText.trim() || postingReply}
-                              onClick={postReply}
-                            >{postingReply ? 'Posting…' : '↩ Reply'}</button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Replies */}
-                      {c.replies && c.replies.length > 0 && (
-                        <div className="mt-2 pl-3 border-l-2 border-blue-100 space-y-2">
-                          {c.replies.map(r => (
-                            <div key={r.id}>
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-1 min-w-0">
-                                  <span className="text-blue-300 text-xs">↩</span>
-                                  <span className="text-xs font-semibold text-gray-700 truncate">{r.user_name}</span>
-                                </div>
-                                <span className="text-xs text-gray-400 flex-shrink-0">{fmtTime(r.created_at)}</span>
+                    {/* Replies */}
+                    {c.replies && c.replies.length > 0 && (
+                      <div className="mt-2 pl-3 border-l-2 border-blue-100 space-y-2">
+                        {c.replies.map(r => (
+                          <div key={r.id}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-blue-300 text-xs">↩</span>
+                                <span className="text-xs font-semibold text-gray-700 truncate">{r.user_name}</span>
                               </div>
-                              <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap break-words">{r.comment}</p>
+                              <span className="text-xs text-gray-400 flex-shrink-0">{fmtTime(r.created_at)}</span>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                            <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap break-words">{r.comment}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
