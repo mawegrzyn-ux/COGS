@@ -263,9 +263,10 @@ export default function MenusPage() {
   const [allScenarios,    setAllScenarios]    = useState<ScenarioSummary[]>([])
 
   // Menu Engineer change panel
-  const [meChanges,        setMeChanges]        = useState<MeChange[]>([])
-  const [meChangesLoading, setMeChangesLoading] = useState(false)
-  const [meSharedPageId,   setMeSharedPageId]   = useState<number | null>(null)
+  const [meChanges,          setMeChanges]          = useState<MeChange[]>([])
+  const [meChangesLoading,   setMeChangesLoading]   = useState(false)
+  const [meSharedPageId,     setMeSharedPageId]     = useState<number | null>(null)
+  const [meCurrentScenarioId, setMeCurrentScenarioId] = useState<number | null>(null)
 
   // toast
   const [toast, setToast] = useState<{ msg: string; type?: 'error' } | null>(null)
@@ -427,7 +428,7 @@ export default function MenusPage() {
   }, [api])
 
   useEffect(() => {
-    if (activeTab === 'shared-links' || sharedModal === 'new') loadSharedPages()
+    if (activeTab === 'shared-links' || activeTab === 'scenario' || sharedModal === 'new') loadSharedPages()
   }, [activeTab, sharedModal, loadSharedPages])
 
   function openNewSharedModal() {
@@ -677,22 +678,34 @@ export default function MenusPage() {
   }, [activeTab, lrCountryId]) // eslint-disable-line
 
   useEffect(() => {
-    // When ME menu changes, check if a shared page exists and load its changes
+    // Load comments from ALL active shared pages linked to this menu + scenario.
+    // Multiple shared views (different users/partners) are merged into one stream sorted by time.
     if (activeTab !== 'scenario' || !scenarioMenuId) { setMeChanges([]); setMeSharedPageId(null); return }
-    const linked = sharedPages.find(p => p.menu_id === scenarioMenuId && p.is_active)
-    if (!linked) { setMeChanges([]); setMeSharedPageId(null); return }
-    setMeSharedPageId(linked.id)
+    const active = sharedPages.filter(p => p.menu_id === scenarioMenuId && p.is_active && (
+      !meCurrentScenarioId || !p.scenario_id || p.scenario_id === meCurrentScenarioId
+    ))
+    if (!active.length) { setMeChanges([]); setMeSharedPageId(null); return }
+    // Use first page as the "write" target for new comments posted from ME
+    setMeSharedPageId(active[0].id)
     setMeChangesLoading(true)
-    api.get(`/shared-pages/${linked.id}/changes`)
-      .then((ch: MeChange[]) => setMeChanges(ch))
-      .catch(() => {})
+    Promise.all(active.map(p => api.get(`/shared-pages/${p.id}/changes`).catch(() => [])))
+      .then((results: MeChange[][]) => {
+        const merged = results.flat().sort((a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+        setMeChanges(merged)
+      })
       .finally(() => setMeChangesLoading(false))
-  }, [activeTab, scenarioMenuId, sharedPages, api])
+  }, [activeTab, scenarioMenuId, meCurrentScenarioId, sharedPages, api])
 
   async function clearMeComments() {
-    if (!meSharedPageId) return
+    if (!scenarioMenuId) return
+    const active = sharedPages.filter(p => p.menu_id === scenarioMenuId && p.is_active && (
+      !meCurrentScenarioId || !p.scenario_id || p.scenario_id === meCurrentScenarioId
+    ))
+    if (!active.length) return
     try {
-      await api.delete(`/shared-pages/${meSharedPageId}/changes/comments`)
+      await Promise.all(active.map(p => api.delete(`/shared-pages/${p.id}/changes/comments`)))
       setMeChanges(prev => prev.filter(c => c.change_type !== 'comment'))
       showToast('Comments cleared.')
     } catch { showToast('Failed to clear comments.', 'error') }
@@ -974,6 +987,7 @@ export default function MenusPage() {
                   setSpMenuId(mId); setSpCountryId(''); setSpScenarioId(sId ?? ''); setSpExpires('')
                   setSharedModal('new')
                 }}
+                onScenarioChange={setMeCurrentScenarioId}
                 comments={meSharedPageId ? meChanges : undefined}
                 commentsLoading={meChangesLoading}
                 onAddComment={meSharedPageId ? addMeComment : undefined}
@@ -2930,6 +2944,7 @@ interface ScenarioToolProps {
   onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
   onShare?(menuId: number, scenarioId: number | null): void
+  onScenarioChange?(scenarioId: number | null): void
   comments?: MeChange[]
   commentsLoading?: boolean
   onAddComment?(text: string, parentId?: number): Promise<void>
@@ -2939,7 +2954,7 @@ interface ScenarioToolProps {
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
-  onAddItem, onEditItem, onDeleteItem, onShare,
+  onAddItem, onEditItem, onDeleteItem, onShare, onScenarioChange,
   comments, commentsLoading, onAddComment, onClearComments,
   refreshKey = 0,
 }: ScenarioToolProps) {
@@ -2986,6 +3001,9 @@ function ScenarioTool({
   const [loadingScenarios, setLoadingScenarios] = useState(false)
   const [savedId,          setSavedId]          = useState<number | null>(null)
   const [savedName,        setSavedName]        = useState('')
+
+  // Notify parent whenever the active scenario changes (for shared-page matching)
+  useEffect(() => { onScenarioChange?.(savedId) }, [savedId, onScenarioChange]) // eslint-disable-line
   const [dirty,            setDirty]            = useState(false)
   const [saving,           setSaving]           = useState(false)
 
