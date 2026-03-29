@@ -166,7 +166,7 @@ function UnitsTab() {
         <div className="bg-surface rounded-lg border border-border overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Abbreviation</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Type</th>
@@ -340,7 +340,7 @@ function PriceLevelsTab() {
         <div className="bg-surface rounded-lg border border-border overflow-hidden max-w-2xl">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Description</th>
                 <th className="text-center px-4 py-2.5 font-semibold text-text-2 w-24">Default</th>
@@ -1461,7 +1461,7 @@ function AiTab() {
                   <div className="px-4 py-2.5 bg-surface-2/50 border-b border-border text-xs font-semibold text-text-2">Usage by user</div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-b border-gray-200">
+                      <thead className="bg-gray-200 border-b border-gray-300">
                         <tr>
                           {['User', 'Turns', 'Tokens in', 'Tokens out', 'Est. cost', 'Last active'].map(h => (
                             <th key={h} className="px-3 py-2 text-xs font-semibold text-gray-500 text-left">{h}</th>

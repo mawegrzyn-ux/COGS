@@ -468,7 +468,7 @@ function TempLogsTab({ locationId }: { locationId: number | null }) {
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Date / Time</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Temp (°C)</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Status</th>
@@ -647,7 +647,7 @@ function CcpLogsTab({ locationId }: { locationId: number | null }) {
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Type</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Item</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Target</th>
@@ -808,7 +808,7 @@ function ReportTab({ locationId }: { locationId: number | null }) {
               <div className="bg-surface border border-border rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-surface-2 border-b border-border">
+                    <tr className="bg-gray-200 border-b border-gray-300">
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Equipment</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Type</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-text-2">Checks</th>
@@ -874,7 +874,7 @@ function ReportTab({ locationId }: { locationId: number | null }) {
               <div className="bg-surface border border-border rounded-xl overflow-hidden">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-surface-2 border-b border-border">
+                    <tr className="bg-gray-200 border-b border-gray-300">
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Source</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Item</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-text-2">Actual</th>

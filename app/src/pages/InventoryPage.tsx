@@ -950,7 +950,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         <div className="bg-surface border border-border rounded-xl overflow-visible">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border rounded-t-xl">
+              <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
                 <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Category"   field="category"                        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category')} onFilter={v => setFilter('category', v)} />
                 <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
@@ -1542,7 +1542,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
         <div className="bg-surface border border-border rounded-xl overflow-visible">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border rounded-t-xl">
+              <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
                 <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={ingredientFilterOptions} filterValues={getFilter('ingredient_id')} onFilter={v => setFilter('ingredient_id', v)} />
                 <ColumnHeader<Quote> label="Category"      field="ingredient_category" sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions}   filterValues={getFilter('ingredient_category')} onFilter={v => setFilter('ingredient_category', v)} />
                 <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={getFilter('vendor_id')} onFilter={v => setFilter('vendor_id',  v)} />

@@ -1031,12 +1031,12 @@ export default function SharedMenuPage() {
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                   <thead className="sticky top-0 z-10">
-                    <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide sticky left-0 bg-gray-50 whitespace-nowrap min-w-[200px]">
+                    <tr className="bg-gray-200 border-b border-gray-300">
+                      <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide sticky left-0 bg-gray-200 whitespace-nowrap min-w-[200px]">
                         Item
                       </th>
                       {levels.map(l => (
-                        <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-50 whitespace-nowrap min-w-[120px]">
+                        <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-200 whitespace-nowrap min-w-[120px]">
                           {l.name}
                         </th>
                       ))}

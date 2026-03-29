@@ -1217,7 +1217,7 @@ export default function RecipesPage() {
                       ) : (
                         <table className="w-full text-sm">
                           <thead>
-                            <tr className="border-b border-border text-xs text-text-2 uppercase tracking-wide bg-surface-2/50">
+                            <tr className="border-b border-border text-xs text-text-2 uppercase tracking-wide bg-gray-200">
                               <th className="px-3 py-2 text-left font-semibold">Ingredient</th>
                               <th className="px-3 py-2 text-left font-semibold">Qty</th>
                             </tr>
@@ -1327,7 +1327,7 @@ export default function RecipesPage() {
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                        <tr className="bg-gray-200 border-b border-gray-300 text-xs text-text-2 uppercase tracking-wide">
                           {/* drag handle spacer */}
                           {itemSortField === 'custom' && <th className="w-6" />}
                           <SortTh label="Ingredient" field="name" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
@@ -1456,7 +1456,7 @@ export default function RecipesPage() {
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                        <tr className="bg-gray-200 border-b border-gray-300 text-xs text-text-2 uppercase tracking-wide">
                           <th className="px-4 py-2.5 text-left font-semibold">Market</th>
                           <th className="px-4 py-2.5 text-left font-semibold">Menu</th>
                           <th className="px-4 py-2.5 text-left font-semibold">Display Name</th>
@@ -1548,7 +1548,7 @@ export default function RecipesPage() {
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="bg-surface-2 border-b border-border text-xs text-text-2 uppercase tracking-wide">
+                        <tr className="bg-gray-200 border-b border-gray-300 text-xs text-text-2 uppercase tracking-wide">
                           <th className="px-4 py-2.5 text-left font-semibold">Market</th>
                           <th className="px-4 py-2.5 text-left font-semibold">Recipe</th>
                           <th className="px-4 py-2.5 text-right font-semibold">Per Portion</th>

@@ -1487,7 +1487,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       <div className="bg-surface rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-surface-2 border-b border-border">
+            <thead className="bg-gray-200 border-b border-gray-300">
               <tr>
                 {[
                   { key: 'name',  label: 'Item' },
@@ -2127,7 +2127,7 @@ function PriceLevelTool({
         {!loading && data && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-gray-200 border-b border-gray-300">
                 <tr>
                   <ColumnHeader<PltGridRow> label="Menu"     field="menu_name"          sortField={sortField} sortDir={sortDir} onSort={setSort}
                     filterOptions={[...new Set(gridRows.map(r => r.menu_name).filter(Boolean))].sort().map(m => ({ value: m, label: m }))}
@@ -2372,7 +2372,7 @@ function MarketPriceTool({
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-gray-200 border-b border-gray-300">
                   <tr>
                     <ColumnHeader<MptRow> label="Item"     field="display_name" sortField={sortField} sortDir={sortDir} onSort={setSort} />
                     <ColumnHeader<MptRow> label="Category" field="category"     sortField={sortField} sortDir={sortDir} onSort={setSort}
@@ -4007,9 +4007,9 @@ ${tableHtml}
         {menuId && !loading && data && data.items.length > 0 && (
           <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 'calc(100vh - 320px)' }}>
             <table className="w-full text-sm">
-              <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
+              <thead className="sticky top-0 z-10 bg-gray-200 border-b border-gray-300 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-50">
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-200">
                     <div className="flex items-center gap-2">
                       Item
                       {allCats.length > 1 && (
@@ -4023,15 +4023,15 @@ ${tableHtml}
                       )}
                     </div>
                   </th>
-                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-50">Type</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px] bg-gray-50">Qty Sold</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">Sales Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">Rev Mix</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-50">Cost{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-50">COGS %</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-200">Type</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px] bg-gray-200">Qty Sold</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-200">Sales Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-200">Rev Mix</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Cost{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-200">COGS %</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -4206,7 +4206,7 @@ ${tableHtml}
         {menuId && levelId === 'ALL' && !allLevelsLoading && allLevelRows.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200 text-xs uppercase tracking-wide">
+              <thead className="bg-gray-200 border-b border-gray-300 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold text-gray-500" rowSpan={2}>
                     <div className="flex items-center gap-2">

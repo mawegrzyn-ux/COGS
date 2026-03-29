@@ -264,7 +264,7 @@ function LocationsTab({ onCountChange }: { onCountChange: (n: number) => void })
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Location</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Market</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group</th>
@@ -528,7 +528,7 @@ function GroupsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-surface-2 border-b border-border">
+              <tr className="bg-gray-200 border-b border-gray-300">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Group Name</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-2">Description</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-text-2">Locations</th>
