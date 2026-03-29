@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 interface ModalProps {
@@ -15,8 +16,8 @@ export function Modal({ title, onClose, children, width = 'max-w-lg' }: ModalPro
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className={`relative bg-surface rounded-xl shadow-modal w-full ${width} max-h-[90vh] flex flex-col`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
@@ -29,7 +30,8 @@ export function Modal({ title, onClose, children, width = 'max-w-lg' }: ModalPro
         </div>
         <div className="overflow-y-auto flex-1 px-6 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -145,8 +147,8 @@ interface ConfirmProps {
 }
 
 export function ConfirmDialog({ message, onConfirm, onCancel, danger = true }: ConfirmProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
       <div className="relative bg-surface rounded-xl shadow-modal w-full max-w-sm p-6">
         <p className="text-text-1 text-sm mb-6">{message}</p>
@@ -160,7 +162,8 @@ export function ConfirmDialog({ message, onConfirm, onCancel, danger = true }: C
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
@@ -141,6 +142,7 @@ interface MeChange {
   old_value:      number | null
   new_value:      number | null
   comment:        string | null
+  parent_id:      number | null
   created_at:     string
 }
 
@@ -224,8 +226,10 @@ export default function MenusPage() {
   const [priceCat,           setPriceCat]           = useState('')
 
 
-  // scenario tool
-  const [scenarioMenuId,    setScenarioMenuId]    = useState<number | null>(null)
+  // scenario tool — persist last-used menu to survive page reload
+  const [scenarioMenuId,    setScenarioMenuId]    = useState<number | null>(() => {
+    try { const v = localStorage.getItem('me_last_menu_id'); return v ? Number(v) : null } catch { return null }
+  })
   const [scenarioLevelId,   setScenarioLevelId]   = useState<number | '' | 'ALL'>('ALL')
   const [scenarioData,      setScenarioData]      = useState<CogsData | null>(null)
   const [scenarioLoading,   setScenarioLoading]   = useState(false)
@@ -694,6 +698,18 @@ export default function MenusPage() {
     } catch { showToast('Failed to clear comments.', 'error') }
   }
 
+  async function addMeComment(text: string, parentId?: number) {
+    if (!meSharedPageId || !text.trim()) return
+    try {
+      const row: MeChange = await api.post(`/shared-pages/${meSharedPageId}/changes`, {
+        comment:   text.trim(),
+        user_name: 'Admin',
+        parent_id: parentId ?? null,
+      })
+      setMeChanges(prev => [row, ...prev])
+    } catch { showToast('Failed to post comment.', 'error') }
+  }
+
   useEffect(() => {
     if (activeTab !== 'scenario' || !scenarioMenuId) { setScenarioData(null); return }
     // 'ALL' mode: ScenarioTool fetches per-level data internally; parent doesn't load
@@ -925,7 +941,10 @@ export default function MenusPage() {
                 levelId={scenarioLevelId}
                 qty={scenarioQty}
                 refreshKey={scenarioRefreshKey}
-                onMenuChange={id => { setScenarioMenuId(id); setSelectedMenuId(id) }}
+                onMenuChange={id => {
+                  setScenarioMenuId(id); setSelectedMenuId(id)
+                  try { if (id) localStorage.setItem('me_last_menu_id', String(id)); else localStorage.removeItem('me_last_menu_id') } catch {}
+                }}
                 onLevelChange={setScenarioLevelId}
                 onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
                 onResetQty={() => setScenarioQty({})}
@@ -955,10 +974,9 @@ export default function MenusPage() {
                   setSpMenuId(mId); setSpCountryId(''); setSpScenarioId(sId ?? ''); setSpExpires('')
                   setSharedModal('new')
                 }}
-                manualQtyKeys={manualQtyKeys}
-                onManualQtyKey={key => setManualQtyKeys(prev => new Set([...prev, key]))}
                 comments={meSharedPageId ? meChanges : undefined}
                 commentsLoading={meChangesLoading}
+                onAddComment={meSharedPageId ? addMeComment : undefined}
                 onClearComments={clearMeComments}
               />
             </div>
@@ -2611,8 +2629,8 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
 
   const sym = currencySymbol
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
         className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col"
         onClick={e => e.stopPropagation()}
@@ -2865,7 +2883,8 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -2911,10 +2930,9 @@ interface ScenarioToolProps {
   onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
   onShare?(menuId: number, scenarioId: number | null): void
-  manualQtyKeys?: Set<string>
-  onManualQtyKey?(key: string): void
   comments?: MeChange[]
   commentsLoading?: boolean
+  onAddComment?(text: string, parentId?: number): Promise<void>
   onClearComments?(): void
 }
 
@@ -2922,8 +2940,7 @@ function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
   onAddItem, onEditItem, onDeleteItem, onShare,
-  manualQtyKeys, onManualQtyKey,
-  comments, commentsLoading, onClearComments,
+  comments, commentsLoading, onAddComment, onClearComments,
   refreshKey = 0,
 }: ScenarioToolProps) {
 
@@ -3872,6 +3889,7 @@ ${tableHtml}
             onClose={() => setShowHistoryNotes(false)}
             comments={comments}
             commentsLoading={commentsLoading}
+            onAddComment={onAddComment}
             onClearComments={onClearComments}
           />
         )}
@@ -3902,11 +3920,11 @@ ${tableHtml}
         )}
 
         {/* ── Row context menu ──────────────────────────────────────────── */}
-        {rowCtx && (
+        {rowCtx && createPortal(
           <>
-            <div className="fixed inset-0 z-40" onClick={() => setRowCtx(null)} />
+            <div className="fixed inset-0 z-[9998]" onClick={() => setRowCtx(null)} />
             <div
-              className="fixed z-50 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-[160px]"
+              className="fixed z-[9999] bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 min-w-[160px]"
               style={{ top: Math.min(rowCtx.y, window.innerHeight - 120), left: Math.min(rowCtx.x, window.innerWidth - 180) }}
             >
               <div className="px-3 py-1.5 border-b border-gray-100 mb-1">
@@ -3925,7 +3943,8 @@ ${tableHtml}
                 >🗑 Remove from menu</button>
               )}
             </div>
-          </>
+          </>,
+          document.body
         )}
 
         {/* KPI Strip */}
@@ -4108,10 +4127,10 @@ ${tableHtml}
                               min="0"
                               step="1"
                               value={qty[row.nat_key] ?? ''}
-                              onChange={e => { onManualQtyKey?.(row.nat_key); onQtyChange(row.nat_key, e.target.value) }}
+                              onChange={e => { setManualQtyKeys(prev => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
                               placeholder="0"
                               className={`w-16 text-right font-mono text-sm rounded px-2 py-1 focus:outline-none focus:ring-1
-                                ${manualQtyKeys?.has(row.nat_key)
+                                ${manualQtyKeys.has(row.nat_key)
                                   ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                   : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                             />
@@ -4298,10 +4317,10 @@ ${tableHtml}
                                     <input
                                       type="number" min="0" step="1"
                                       value={qty[p.qty_key] ?? ''}
-                                      onChange={e => { onManualQtyKey?.(p.qty_key); onQtyChange(p.qty_key, e.target.value) }}
+                                      onChange={e => { setManualQtyKeys(prev => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
                                       placeholder="0"
                                       className={`w-16 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                        ${manualQtyKeys?.has(p.qty_key)
+                                        ${manualQtyKeys.has(p.qty_key)
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                           : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                     />
@@ -4428,8 +4447,8 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
     try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-[520px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
@@ -4585,7 +4604,8 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -4598,8 +4618,8 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
   const pN = parseFloat(pricePct) || 0
   const cN = parseFloat(costPct)  || 0
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-80" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-semibold text-gray-800">⚡ What If…</h3>
@@ -4645,7 +4665,8 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
           >Apply</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -4662,10 +4683,48 @@ function HistoryNotesModal({
   onClose(): void
   comments?: MeChange[]
   commentsLoading?: boolean
+  onAddComment?(text: string, parentId?: number): Promise<void>
   onClearComments?(): void
 }) {
   const hasComments = comments !== undefined
   const [tab, setTab] = useState<'notes' | 'history' | 'comments'>('notes')
+  const [commentText, setCommentText] = useState('')
+  const [posting, setPosting] = useState(false)
+  const [replyTo, setReplyTo] = useState<MeChange | null>(null)
+  const [replyText, setReplyText] = useState('')
+  const [postingReply, setPostingReply] = useState(false)
+
+  // Build comment tree: top-level + their replies (one level deep)
+  const commentTree = useMemo(() => {
+    if (!comments) return []
+    const topLevel = comments.filter(c => c.change_type === 'comment' && !c.parent_id)
+    const byParent: Record<number, MeChange[]> = {}
+    for (const c of comments) {
+      if (c.change_type === 'comment' && c.parent_id) {
+        if (!byParent[c.parent_id]) byParent[c.parent_id] = []
+        byParent[c.parent_id].push(c)
+      }
+    }
+    return topLevel.map(c => ({ ...c, replies: (byParent[c.id] || []).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) }))
+  }, [comments])
+
+  async function postComment() {
+    if (!commentText.trim() || !onAddComment) return
+    setPosting(true)
+    try { await onAddComment(commentText.trim()); setCommentText('') }
+    finally { setPosting(false) }
+  }
+
+  async function postReply() {
+    if (!replyText.trim() || !replyTo || !onAddComment) return
+    setPostingReply(true)
+    try { await onAddComment(replyText.trim(), replyTo.id); setReplyText(''); setReplyTo(null) }
+    finally { setPostingReply(false) }
+  }
+
+  function fmtTime(iso: string) {
+    try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
+  }
 
   function fmtAction(a: string) {
     const map: Record<string, string> = {
@@ -4681,8 +4740,8 @@ function HistoryNotesModal({
     try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) } catch { return iso }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -4748,37 +4807,115 @@ function HistoryNotesModal({
 
         {/* Comments tab */}
         {tab === 'comments' && hasComments && (
-          <div className="flex-1 overflow-y-auto">
-            {commentsLoading && <div className="py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</div>}
-            {!commentsLoading && (!comments || comments.length === 0) && (
-              <div className="py-8 text-center text-sm text-gray-400">No changes or comments yet.</div>
-            )}
-            {!commentsLoading && comments && comments.map(c => (
-              <div key={c.id} className={`px-4 py-3 border-b border-gray-100 ${c.change_type === 'comment' ? 'bg-blue-50/30' : ''}`}>
-                <div className="flex items-center justify-between mb-1 gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {c.change_type === 'comment'
-                      ? <span className="text-blue-400 flex-shrink-0">💬</span>
-                      : <span className="text-accent flex-shrink-0">✏️</span>}
-                    <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
-                  </div>
-                  <span className="text-xs text-gray-400 flex-shrink-0">
-                    {new Date(c.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </span>
+          <div className="flex flex-col flex-1 min-h-0">
+            {/* New comment input */}
+            {onAddComment && (
+              <div className="px-4 py-3 border-b border-gray-100 flex-shrink-0">
+                <textarea
+                  className="input w-full text-sm resize-none"
+                  rows={2}
+                  placeholder="Add a comment…"
+                  value={commentText}
+                  onChange={e => setCommentText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postComment() }}
+                />
+                <div className="flex justify-end mt-1.5">
+                  <button
+                    className="btn btn-sm btn-primary text-xs"
+                    disabled={!commentText.trim() || posting}
+                    onClick={postComment}
+                  >{posting ? 'Posting…' : '💬 Post Comment'}</button>
                 </div>
-                {c.change_type === 'price' ? (
-                  <div>
-                    <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
-                    <p className="text-xs text-gray-500">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
-                    <p className="text-xs text-blue-600 italic mt-0.5">"{c.comment}"</p>
-                  </div>
-                )}
               </div>
-            ))}
+            )}
+
+            {/* Comment feed */}
+            <div className="flex-1 overflow-y-auto">
+              {commentsLoading && <div className="py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</div>}
+              {!commentsLoading && comments && comments.filter(c => !c.parent_id).length === 0 && (
+                <div className="py-8 text-center text-sm text-gray-400">No comments yet.</div>
+              )}
+              {!commentsLoading && commentTree.map(c => (
+                <div key={c.id} className="border-b border-gray-100 last:border-0">
+                  {/* Price change entries (not commentable) */}
+                  {c.change_type === 'price' ? (
+                    <div className="px-4 py-2.5">
+                      <div className="flex items-center justify-between mb-0.5 gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-accent flex-shrink-0 text-xs">✏️</span>
+                          <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
+                        </div>
+                        <span className="text-xs text-gray-400 flex-shrink-0">{fmtTime(c.created_at)}</span>
+                      </div>
+                      <p className="text-xs text-gray-700 truncate font-medium">{c.display_name}</p>
+                      <p className="text-xs text-gray-500">{c.level_name}: <span className="line-through">{c.old_value !== null ? Number(c.old_value).toFixed(2) : 'unset'}</span> → <span className="text-accent font-semibold">{Number(c.new_value ?? 0).toFixed(2)}</span></p>
+                    </div>
+                  ) : (
+                    /* Comment entries */
+                    <div className="px-4 py-2.5 bg-blue-50/20">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-blue-400 text-xs flex-shrink-0">💬</span>
+                          <span className="text-xs font-semibold text-gray-800 truncate">{c.user_name}</span>
+                          {c.display_name && <span className="text-xs text-gray-400 truncate">· {c.display_name}</span>}
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-xs text-gray-400">{fmtTime(c.created_at)}</span>
+                          {onAddComment && (
+                            <button
+                              className="text-xs text-blue-400 hover:text-blue-600 transition-colors"
+                              onClick={() => { setReplyTo(replyTo?.id === c.id ? null : c); setReplyText('') }}
+                            >↩ Reply</button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words">{c.comment}</p>
+
+                      {/* Reply input */}
+                      {replyTo?.id === c.id && onAddComment && (
+                        <div className="mt-2 pl-3 border-l-2 border-blue-200">
+                          <textarea
+                            className="input w-full text-xs resize-none"
+                            rows={2}
+                            placeholder={`Reply to ${c.user_name}…`}
+                            value={replyText}
+                            onChange={e => setReplyText(e.target.value)}
+                            autoFocus
+                            onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) postReply() }}
+                          />
+                          <div className="flex gap-1.5 justify-end mt-1">
+                            <button className="btn btn-sm btn-ghost text-xs text-gray-500" onClick={() => setReplyTo(null)}>Cancel</button>
+                            <button
+                              className="btn btn-sm btn-primary text-xs"
+                              disabled={!replyText.trim() || postingReply}
+                              onClick={postReply}
+                            >{postingReply ? 'Posting…' : '↩ Reply'}</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Replies */}
+                      {c.replies && c.replies.length > 0 && (
+                        <div className="mt-2 pl-3 border-l-2 border-blue-100 space-y-2">
+                          {c.replies.map(r => (
+                            <div key={r.id}>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="text-blue-300 text-xs">↩</span>
+                                  <span className="text-xs font-semibold text-gray-700 truncate">{r.user_name}</span>
+                                </div>
+                                <span className="text-xs text-gray-400 flex-shrink-0">{fmtTime(r.created_at)}</span>
+                              </div>
+                              <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-wrap break-words">{r.comment}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -4794,6 +4931,7 @@ function HistoryNotesModal({
           <button className="btn btn-sm btn-outline" onClick={onClose}>Close</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

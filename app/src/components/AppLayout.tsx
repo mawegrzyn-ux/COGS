@@ -213,6 +213,10 @@ export default function AppLayout() {
   }, [])
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
+    // If a React onContextMenu handler already claimed this event (called e.preventDefault()),
+    // bail out — let that component's own context menu show (e.g. ME row Edit/Delete menu)
+    if (e.defaultPrevented) return
+
     // Don't intercept right-clicks inside input/textarea/contenteditable
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
