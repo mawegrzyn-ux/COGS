@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200">
+  <circle cx="0" cy="0" r="66" fill="#146A34"/>
+  <g fill="#146A34">
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(0)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(30)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(60)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(90)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(120)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(150)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(180)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(210)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(240)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(270)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(300)"/>
+    <rect x="-9" y="-80" width="18" height="20" rx="3" transform="rotate(330)"/>
+  </g>
+  <circle cx="0" cy="0" r="54" fill="white"/>
+  <line x1="0" y1="30" x2="0" y2="-16" stroke="#146A34" stroke-width="6" stroke-linecap="round"/>
+  <path d="M 0,6 C -4,-10 -26,-16 -26,-4 C -26,8 -8,12 0,6 Z" fill="#1E8A44"/>
+  <path d="M 0,-4 C 4,-20 26,-26 26,-14 C 26,-2 8,2 0,-4 Z" fill="#146A34"/>
+  <circle cx="0" cy="-16" r="6" fill="#1E8A44"/>
+</svg>
