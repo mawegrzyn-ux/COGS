@@ -26,19 +26,28 @@ interface RecipeItem {
   quote_is_preferred?:    boolean | null
 }
 
-interface CogsByCountry {
-  country_id:       number
-  country_name:     string
-  currency_code:    string
-  currency_symbol:  string
-  exchange_rate:    number
+interface PlVariationCost {
+  lines:            RecipeItem[]
   total_cost_base:  number
   total_cost_local: number
   cost_per_portion: number
   coverage: 'fully_preferred' | 'fully_quoted' | 'partially_quoted' | 'not_quoted'
-  has_variation:    boolean
-  variation_id:     number | null
-  lines:            RecipeItem[]
+}
+
+interface CogsByCountry {
+  country_id:          number
+  country_name:        string
+  currency_code:       string
+  currency_symbol:     string
+  exchange_rate:       number
+  total_cost_base:     number
+  total_cost_local:    number
+  cost_per_portion:    number
+  coverage: 'fully_preferred' | 'fully_quoted' | 'partially_quoted' | 'not_quoted'
+  has_variation:       boolean
+  variation_id:        number | null
+  lines:               RecipeItem[]
+  pl_variation_costs:  Record<string, PlVariationCost>  // keyed by price_level_id string
 }
 
 interface RecipeVariation {
@@ -296,8 +305,27 @@ export default function RecipesPage() {
 
   const activeCogs = useMemo(() => {
     if (selectedCountryId === 'GLOBAL') return null
-    return selected?.cogs_by_country.find(c => c.country_id === selectedCountryId) ?? selected?.cogs_by_country[0] ?? null
-  }, [selected, selectedCountryId])
+    const base = selected?.cogs_by_country.find(c => c.country_id === selectedCountryId)
+      ?? selected?.cogs_by_country[0]
+      ?? null
+    if (!base) return null
+    // When viewing a PL variation, overlay PL-specific lines/totals/coverage
+    // while keeping country/currency metadata from the base entry.
+    if (variantMode === 'price-level' && selectedPriceLevelId) {
+      const plCost = base.pl_variation_costs?.[String(selectedPriceLevelId)]
+      if (plCost) {
+        return {
+          ...base,
+          lines:            plCost.lines,
+          total_cost_base:  plCost.total_cost_base,
+          total_cost_local: plCost.total_cost_local,
+          cost_per_portion: plCost.cost_per_portion,
+          coverage:         plCost.coverage,
+        }
+      }
+    }
+    return base
+  }, [selected, selectedCountryId, variantMode, selectedPriceLevelId])
 
   // Currency display
   const displayCurrency = useMemo(() => {

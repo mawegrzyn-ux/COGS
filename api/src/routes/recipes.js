@@ -301,35 +301,50 @@ router.get('/:id', async (req, res) => {
       return { lines, total_base, preferredCount, quotedCount, leafCount };
     }
 
+    function deriveCoverage({ leafCount, preferredCount, quotedCount }) {
+      if (leafCount === 0)                   return 'fully_preferred';
+      if (preferredCount === leafCount)      return 'fully_preferred';
+      if (quotedCount    === leafCount)      return 'fully_quoted';
+      if (quotedCount    > 0)               return 'partially_quoted';
+      return 'not_quoted';
+    }
+
     const cogs_by_country = countries.map(country => {
       // Use variation items for this country if they exist, otherwise global items
       const variation    = varByCountry[country.id];
       const itemsForCost = variation ? variation.items : globalItems;
 
-      const { lines, total_base, preferredCount, quotedCount, leafCount }
-        = buildCostLines(itemsForCost, country.id);
-
-      let coverage;
-      if (leafCount === 0)                         coverage = 'fully_preferred';
-      else if (preferredCount === leafCount)       coverage = 'fully_preferred';
-      else if (quotedCount    === leafCount)       coverage = 'fully_quoted';
-      else if (quotedCount    > 0)                 coverage = 'partially_quoted';
-      else                                         coverage = 'not_quoted';
-
+      const result = buildCostLines(itemsForCost, country.id);
       const local_rate = Number(country.exchange_rate);
+      const yieldQty = Math.max(1, Number(recipe.yield_qty || 1));
+
+      // Compute costs for every PL variation using market price quotes for this country
+      const pl_variation_costs = {};
+      for (const [levelId, plVar] of Object.entries(plVarByLevelId)) {
+        const plResult = buildCostLines(plVar.items, country.id);
+        pl_variation_costs[levelId] = {
+          lines:            plResult.lines,
+          total_cost_base:  Math.round(plResult.total_base * 10000) / 10000,
+          total_cost_local: Math.round(plResult.total_base * local_rate * 10000) / 10000,
+          cost_per_portion: Math.round((plResult.total_base / yieldQty) * 10000) / 10000,
+          coverage:         deriveCoverage(plResult),
+        };
+      }
+
       return {
-        country_id:        country.id,
-        country_name:      country.name,
-        currency_code:     country.currency_code,
-        currency_symbol:   country.currency_symbol,
-        exchange_rate:     local_rate,
-        has_variation:     !!variation,
-        variation_id:      variation?.id ?? null,
-        total_cost_base:   Math.round(total_base * 10000) / 10000,
-        total_cost_local:  Math.round(total_base * local_rate * 10000) / 10000,
-        cost_per_portion:  Math.round((total_base / Math.max(1, Number(recipe.yield_qty || 1))) * 10000) / 10000,
-        coverage,
-        lines,
+        country_id:          country.id,
+        country_name:        country.name,
+        currency_code:       country.currency_code,
+        currency_symbol:     country.currency_symbol,
+        exchange_rate:       local_rate,
+        has_variation:       !!variation,
+        variation_id:        variation?.id ?? null,
+        total_cost_base:     Math.round(result.total_base * 10000) / 10000,
+        total_cost_local:    Math.round(result.total_base * local_rate * 10000) / 10000,
+        cost_per_portion:    Math.round((result.total_base / yieldQty) * 10000) / 10000,
+        coverage:            deriveCoverage(result),
+        lines:               result.lines,
+        pl_variation_costs,
       };
     });
 
