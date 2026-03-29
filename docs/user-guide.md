@@ -341,6 +341,26 @@ All line costs are summed, then divided by the yield quantity to produce the cos
 
 A market selector at the top of the recipe view lets you see COGS for any specific market using that market's preferred vendor quotes and exchange rates. Switching the market recalculates all line costs and the cost per portion in the selected market's currency.
 
+### Price Level Recipes (PL Variations)
+
+A **Price Level Recipe** (internally called a PL variation) is an alternate set of ingredients for a recipe that applies only when that recipe is sold under a specific price level.
+
+**Example use case:** Your Eat-in burger uses premium brioche buns, but your Delivery burger uses a standard bun to reduce cost. Rather than maintaining two separate recipes, you create a Delivery price level variation of the same recipe with the substituted ingredient.
+
+**How to create:**
+1. Open the recipe in the Recipes page.
+2. Select the **Price Level** tab (next to the Market tab in the variant selector).
+3. Choose a price level from the dropdown.
+4. Click **⊞ Create PL Variation**.
+5. Choose whether to start from a copy of the global recipe (recommended) or start empty.
+6. Edit the line items for this price level version — add, remove, or change quantities.
+
+**Priority order in COGS calculations:** PL variation > market variation > global recipe. If a PL variation exists for the relevant price level, it takes precedence over the market variation for that price level.
+
+**Promoting to global:** Use **Copy to Global** to replace the global recipe's ingredients with this PL variation's ingredients. This does not affect other market or PL variations.
+
+**Deleting a PL variation:** Click **Delete PL Variation** to remove it. The recipe reverts to using the global (or market) version for that price level going forward.
+
 ---
 
 ## Menus
@@ -366,20 +386,81 @@ Items are grouped by their recipe or ingredient category within the menu view.
 
 ### Menu Engineer Tab
 
-The Menu Engineer tab (formerly called "Scenario") provides a sales mix analysis view. It helps you understand profitability across your menu and model the impact of different sales volumes.
+The Menu Engineer tab provides a sales mix analysis and scenario planning workspace. Select a menu and a price level (or "All Levels") to see every item's cost, sell price, COGS%, revenue, and contribution margin.
 
-**Mix Manager:** Click the Mix Manager button to open a modal where you enter the expected or actual sales quantities per menu item. If quantities have already been entered, the modal pre-populates with those values.
+**Cross-tab sync:** Selecting a menu in Menu Builder automatically selects the same menu here, and vice versa. No need to reselect when switching tabs.
 
-Once quantities are set, the tab displays for each item:
-- Cost per portion (in the market's currency)
-- Sell price
-- Contribution margin
+**Category collapsing:** Items are grouped by category. Click a category row to collapse or expand its items. Use the ▼ All / ▶ All button next to the Item column header to toggle all categories at once.
 
-**Cross-tab sync:** Selecting a menu in Menu Builder also selects the same menu in Menu Engineer, and vice versa. You do not need to reselect the menu when switching tabs.
+**Currency display:** Currency symbols are shown in column headers (e.g. `Cost/ptn (£)`) based on the selected menu's market.
 
-**Category collapsing:** Items are grouped by category. Click any category row to collapse or expand the items under it. Use the "▼ All" button next to the Item column header to expand all categories at once, or "▶ All" to collapse all. The button label toggles based on the current state.
+#### Sales Mix
 
-**Currency display:** The currency symbol for the selected market is shown in column headers (e.g. `Cost/ptn (£)`).
+Enter quantities in the **Qty Sold** column to model your sales mix. The table updates in real time, showing:
+
+| Column | Meaning |
+|---|---|
+| Cost/ptn | Ingredient cost per portion in local currency |
+| Price | Sell price (gross, incl. tax) |
+| Qty Sold | Units sold in the period modelled |
+| Sales Mix | This item's share of total units sold |
+| Revenue | Net revenue (excl. tax) for this item |
+| Rev Mix | This item's share of total net revenue |
+| Cost | Total ingredient cost for all units sold |
+| COGS % | Cost ÷ Net revenue × 100 |
+
+The grand total row summarises the full menu.
+
+**Mix Manager:** Click **Mix Manager** to open a modal where you set quantities per item (or enter a revenue target and auto-distribute). The modal pre-populates with any quantities already entered.
+
+#### Scenarios
+
+A scenario saves a named snapshot of the quantities, any price overrides you have set, and your notes. Scenarios belong to a menu.
+
+- **Save scenario** — click the save button to name and save the current state. The name and notes are stored alongside the qty_data and price_overrides in `mcogs_menu_scenarios`.
+- **Load scenario** — click any saved scenario in the scenario list to restore its quantities and price overrides.
+- **Delete scenario** — remove a saved scenario permanently.
+- **Price overrides** — in the ME table you can type a new sell price directly into any Price cell. This overrides the live menu price for the purposes of this scenario only. The override is stored as part of the scenario; the actual menu price in Compare Markets is not changed unless you use **Push Prices**.
+- **Push Prices** — replaces the live sell prices in the menu (across all markets) with the price overrides from the current scenario. This is a permanent write; confirm carefully.
+- **What If tool** — apply a percentage uplift or reduction to all prices or all costs in one operation. Useful for modelling "what if food costs rise by 5%?" or "what if we raise all prices by 10%?".
+
+#### Notes, History, and Comments
+
+Click the **Notes / History** button (clock icon) to open the panel. It has three tabs:
+
+**Notes tab:** Free-text scratchpad saved with the scenario. Use for pricing rationale, assumptions, or review commentary.
+
+**History tab:** A timestamped log of local actions taken in this session — price resets, cost resets, qty resets, What If applications, and price pushes. Also shows a **Shared View Edits** sub-section listing every price change made by external users via shared links, with the user's name, item, price level, and old → new value.
+
+**Comments tab:** Shows all comments posted by external reviewers via any shared link that is linked to this menu/scenario. Comments from multiple shared views are merged into a single chronological feed. You can:
+- Post a new top-level comment from the Menu Engineer without leaving the page.
+- Reply to any comment — the reply is automatically routed back to the same shared view the original comment came from, even if multiple shared views are active.
+- Clear all comments (removes all comment-type entries from all matching shared views).
+
+The Comments badge count shows only actual text comments, not price change entries (those appear in the History tab).
+
+#### Shared Links
+
+Click the **🔗 Share** button (or go to the **Shared Links** tab) to manage public-access links to this menu's pricing and COGS data.
+
+Each shared link has:
+
+| Field | Description |
+|---|---|
+| Name | Label for this link (e.g. "UK Franchisee Review") |
+| Mode | **View** — read-only; **Edit** — recipient can change sell prices |
+| Password | Required to access the shared page (set on creation; update anytime) |
+| Menu | Which menu is displayed |
+| Country / Market | Which market's prices and exchange rates are used |
+| Scenario | Optionally lock the link to a specific saved scenario (shows scenario prices instead of live menu prices) |
+| Expires | Optional expiry date — link becomes inaccessible after this date |
+| Active | Toggle to enable/disable without deleting |
+
+**Multiple shared views per scenario:** You can create several shared links pointing at the same menu and scenario — for example, one per franchisee or market review partner. Comments and edits from all active matching links are merged into the ME Comments and History tabs automatically.
+
+**Shared page (public view):** Recipients open the link at `/share/<slug>`, enter the password, and see the menu pricing grid. In edit mode they can type new prices directly in the grid; each save is logged as a price change event visible in the ME History tab.
+
+**Copying a link:** Click the copy icon next to any shared link to copy the full URL to the clipboard. The icon briefly confirms the copy.
 
 ### Compare Markets Tab
 

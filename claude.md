@@ -683,23 +683,42 @@ Three tabs:
 - Recipe builder: name, category, yield qty + unit
 - Recipe items: add ingredients or sub-recipes with qty + prep unit + conversion factor
 - COGS calculation: cost per portion based on preferred vendor quotes
+- **Market variations** — alternative ingredient lists per country/market (existing)
+- **Price Level Recipes (PL Variations)** — alternative ingredient lists per price level. Create via the Price Level variant selector. Priority: PL variation > market variation > global recipe. Stored in `mcogs_recipe_pl_variations`; items linked via `pl_variation_id` on `mcogs_recipe_items`. Copy-to-global promotes a PL variation to the global recipe.
 
 ### ✅ Menus Page (`/menus`)
 
-Four tabs:
+Five tabs:
 
 1. **Menus (Menu Builder)** — create menus per country, add recipe/ingredient items with display name + sort order
-2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and margin engineering per menu item
+2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and scenario planning per menu item
 3. **Compare Markets** — grid of sell prices per menu item per price level; inline editing with currency conversion (internally called PLT/price-report)
 4. **Market Price Tool** — COGS% grid showing gross/net margins per item per price level (internally called MPT/level-report)
+5. **Shared Links** — manage password-protected public links for external reviewer access
 
 **Menu Engineer details:**
-- Tab renamed from "Scenario" to "Menu Engineer"
-- Selecting a menu in Menu Builder tab also selects the same menu in Menu Engineer tab and vice versa (cross-tab sync)
-- "Generate Mix" button renamed to "Mix Manager"
+- Cross-tab sync: selecting a menu in Menu Builder also selects it in Menu Engineer and vice versa
 - Mix Manager modal pre-populates with existing quantities when qty fields are already filled
 - Currency symbol shown in column headers (e.g. `Cost/ptn (£)`)
-- Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header to collapse/expand all categories at once
+- Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header
+- **Price overrides** — type a new price into any Price cell to override the live price for this scenario only; does not affect Compare Markets until "Push Prices" is used
+- **Push Prices** — permanently writes scenario price overrides back to the live menu
+- **What If tool** — apply a % change to all prices or all costs in one step
+- **Scenarios** — save/load/delete named snapshots of qty_data + price_overrides + notes, stored in `mcogs_menu_scenarios`
+
+**Notes / History / Comments panel (clock icon in ME):**
+- **Notes tab** — free-text scratchpad saved with the scenario
+- **History tab** — local action log (resets, pushes, What If). Also shows a "Shared View Edits" sub-section with price changes made by external reviewers via shared links (user, item, level, old → new). Badge count = local entries + shared view edits.
+- **Comments tab** — merged feed of text comments from ALL active shared links matching the current menu/scenario (multiple shared views supported). Badge count = comment-type entries only (price changes go to History). Replies are routed back to the correct shared view the parent comment came from.
+
+**Shared Links:**
+- Create password-protected links at `/share/<slug>` for external reviewers
+- Mode: `view` (read-only) or `edit` (recipient can change sell prices)
+- Optional: pin to a specific scenario, set an expiry date, enable/disable without deleting
+- Multiple shared links per scenario are supported — e.g. one per franchisee
+- In edit mode, each recipient price change is logged and surfaced in the ME History tab
+- Comments posted via shared links appear in ME Comments tab, merged and sorted by timestamp
+- Reply from ME routes to the correct originating shared view via `shared_page_id` tagging
 
 **Currency conversion in Compare Markets / Market Price Tool:**
 
@@ -1017,6 +1036,32 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 ```
 
 **File:** `api/src/routes/import.js`
+
+---
+
+### Fix 9 — Shared View Comment Count Mismatch
+
+**Symptom:** The Comments badge in the ME Notes/History panel showed 9 but only 3 comments were visible.
+
+**Root cause:** `meChanges` contains all change types — `'comment'` and `'price'`/`'qty'`. The badge was counting `comments.length` (all entries) rather than only `change_type === 'comment'` entries. The `commentTree` correctly filtered to comments only, so only 3 showed in the panel, but the badge showed the full count including price change events.
+
+**Fix:** Badge and empty-state now filter to `change_type === 'comment'` only. Price/qty change events were moved to the History tab under "Shared View Edits".
+
+---
+
+### Fix 10 — Shared View Reply Posted to Wrong Shared Page
+
+**Symptom:** When replying to a comment in Menu Engineer that came from shared view B, the reply was always posted to shared view A (active[0]).
+
+**Root cause:** `addMeComment` always posted to `meSharedPageId` (= `active[0].id`), regardless of which shared page the original comment came from. When multiple shared views are linked to the same scenario, comments from view B would receive replies that land in view A.
+
+**Fix:**
+- Added `shared_page_id?: number` field to `MeChange` interface (tagged client-side when fetching)
+- When fetching changes for multiple pages, each row is tagged with the page's ID: `.then(rows => rows.map(r => ({ ...r, shared_page_id: p.id })))`
+- `addMeComment(text, parentId?, sharedPageId?)` now accepts an optional `sharedPageId` override
+- `postReply()` passes `replyTo.shared_page_id` — the reply always routes to the same view as the parent comment
+
+**Files:** `app/src/pages/MenusPage.tsx`
 
 ---
 

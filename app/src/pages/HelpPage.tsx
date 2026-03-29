@@ -484,15 +484,51 @@ export default function HelpPage() {
 
         <H3 id="menu-engineer">Tab 2 — Menu Engineer</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          The Menu Engineer (formerly "Scenario") models your menu's sales mix and revenue. Select a menu and
-          a price level (or "All Levels") to see every item's cost, sell price, and COGS%. Selecting a menu
-          in the Builder tab automatically selects the same menu here and vice versa.
+          The Menu Engineer models your menu's sales mix, revenue, and profitability. Select a menu and a price level (or "All Levels") to see every item's cost, sell price, and COGS%. Selecting a menu in the Builder tab automatically syncs the selection here and vice versa.
         </p>
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
-          <li><strong>Qty Sold</strong> — enter quantities to model your sales mix and see revenue and COGS% impact</li>
-          <li><strong>Mix Manager</strong> (formerly Generate Mix) — opens a modal to set a revenue target and auto-generate quantity distributions. Pre-populates with any quantities already entered.</li>
-          <li><strong>Currency symbols</strong> shown in column headers (e.g. Cost/ptn (£)) based on the selected menu's market</li>
-          <li><strong>Collapsible categories</strong> — click any category row to collapse/expand its items. Use the ▼ All / ▶ All button beside the Item column header to collapse or expand everything at once.</li>
+          <li><strong>Qty Sold</strong> — enter quantities per item to model your sales mix. Revenue, COGS%, and grand totals update in real time.</li>
+          <li><strong>Mix Manager</strong> — opens a modal to set quantities or enter a revenue target for auto-distribution. Pre-populates with any quantities already entered.</li>
+          <li><strong>Price overrides</strong> — type a new price directly into any Price cell to override the live menu price for this scenario only. The live menu price in Compare Markets is unchanged until you use Push Prices.</li>
+          <li><strong>Push Prices</strong> — permanently writes the scenario's price overrides back to the live menu. Confirm carefully — this replaces live prices.</li>
+          <li><strong>What If tool</strong> — apply a % uplift or reduction across all prices or all costs simultaneously. Models "what if food costs rise 5%?" or "what if we raise all prices 10%?".</li>
+          <li><strong>Scenarios</strong> — save named snapshots of the current quantities, price overrides, and notes. Reload any scenario to restore the full state. Delete scenarios you no longer need.</li>
+          <li><strong>Collapsible categories</strong> — click any category row to collapse/expand its items. Use ▼ All / ▶ All beside the Item header to toggle all at once.</li>
+          <li><strong>Currency symbols</strong> shown in column headers (e.g. Cost/ptn (£)) based on the selected menu's market.</li>
+        </ul>
+        <H3 id="me-notes-history">Notes, History &amp; Comments</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Click the clock icon (<strong>Notes / History</strong>) to open the panel. Three tabs:
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Notes</strong> — free-text scratchpad saved with the scenario. Use for pricing rationale, assumptions, or review commentary.</li>
+          <li><strong>History</strong> — timestamped log of local actions (price resets, cost resets, qty resets, What If applications, pushes). Also shows a <em>Shared View Edits</em> sub-section with every price change made by external reviewers via shared links (user, item, price level, old → new value).</li>
+          <li><strong>Comments</strong> — all text comments posted by reviewers via any shared link linked to this menu/scenario. Comments from multiple shared views are merged into one feed. You can post new comments and reply to existing ones directly from here. Replies are automatically routed to the same shared view the original comment came from. The badge count shows only text comments — price change events appear in History.</li>
+        </ul>
+        <H3 id="shared-links">Shared Links</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Click <strong>🔗 Share</strong> (or the Shared Links tab) to create password-protected public links for external reviewers. Recipients visit <Mono>/share/{'<slug>'}</Mono>, enter the password, and see the pricing grid.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>View mode</strong> — read-only; recipients see prices and COGS% but cannot edit.</li>
+          <li><strong>Edit mode</strong> — recipients can type new sell prices into the grid. Each change is logged and appears in the ME History tab as a Shared View Edit.</li>
+          <li><strong>Scenario lock</strong> — optionally pin a shared link to a specific scenario. The link shows scenario prices instead of live menu prices.</li>
+          <li><strong>Expires</strong> — optional expiry date. The link becomes inaccessible after this date.</li>
+          <li><strong>Multiple views per scenario</strong> — create several links for the same menu/scenario (e.g. one per franchisee). Comments and edits from all active matching links are merged in the ME panel automatically.</li>
+          <li><strong>Copy link</strong> — click the copy icon to copy the full URL to the clipboard.</li>
+        </ul>
+
+        <H3 id="pl-recipes">Price Level Recipes (PL Variations)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A <strong>Price Level Recipe</strong> is an alternate ingredient list for a recipe that activates only when that recipe is sold under a specific price level. Useful when the same dish uses different ingredients depending on the sales channel (e.g. premium bun for Eat-in, standard bun for Delivery).
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Open the recipe, switch the variant selector to <strong>Price Level</strong>, choose a level, then click <strong>⊞ Create PL Variation</strong>.</li>
+          <li>Choose to start from a copy of the global recipe or an empty list.</li>
+          <li>Edit ingredients for that price level independently. Changes do not affect the global recipe or other variations.</li>
+          <li>Priority order in COGS calculations: <strong>PL variation &gt; market variation &gt; global recipe</strong>.</li>
+          <li>Use <strong>Copy to Global</strong> to promote a PL variation's ingredients to become the global recipe.</li>
+          <li>Use <strong>Delete PL Variation</strong> to revert that price level back to the global recipe.</li>
         </ul>
 
         <H3 id="plt">Tab 3 — Compare Markets</H3>
