@@ -1354,28 +1354,28 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   return (
     <div className="p-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">{menu.name}</h2>
+      <div className="flex items-start gap-3 mb-4 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-xl font-semibold text-gray-900 truncate">{menu.name}</h2>
           <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded mt-1 inline-block">
             {country?.name ?? '—'}
           </span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
           <button className="btn btn-sm btn-outline" onClick={() => onEdit(menu)}>✏️ Edit</button>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <label className="text-xs text-gray-400 whitespace-nowrap">🏷 Level</label>
             <select
-              className="select select-sm"
+              className="select select-sm max-w-[160px]"
               value={activeMenuLevel}
               onChange={e => onLevelChange(e.target.value ? Number(e.target.value) : '')}
             >
-              <option value="">— Cost only (no prices) —</option>
+              <option value="">— Cost only —</option>
               {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
           <button className="btn btn-sm btn-outline" onClick={onApplyTax} title="Apply country default tax to all items">
-            % Apply Tax
+            % Tax
           </button>
           <button className="btn btn-sm btn-primary" onClick={onAddItem}>+ Add Item</button>
           <button className="btn btn-sm btn-ghost text-red-500" onClick={() => onDelete(menu.id)}>🗑</button>
