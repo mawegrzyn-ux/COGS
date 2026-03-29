@@ -955,6 +955,8 @@ export default function MenusPage() {
                   setSpMenuId(mId); setSpCountryId(''); setSpScenarioId(sId ?? ''); setSpExpires('')
                   setSharedModal('new')
                 }}
+                manualQtyKeys={manualQtyKeys}
+                onManualQtyKey={key => setManualQtyKeys(prev => new Set([...prev, key]))}
                 comments={meSharedPageId ? meChanges : undefined}
                 commentsLoading={meChangesLoading}
                 onClearComments={clearMeComments}
@@ -2909,6 +2911,8 @@ interface ScenarioToolProps {
   onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
   onShare?(menuId: number, scenarioId: number | null): void
+  manualQtyKeys?: Set<string>
+  onManualQtyKey?(key: string): void
   comments?: MeChange[]
   commentsLoading?: boolean
   onClearComments?(): void
@@ -2918,6 +2922,7 @@ function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
   onAddItem, onEditItem, onDeleteItem, onShare,
+  manualQtyKeys, onManualQtyKey,
   comments, commentsLoading, onClearComments,
   refreshKey = 0,
 }: ScenarioToolProps) {
@@ -3001,6 +3006,9 @@ function ScenarioTool({
   // Converted to USD on save, back to display on load.
   const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({})
   const [costOverrides,  setCostOverrides]  = useState<Record<string, string>>({})
+
+  // Tracks qty keys edited manually in this session (not loaded/generated)
+  const [manualQtyKeys, setManualQtyKeys] = useState<Set<string>>(new Set())
 
   // ── Change history + notes ─────────────────────────────────────────────────
   const [history,          setHistory]          = useState<HistoryEntry[]>([])
@@ -3113,6 +3121,7 @@ function ScenarioTool({
   }
 
   function loadScenario(s: SavedScenario) {
+    setManualQtyKeys(new Set())
     dirtyRef.current = false
     if (s.menu_id) onMenuChange(s.menu_id)
     // Qty
@@ -3876,12 +3885,14 @@ ${tableHtml}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
             currentQty={qty}
             onGenerate={qMap => {
+              setManualQtyKeys(new Set())
               onReplaceQty(qMap)
               dirtyRef.current = true
               setDirty(true)
               setShowMixGen(false)
             }}
             onReset={() => {
+              setManualQtyKeys(new Set())
               onResetQty()
               addHistoryEntry('reset_qty', 'Quantities reset')
               markDirty()
@@ -4097,10 +4108,10 @@ ${tableHtml}
                               min="0"
                               step="1"
                               value={qty[row.nat_key] ?? ''}
-                              onChange={e => onQtyChange(row.nat_key, e.target.value)}
+                              onChange={e => { onManualQtyKey?.(row.nat_key); onQtyChange(row.nat_key, e.target.value) }}
                               placeholder="0"
                               className={`w-16 text-right font-mono text-sm rounded px-2 py-1 focus:outline-none focus:ring-1
-                                ${qty[row.nat_key]
+                                ${manualQtyKeys?.has(row.nat_key)
                                   ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                   : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                             />
@@ -4287,10 +4298,10 @@ ${tableHtml}
                                     <input
                                       type="number" min="0" step="1"
                                       value={qty[p.qty_key] ?? ''}
-                                      onChange={e => onQtyChange(p.qty_key, e.target.value)}
+                                      onChange={e => { onManualQtyKey?.(p.qty_key); onQtyChange(p.qty_key, e.target.value) }}
                                       placeholder="0"
                                       className={`w-16 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                        ${qty[p.qty_key]
+                                        ${manualQtyKeys?.has(p.qty_key)
                                           ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                           : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                     />
