@@ -507,7 +507,7 @@ export default function HelpPage() {
         </ul>
         <H3 id="shared-links">Shared Links</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Click <strong>🔗 Share</strong> (or the Shared Links tab) to create password-protected public links for external reviewers. Recipients visit <Mono>/share/{'<slug>'}</Mono>, enter the password, and see the pricing grid.
+          Click <strong>🔗 Share</strong> (or the Shared Links tab) to create password-protected public links for external reviewers. Recipients visit <Mono>{'/share/<slug>'}</Mono>, enter the password, and see the pricing grid.
         </p>
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
           <li><strong>View mode</strong> — read-only; recipients see prices and COGS% but cannot edit.</li>
