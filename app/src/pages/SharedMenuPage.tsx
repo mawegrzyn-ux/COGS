@@ -3,7 +3,7 @@
 // URL: /share/:slug
 // =============================================================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -162,6 +162,7 @@ export default function SharedMenuPage() {
   // UI
   const [collapsedCats,   setCollapsedCats]   = useState<Set<string>>(new Set())
   const [breakdown,       setBreakdown]       = useState<{ itemId: number; data: BreakdownData | null; loading: boolean } | null>(null)
+  const [showTutorial,    setShowTutorial]    = useState(false)
 
   // Tiles layout: 'top' | 'left' — persisted
   const [tilesLayout, setTilesLayout] = useState<'top' | 'left'>(
@@ -722,6 +723,18 @@ export default function SharedMenuPage() {
                   </svg>
                 )}
                 <span className="hidden sm:inline">{tilesLayout === 'top' ? 'Dock' : 'Top'}</span>
+              </button>
+
+              {/* Tutorial / help */}
+              <button
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-400 hover:border-emerald-300 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                onClick={() => setShowTutorial(true)}
+                title="How to use this page"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <span className="hidden sm:inline">Help</span>
               </button>
 
               {/* Changes toggle */}
@@ -1434,7 +1447,120 @@ export default function SharedMenuPage() {
           </div>
         </>
       )}
+
+      {/* ── Tutorial / Help modal ────────────────────────────────────────────── */}
+      {showTutorial && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={() => setShowTutorial(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto pointer-events-auto"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center text-lg flex-shrink-0">📖</div>
+                  <div>
+                    <h2 className="font-bold text-gray-900 text-base">How to use this page</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">{isEdit ? 'Edit mode — you can update prices' : 'View mode — read-only'}</p>
+                  </div>
+                </div>
+                <button className="text-gray-300 hover:text-gray-500 text-xl leading-none ml-4" onClick={() => setShowTutorial(false)}>×</button>
+              </div>
+
+              {/* Body */}
+              <div className="px-6 py-5 space-y-5 text-sm text-gray-700">
+
+                {/* Mode banner */}
+                {isEdit ? (
+                  <div className="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-xl p-4">
+                    <span className="text-xl flex-shrink-0">✏️</span>
+                    <div>
+                      <p className="font-semibold text-amber-800">You have edit access</p>
+                      <p className="text-amber-700 text-xs mt-1">Click any price cell in the table to update the sell price. Changes are saved to the live database and logged in the Changes panel.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-xl p-4">
+                    <span className="text-xl flex-shrink-0">👁️</span>
+                    <div>
+                      <p className="font-semibold text-blue-800">View only</p>
+                      <p className="text-blue-700 text-xs mt-1">You can browse all menu data but cannot change prices. You can still leave comments on items.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Feature list */}
+                <ul className="space-y-3.5">
+                  <TutorialItem icon="📊" title="Summary panel">
+                    The KPI tiles at the {tilesLayout === 'top' ? 'top' : 'left'} show totals across the whole menu — total cost, revenue, gross profit and weighted COGS%. Use the <strong>Dock / Top</strong> button in the header to reposition the panel.
+                  </TutorialItem>
+
+                  {isEdit && (
+                    <TutorialItem icon="💲" title="Editing prices">
+                      Click any price cell to edit it. Type the new gross sell price in {data?.menu.currency_code ?? 'local currency'} and press <kbd className="bg-gray-100 border border-gray-200 rounded px-1 py-0.5 text-xs font-mono">Enter</kbd> to save, or <kbd className="bg-gray-100 border border-gray-200 rounded px-1 py-0.5 text-xs font-mono">Esc</kbd> to cancel. COGS% updates immediately.
+                    </TutorialItem>
+                  )}
+
+                  <TutorialItem icon="🔍" title="Ingredient breakdown">
+                    Click on any <strong>item name</strong> in the table to see a full ingredient breakdown — the cost of each component and how it contributes to the total recipe cost.
+                  </TutorialItem>
+
+                  <TutorialItem icon="📂" title="Categories">
+                    Menu items are grouped by category. Click any <strong>category header row</strong> to collapse or expand that section. Use the <strong>Expand / Collapse</strong> buttons in the top bar to expand or collapse all at once.
+                  </TutorialItem>
+
+                  <TutorialItem icon="💬" title="Comments">
+                    <strong>Right-click</strong> any item row to leave a comment on that specific item. Or open the <strong>Changes</strong> panel (top-right) to post a general comment and see all price changes and comments in one feed.
+                  </TutorialItem>
+
+                  <TutorialItem icon="📈" title="COGS % colour coding">
+                    <span className="text-emerald-600 font-semibold">Green</span> ≤ 28% · <span className="text-amber-500 font-semibold">Amber</span> 28–35% · <span className="text-red-500 font-semibold">Red</span> &gt; 35%. The bar under each price grows from the right — a longer bar means lower COGS and more margin.
+                  </TutorialItem>
+
+                  {data && data.menus.length > 1 && !meta?.menu_locked && (
+                    <TutorialItem icon="📋" title="Switching menus">
+                      This link covers multiple menus. Use the <strong>Switch menu</strong> bar below the header to change which menu you're viewing.
+                    </TutorialItem>
+                  )}
+
+                  {data?.scenario && (
+                    <TutorialItem icon="📊" title="Scenario data">
+                      A sales mix scenario (<strong>{data.scenario.name}</strong>) is loaded. Quantities sold per item are used to calculate weighted revenue and GP figures in the summary panel.
+                    </TutorialItem>
+                  )}
+                </ul>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 pb-5 pt-2">
+                <button
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition"
+                  onClick={() => setShowTutorial(false)}
+                >
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
+  )
+}
+
+// ── Tutorial item ─────────────────────────────────────────────────────────────
+
+function TutorialItem({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-3">
+      <span className="text-base flex-shrink-0 mt-0.5">{icon}</span>
+      <div>
+        <p className="font-semibold text-gray-800">{title}</p>
+        <p className="text-gray-500 text-xs mt-0.5 leading-relaxed">{children}</p>
+      </div>
+    </li>
   )
 }
 
