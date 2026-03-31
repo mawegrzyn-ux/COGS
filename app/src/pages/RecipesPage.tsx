@@ -32,6 +32,7 @@ interface PlVariationCost {
   total_cost_local: number
   cost_per_portion: number
   coverage: 'fully_preferred' | 'fully_quoted' | 'partially_quoted' | 'not_quoted'
+  variant_source?:  'market_pl' | 'market' | 'pl' | 'global'
 }
 
 interface CogsByCountry {
@@ -64,6 +65,15 @@ interface PlVariation {
   items:            RecipeItem[]
 }
 
+interface MarketPlVariation {
+  id:               number
+  country_id:       number
+  price_level_id:   number
+  country_name:     string
+  price_level_name: string
+  items:            RecipeItem[]
+}
+
 interface Country {
   id:             number
   name:           string
@@ -79,10 +89,11 @@ interface PriceLevel {
 }
 
 interface RecipeDetail extends Recipe {
-  items:            RecipeItem[]
-  variations:       RecipeVariation[]
-  pl_variations?:   PlVariation[]
-  cogs_by_country:  CogsByCountry[]
+  items:                RecipeItem[]
+  variations:           RecipeVariation[]
+  pl_variations?:       PlVariation[]
+  market_pl_variations?: MarketPlVariation[]
+  cogs_by_country:      CogsByCountry[]
 }
 
 type ItemSortField = 'custom' | 'name' | 'qty' | 'cost'
@@ -135,10 +146,11 @@ export default function RecipesPage() {
   const [recipeModal,  setRecipeModal]  = useState<'new' | Recipe | null>(null)
   const [itemModal,    setItemModal]    = useState(false)
   const [editItemModal,setEditItemModal]= useState<RecipeItem | null>(null)
-  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global' | 'pl-variation' | 'pl-copy-to-global'; id: number } | null>(null)
+  const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global' | 'pl-variation' | 'pl-copy-to-global' | 'market-pl-variation'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [itemModalForPlVariation, setItemModalForPlVariation] = useState<number | null>(null) // pl_variation_id when adding to a PL variation
-  const [variantMode, setVariantMode] = useState<'market' | 'price-level'>('market')
+  const [itemModalForMarketPlVariation, setItemModalForMarketPlVariation] = useState<number | null>(null) // market_pl_variation_id when adding to a market+PL variation
+  const [variantMode, setVariantMode] = useState<'market' | 'price-level' | 'market-pl'>('market')
   const [showComparison,        setShowComparison]        = useState(false)
 
   // ── Ingredient list sort + drag-to-reorder ────────────────────────────────
@@ -309,9 +321,8 @@ export default function RecipesPage() {
       ?? selected?.cogs_by_country[0]
       ?? null
     if (!base) return null
-    // When viewing a PL variation, overlay PL-specific lines/totals/coverage
-    // while keeping country/currency metadata from the base entry.
-    if (variantMode === 'price-level' && selectedPriceLevelId) {
+    // market+PL and price-level modes both use pl_variation_costs (backend already applies 4-level priority)
+    if ((variantMode === 'market-pl' || variantMode === 'price-level') && selectedPriceLevelId) {
       const plCost = base.pl_variation_costs?.[String(selectedPriceLevelId)]
       if (plCost) {
         return {
@@ -350,11 +361,19 @@ export default function RecipesPage() {
     return selected.pl_variations?.find(v => v.price_level_id === selectedPriceLevelId) ?? null
   }, [selected, selectedPriceLevelId, variantMode])
 
+  const activeMarketPlVariation = useMemo(() => {
+    if (!selected || !selectedPriceLevelId || variantMode !== 'market-pl' || selectedCountryId === '' || selectedCountryId === 'GLOBAL') return null
+    return selected.market_pl_variations?.find(
+      v => v.country_id === selectedCountryId && v.price_level_id === selectedPriceLevelId
+    ) ?? null
+  }, [selected, selectedPriceLevelId, variantMode, selectedCountryId])
+
   const activeItems = useMemo(() => {
+    if (variantMode === 'market-pl' && activeMarketPlVariation) return activeMarketPlVariation.items
     if (variantMode === 'price-level' && activePlVariation) return activePlVariation.items
     if (variantMode === 'market' && activeVariation) return activeVariation.items
     return selected?.items ?? []
-  }, [variantMode, activePlVariation, activeVariation, selected])
+  }, [variantMode, activeMarketPlVariation, activePlVariation, activeVariation, selected])
 
   // Sorted view of activeItems — 'custom' preserves DB sort_order
   const displayItems = useMemo(() => {
@@ -510,7 +529,7 @@ export default function RecipesPage() {
   // ── Drag-to-reorder ───────────────────────────────────────────────────────
   const reorderItems = useCallback(async (fromId: number, toId: number) => {
     if (!selected || fromId === toId) return
-    const list = activePlVariation ? activePlVariation.items : activeVariation ? activeVariation.items : selected.items
+    const list = activeMarketPlVariation ? activeMarketPlVariation.items : activePlVariation ? activePlVariation.items : activeVariation ? activeVariation.items : selected.items
     const fromIdx = list.findIndex(i => i.id === fromId)
     const toIdx   = list.findIndex(i => i.id === toId)
     if (fromIdx < 0 || toIdx < 0) return
@@ -522,6 +541,14 @@ export default function RecipesPage() {
     // Optimistic update
     setSelected(prev => {
       if (!prev) return prev
+      if (activeMarketPlVariation) {
+        return {
+          ...prev,
+          market_pl_variations: (prev.market_pl_variations ?? []).map(v =>
+            v.id === activeMarketPlVariation.id ? { ...v, items: next } : v
+          ),
+        }
+      }
       if (activePlVariation) {
         return {
           ...prev,
@@ -724,6 +751,86 @@ export default function RecipesPage() {
     try {
       await api.delete(`/recipes/${selected.id}/pl-variations/${varId}/items/${itemId}`)
       showToast('Item removed from PL variation')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Delete failed', 'error') }
+  }
+
+  // ── Market+PL Variation CRUD ───────────────────────────────────────────────
+
+  const createMarketPlVariation = async (countryId: number, priceLevelId: number, copyFrom: 'global' | 'market' | 'pl' | null) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/market-pl-variations`, {
+        country_id:     countryId,
+        price_level_id: priceLevelId,
+        copy_from:      copyFrom,
+      })
+      showToast('Market+PL variation created')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Failed to create market+PL variation', 'error') }
+  }
+
+  const deleteMarketPlVariation = async (varId: number) => {
+    if (!selected) return
+    try {
+      await api.delete(`/recipes/${selected.id}/market-pl-variations/${varId}`)
+      showToast('Market+PL variation deleted')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Failed to delete market+PL variation', 'error') }
+  }
+
+  const addMarketPlVariationItem = async (varId: number, form: ItemForm) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/market-pl-variations/${varId}/items`, {
+        item_type:               form.item_type,
+        ingredient_id:           form.item_type === 'ingredient' ? Number(form.ingredient_id) : null,
+        recipe_item_id:          form.item_type === 'recipe'     ? Number(form.recipe_item_id) : null,
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Ingredient added to market+PL variation')
+      setItemModal(false)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Add failed', 'error') }
+  }
+
+  const addMarketPlVariationItemAndNext = async (varId: number, form: ItemForm) => {
+    if (!selected) return
+    try {
+      await api.post(`/recipes/${selected.id}/market-pl-variations/${varId}/items`, {
+        item_type:               form.item_type,
+        ingredient_id:           form.item_type === 'ingredient' ? Number(form.ingredient_id) : null,
+        recipe_item_id:          form.item_type === 'recipe'     ? Number(form.recipe_item_id) : null,
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Ingredient added to market+PL variation')
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Add failed', 'error') }
+  }
+
+  const updateMarketPlVariationItem = async (varId: number, form: ItemForm) => {
+    if (!selected || !editItemModal) return
+    try {
+      await api.put(`/recipes/${selected.id}/market-pl-variations/${varId}/items/${editItemModal.id}`, {
+        prep_qty:                Number(form.prep_qty),
+        prep_unit:               form.prep_unit.trim() || null,
+        prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+      })
+      showToast('Item updated')
+      setEditItemModal(null)
+      loadDetail(selected.id)
+    } catch (err: any) { showToast(err.message || 'Update failed', 'error') }
+  }
+
+  const deleteMarketPlVariationItem = async (varId: number, itemId: number) => {
+    if (!selected) return
+    try {
+      await api.delete(`/recipes/${selected.id}/market-pl-variations/${varId}/items/${itemId}`)
+      showToast('Item removed from market+PL variation')
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Delete failed', 'error') }
   }
@@ -1120,11 +1227,13 @@ export default function RecipesPage() {
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
                   <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
-                    {variantMode === 'price-level' && activePlVariation
-                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
-                      : activeCogs?.has_variation
-                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
-                        : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
+                    {variantMode === 'market-pl' && activeMarketPlVariation
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">🌍💰 {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
+                      : variantMode === 'price-level' && activePlVariation
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
+                        : activeCogs?.has_variation
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
+                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
                     }
                     {/* Variant mode toggle */}
                     {priceLevels.length > 0 && (
@@ -1137,8 +1246,13 @@ export default function RecipesPage() {
                         <button
                           className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'price-level' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                           onClick={() => setVariantMode('price-level')}
-                          title="Price level variations — different ingredients per price level"
+                          title="Price level variations — different ingredients per price level (global)"
                         >💰 Price Level</button>
+                        <button
+                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market-pl' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                          onClick={() => setVariantMode('market-pl')}
+                          title="Market+PL variations — specific ingredients for a market+price level combination"
+                        >🌍💰 Market+PL</button>
                       </div>
                     )}
                   </div>
@@ -1213,15 +1327,56 @@ export default function RecipesPage() {
                         </button>
                       )
                     )}
+                    {variantMode === 'market-pl' && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && selectedPriceLevelId && (
+                      activeMarketPlVariation ? (
+                        <button
+                          className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
+                          onClick={() => setConfirmDelete({ type: 'market-pl-variation', id: activeMarketPlVariation.id })}
+                          title="Delete this market+PL variation"
+                        >
+                          <TrashIcon size={11} /> Delete Market+PL
+                        </button>
+                      ) : (
+                        <button
+                          className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                          onClick={() => {
+                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
+                            const levelName   = priceLevels.find(l => l.id === selectedPriceLevelId)?.name ?? 'this price level'
+                            const hasMktVar   = selected.variations.some(v => v.country_id === selectedCountryId)
+                            const hasPlVar    = selected.pl_variations?.some(v => v.price_level_id === selectedPriceLevelId)
+                            const choices = ['global', hasMktVar && 'market', hasPlVar && 'pl'].filter(Boolean) as string[]
+                            const copyLabel = choices.length > 1
+                              ? `\n\nCopy from: global (G), market variation (M)${hasPlVar ? ', PL variation (P)' : ''}?\nEnter G, M${hasPlVar ? ', P' : ''} or leave blank for empty.`
+                              : `\n\nCopy global ingredients as starting point?`
+                            const ans = window.prompt(`Create Market+PL variation for ${countryName} · ${levelName}?${copyLabel}`)
+                            if (ans === null) return
+                            const copyFrom = ans.trim().toUpperCase() === 'M' ? 'market'
+                              : ans.trim().toUpperCase() === 'P' ? 'pl'
+                              : ans.trim() === '' ? null
+                              : 'global'
+                            createMarketPlVariation(selectedCountryId as number, selectedPriceLevelId, copyFrom)
+                          }}
+                          title="Create a market+price-level-specific variation"
+                        >
+                          🌍💰 Create Market+PL
+                        </button>
+                      )
+                    )}
                     <button
                       className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
                       onClick={() => {
-                        if (variantMode === 'price-level' && activePlVariation) {
+                        if (variantMode === 'market-pl' && activeMarketPlVariation) {
+                          setItemModalForMarketPlVariation(activeMarketPlVariation.id)
+                          setItemModalForVariation(null)
+                          setItemModalForPlVariation(null)
+                        } else if (variantMode === 'price-level' && activePlVariation) {
                           setItemModalForPlVariation(activePlVariation.id)
                           setItemModalForVariation(null)
+                          setItemModalForMarketPlVariation(null)
                         } else {
                           setItemModalForVariation(activeVariation?.id ?? null)
                           setItemModalForPlVariation(null)
+                          setItemModalForMarketPlVariation(null)
                         }
                         setItemModal(true)
                       }}
@@ -1643,42 +1798,48 @@ export default function RecipesPage() {
           recipes={recipes.filter(r => r.id !== selected?.id)}
           onSave={form => {
             if (editItemModal) {
-              if (activePlVariation && variantMode === 'price-level') updatePlVariationItem(activePlVariation.id, form)
+              if (activeMarketPlVariation && variantMode === 'market-pl') updateMarketPlVariationItem(activeMarketPlVariation.id, form)
+              else if (activePlVariation && variantMode === 'price-level') updatePlVariationItem(activePlVariation.id, form)
               else if (activeVariation) updateVariationItem(activeVariation.id, form)
               else                      updateItem(form)
             } else {
-              if (itemModalForPlVariation != null) addPlVariationItem(itemModalForPlVariation, form)
-              else if (itemModalForVariation != null) addVariationItem(itemModalForVariation, form)
-              else                                    addItem(form)
+              if (itemModalForMarketPlVariation != null) addMarketPlVariationItem(itemModalForMarketPlVariation, form)
+              else if (itemModalForPlVariation != null)  addPlVariationItem(itemModalForPlVariation, form)
+              else if (itemModalForVariation != null)    addVariationItem(itemModalForVariation, form)
+              else                                       addItem(form)
             }
           }}
           onSaveAndNext={editItemModal ? undefined : form => {
-            if (itemModalForPlVariation != null) addPlVariationItemAndNext(itemModalForPlVariation, form)
-            else if (itemModalForVariation != null) addVariationItemAndNext(itemModalForVariation, form)
-            else                                    addItemAndNext(form)
+            if (itemModalForMarketPlVariation != null) addMarketPlVariationItemAndNext(itemModalForMarketPlVariation, form)
+            else if (itemModalForPlVariation != null)  addPlVariationItemAndNext(itemModalForPlVariation, form)
+            else if (itemModalForVariation != null)    addVariationItemAndNext(itemModalForVariation, form)
+            else                                       addItemAndNext(form)
           }}
-          onClose={() => { setItemModal(false); setEditItemModal(null); setItemModalForVariation(null); setItemModalForPlVariation(null) }}
+          onClose={() => { setItemModal(false); setEditItemModal(null); setItemModalForVariation(null); setItemModalForPlVariation(null); setItemModalForMarketPlVariation(null) }}
         />
       )}
 
       {confirmDelete && (
         <ConfirmDialog
           message={
-            confirmDelete.type === 'recipe'              ? 'This will permanently delete the recipe and all its ingredients.' :
-            confirmDelete.type === 'variation'           ? 'Delete this market variation? The global recipe will be used for this country going forward.' :
-            confirmDelete.type === 'copy-to-global'      ? 'Replace all global ingredients with this variation\'s ingredients? The global recipe will be overwritten. All other market variations are unaffected.' :
-            confirmDelete.type === 'pl-variation'        ? 'Delete this price level variation? The global recipe will be used for this price level going forward.' :
-            confirmDelete.type === 'pl-copy-to-global'   ? 'Replace all global ingredients with this price level variation\'s ingredients? The global recipe will be overwritten. All other variations are unaffected.' :
+            confirmDelete.type === 'recipe'                ? 'This will permanently delete the recipe and all its ingredients.' :
+            confirmDelete.type === 'variation'             ? 'Delete this market variation? The global recipe will be used for this country going forward.' :
+            confirmDelete.type === 'copy-to-global'        ? 'Replace all global ingredients with this variation\'s ingredients? The global recipe will be overwritten. All other market variations are unaffected.' :
+            confirmDelete.type === 'pl-variation'          ? 'Delete this price level variation? The global recipe will be used for this price level going forward.' :
+            confirmDelete.type === 'pl-copy-to-global'     ? 'Replace all global ingredients with this price level variation\'s ingredients? The global recipe will be overwritten. All other variations are unaffected.' :
+            confirmDelete.type === 'market-pl-variation'   ? 'Delete this market+PL variation? The next applicable tier (market, PL, or global recipe) will be used for this country+price level going forward.' :
             'Remove this ingredient from the recipe?'
           }
           onConfirm={() => {
-            if (confirmDelete.type === 'recipe')                 deleteRecipe(confirmDelete.id)
-            else if (confirmDelete.type === 'variation')         deleteVariation(confirmDelete.id)
-            else if (confirmDelete.type === 'copy-to-global')    copyVariationToGlobal(confirmDelete.id)
-            else if (confirmDelete.type === 'pl-variation')      deletePlVariation(confirmDelete.id)
-            else if (confirmDelete.type === 'pl-copy-to-global') copyPlVariationToGlobal(confirmDelete.id)
+            if (confirmDelete.type === 'recipe')                  deleteRecipe(confirmDelete.id)
+            else if (confirmDelete.type === 'variation')          deleteVariation(confirmDelete.id)
+            else if (confirmDelete.type === 'copy-to-global')     copyVariationToGlobal(confirmDelete.id)
+            else if (confirmDelete.type === 'pl-variation')       deletePlVariation(confirmDelete.id)
+            else if (confirmDelete.type === 'pl-copy-to-global')  copyPlVariationToGlobal(confirmDelete.id)
+            else if (confirmDelete.type === 'market-pl-variation') deleteMarketPlVariation(confirmDelete.id)
             else {
-              if (variantMode === 'price-level' && activePlVariation) deletePlVariationItem(activePlVariation.id, confirmDelete.id)
+              if (variantMode === 'market-pl' && activeMarketPlVariation) deleteMarketPlVariationItem(activeMarketPlVariation.id, confirmDelete.id)
+              else if (variantMode === 'price-level' && activePlVariation) deletePlVariationItem(activePlVariation.id, confirmDelete.id)
               else if (activeVariation) deleteVariationItem(activeVariation.id, confirmDelete.id)
               else                      deleteItem(confirmDelete.id)
             }

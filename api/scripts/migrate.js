@@ -598,6 +598,21 @@ const migrations = [
 
   // ── 31b. Add pl_variation_id column to mcogs_recipe_items ─────────────────
   `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS pl_variation_id INTEGER REFERENCES mcogs_recipe_pl_variations(id) ON DELETE CASCADE`,
+
+  // ── 32. Recipe Market+PL Variations (country + price-level specific) ──────
+  `CREATE TABLE IF NOT EXISTS mcogs_recipe_market_pl_variations (
+  id              SERIAL PRIMARY KEY,
+  recipe_id       INTEGER NOT NULL REFERENCES mcogs_recipes(id)        ON DELETE CASCADE,
+  country_id      INTEGER NOT NULL REFERENCES mcogs_countries(id)      ON DELETE CASCADE,
+  price_level_id  INTEGER NOT NULL REFERENCES mcogs_price_levels(id)   ON DELETE CASCADE,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(recipe_id, country_id, price_level_id)
+)`,
+
+  // ── 32b. Add market_pl_variation_id column to mcogs_recipe_items ──────────
+  `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS market_pl_variation_id INTEGER REFERENCES mcogs_recipe_market_pl_variations(id) ON DELETE CASCADE`,
 ];
 
 async function migrate() {

@@ -87,8 +87,9 @@ async function loadAllRecipeItemsDeep(topIds) {
       LEFT JOIN mcogs_ingredients ing  ON ing.id  = ri.ingredient_id
       LEFT JOIN mcogs_recipes     sub_r ON sub_r.id = ri.recipe_item_id
       WHERE  ri.recipe_id = ANY($1::int[])
-        AND  ri.variation_id    IS NULL
-        AND  ri.pl_variation_id IS NULL
+        AND  ri.variation_id           IS NULL
+        AND  ri.pl_variation_id        IS NULL
+        AND  ri.market_pl_variation_id IS NULL
     `, [batch]);
 
     for (const ri of riRows) {
@@ -162,20 +163,55 @@ async function loadPlVariationItemsMap(recipeIds) {
 }
 
 /**
+ * Load market+price-level variation items for a set of recipe IDs.
+ * Returns: { [recipe_id]: { [country_id]: { [price_level_id]: [items...] } } }
+ */
+async function loadMarketPlVariationItemsMap(recipeIds) {
+  if (!recipeIds.length) return {};
+  const { rows } = await pool.query(`
+    SELECT mplv.recipe_id,
+           mplv.country_id,
+           mplv.price_level_id,
+           ri.*,
+           i.waste_pct,
+           sub_r.yield_qty AS sub_recipe_yield_qty
+    FROM   mcogs_recipe_market_pl_variations mplv
+    JOIN   mcogs_recipe_items ri ON ri.market_pl_variation_id = mplv.id
+    LEFT JOIN mcogs_ingredients i     ON i.id     = ri.ingredient_id
+    LEFT JOIN mcogs_recipes     sub_r ON sub_r.id = ri.recipe_item_id
+    WHERE  mplv.recipe_id = ANY($1::int[])
+    ORDER  BY mplv.recipe_id, mplv.country_id, mplv.price_level_id, ri.id ASC
+  `, [recipeIds]);
+
+  const map = {};
+  for (const row of rows) {
+    if (!map[row.recipe_id])                                          map[row.recipe_id] = {};
+    if (!map[row.recipe_id][row.country_id])                          map[row.recipe_id][row.country_id] = {};
+    if (!map[row.recipe_id][row.country_id][row.price_level_id])      map[row.recipe_id][row.country_id][row.price_level_id] = [];
+    map[row.recipe_id][row.country_id][row.price_level_id].push(row);
+  }
+  return map;
+}
+
+/**
  * Calculate cost-per-portion for one recipe in one country.
  * Handles both direct ingredients and sub-recipe items (item_type = 'recipe') recursively.
  * allRecipeItemsMap must include items for every sub-recipe referenced in the tree.
  */
-function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap, allRecipeItemsMap = {}, _visited = null, priceLevelId = null, plVariationMap = {}) {
+function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMap, allRecipeItemsMap = {}, _visited = null, priceLevelId = null, plVariationMap = {}, marketPlVariationMap = {}) {
   // Guard against circular references (A → B → A). Clone on first call so each
   // top-level invocation gets its own visited set and sibling sub-recipes are
   // allowed to appear more than once at different branches.
   const visited = _visited ? new Set(_visited) : new Set([Number(recipe.id)]);
 
-  // Priority: PL variant > market variant > global
-  const plItems  = priceLevelId ? plVariationMap?.[recipe.id]?.[priceLevelId] : null;
-  const mktItems = variationMap?.[recipe.id]?.[countryId];
-  const items    = (plItems && plItems.length) ? plItems : (mktItems || globalItems);
+  // Priority: market+PL > market > PL > global
+  const mktPlItems = (priceLevelId && countryId) ? marketPlVariationMap?.[recipe.id]?.[countryId]?.[priceLevelId] : null;
+  const mktItems   = variationMap?.[recipe.id]?.[countryId];
+  const plItems    = priceLevelId ? plVariationMap?.[recipe.id]?.[priceLevelId] : null;
+  const items = (mktPlItems && mktPlItems.length) ? mktPlItems
+    : (mktItems && mktItems.length) ? mktItems
+    : (plItems  && plItems.length)  ? plItems
+    : globalItems;
   let total = 0, preferredCount = 0, quotedCount = 0, leafCount = 0;
 
   for (const item of items) {
@@ -213,6 +249,7 @@ function calcRecipeCost(recipe, globalItems, countryId, quoteLookup, variationMa
         subVisited,
         priceLevelId,
         plVariationMap,
+        marketPlVariationMap,
       );
       const usage = Number(item.prep_qty) * Number(item.prep_to_base_conversion || 1);
       total += subResult.cost * usage;
@@ -749,4 +786,4 @@ function formatLevel(l) {
   return { id: l.id, name: l.name, sort_order: 0 };
 }
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap };
