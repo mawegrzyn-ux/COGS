@@ -143,7 +143,7 @@ export default function SharedMenuPage() {
   const [selectedMenuId, setSelectedMenuId] = useState<number | null>(null)
 
   // edit
-  const [editCell,  setEditCell]  = useState<{ itemId: number; levelId: number; value: string } | null>(null)
+  const [editCell,  setEditCell]  = useState<{ itemId: number; levelId: number; value: string; originalValue: string } | null>(null)
   const [saving,    setSaving]    = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveOk,    setSaveOk]    = useState<string | null>(null)
@@ -266,6 +266,8 @@ export default function SharedMenuPage() {
     if (!editCell || !token || !slug) return
     const gross = parseFloat(editCell.value)
     if (isNaN(gross) || gross < 0) { setEditCell(null); return }
+    // No-op guard — bail without saving if value hasn't changed
+    if (parseFloat(editCell.value) === parseFloat(editCell.originalValue)) { setEditCell(null); return }
 
     setSaving(true)
     setSaveError('')
@@ -657,22 +659,16 @@ export default function SharedMenuPage() {
       <header className="bg-white border-b border-gray-100 sticky top-0 z-20">
         <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4 min-w-0">
 
-          {/* Left: logo + view name → menu name + subtitle */}
+          {/* Left: logo + share name (large) + metadata row below */}
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center flex-shrink-0">
               <span className="text-white font-bold text-xs">C</span>
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs text-gray-400 font-medium whitespace-nowrap">{meta?.name}</span>
-                {data?.menu.name && (
-                  <>
-                    <span className="text-gray-200 text-xs">›</span>
-                    <h1 className="font-bold text-gray-900 text-sm truncate">{data.menu.name}</h1>
-                  </>
-                )}
-              </div>
+              <h1 className="font-bold text-gray-900 text-base leading-tight truncate">{data?.menu.name ?? meta?.name}</h1>
               <div className="flex items-center gap-1.5 text-xs text-gray-400 flex-wrap mt-0.5">
+                {meta?.name && <span className="font-medium text-gray-500">{meta.name}</span>}
+                {meta?.name && <span className="text-gray-200">·</span>}
                 {isEdit
                   ? <span className="text-amber-600 font-medium">✏ Edit</span>
                   : <span>👁 View</span>}
@@ -695,7 +691,7 @@ export default function SharedMenuPage() {
                     {data.items.length > 0 && (
                       <>
                         <span className="text-gray-200">·</span>
-                        <span>{data.items.length} items · {categories.length} categories</span>
+                        <span>{data.items.length} items · {categories.length} cat.</span>
                       </>
                     )}
                   </>
@@ -749,13 +745,6 @@ export default function SharedMenuPage() {
                 Changes {changes.length > 0 && <span className="font-bold">{changes.filter(c => c.change_type === 'price').length}</span>}
               </button>
 
-              {/* Expand / Collapse all */}
-              {data.items.length > 0 && (
-                <>
-                  <button onClick={expandAll}   className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-emerald-600 hover:border-emerald-300 hover:bg-emerald-50 transition-colors">Expand</button>
-                  <button onClick={collapseAll} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 hover:border-gray-300 hover:bg-gray-50 transition-colors">Collapse</button>
-                </>
-              )}
             </div>
           )}
         </div>
@@ -1046,7 +1035,16 @@ export default function SharedMenuPage() {
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-gray-200 border-b border-gray-300">
                       <th className="text-left px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide sticky left-0 bg-gray-200 whitespace-nowrap min-w-[200px]">
-                        Item
+                        <div className="flex items-center gap-2">
+                          Item
+                          <button
+                            className="text-gray-400 hover:text-gray-600 transition-colors font-normal normal-case tracking-normal text-xs border border-gray-300 rounded px-1.5 py-0.5 bg-white/70 hover:bg-white leading-tight"
+                            onClick={() => collapsedCats.size === categories.length ? expandAll() : collapseAll()}
+                            title={collapsedCats.size === categories.length ? 'Expand all' : 'Collapse all'}
+                          >
+                            All {collapsedCats.size === categories.length ? '▼' : '▶'}
+                          </button>
+                        </div>
                       </th>
                       {levels.map(l => (
                         <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-200 whitespace-nowrap min-w-[120px]">
@@ -1148,7 +1146,7 @@ export default function SharedMenuPage() {
                                       ) : (
                                         <button
                                           className="text-xs text-gray-300 hover:text-emerald-500 transition-colors"
-                                          onClick={() => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: '' })}
+                                          onClick={() => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: '', originalValue: '' })}
                                         >
                                           + set price
                                         </button>
@@ -1175,25 +1173,24 @@ export default function SharedMenuPage() {
                                     <div className={`group relative ${cellChange ? 'rounded-md ring-1 ring-amber-300 bg-amber-50/40 px-1' : ''}`}>
                                       <button
                                         className={`w-full text-right ${isEdit ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default'}`}
-                                        onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross) }) : undefined}
+                                        onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
                                         disabled={!isEdit}
                                       >
-                                        <div className="flex items-center justify-end gap-1">
-                                          {cellChange && (
-                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Recently changed" />
-                                          )}
-                                          {entry.is_scenario_override && (
-                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Scenario override" />
+                                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                          {(cellChange || entry.is_scenario_override) && (
+                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title={cellChange ? 'Recently changed' : 'Scenario override'} />
                                           )}
                                           <span className="font-semibold text-gray-800 tabular-nums">
                                             {sym}{fmt2(entry.gross)}
                                           </span>
-                                        </div>
-                                        <div className="text-xs tabular-nums text-gray-400 mt-0.5">
-                                          cost {sym}{fmt2(item.cost)}
-                                        </div>
-                                        <div className={`text-xs tabular-nums mt-0.5 ${cogsCls(entry.cogs_pct)}`}>
-                                          {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                          <span className="text-gray-200 text-xs">·</span>
+                                          <span className="text-xs tabular-nums text-gray-400">
+                                            {sym}{fmt2(item.cost)}
+                                          </span>
+                                          <span className="text-gray-200 text-xs">·</span>
+                                          <span className={`text-xs tabular-nums font-medium ${cogsCls(entry.cogs_pct)}`}>
+                                            {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                          </span>
                                         </div>
                                         {entry.cogs_pct !== null && (
                                           <div className="mt-1 h-1 rounded-full bg-gray-100 overflow-hidden flex justify-end">
