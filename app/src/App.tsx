@@ -15,11 +15,18 @@ import HACCPPage          from './pages/HACCPPage'
 import HelpPage           from './pages/HelpPage'
 import ImportPage         from './pages/ImportPage'
 import SharedMenuPage     from './pages/SharedMenuPage'
+import PendingPage        from './pages/PendingPage'
+import PermissionsProvider from './components/PermissionsProvider'
+import { usePermissions } from './hooks/usePermissions'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth0()
-  if (isLoading)        return <LoadingScreen />
-  if (!isAuthenticated) return <Navigate to="/login" replace />
+  const { isAuthenticated, isLoading: authLoading } = useAuth0()
+  const { user, loading: permLoading } = usePermissions()
+
+  if (authLoading || permLoading) return <LoadingScreen />
+  if (!isAuthenticated)           return <Navigate to="/login" replace />
+  if (user?.status === 'pending') return <PendingPage />
+
   return <>{children}</>
 }
 
@@ -29,36 +36,38 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+      <PermissionsProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
 
-        {/* Protected app shell */}
-        <Route path="/" element={
-          <ProtectedRoute>
-            <AppLayout />
-          </ProtectedRoute>
-        }>
-          <Route index             element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard"  element={<DashboardPage />} />
-          <Route path="settings"   element={<SettingsPage />} />
-          <Route path="markets"    element={<MarketsPage />} />
-          <Route path="countries"  element={<Navigate to="/markets" replace />} />
-          <Route path="locations"  element={<Navigate to="/markets" replace />} />
-          <Route path="categories" element={<CategoriesPage />} />
-          <Route path="inventory"  element={<InventoryPage />} />
-          <Route path="recipes"    element={<RecipesPage />} />
-          <Route path="menus"      element={<MenusPage />} />
-          <Route path="allergens"  element={<AllergenMatrixPage />} />
-          <Route path="haccp"      element={<HACCPPage />} />
-          <Route path="help"       element={<HelpPage />} />
-          <Route path="import"     element={<ImportPage />} />
-        </Route>
+          {/* Protected app shell */}
+          <Route path="/" element={
+            <ProtectedRoute>
+              <AppLayout />
+            </ProtectedRoute>
+          }>
+            <Route index             element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard"  element={<DashboardPage />} />
+            <Route path="settings"   element={<SettingsPage />} />
+            <Route path="markets"    element={<MarketsPage />} />
+            <Route path="countries"  element={<Navigate to="/markets" replace />} />
+            <Route path="locations"  element={<Navigate to="/markets" replace />} />
+            <Route path="categories" element={<CategoriesPage />} />
+            <Route path="inventory"  element={<InventoryPage />} />
+            <Route path="recipes"    element={<RecipesPage />} />
+            <Route path="menus"      element={<MenusPage />} />
+            <Route path="allergens"  element={<AllergenMatrixPage />} />
+            <Route path="haccp"      element={<HACCPPage />} />
+            <Route path="help"       element={<HelpPage />} />
+            <Route path="import"     element={<ImportPage />} />
+          </Route>
 
-        {/* Public shared pages — no auth */}
-        <Route path="/share/:slug" element={<SharedMenuPage />} />
+          {/* Public shared pages — no auth, outside RBAC */}
+          <Route path="/share/:slug" element={<SharedMenuPage />} />
 
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </PermissionsProvider>
     </BrowserRouter>
   )
 }

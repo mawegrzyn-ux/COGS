@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
+import { usePermissions } from '../hooks/usePermissions'
+import type { Feature, AccessLevel } from '../hooks/usePermissions'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,7 +27,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai' | 'import'
+type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai' | 'import' | 'users' | 'roles'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -38,6 +40,8 @@ const TAB_LABELS: Record<Tab, string> = {
   'test-data':      'Test Data',
   'ai':             'AI',
   'import':         'Import',
+  'users':          'Users',
+  'roles':          'Roles',
 }
 
 const TAB_TUTORIALS: Record<Tab, string> = {
@@ -49,6 +53,8 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'test-data':      'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
   'ai':             'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'import':         'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
+  'users':          'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
+  'roles':          'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -65,7 +71,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
-        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import'] as Tab[]).map(t => (
+        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -93,6 +99,8 @@ export default function SettingsPage() {
         {tab === 'test-data'      && <TestDataTab />}
         {tab === 'ai'             && <AiTab />}
         {tab === 'import'         && <ImportPage hideHeader />}
+        {tab === 'users'          && <UsersTab />}
+        {tab === 'roles'          && <RolesTab />}
       </div>
     </div>
   )
@@ -1494,6 +1502,635 @@ function AiTab() {
           </div>
         )}
       </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Users Tab ─────────────────────────────────────────────────────────────────
+
+interface AppUser {
+  id:            number
+  email:         string | null
+  name:          string | null
+  picture:       string | null
+  status:        'pending' | 'active' | 'disabled'
+  role_id:       number | null
+  role_name:     string | null
+  brand_partners: { id: number; name: string }[]
+  created_at:    string
+  last_login_at: string | null
+}
+
+interface Role {
+  id:          number
+  name:        string
+  description: string | null
+  is_system:   boolean
+  permissions: Partial<Record<Feature, AccessLevel>>
+}
+
+interface BrandPartner {
+  id:   number
+  name: string
+}
+
+const STATUS_LABELS: Record<AppUser['status'], string> = {
+  pending:  'Pending',
+  active:   'Active',
+  disabled: 'Disabled',
+}
+const STATUS_CLASSES: Record<AppUser['status'], string> = {
+  pending:  'bg-yellow-50 text-yellow-700 border-yellow-200',
+  active:   'bg-accent-dim text-accent border-accent/20',
+  disabled: 'bg-gray-100 text-gray-500 border-gray-200',
+}
+
+function UsersTab() {
+  const api = useApi()
+  const { user: me, can } = usePermissions()
+
+  const [users, setUsers]   = useState<AppUser[]>([])
+  const [roles, setRoles]   = useState<Role[]>([])
+  const [bps,   setBps]     = useState<BrandPartner[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [editing,    setEditing]    = useState<AppUser | null>(null)
+  const [editRoleId, setEditRoleId] = useState<number | null>(null)
+  const [editBpIds,  setEditBpIds]  = useState<number[]>([])
+  const [saving, setSaving] = useState(false)
+
+  const [confirming, setConfirming] = useState<{ user: AppUser; action: 'disable' | 'enable' | 'delete' } | null>(null)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [u, r, b] = await Promise.all([
+        api.get('/users'),
+        api.get('/roles'),
+        api.get('/brand-partners'),
+      ])
+      setUsers(u  || [])
+      setRoles(r  || [])
+      setBps(b    || [])
+    } catch { /* handled by toast */ }
+    finally { setLoading(false) }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  if (!can('users', 'read')) {
+    return <EmptyState message="You don't have permission to manage users." />
+  }
+
+  const canWrite = can('users', 'write')
+
+  function openEdit(u: AppUser) {
+    setEditing(u)
+    setEditRoleId(u.role_id)
+    setEditBpIds(u.brand_partners.map(bp => bp.id))
+  }
+
+  async function handleSaveEdit() {
+    if (!editing) return
+    setSaving(true)
+    try {
+      await api.put(`/users/${editing.id}`, {
+        role_id:           editRoleId,
+        brand_partner_ids: editBpIds,
+      })
+      setToast({ message: 'User updated', type: 'success' })
+      setEditing(null)
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleStatusChange(u: AppUser, status: 'active' | 'disabled') {
+    try {
+      await api.put(`/users/${u.id}`, { status })
+      setToast({ message: `User ${status === 'active' ? 'approved' : 'disabled'}`, type: 'success' })
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed', type: 'error' })
+    } finally {
+      setConfirming(null)
+    }
+  }
+
+  async function handleDelete(u: AppUser) {
+    try {
+      await api.delete(`/users/${u.id}`)
+      setToast({ message: 'User removed', type: 'success' })
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Delete failed', type: 'error' })
+    } finally {
+      setConfirming(null)
+    }
+  }
+
+  function toggleBp(id: number) {
+    setEditBpIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  if (loading) return <Spinner />
+
+  const pending = users.filter(u => u.status === 'pending')
+
+  return (
+    <div>
+      {pending.length > 0 && (
+        <div className="mb-4 flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">
+          <svg className="w-4 h-4 text-yellow-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-sm text-yellow-800 font-medium">
+            {pending.length} user{pending.length > 1 ? 's' : ''} awaiting approval
+          </span>
+        </div>
+      )}
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-surface-2 border-b border-border">
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">User</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Status</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Role</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Market scope</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Joined</th>
+              {canWrite && <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-3">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {users.length === 0 && (
+              <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-sm text-text-3">No users yet</td></tr>
+            )}
+            {users.map(u => (
+              <tr key={u.id} className={`hover:bg-surface-2/50 ${u.id === me?.id ? 'bg-accent-dim/20' : ''}`}>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2.5">
+                    {u.picture
+                      ? <img src={u.picture} className="w-7 h-7 rounded-full object-cover shrink-0" alt="" />
+                      : <div className="w-7 h-7 rounded-full bg-accent-dim flex items-center justify-center text-accent text-xs font-bold shrink-0">
+                          {(u.email || u.name || '?')[0].toUpperCase()}
+                        </div>
+                    }
+                    <div className="min-w-0">
+                      <div className="font-semibold text-text-1 truncate">{u.name || '—'}</div>
+                      <div className="text-xs text-text-3 truncate">{u.email}</div>
+                    </div>
+                    {u.id === me?.id && <span className="text-[10px] font-semibold text-accent bg-accent-dim px-1.5 py-0.5 rounded shrink-0">you</span>}
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${STATUS_CLASSES[u.status]}`}>
+                    {STATUS_LABELS[u.status]}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-text-2">{u.role_name || <span className="text-text-3 italic">None</span>}</td>
+                <td className="px-4 py-3">
+                  {u.brand_partners.length === 0
+                    ? <span className="text-xs text-text-3">All markets</span>
+                    : <span className="text-xs text-text-2">{u.brand_partners.map(b => b.name).join(', ')}</span>
+                  }
+                </td>
+                <td className="px-4 py-3 text-xs text-text-3">
+                  {new Date(u.created_at).toLocaleDateString()}
+                </td>
+                {canWrite && (
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {u.status === 'pending' && (
+                        <button
+                          className="text-xs px-2.5 py-1 rounded-lg bg-accent text-white font-semibold hover:bg-accent-mid transition-colors"
+                          onClick={() => handleStatusChange(u, 'active')}
+                        >
+                          Approve
+                        </button>
+                      )}
+                      {u.status === 'active' && u.id !== me?.id && (
+                        <button
+                          className="text-xs px-2.5 py-1 rounded-lg border border-border text-text-3 hover:text-red-600 hover:border-red-200 transition-colors"
+                          onClick={() => setConfirming({ user: u, action: 'disable' })}
+                        >
+                          Disable
+                        </button>
+                      )}
+                      {u.status === 'disabled' && (
+                        <button
+                          className="text-xs px-2.5 py-1 rounded-lg border border-border text-text-3 hover:text-accent transition-colors"
+                          onClick={() => setConfirming({ user: u, action: 'enable' })}
+                        >
+                          Enable
+                        </button>
+                      )}
+                      <button
+                        className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                        title="Edit role & scope"
+                        onClick={() => openEdit(u)}
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      {u.id !== me?.id && (
+                        <button
+                          className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-red-600 transition-colors"
+                          title="Remove user"
+                          onClick={() => setConfirming({ user: u, action: 'delete' })}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {editing && (
+        <Modal title={`Edit — ${editing.name || editing.email}`} onClose={() => setEditing(null)}>
+          <div className="space-y-5">
+            <Field label="Role">
+              <select
+                className="input w-full"
+                value={editRoleId ?? ''}
+                onChange={e => setEditRoleId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">No role</option>
+                {roles.map(r => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Market scope" hint="Leave all unchecked for unrestricted access to all markets.">
+              <div className="border border-border rounded-xl overflow-hidden">
+                {bps.length === 0
+                  ? <p className="text-xs text-text-3 px-3 py-3">No brand partners configured</p>
+                  : bps.map(bp => (
+                    <label key={bp.id} className="flex items-center gap-3 px-3 py-2.5 border-b last:border-0 border-border cursor-pointer hover:bg-surface-2/50">
+                      <input
+                        type="checkbox"
+                        className="accent-accent"
+                        checked={editBpIds.includes(bp.id)}
+                        onChange={() => toggleBp(bp.id)}
+                      />
+                      <span className="text-sm text-text-1">{bp.name}</span>
+                    </label>
+                  ))
+                }
+              </div>
+              {editBpIds.length === 0 && (
+                <p className="text-xs text-text-3 mt-1.5">All markets accessible (no restriction)</p>
+              )}
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSaveEdit} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {confirming?.action === 'disable' && (
+        <ConfirmDialog
+          message={`Disable ${confirming.user.name || confirming.user.email}? They will no longer be able to sign in.`}
+          danger
+          onConfirm={() => handleStatusChange(confirming.user, 'disabled')}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+      {confirming?.action === 'enable' && (
+        <ConfirmDialog
+          message={`Re-enable ${confirming.user.name || confirming.user.email}? They will be able to sign in again.`}
+          danger={false}
+          onConfirm={() => handleStatusChange(confirming.user, 'active')}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+      {confirming?.action === 'delete' && (
+        <ConfirmDialog
+          message={`Permanently remove ${confirming.user.name || confirming.user.email}? They can re-register but will start as pending again.`}
+          danger
+          onConfirm={() => handleDelete(confirming.user)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Roles Tab ─────────────────────────────────────────────────────────────────
+
+const FEATURES_LIST: { key: Feature; label: string }[] = [
+  { key: 'dashboard',  label: 'Dashboard'  },
+  { key: 'inventory',  label: 'Inventory'  },
+  { key: 'recipes',    label: 'Recipes'    },
+  { key: 'menus',      label: 'Menus'      },
+  { key: 'allergens',  label: 'Allergens'  },
+  { key: 'haccp',      label: 'HACCP'      },
+  { key: 'markets',    label: 'Markets'    },
+  { key: 'categories', label: 'Categories' },
+  { key: 'settings',   label: 'Settings'   },
+  { key: 'import',     label: 'Import'     },
+  { key: 'ai_chat',    label: 'AI Chat'    },
+  { key: 'users',      label: 'Users'      },
+]
+
+const ACCESS_CLASS: Record<AccessLevel, string> = {
+  none:  'bg-gray-100 text-gray-400',
+  read:  'bg-blue-50 text-blue-600',
+  write: 'bg-accent-dim text-accent',
+}
+const ACCESS_LABEL: Record<AccessLevel, string> = { none: '—', read: 'R', write: 'W' }
+
+function RolesTab() {
+  const api = useApi()
+  const { can } = usePermissions()
+
+  const [roles,   setRoles]   = useState<Role[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState<Role | null>(null)
+  const [editPerms, setEditPerms] = useState<Partial<Record<Feature, AccessLevel>>>({})
+  const [editName, setEditName]   = useState('')
+  const [editDesc, setEditDesc]   = useState('')
+  const [saving, setSaving]   = useState(false)
+
+  const [creating,  setCreating]  = useState(false)
+  const [newName,   setNewName]   = useState('')
+  const [newDesc,   setNewDesc]   = useState('')
+  const [copyFrom,  setCopyFrom]  = useState<number | ''>('')
+  const [newSaving, setNewSaving] = useState(false)
+
+  const [deleting, setDeleting] = useState<Role | null>(null)
+  const [toast, setToast]       = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try { setRoles(await api.get('/roles') || []) }
+    catch { /* ignore */ }
+    finally { setLoading(false) }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  if (!can('users', 'read')) {
+    return <EmptyState message="You don't have permission to manage roles." />
+  }
+
+  const canWrite = can('users', 'write')
+
+  function openEdit(r: Role) {
+    setEditing(r)
+    setEditName(r.name)
+    setEditDesc(r.description || '')
+    setEditPerms({ ...r.permissions })
+  }
+
+  async function handleSaveEdit() {
+    if (!editing) return
+    setSaving(true)
+    try {
+      await api.put(`/roles/${editing.id}`, {
+        name:        editName,
+        description: editDesc,
+        permissions: editPerms,
+      })
+      setToast({ message: 'Role saved', type: 'success' })
+      setEditing(null)
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleCreate() {
+    if (!newName.trim()) return
+    setNewSaving(true)
+    try {
+      await api.post('/roles', {
+        name:              newName.trim(),
+        description:       newDesc.trim() || null,
+        copy_from_role_id: copyFrom || undefined,
+      })
+      setToast({ message: 'Role created', type: 'success' })
+      setCreating(false)
+      setNewName(''); setNewDesc(''); setCopyFrom('')
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Create failed', type: 'error' })
+    } finally {
+      setNewSaving(false)
+    }
+  }
+
+  async function handleDelete(r: Role) {
+    try {
+      await api.delete(`/roles/${r.id}`)
+      setToast({ message: 'Role deleted', type: 'success' })
+      setDeleting(null)
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Delete failed', type: 'error' })
+      setDeleting(null)
+    }
+  }
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-text-3">Permission levels: <strong>—</strong> no access · <strong>R</strong> read-only · <strong>W</strong> full access</p>
+        {canWrite && (
+          <button className="btn-primary px-4 py-2 text-sm" onClick={() => setCreating(true)}>
+            + New role
+          </button>
+        )}
+      </div>
+
+      {roles.length === 0 && (
+        <EmptyState message="No roles defined yet." />
+      )}
+
+      {roles.map(role => (
+        <div key={role.id} className="bg-surface border border-border rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 bg-surface-2/50 border-b border-border">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="font-bold text-text-1 text-sm">{role.name}</div>
+              {role.is_system && (
+                <span className="text-[10px] font-semibold text-accent bg-accent-dim px-1.5 py-0.5 rounded shrink-0">System</span>
+              )}
+              {role.description && (
+                <span className="text-xs text-text-3 truncate">{role.description}</span>
+              )}
+            </div>
+            {canWrite && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                  title="Edit permissions"
+                  onClick={() => openEdit(role)}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+                {!role.is_system && (
+                  <button
+                    className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-red-600 transition-colors"
+                    title="Delete role"
+                    onClick={() => setDeleting(role)}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-px bg-border">
+            {FEATURES_LIST.map(({ key, label }) => {
+              const access = role.permissions[key] || 'none'
+              return (
+                <div key={key} className="bg-surface px-3 py-2.5 flex items-center justify-between gap-2">
+                  <span className="text-xs text-text-2 truncate">{label}</span>
+                  <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0 ${ACCESS_CLASS[access]}`}>
+                    {ACCESS_LABEL[access]}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Edit modal */}
+      {editing && (
+        <Modal title={`Edit — ${editing.name}`} onClose={() => setEditing(null)} width="max-w-2xl">
+          <div className="space-y-5">
+            {!editing.is_system && (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Name">
+                  <input className="input w-full" value={editName} onChange={e => setEditName(e.target.value)} />
+                </Field>
+                <Field label="Description">
+                  <input className="input w-full" value={editDesc} onChange={e => setEditDesc(e.target.value)} />
+                </Field>
+              </div>
+            )}
+
+            <div>
+              <div className="text-xs font-semibold text-text-2 mb-2 uppercase tracking-wide">Permissions</div>
+              <div className="border border-border rounded-xl overflow-hidden">
+                <table className="w-full text-sm border-separate border-spacing-0">
+                  <thead>
+                    <tr className="bg-surface-2">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-text-3 border-b border-border w-1/3">Feature</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">No access</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">Read</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">Write</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {FEATURES_LIST.map(({ key, label }, i) => {
+                      const cur = editPerms[key] || 'none'
+                      const isLocked = editing.is_system && editing.name !== 'Admin' && key === 'users'
+                      return (
+                        <tr key={key} className={i % 2 === 0 ? 'bg-surface' : 'bg-surface-2/30'}>
+                          <td className="px-3 py-2.5 font-medium text-text-1 border-b border-border">
+                            {label}
+                            {isLocked && <span className="ml-1.5 text-[10px] text-text-3">(locked)</span>}
+                          </td>
+                          {(['none', 'read', 'write'] as AccessLevel[]).map(level => (
+                            <td key={level} className="px-3 py-2.5 text-center border-b border-border">
+                              <button
+                                disabled={isLocked}
+                                onClick={() => {
+                                  if (!isLocked) setEditPerms(p => ({ ...p, [key]: level }))
+                                }}
+                                className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
+                                  cur === level
+                                    ? ACCESS_CLASS[level] + ' ring-2 ring-offset-1 ring-accent'
+                                    : 'text-text-3 hover:bg-surface-2'
+                                } ${isLocked ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                              >
+                                {level === 'none' ? '—' : level === 'read' ? 'R' : 'W'}
+                              </button>
+                            </td>
+                          ))}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSaveEdit} disabled={saving}>
+                {saving ? 'Saving…' : 'Save role'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Create modal */}
+      {creating && (
+        <Modal title="New role" onClose={() => setCreating(false)}>
+          <div className="space-y-4">
+            <Field label="Name" required>
+              <input className="input w-full" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Kitchen Manager" autoFocus />
+            </Field>
+            <Field label="Description">
+              <input className="input w-full" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional description" />
+            </Field>
+            <Field label="Copy permissions from" hint="Start from an existing role's permission set">
+              <select className="input w-full" value={copyFrom} onChange={e => setCopyFrom(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">All permissions set to none</option>
+                {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setCreating(false)}>Cancel</button>
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleCreate} disabled={newSaving || !newName.trim()}>
+                {newSaving ? 'Creating…' : 'Create role'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {deleting && (
+        <ConfirmDialog
+          message={`Delete role "${deleting.name}"? Users assigned to this role will have no role. This cannot be undone.`}
+          danger
+          onConfirm={() => handleDelete(deleting)}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

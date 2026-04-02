@@ -613,6 +613,87 @@ const migrations = [
 
   // ── 32b. Add market_pl_variation_id column to mcogs_recipe_items ──────────
   `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS market_pl_variation_id INTEGER REFERENCES mcogs_recipe_market_pl_variations(id) ON DELETE CASCADE`,
+
+  // ── 33. RBAC — Roles ──────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_roles (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 34. RBAC — Role Permissions ───────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_role_permissions (
+    id        SERIAL PRIMARY KEY,
+    role_id   INTEGER NOT NULL REFERENCES mcogs_roles(id) ON DELETE CASCADE,
+    feature   VARCHAR(50) NOT NULL,
+    access    VARCHAR(10) NOT NULL DEFAULT 'none' CHECK (access IN ('none','read','write')),
+    UNIQUE(role_id, feature)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON mcogs_role_permissions(role_id)`,
+
+  // ── 35. RBAC — Users ──────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_users (
+    id            SERIAL PRIMARY KEY,
+    auth0_sub     VARCHAR(200) NOT NULL UNIQUE,
+    email         VARCHAR(200),
+    name          VARCHAR(200),
+    picture       TEXT,
+    role_id       INTEGER REFERENCES mcogs_roles(id) ON DELETE SET NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','disabled')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_users_auth0_sub ON mcogs_users(auth0_sub)`,
+  `CREATE INDEX IF NOT EXISTS idx_users_status    ON mcogs_users(status)`,
+
+  // ── 36. RBAC — User Brand Partner Scope ──────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_user_brand_partners (
+    user_id          INTEGER NOT NULL REFERENCES mcogs_users(id) ON DELETE CASCADE,
+    brand_partner_id INTEGER NOT NULL REFERENCES mcogs_brand_partners(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, brand_partner_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_bp_user ON mcogs_user_brand_partners(user_id)`,
+
+  // ── 33–36 Seed: default system roles + permission matrix ─────────────────
+  `INSERT INTO mcogs_roles (name, description, is_system) VALUES
+    ('Admin',    'Full access including user management', true),
+    ('Operator', 'Full read/write to COGS data, no user management', true),
+    ('Viewer',   'Read-only access to all COGS data', true)
+  ON CONFLICT (name) DO NOTHING`,
+
+  `DO $$ DECLARE
+    admin_id    INTEGER;
+    operator_id INTEGER;
+    viewer_id   INTEGER;
+    features    TEXT[] := ARRAY['dashboard','inventory','recipes','menus','allergens','haccp','markets','categories','settings','import','ai_chat','users'];
+    f           TEXT;
+  BEGIN
+    SELECT id INTO admin_id    FROM mcogs_roles WHERE name = 'Admin';
+    SELECT id INTO operator_id FROM mcogs_roles WHERE name = 'Operator';
+    SELECT id INTO viewer_id   FROM mcogs_roles WHERE name = 'Viewer';
+
+    FOREACH f IN ARRAY features LOOP
+      INSERT INTO mcogs_role_permissions (role_id, feature, access)
+        VALUES (admin_id, f, 'write')
+        ON CONFLICT (role_id, feature) DO NOTHING;
+
+      INSERT INTO mcogs_role_permissions (role_id, feature, access)
+        VALUES (operator_id, f,
+          CASE WHEN f IN ('users') THEN 'none'
+               WHEN f IN ('settings') THEN 'read'
+               ELSE 'write' END)
+        ON CONFLICT (role_id, feature) DO NOTHING;
+
+      INSERT INTO mcogs_role_permissions (role_id, feature, access)
+        VALUES (viewer_id, f,
+          CASE WHEN f IN ('users','settings','import') THEN 'none'
+               ELSE 'read' END)
+        ON CONFLICT (role_id, feature) DO NOTHING;
+    END LOOP;
+  END $$`,
 ];
 
 async function migrate() {
