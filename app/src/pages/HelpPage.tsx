@@ -116,6 +116,7 @@ const SECTIONS = [
   { id: 'api-reference',    icon: '📡', label: 'API Reference' },
   { id: 'security',         icon: '🔒', label: 'Security' },
   { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
+  { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
 ]
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -907,7 +908,7 @@ export default function HelpPage() {
               ['Styling',        'Tailwind CSS 3 + CSS variables', 'Custom design tokens in tailwind.config.js'],
               ['API',            'Node.js 20 + Express 4',        'REST API on port 3001. Helmet, Morgan, rate-limit.'],
               ['Database',       'PostgreSQL 16',                  '26 tables, all prefixed mcogs_'],
-              ['Auth',           'Auth0 (obscurekitty.uk.auth0.com)', 'Username/password + Google OAuth'],
+              ['Auth',           'Auth0 (obscurekitty.uk.auth0.com)', 'Username/password + Google OAuth — tenant fixed, app domain separate'],
               ['Web Server',     'Nginx',                          'Reverse proxy + SSL termination'],
               ['Process Mgr',   'PM2 (ubuntu user)',               'Auto-restart + log rotation'],
               ['Hosting',        'AWS Lightsail',                  '$10/mo · 2 GB RAM · 1 vCPU · Ubuntu 24.04'],
@@ -928,7 +929,7 @@ export default function HelpPage() {
           <div className="text-[#6B7F74]">{'// Single AWS Lightsail instance — all services on one box'}</div>
           <div className="mt-2">
             <span className="text-[#E8F5ED]">Browser</span>
-            <span className="text-[#6B7F74]"> (React SPA — https://obscurekitty.com)</span>
+            <span className="text-[#6B7F74]"> (React SPA — https://cogs.flavorconnect.tech)</span>
           </div>
           <div className="text-[#1E8A44] ml-4">↕ HTTPS :443</div>
           <div>
@@ -1073,7 +1074,7 @@ export default function HelpPage() {
         {/* ═══════════════════════════════════ API REFERENCE */}
         <H2 id="api-reference" icon="📡" title="API Reference" />
         <p className="text-sm text-[#2D4A38] mb-1">
-          Base URL (production): <Mono>https://obscurekitty.com/api</Mono>
+          Base URL (production): <Mono>https://cogs.flavorconnect.tech/api</Mono>
         </p>
         <p className="text-sm text-[#2D4A38] mb-3">
           Base URL (local dev): <Mono>http://localhost:3001/api</Mono>
@@ -1197,7 +1198,7 @@ export default function HelpPage() {
 
         <H3 id="auth0-flow">Auth0 Authentication Flow</H3>
         <ProcessFlow steps={[
-          { label: 'User visits', sub: 'obscurekitty.com' },
+          { label: 'User visits', sub: 'cogs.flavorconnect.tech' },
           { label: 'Auth0 check', sub: 'Token valid?' },
           { label: 'Redirect to Auth0', sub: 'If not authenticated' },
           { label: 'Login', sub: 'Password or Google' },
@@ -1312,7 +1313,7 @@ export default function HelpPage() {
             },
             {
               q: 'Auth0 login is failing with a "callback URL mismatch" error.',
-              a: 'In the Auth0 dashboard (manage.auth0.com), go to Applications → your app → Settings. Ensure both https://obscurekitty.com and http://localhost:5173 are in Allowed Callback URLs, Allowed Logout URLs, and Allowed Web Origins.',
+              a: 'In the Auth0 dashboard (manage.auth0.com), go to Applications → your app → Settings. Ensure both https://cogs.flavorconnect.tech and http://localhost:5173 are in Allowed Callback URLs, Allowed Logout URLs, and Allowed Web Origins.',
             },
             {
               q: 'The CI/CD deploy is failing at the health check step.',
@@ -1366,15 +1367,48 @@ export default function HelpPage() {
           <p className="text-white">sudo certbot renew --dry-run</p>
           <p className="text-[#6B7F74] ml-4"># Test Let's Encrypt renewal</p>
           <p className="text-[#1E8A44] font-bold mt-2"># Health check</p>
-          <p className="text-white">curl https://obscurekitty.com/api/health</p>
+          <p className="text-white">curl https://cogs.flavorconnect.tech/api/health</p>
           <p className="text-[#6B7F74] ml-4"># Should return: {"{"}"status":"ok"{"}"}</p>
         </div>
+
+        {/* ═══════════════════════════════════ DOMAIN MIGRATION */}
+        <H2 id="domain-migration" icon="🌐" title="Domain Migration" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-3">
+          The app was migrated from <Mono>obscurekitty.com</Mono> to <Mono>cogs.flavorconnect.tech</Mono> in April 2026.
+          Use this checklist if you ever need to change the domain again.
+        </p>
+
+        <H3 id="domain-checklist">Domain Change Checklist</H3>
+        <div className="space-y-2 my-3">
+          {[
+            ['DNS A record', 'Add A record in Lightsail DNS zone: subdomain → server IP (13.135.158.196). Verify with nslookup <new-domain>.'],
+            ['Nginx server_name', 'Edit /etc/nginx/sites-available/menu-cogs → update server_name. Run: sudo nginx -t && sudo nginx -s reload'],
+            ['SSL certificate', 'Run: sudo certbot --nginx -d <new-domain>. Certbot issues the cert and updates Nginx automatically.'],
+            ['Auth0 URLs', 'manage.auth0.com → Applications → your app → Settings. Add new domain to Allowed Callback URLs, Logout URLs, and Web Origins. Keep localhost entries.'],
+            ['GitHub Secrets', 'Update LIGHTSAIL_HOST and VITE_API_URL secrets in the repo Settings → Secrets → Actions.'],
+            ['Deploy', 'Push to main (or empty commit) to trigger GitHub Actions. Health check must pass: curl https://<new-domain>/api/health'],
+            ['Docs', 'Update domain in CLAUDE.md, HelpPage.tsx, docs/user-guide.md, api/src/routes/nutrition.js (User-Agent email).'],
+          ].map(([step, detail]) => (
+            <div key={step} className="flex gap-3 border border-[#D8E6DD] rounded-lg p-3 bg-white">
+              <span className="text-emerald-500 font-bold text-sm mt-0.5 flex-shrink-0">✓</span>
+              <div>
+                <p className="text-sm font-semibold text-[#0F1F17]">{step}</p>
+                <p className="text-xs text-[#2D4A38] mt-0.5 leading-relaxed">{detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <InfoBox type="info" title="Auth0 tenant is independent of the app domain">
+          The Auth0 tenant name (<Mono>obscurekitty.uk.auth0.com</Mono>) is a fixed identifier chosen at tenant creation and
+          cannot be changed without creating a new tenant. It has no effect on the app domain and does not need updating when the domain changes.
+        </InfoBox>
 
         {/* Footer */}
         <div className="mt-12 pt-6 border-t border-[#D8E6DD] text-center">
           <p className="text-xs text-[#6B7F74]">COGS Manager v2.1 · React 18 + Node.js 20 + PostgreSQL 16</p>
           <p className="text-xs text-[#6B7F74] mt-1.5 space-x-3">
-            <a href="https://obscurekitty.com" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">Production App</a>
+            <a href="https://cogs.flavorconnect.tech" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">Production App</a>
             <span>·</span>
             <a href="https://github.com/mawegrzyn-ux/COGS" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">GitHub Repo</a>
             <span>·</span>

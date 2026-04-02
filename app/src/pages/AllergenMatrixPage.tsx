@@ -463,6 +463,17 @@ function InventoryAllergenMatrix() {
           message={search || filterCountry || filterCats.length > 0
             ? 'No ingredients match your filters.'
             : 'No ingredients found.'}
+          action={search || filterCountry || filterCats.length > 0
+            ? (
+              <button
+                className="btn-outline px-4 py-2 text-sm"
+                onClick={() => { setSearch(''); setFilterCountry(''); setFilterCats([]) }}
+              >
+                Clear filters
+              </button>
+            )
+            : undefined
+          }
         />
       ) : (
         <div className="flex-1 overflow-auto mx-6 mb-4 mt-4 rounded-xl border border-border">

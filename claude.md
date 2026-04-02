@@ -25,7 +25,8 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 15. [Known Bugs Fixed](#15-known-bugs-fixed)
 16. [Critical Gotchas & Lessons Learned](#16-critical-gotchas--lessons-learned)
 17. [Backlog](#17-backlog)
-18. [Key Contacts & Resources](#18-key-contacts--resources)
+18. [Domain Migration Log](#18-domain-migration-log)
+19. [Key Contacts & Resources](#19-key-contacts--resources)
 
 ---
 
@@ -37,7 +38,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Origin** | WordPress plugin v3.3.0 — migrated to React/Node/PostgreSQL |
 | **Server** | AWS Lightsail instance "WRI" — Ubuntu 24.04, $10/mo, 2GB RAM, 1 vCPU |
 | **IP** | `13.135.158.196` (static) |
-| **Domain** | `obscurekitty.com` |
+| **Domain** | `cogs.flavorconnect.tech` |
 | **SSL** | Let's Encrypt via Certbot — auto-renews |
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
@@ -198,7 +199,7 @@ psql -U mcogs -d mcogs              # Connect to PostgreSQL
 | `/var/www/menu-cogs/api/.env` | API environment variables (DB password etc.) |
 | `/var/www/menu-cogs/frontend/` | React build output (served by Nginx) |
 | `/etc/nginx/sites-available/menu-cogs` | Nginx site config |
-| `/etc/letsencrypt/live/obscurekitty.com/` | SSL certificate files |
+| `/etc/letsencrypt/live/cogs.flavorconnect.tech/` | SSL certificate files |
 | `~/.ssh/id_ed25519_cogs` | Deploy SSH key (read-only pull from GitHub) |
 | `~/.ssh/config` | SSH config (routes `github.com` to the correct key) |
 
@@ -277,7 +278,7 @@ cd app && npm run dev
 
 Open `http://localhost:5173` — Auth0 login will redirect to `localhost` callback.
 
-> **Note:** Auth0 requires the callback URL `http://localhost:5173` to be in the **Allowed Callback URLs** list in the Auth0 dashboard. Add it alongside `https://obscurekitty.com`.
+> **Note:** Auth0 requires the callback URL `http://localhost:5173` to be in the **Allowed Callback URLs** list in the Auth0 dashboard. Add it alongside `https://cogs.flavorconnect.tech`.
 
 ---
 
@@ -292,16 +293,16 @@ Every push to `main` triggers `.github/workflows/deploy.yml` automatically.
 3. Build React app with Vite — env vars baked in from GitHub Secrets
 4. SCP `app/dist/` to `/var/www/menu-cogs/frontend/` on server
 5. SSH into server: `git pull` → `npm install` → `pm2 restart` → `nginx reload`
-6. Health check: `GET https://obscurekitty.com/api/health` must return `{"status":"ok"}`
+6. Health check: `GET https://cogs.flavorconnect.tech/api/health` must return `{"status":"ok"}`
 
 ### GitHub Secrets Required
 
 | Secret | Value |
 |---|---|
-| `LIGHTSAIL_HOST` | `obscurekitty.com` |
+| `LIGHTSAIL_HOST` | `cogs.flavorconnect.tech` |
 | `LIGHTSAIL_USER` | `ubuntu` |
 | `LIGHTSAIL_SSH_KEY` | Full private SSH key content (including `-----BEGIN OPENSSH PRIVATE KEY-----`) |
-| `VITE_API_URL` | `https://obscurekitty.com/api` |
+| `VITE_API_URL` | `https://cogs.flavorconnect.tech/api` |
 | `VITE_AUTH0_DOMAIN` | `obscurekitty.uk.auth0.com` |
 | `VITE_AUTH0_CLIENT_ID` | `B7JlaVzsljdFDCX7BkbofYYA2bCsTc69` |
 
@@ -320,9 +321,9 @@ Every push to `main` triggers `.github/workflows/deploy.yml` automatically.
 | **Tenant** | `obscurekitty.uk.auth0.com` |
 | **Application type** | Single Page Application (SPA) |
 | **Client ID** | `B7JlaVzsljdFDCX7BkbofYYA2bCsTc69` |
-| **Allowed Callback URLs** | `https://obscurekitty.com`, `http://localhost:5173` |
-| **Allowed Logout URLs** | `https://obscurekitty.com/login`, `http://localhost:5173/login` |
-| **Allowed Web Origins** | `https://obscurekitty.com`, `http://localhost:5173` |
+| **Allowed Callback URLs** | `https://cogs.flavorconnect.tech`, `http://localhost:5173` |
+| **Allowed Logout URLs** | `https://cogs.flavorconnect.tech/login`, `http://localhost:5173/login` |
+| **Allowed Web Origins** | `https://cogs.flavorconnect.tech`, `http://localhost:5173` |
 | **Audience** | Empty — add later if API token validation is needed |
 | **Login methods** | Username/password + Google OAuth |
 
@@ -1278,11 +1279,43 @@ Pepper's response arrives as SSE text chunks, not complete sentences. For real-t
 
 ---
 
-## 18. Key Contacts & Resources
+## 18. Domain Migration Log
+
+### April 2026 — `obscurekitty.com` → `cogs.flavorconnect.tech`
+
+Migrated from the original throwaway domain to a branded subdomain under `flavorconnect.tech`.
+
+**What was changed:**
+
+| Component | Change |
+|---|---|
+| DNS | A record `cogs` → `13.135.158.196` added to Lightsail DNS zone for `flavorconnect.tech` |
+| Nginx | `server_name` updated in `/etc/nginx/sites-available/menu-cogs` |
+| SSL | New Let's Encrypt cert issued via `sudo certbot --nginx -d cogs.flavorconnect.tech` |
+| Auth0 | Callback / Logout / Web Origins updated in Auth0 dashboard |
+| GitHub Secrets | `LIGHTSAIL_HOST` and `VITE_API_URL` updated |
+| CI/CD | Deploy triggered via empty commit — health check passed |
+
+**Domain change checklist (for future reference):**
+
+1. Add A record in DNS zone (Lightsail) → `<subdomain>` → server IP
+2. Verify with `nslookup <new-domain>` — must return the correct IP
+3. Update `server_name` in `/etc/nginx/sites-available/menu-cogs` → test + reload
+4. `sudo certbot --nginx -d <new-domain>` — issues cert + updates Nginx automatically
+5. Auth0 dashboard → add new domain to Callback / Logout / Web Origins (keep localhost entries)
+6. GitHub → update `LIGHTSAIL_HOST` and `VITE_API_URL` secrets
+7. Push to `main` (or empty commit) to trigger deploy
+8. Confirm health check: `curl https://<new-domain>/api/health`
+
+> **Note:** Auth0 tenant name (`obscurekitty.uk.auth0.com`) does not change with the app domain — it is a fixed Auth0 identifier.
+
+---
+
+## 19. Key Contacts & Resources
 
 | Resource | URL/Value |
 |---|---|
-| **Production App** | https://obscurekitty.com |
+| **Production App** | https://cogs.flavorconnect.tech |
 | **GitHub Repo** | https://github.com/mawegrzyn-ux/COGS |
 | **Auth0 Dashboard** | https://manage.auth0.com → tenant: `obscurekitty.uk.auth0.com` |
 | **AWS Lightsail Console** | https://lightsail.aws.amazon.com |
@@ -1292,4 +1325,4 @@ Pepper's response arrives as SSE text chunks, not complete sentences. For real-t
 
 ---
 
-*README last updated: March 2026 (session: Allergen notes fields on Inventory + Menu matrices; Right-click Ask Pepper context menu with auto-screenshot; PepperHelpButton tutorial icons on page/tab headers; Pepper panel docking (left/right/float) with mode persistence; Screenshot camera button in chat input; html2canvas integration; AI renamed from McFry to Pepper; System prompt updated with price quote multi-market model, allergen notes, screenshot, and panel mode context; Voice interface for Pepper scoped and parked in backlog; Internal feedback API with DB-managed Claude Code API key; Claude Code API key field added to Settings → AI tab; POS Menu Features (manual items, combos, modifier groups) fully scoped and documented in docs/POS_MENU_FEATURES.md — not yet built)*
+*README last updated: April 2026 (session: Domain migrated from obscurekitty.com to cogs.flavorconnect.tech — DNS A record, Nginx server_name, Certbot SSL cert, Auth0 URLs, GitHub Secrets all updated; domain migration checklist added as section 18; SharedMenuPage UI: header title/metadata layout, all-expand toggle in Item column header, price·cost·COGS% inline row layout, amber highlight only on actual value change; 4-level recipe variant priority chain: market+PL > market > PL > global; mcogs_recipe_market_pl_variations table; Shared Links multi-view comment routing fix)*

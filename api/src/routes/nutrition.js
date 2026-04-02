@@ -7,7 +7,7 @@ const http   = require('http');
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
-    lib.get(url, { headers: { 'User-Agent': 'MenuCOGS/1.0 (contact@obscurekitty.com)' } }, res => {
+    lib.get(url, { headers: { 'User-Agent': 'MenuCOGS/1.0 (contact@flavorconnect.tech)' } }, res => {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {

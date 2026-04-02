@@ -2,7 +2,7 @@
 
 Comprehensive user-facing documentation for COGS Manager — a menu cost-of-goods calculator for restaurant franchise operators. This guide covers every feature, workflow, and troubleshooting scenario.
 
-Production URL: https://obscurekitty.com
+Production URL: https://cogs.flavorconnect.tech
 
 ---
 

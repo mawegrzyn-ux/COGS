@@ -1221,12 +1221,20 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   const [ingredients,   setIngredients]  = useState<Ingredient[]>([])
   const [vendors,       setVendors]      = useState<Vendor[]>([])
   const [countries,     setCountries]    = useState<Country[]>([])
-  const [loading,       setLoading]      = useState(true)
-  const [search,        setSearch]       = useState('')
-  const [gridMode,      setGridMode]     = useState(false)
-  const [modal,         setModal]        = useState<Quote | 'new' | null>(null)
-  const [confirmDelete, setConfirmDelete]= useState<Quote | null>(null)
-  const [toast,         setToast]        = useState<ToastState | null>(null)
+  const [loading,          setLoading]         = useState(true)
+  const [search,           setSearch]          = useState('')
+  const [gridMode,         setGridMode]        = useState(false)
+  const [modal,            setModal]           = useState<Quote | 'new' | null>(null)
+  const [confirmDelete,    setConfirmDelete]   = useState<Quote | null>(null)
+  const [toast,            setToast]           = useState<ToastState | null>(null)
+
+  // ── Missing quotes mode ──────────────────────────────────────────────────────
+  const [showMissing,      setShowMissing]     = useState(false)
+  const [missingCountryId, setMissingCountryId]= useState<string>('')
+  const [missingForms,     setMissingForms]    = useState<Record<number, {
+    vendor_id: string; purchase_unit: string; qty_in_base_units: string; purchase_price: string
+  }>>({})
+  const [missingSaving,    setMissingSaving]   = useState<Record<number, boolean>>({})
 
   const blankForm = {
     ingredient_id: '', vendor_id: '', purchase_unit: '', purchase_price: '',
@@ -1286,6 +1294,58 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     if (!price || !qty || qty === 0) return null
     return (price / qty).toFixed(6)
   }, [form.purchase_price, form.qty_in_base_units])
+
+  // ── Missing quotes derived ───────────────────────────────────────────────────
+
+  const vendorsForMissingCountry = useMemo(() =>
+    missingCountryId ? vendors.filter(v => String(v.country_id) === missingCountryId) : vendors
+  , [vendors, missingCountryId])
+
+  const missingIngredients = useMemo(() => {
+    if (!missingCountryId) return []
+    const coveredIds = new Set(
+      quotes
+        .filter(q => q.is_active && String(q.country_id) === missingCountryId)
+        .map(q => q.ingredient_id)
+    )
+    return ingredients.filter(i => !coveredIds.has(i.id))
+  }, [quotes, ingredients, missingCountryId])
+
+  function getMissingForm(ingId: number) {
+    return missingForms[ingId] ?? { vendor_id: '', purchase_unit: '', qty_in_base_units: '1', purchase_price: '' }
+  }
+
+  function setMissingField(ingId: number, field: string, value: string) {
+    setMissingForms(prev => ({
+      ...prev,
+      [ingId]: { ...getMissingForm(ingId), [field]: value },
+    }))
+  }
+
+  async function saveMissingQuote(ing: Ingredient) {
+    const f = getMissingForm(ing.id)
+    if (!f.vendor_id || !f.purchase_price || Number(f.qty_in_base_units) <= 0) {
+      showToast('Vendor and price are required', 'error'); return
+    }
+    setMissingSaving(prev => ({ ...prev, [ing.id]: true }))
+    try {
+      await api.post('/price-quotes', {
+        ingredient_id:     ing.id,
+        vendor_id:         Number(f.vendor_id),
+        purchase_unit:     f.purchase_unit.trim() || null,
+        purchase_price:    Number(f.purchase_price),
+        qty_in_base_units: Number(f.qty_in_base_units) || 1,
+        is_active:         true,
+      })
+      setMissingForms(prev => { const n = { ...prev }; delete n[ing.id]; return n })
+      showToast(`Quote added for ${ing.name}`)
+      load()
+    } catch (err: any) {
+      showToast(err.message || 'Save failed', 'error')
+    } finally {
+      setMissingSaving(prev => ({ ...prev, [ing.id]: false }))
+    }
+  }
 
   // ── Column definitions for DataGrid ─────────────────────────────────────────
 
@@ -1471,22 +1531,164 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
 
   return (
     <>
-      <div className="flex gap-3 mb-5 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
-          <input
-            type="search" placeholder="Search ingredient or vendor…"
-            value={search} onChange={e => setSearch(e.target.value)}
-            className="input pl-9 w-full"
-          />
-        </div>
-        <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />
+      <div className="flex gap-3 mb-5 flex-wrap items-center">
+        {!showMissing && (
+          <div className="relative flex-1 min-w-[200px]">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
+            <input
+              type="search" placeholder="Search ingredient or vendor…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="input pl-9 w-full"
+            />
+          </div>
+        )}
+        {showMissing && (
+          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+            <label className="text-sm font-medium text-text-2 whitespace-nowrap">Market:</label>
+            <select
+              className="select flex-1"
+              value={missingCountryId}
+              onChange={e => setMissingCountryId(e.target.value)}
+            >
+              <option value="">Select a market…</option>
+              {countries.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name} ({c.currency_code})
+                </option>
+              ))}
+            </select>
+            {missingCountryId && (
+              <span className="text-xs text-text-3 whitespace-nowrap">
+                {missingIngredients.length} unpriced
+              </span>
+            )}
+          </div>
+        )}
+        <button
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border transition-colors whitespace-nowrap
+            ${showMissing
+              ? 'bg-amber-50 border-amber-300 text-amber-700 font-semibold'
+              : 'bg-surface border-border text-text-3 hover:text-text-1 hover:border-accent'
+            }`}
+          onClick={() => { setShowMissing(m => !m); setSearch('') }}
+          title="Show ingredients with no active price quote for a selected market"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          Missing Quotes
+        </button>
+        {!showMissing && <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />}
         <button className="btn-primary px-4 py-2 text-sm flex items-center gap-2" onClick={openAdd}>
           <PlusIcon size={14} /> Add Quote
         </button>
       </div>
 
-      {loading ? <Spinner /> : gridMode ? (
+      {loading ? <Spinner /> : showMissing ? (
+        /* ── Missing quotes view ──────────────────────────────────────────────── */
+        !missingCountryId ? (
+          <EmptyState message="Select a market above to see which ingredients are missing a price quote for that country." />
+        ) : missingIngredients.length === 0 ? (
+          <EmptyState message={`All ingredients have at least one active price quote for ${countries.find(c => String(c.id) === missingCountryId)?.name ?? 'this market'}. 🎉`} />
+        ) : (
+          <div className="bg-surface border border-border rounded-xl overflow-visible">
+            <div className="px-4 py-2.5 border-b border-border bg-amber-50/60 rounded-t-xl flex items-center gap-2">
+              <svg className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <p className="text-xs text-amber-700 font-medium">
+                Fill in vendor, unit, qty and price for each ingredient then click <strong>Save</strong> to create the quote.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-200 border-b border-gray-300">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Ingredient</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Category</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Base Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Vendor</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Purchase Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-24">Base Qty</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28">Price</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide">Per Base Unit</th>
+                    <th className="w-20" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {missingIngredients.map((ing, idx) => {
+                    const f    = getMissingForm(ing.id)
+                    const ven  = vendorsForMissingCountry.find(v => String(v.id) === f.vendor_id)
+                    const ppbu = f.purchase_price && f.qty_in_base_units && Number(f.qty_in_base_units) > 0
+                      ? (Number(f.purchase_price) / Number(f.qty_in_base_units)).toFixed(4)
+                      : null
+                    const isSaving = !!missingSaving[ing.id]
+                    const canSave  = !!f.vendor_id && !!f.purchase_price && Number(f.qty_in_base_units) > 0
+                    return (
+                      <tr key={ing.id} className={`border-b border-border last:border-0 ${idx % 2 === 0 ? 'bg-white' : 'bg-surface-2/40'}`}>
+                        <td className="px-4 py-2.5 font-semibold text-text-1">{ing.name}</td>
+                        <td className="px-4 py-2.5 text-text-3 text-xs">{ing.category || '—'}</td>
+                        <td className="px-4 py-2.5 font-mono text-text-3 text-xs">{ing.base_unit_abbr || '—'}</td>
+                        <td className="px-4 py-2">
+                          <select
+                            className="select w-full min-w-[140px] text-sm py-1.5"
+                            value={f.vendor_id}
+                            onChange={e => setMissingField(ing.id, 'vendor_id', e.target.value)}
+                          >
+                            <option value="">Select vendor…</option>
+                            {vendorsForMissingCountry.map(v => (
+                              <option key={v.id} value={String(v.id)}>{v.name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            className="input w-full min-w-[120px] text-sm py-1.5"
+                            placeholder="e.g. Case 12×1kg"
+                            value={f.purchase_unit}
+                            onChange={e => setMissingField(ing.id, 'purchase_unit', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            className="input w-full font-mono text-sm py-1.5"
+                            type="number" min="0.000001" step="0.000001"
+                            value={f.qty_in_base_units}
+                            onChange={e => setMissingField(ing.id, 'qty_in_base_units', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            className="input w-full font-mono text-sm py-1.5"
+                            type="number" min="0" step="0.01" placeholder="0.00"
+                            value={f.purchase_price}
+                            onChange={e => setMissingField(ing.id, 'purchase_price', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono">
+                          {ppbu
+                            ? <><span className="font-bold text-accent">{ven?.currency_symbol ?? ''}{ppbu}</span>{ing.base_unit_abbr && <span className="text-xs text-text-3 ml-0.5">/{ing.base_unit_abbr}</span>}</>
+                            : <span className="text-text-3">—</span>
+                          }
+                        </td>
+                        <td className="px-4 py-2">
+                          <button
+                            className="btn-primary px-3 py-1.5 text-xs disabled:opacity-40"
+                            disabled={!canSave || isSaving}
+                            onClick={() => saveMissingQuote(ing)}
+                          >
+                            {isSaving ? '…' : 'Save'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      ) : gridMode ? (
         <DataGrid<Quote>
           gridId="quotes"
           columns={quoteColumns}

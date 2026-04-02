@@ -118,7 +118,7 @@ const { auth } = require('express-oauth2-jwt-bearer');
 
 // Add AFTER app.set('trust proxy', 1) — BEFORE route registration
 const checkJwt = auth({
-  audience: process.env.AUTH0_AUDIENCE,   // e.g. 'https://api.obscurekitty.com'
+  audience: process.env.AUTH0_AUDIENCE,   // e.g. 'https://api.cogs.flavorconnect.tech'
   issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`,
   tokenSigningAlg: 'RS256',
 });
@@ -128,13 +128,13 @@ app.use('/api', checkJwt);   // Protect all /api/* routes
 
 **Add to `api/.env`:**
 ```env
-AUTH0_AUDIENCE=https://api.obscurekitty.com
+AUTH0_AUDIENCE=https://api.cogs.flavorconnect.tech
 AUTH0_DOMAIN=obscurekitty.uk.auth0.com
 ```
 
 **Add to Auth0 dashboard:**
-1. Create a new API: `Identifier = https://api.obscurekitty.com`
-2. Add the audience to `app/.env.local`:  `VITE_AUTH0_AUDIENCE=https://api.obscurekitty.com`
+1. Create a new API: `Identifier = https://api.cogs.flavorconnect.tech`
+2. Add the audience to `app/.env.local`:  `VITE_AUTH0_AUDIENCE=https://api.cogs.flavorconnect.tech`
 3. Pass audience in `app/src/main.tsx` `authorizationParams`
 
 **Effort:** ~1 day.
