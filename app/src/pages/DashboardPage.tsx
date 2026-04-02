@@ -2,6 +2,62 @@ import { useEffect, useState, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PepperHelpButton } from '../components/ui'
 
+// ── PWA install prompt ────────────────────────────────────────────────────────
+
+function PwaInstallBanner() {
+  const [prompt, setPrompt] = useState<any>(null)
+  const [dismissed, setDismissed] = useState(() =>
+    localStorage.getItem('pwa-banner-dismissed') === '1'
+  )
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handler as EventListener)
+    return () => window.removeEventListener('beforeinstallprompt', handler as EventListener)
+  }, [])
+
+  if (!prompt || dismissed) return null
+
+  async function install() {
+    prompt.prompt()
+    const { outcome } = await prompt.userChoice
+    if (outcome === 'accepted') setPrompt(null)
+  }
+
+  function dismiss() {
+    setDismissed(true)
+    localStorage.setItem('pwa-banner-dismissed', '1')
+  }
+
+  return (
+    <div className="flex items-center gap-3 bg-accent-dim border border-accent/30 rounded-xl px-4 py-3 text-sm">
+      <span className="text-lg flex-shrink-0">📲</span>
+      <div className="flex-1 min-w-0">
+        <span className="font-semibold text-text-1">Install Menu COGS</span>
+        <span className="text-text-2 ml-2">Add to your home screen or desktop for quick access.</span>
+      </div>
+      <button
+        onClick={install}
+        className="btn-primary px-3 py-1.5 text-xs whitespace-nowrap flex-shrink-0"
+      >
+        Install app
+      </button>
+      <button
+        onClick={dismiss}
+        className="text-text-3 hover:text-text-1 transition-colors flex-shrink-0"
+        title="Dismiss"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface DashStats {
@@ -407,6 +463,9 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-surface-2">
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+
+        {/* ── PWA install banner ── */}
+        <PwaInstallBanner />
 
         {/* ── Header ── */}
         <div
