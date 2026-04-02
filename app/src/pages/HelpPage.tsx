@@ -1374,26 +1374,66 @@ export default function HelpPage() {
         {/* ═══════════════════════════════════ DOMAIN MIGRATION */}
         <H2 id="domain-migration" icon="🌐" title="Domain Migration" />
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-3">
-          The app was migrated from <Mono>obscurekitty.com</Mono> to <Mono>cogs.flavorconnect.tech</Mono> in April 2026.
-          Use this checklist if you ever need to change the domain again.
+          The app currently runs at <Mono>cogs.flavorconnect.tech</Mono> (migrated from <Mono>obscurekitty.com</Mono> in April 2026).
+          Follow the steps below if you ever need to change the domain or subdomain again.
+          A full reference is also in <Mono>docs/DOMAIN_MIGRATION.md</Mono>.
         </p>
 
-        <H3 id="domain-checklist">Domain Change Checklist</H3>
-        <div className="space-y-2 my-3">
+        <H3 id="domain-prereqs">Prerequisites</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-3">
+          Before starting: purchase the domain, point its nameservers to AWS Route 53 / Lightsail, and create a DNS zone in Lightsail for the apex domain.
+          If using a subdomain (recommended — no complications), you only need an A record in the existing zone.
+        </p>
+
+        <H3 id="domain-steps">Step-by-Step Process</H3>
+        <div className="space-y-3 my-3">
           {[
-            ['DNS A record', 'Add A record in Lightsail DNS zone: subdomain → server IP (13.135.158.196). Verify with nslookup <new-domain>.'],
-            ['Nginx server_name', 'Edit /etc/nginx/sites-available/menu-cogs → update server_name. Run: sudo nginx -t && sudo nginx -s reload'],
-            ['SSL certificate', 'Run: sudo certbot --nginx -d <new-domain>. Certbot issues the cert and updates Nginx automatically.'],
-            ['Auth0 URLs', 'manage.auth0.com → Applications → your app → Settings. Add new domain to Allowed Callback URLs, Logout URLs, and Web Origins. Keep localhost entries.'],
-            ['GitHub Secrets', 'Update LIGHTSAIL_HOST and VITE_API_URL secrets in the repo Settings → Secrets → Actions.'],
-            ['Deploy', 'Push to main (or empty commit) to trigger GitHub Actions. Health check must pass: curl https://<new-domain>/api/health'],
-            ['Docs', 'Update domain in CLAUDE.md, HelpPage.tsx, docs/user-guide.md, api/src/routes/nutrition.js (User-Agent email).'],
-          ].map(([step, detail]) => (
-            <div key={step} className="flex gap-3 border border-[#D8E6DD] rounded-lg p-3 bg-white">
-              <span className="text-emerald-500 font-bold text-sm mt-0.5 flex-shrink-0">✓</span>
-              <div>
-                <p className="text-sm font-semibold text-[#0F1F17]">{step}</p>
-                <p className="text-xs text-[#2D4A38] mt-0.5 leading-relaxed">{detail}</p>
+            {
+              n: '1', title: 'Add DNS A record',
+              cmd: 'nslookup cogs.flavorconnect.tech',
+              detail: 'In the Lightsail DNS zone for your apex domain, add an A record: subdomain (e.g. "cogs") → server IP 13.135.158.196. Wait for propagation (usually 1–5 min), then verify:',
+            },
+            {
+              n: '2', title: 'Update Nginx server_name',
+              cmd: 'sudo nano /etc/nginx/sites-available/menu-cogs\n# change: server_name <new-domain>;\nsudo nginx -t && sudo nginx -s reload',
+              detail: 'SSH into the server. Edit the Nginx site config and replace the server_name value. Test the config before reloading.',
+            },
+            {
+              n: '3', title: 'Issue SSL certificate',
+              cmd: 'sudo certbot --nginx -d <new-domain>',
+              detail: 'Certbot automatically issues the Let\'s Encrypt cert and patches the Nginx config. The cert auto-renews via a scheduled task. Requires the DNS A record to be live first.',
+            },
+            {
+              n: '4', title: 'Update Auth0 URLs',
+              cmd: 'manage.auth0.com → Applications → Settings',
+              detail: 'Add the new domain to: Allowed Callback URLs, Allowed Logout URLs, Allowed Web Origins. Keep the existing localhost and old entries until the switch is confirmed working. Auth0 tenant name (obscurekitty.uk.auth0.com) does NOT change.',
+            },
+            {
+              n: '5', title: 'Update GitHub Secrets',
+              cmd: 'LIGHTSAIL_HOST = <new-domain>\nVITE_API_URL   = https://<new-domain>/api',
+              detail: 'GitHub repo → Settings → Secrets and variables → Actions. Update both secrets. VITE_API_URL must include the full https:// prefix — never interpolate the host variable into a partial URL in deploy.yml.',
+            },
+            {
+              n: '6', title: 'Deploy & verify',
+              cmd: 'git commit --allow-empty -m "chore: switch domain to <new-domain>"\ngit push\ncurl https://<new-domain>/api/health',
+              detail: 'Push an empty commit to trigger GitHub Actions. The pipeline builds the frontend with the new VITE_API_URL baked in, deploys to the server, and runs a health check. Health check must return {"status":"ok"}.',
+            },
+            {
+              n: '7', title: 'Update documentation',
+              cmd: '',
+              detail: 'Update CLAUDE.md (sections 1, 6, 7, 18, 19), HelpPage.tsx, docs/user-guide.md, docs/DOMAIN_MIGRATION.md, and api/src/routes/nutrition.js (User-Agent contact email). Then remove old domain from Auth0 URLs.',
+            },
+          ].map(({ n, title, cmd, detail }) => (
+            <div key={n} className="border border-[#D8E6DD] rounded-lg bg-white overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-[#E8F5ED]">
+                <span className="w-6 h-6 rounded-full bg-[#146A34] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">{n}</span>
+                <p className="text-sm font-semibold text-[#0F1F17]">{title}</p>
+              </div>
+              <div className="px-4 py-3">
+                <p className="text-xs text-[#2D4A38] leading-relaxed mb-2">{detail}</p>
+                {cmd && (
+                  <div className="bg-[#0F1F17] rounded-md px-3 py-2 font-mono text-xs text-white whitespace-pre-line">{cmd}</div>
+                )}
               </div>
             </div>
           ))}
@@ -1402,6 +1442,11 @@ export default function HelpPage() {
         <InfoBox type="info" title="Auth0 tenant is independent of the app domain">
           The Auth0 tenant name (<Mono>obscurekitty.uk.auth0.com</Mono>) is a fixed identifier chosen at tenant creation and
           cannot be changed without creating a new tenant. It has no effect on the app domain and does not need updating when the domain changes.
+        </InfoBox>
+
+        <InfoBox type="warning" title="Subdomain vs apex domain">
+          Using a subdomain (e.g. <Mono>cogs.flavorconnect.tech</Mono>) is recommended — it requires only an A record in the existing DNS zone and works identically to an apex domain.
+          Moving to a different apex domain requires updating nameservers at the registrar and creating a new Lightsail DNS zone.
         </InfoBox>
 
         {/* Footer */}

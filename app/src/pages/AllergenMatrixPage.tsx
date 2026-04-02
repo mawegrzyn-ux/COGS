@@ -499,9 +499,9 @@ function InventoryAllergenMatrix() {
                 {/* 14 allergen columns — rotated headers */}
                 {allergens.map(a => (
                   <th key={a.code} title={a.name}
-                    className="border border-border bg-surface-2 w-[52px] min-w-[52px]"
+                    className="border border-border bg-surface-2 w-[52px] min-w-[52px] py-2"
                     style={{ position: 'sticky', top: 0, zIndex: 20 }}>
-                    <div className="flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
+                    <div className="w-full flex items-center justify-center text-[10px] font-bold uppercase text-text-2 tracking-wide"
                       style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 96 }}>
                       {a.code}
                     </div>
@@ -987,10 +987,10 @@ function MenuAllergenMatrix() {
                   <th
                     key={a.code}
                     title={a.name}
-                    className="sticky top-0 z-20 bg-surface-2 border border-border px-1 py-2 font-semibold text-text-2 text-center w-12 min-w-[48px]"
+                    className="sticky top-0 z-20 bg-surface-2 border border-border py-2 font-semibold text-text-2 text-center w-12 min-w-[48px]"
                   >
                     <div
-                      className="text-xs uppercase tracking-wide"
+                      className="text-xs uppercase tracking-wide w-full"
                       style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     >
                       {a.code}

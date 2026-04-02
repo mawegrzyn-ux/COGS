@@ -1609,7 +1609,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                     <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Base Unit</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Vendor</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Purchase Unit</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-24">Base Qty</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-36">Conv. to Base</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28">Price</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide">Per Base Unit</th>
                     <th className="w-20" />
@@ -1650,12 +1650,17 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                           />
                         </td>
                         <td className="px-4 py-2">
-                          <input
-                            className="input w-full font-mono text-sm py-1.5"
-                            type="number" min="0.000001" step="0.000001"
-                            value={f.qty_in_base_units}
-                            onChange={e => setMissingField(ing.id, 'qty_in_base_units', e.target.value)}
-                          />
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              className="input font-mono text-sm py-1.5 w-20"
+                              type="number" min="0.000001" step="0.000001"
+                              value={f.qty_in_base_units}
+                              onChange={e => setMissingField(ing.id, 'qty_in_base_units', e.target.value)}
+                            />
+                            {ing.base_unit_abbr && (
+                              <span className="text-xs text-text-3 font-mono whitespace-nowrap">{ing.base_unit_abbr}</span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-2">
                           <input

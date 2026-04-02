@@ -1596,7 +1596,7 @@ export default function RecipesPage() {
                       {activeCogs && activeCogs.total_cost_base > 0 && (
                         <tfoot>
                           <tr className="border-t-2 border-border bg-surface-2">
-                            <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={3}>Total</td>
+                            <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={itemSortField === 'custom' ? 4 : 3}>Total</td>
                             <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
                               {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                             </td>

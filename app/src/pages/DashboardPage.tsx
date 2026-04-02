@@ -358,7 +358,7 @@ export default function DashboardPage() {
             api.get(`/cogs/menu/${menu.id}?market_id=${menu.country_id}&price_level_id=${level.id}`)
               .then((res: any) => ({
                 level_id:   level.id,
-                cogs_pct:   res?.summary?.cogs_pct_net ?? null,
+                cogs_pct:   res?.summary?.avg_cogs_pct_net ?? null,
                 item_count: (res?.items ?? []).length,
               }))
               .catch(() => ({ level_id: level.id, cogs_pct: null, item_count: 0 }))

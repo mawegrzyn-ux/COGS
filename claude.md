@@ -1296,16 +1296,18 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 | GitHub Secrets | `LIGHTSAIL_HOST` and `VITE_API_URL` updated |
 | CI/CD | Deploy triggered via empty commit — health check passed |
 
-**Domain change checklist (for future reference):**
+**Full step-by-step process:** [`docs/DOMAIN_MIGRATION.md`](docs/DOMAIN_MIGRATION.md)
+
+**Quick checklist:**
 
 1. Add A record in DNS zone (Lightsail) → `<subdomain>` → server IP
 2. Verify with `nslookup <new-domain>` — must return the correct IP
-3. Update `server_name` in `/etc/nginx/sites-available/menu-cogs` → test + reload
+3. Update `server_name` in `/etc/nginx/sites-available/menu-cogs` → `sudo nginx -t && sudo nginx -s reload`
 4. `sudo certbot --nginx -d <new-domain>` — issues cert + updates Nginx automatically
 5. Auth0 dashboard → add new domain to Callback / Logout / Web Origins (keep localhost entries)
 6. GitHub → update `LIGHTSAIL_HOST` and `VITE_API_URL` secrets
-7. Push to `main` (or empty commit) to trigger deploy
-8. Confirm health check: `curl https://<new-domain>/api/health`
+7. Push to `main` (or empty commit) to trigger deploy — health check must pass
+8. Update docs: CLAUDE.md, HelpPage.tsx, docs/user-guide.md, docs/DOMAIN_MIGRATION.md
 
 > **Note:** Auth0 tenant name (`obscurekitty.uk.auth0.com`) does not change with the app domain — it is a fixed Auth0 identifier.
 
@@ -1325,4 +1327,4 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Domain migrated from obscurekitty.com to cogs.flavorconnect.tech — DNS A record, Nginx server_name, Certbot SSL cert, Auth0 URLs, GitHub Secrets all updated; domain migration checklist added as section 18; SharedMenuPage UI: header title/metadata layout, all-expand toggle in Item column header, price·cost·COGS% inline row layout, amber highlight only on actual value change; 4-level recipe variant priority chain: market+PL > market > PL > global; mcogs_recipe_market_pl_variations table; Shared Links multi-view comment routing fix)*
+*README last updated: April 2026 (session: Domain migrated from obscurekitty.com to cogs.flavorconnect.tech — DNS A record, Nginx server_name, Certbot SSL cert, Auth0 URLs, GitHub Secrets all updated; docs/DOMAIN_MIGRATION.md created; HelpPage Domain Migration section expanded with numbered step-by-step process; Allergen Matrix header padding + horizontal centering fix; SharedMenuPage UI: menu name as large title, All▼/▶ toggle in Item column header, price·cost·COGS% inline row layout, amber highlight only on actual value change; 4-level recipe variant priority chain: market+PL > market > PL > global; mcogs_recipe_market_pl_variations table; Shared Links multi-view comment routing fix; AllergenMatrixPage clear-filters button on empty state)*
