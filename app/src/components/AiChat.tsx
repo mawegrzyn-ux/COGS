@@ -358,7 +358,17 @@ function ChatPanel({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function AiChat({ mode = 'float', onModeChange }: { mode?: PepperMode; onModeChange?: (m: PepperMode) => void }) {
-  const { user }   = useAuth0()
+  const { user, getAccessTokenSilently } = useAuth0()
+
+  // Returns { Authorization: 'Bearer <token>' } for every authenticated fetch
+  const authHeader = useCallback(async () => {
+    try {
+      const token = await getAccessTokenSilently()
+      return { Authorization: `Bearer ${token}` }
+    } catch {
+      return {} as Record<string, string>
+    }
+  }, [getAccessTokenSilently])
   const location   = useLocation()
 
   const [open,               setOpen]               = useState(false)
@@ -424,7 +434,7 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     setSessionsLoad(true)
     try {
       const params = new URLSearchParams({ user_sub: user.sub, limit: '40' })
-      const res    = await fetch(`${API_BASE}/ai-chat/sessions?${params}`)
+      const res    = await fetch(`${API_BASE}/ai-chat/sessions?${params}`, { headers: await authHeader() })
       if (res.ok) setSessions(await res.json())
     } catch { /* non-critical */ }
     finally  { setSessionsLoad(false) }
@@ -434,7 +444,7 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     if (!user?.sub) return
     try {
       const params = new URLSearchParams({ user_sub: user.sub })
-      const res    = await fetch(`${API_BASE}/ai-chat/sessions/${encodeURIComponent(sid)}?${params}`)
+      const res    = await fetch(`${API_BASE}/ai-chat/sessions/${encodeURIComponent(sid)}?${params}`, { headers: await authHeader() })
       if (!res.ok) return
       const turns: Array<{ user_message: string; response: string; tools_called?: string[] }> = await res.json()
       const loaded: Message[] = []
@@ -484,11 +494,11 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
         form.append('sessionId', sessionId)
         if (user?.email)   form.append('userEmail',  user.email)
         if (user?.sub)     form.append('userSub',    user.sub)
-        res = await fetch(`${API_BASE}/ai-upload`, { method: 'POST', body: form })
+        res = await fetch(`${API_BASE}/ai-upload`, { method: 'POST', body: form, headers: await authHeader() })
       } else {
         res = await fetch(`${API_BASE}/ai-chat`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...await authHeader() },
           body:    JSON.stringify({
             message: text, history, context,
             sessionId,
