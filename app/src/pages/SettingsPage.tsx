@@ -1853,12 +1853,13 @@ const FEATURES_LIST: { key: Feature; label: string }[] = [
   { key: 'users',      label: 'Users'      },
 ]
 
-const ACCESS_CLASS: Record<AccessLevel, string> = {
-  none:  'bg-gray-100 text-gray-400',
-  read:  'bg-blue-50 text-blue-600',
-  write: 'bg-accent-dim text-accent',
+const ACCESS_CYCLE: AccessLevel[] = ['none', 'read', 'write']
+
+const ACCESS_CELL: Record<AccessLevel, string> = {
+  none:  'text-gray-400 hover:bg-gray-100',
+  read:  'bg-blue-50 text-blue-600 hover:bg-blue-100',
+  write: 'bg-accent-dim text-accent hover:bg-accent-dim/70',
 }
-const ACCESS_LABEL: Record<AccessLevel, string> = { none: '—', read: 'R', write: 'W' }
 
 function RolesTab() {
   const api = useApi()
@@ -1866,11 +1867,8 @@ function RolesTab() {
 
   const [roles,   setRoles]   = useState<Role[]>([])
   const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState<Role | null>(null)
-  const [editPerms, setEditPerms] = useState<Partial<Record<Feature, AccessLevel>>>({})
-  const [editName, setEditName]   = useState('')
-  const [editDesc, setEditDesc]   = useState('')
-  const [saving, setSaving]   = useState(false)
+  // saving = Set of "roleId:feature" keys currently being saved
+  const [saving,  setSaving]  = useState<Set<string>>(new Set())
 
   const [creating,  setCreating]  = useState(false)
   const [newName,   setNewName]   = useState('')
@@ -1878,8 +1876,13 @@ function RolesTab() {
   const [copyFrom,  setCopyFrom]  = useState<number | ''>('')
   const [newSaving, setNewSaving] = useState(false)
 
+  const [renaming,     setRenaming]     = useState<Role | null>(null)
+  const [renameName,   setRenameName]   = useState('')
+  const [renameDesc,   setRenameDesc]   = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
+
   const [deleting, setDeleting] = useState<Role | null>(null)
-  const [toast, setToast]       = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [toast,    setToast]    = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1896,29 +1899,32 @@ function RolesTab() {
 
   const canWrite = can('users', 'write')
 
-  function openEdit(r: Role) {
-    setEditing(r)
-    setEditName(r.name)
-    setEditDesc(r.description || '')
-    setEditPerms({ ...r.permissions })
-  }
+  // Click a cell → cycle access and save immediately
+  async function handleCell(role: Role, feature: Feature) {
+    if (!canWrite) return
+    if (role.is_system && role.name !== 'Admin' && feature === 'users') return
 
-  async function handleSaveEdit() {
-    if (!editing) return
-    setSaving(true)
+    const cur   = role.permissions[feature] || 'none'
+    const next  = ACCESS_CYCLE[(ACCESS_CYCLE.indexOf(cur) + 1) % ACCESS_CYCLE.length]
+    const key   = `${role.id}:${feature}`
+    const newPerms = { ...role.permissions, [feature]: next }
+
+    // Optimistic update
+    setRoles(prev => prev.map(r =>
+      r.id === role.id ? { ...r, permissions: { ...r.permissions, [feature]: next } } : r
+    ))
+    setSaving(s => new Set([...s, key]))
+
     try {
-      await api.put(`/roles/${editing.id}`, {
-        name:        editName,
-        description: editDesc,
-        permissions: editPerms,
-      })
-      setToast({ message: 'Role saved', type: 'success' })
-      setEditing(null)
-      await load()
+      await api.put(`/roles/${role.id}`, { permissions: newPerms })
     } catch (err: any) {
+      // Revert on error
+      setRoles(prev => prev.map(r =>
+        r.id === role.id ? { ...r, permissions: { ...r.permissions, [feature]: cur } } : r
+      ))
       setToast({ message: err.message || 'Save failed', type: 'error' })
     } finally {
-      setSaving(false)
+      setSaving(s => { const n = new Set(s); n.delete(key); return n })
     }
   }
 
@@ -1932,22 +1938,31 @@ function RolesTab() {
         copy_from_role_id: copyFrom || undefined,
       })
       setToast({ message: 'Role created', type: 'success' })
-      setCreating(false)
-      setNewName(''); setNewDesc(''); setCopyFrom('')
+      setCreating(false); setNewName(''); setNewDesc(''); setCopyFrom('')
       await load()
     } catch (err: any) {
       setToast({ message: err.message || 'Create failed', type: 'error' })
-    } finally {
-      setNewSaving(false)
-    }
+    } finally { setNewSaving(false) }
+  }
+
+  async function handleRename() {
+    if (!renaming || !renameName.trim()) return
+    setRenameSaving(true)
+    try {
+      await api.put(`/roles/${renaming.id}`, { name: renameName.trim(), description: renameDesc.trim() || null })
+      setToast({ message: 'Role renamed', type: 'success' })
+      setRenaming(null)
+      await load()
+    } catch (err: any) {
+      setToast({ message: err.message || 'Rename failed', type: 'error' })
+    } finally { setRenameSaving(false) }
   }
 
   async function handleDelete(r: Role) {
     try {
       await api.delete(`/roles/${r.id}`)
       setToast({ message: 'Role deleted', type: 'success' })
-      setDeleting(null)
-      await load()
+      setDeleting(null); await load()
     } catch (err: any) {
       setToast({ message: err.message || 'Delete failed', type: 'error' })
       setDeleting(null)
@@ -1958,8 +1973,10 @@ function RolesTab() {
 
   return (
     <div className="space-y-4">
+
+      {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-text-3">Permission levels: <strong>—</strong> no access · <strong>R</strong> read-only · <strong>W</strong> full access</p>
+        <p className="text-xs text-text-3">Click any cell to cycle: <span className="font-mono">— → R → W</span>. Changes save instantly.</p>
         {canWrite && (
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => setCreating(true)}>
             + New role
@@ -1967,134 +1984,99 @@ function RolesTab() {
         )}
       </div>
 
-      {roles.length === 0 && (
-        <EmptyState message="No roles defined yet." />
-      )}
+      {roles.length === 0 && <EmptyState message="No roles defined yet." />}
 
-      {roles.map(role => (
-        <div key={role.id} className="bg-surface border border-border rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 bg-surface-2/50 border-b border-border">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="font-bold text-text-1 text-sm">{role.name}</div>
-              {role.is_system && (
-                <span className="text-[10px] font-semibold text-accent bg-accent-dim px-1.5 py-0.5 rounded shrink-0">System</span>
-              )}
-              {role.description && (
-                <span className="text-xs text-text-3 truncate">{role.description}</span>
-              )}
-            </div>
-            {canWrite && (
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
-                  title="Edit permissions"
-                  onClick={() => openEdit(role)}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                {!role.is_system && (
-                  <button
-                    className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-red-600 transition-colors"
-                    title="Delete role"
-                    onClick={() => setDeleting(role)}
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+      {/* Matrix table */}
+      {roles.length > 0 && (
+        <div className="bg-surface border border-border rounded-xl overflow-hidden overflow-x-auto">
+          <table className="text-sm border-separate border-spacing-0" style={{ minWidth: `${180 + roles.length * 110}px` }}>
+            <thead>
+              <tr>
+                {/* Feature column header */}
+                <th className="px-4 py-3 text-left text-xs font-semibold text-text-3 bg-surface-2 border-b border-r border-border sticky left-0 z-10 w-36">
+                  Feature
+                </th>
+                {/* One column per role */}
+                {roles.map(role => (
+                  <th key={role.id} className="px-3 py-2 bg-surface-2 border-b border-r border-border last:border-r-0 text-center min-w-[108px]">
+                    <div className="flex flex-col items-center gap-1">
+                      <div className="flex items-center gap-1.5 justify-center">
+                        <span className="font-bold text-text-1 text-xs leading-tight">{role.name}</span>
+                        {role.is_system && (
+                          <span className="text-[9px] font-semibold text-accent bg-accent-dim px-1 py-0.5 rounded leading-none shrink-0">SYS</span>
+                        )}
+                      </div>
+                      {role.description && (
+                        <span className="text-[10px] text-text-3 truncate max-w-[90px]">{role.description}</span>
+                      )}
+                      {canWrite && !role.is_system && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <button
+                            className="p-0.5 rounded text-text-3 hover:text-accent transition-colors"
+                            title="Rename"
+                            onClick={() => { setRenaming(role); setRenameName(role.name); setRenameDesc(role.description || '') }}
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            className="p-0.5 rounded text-text-3 hover:text-red-500 transition-colors"
+                            title="Delete"
+                            onClick={() => setDeleting(role)}
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {FEATURES_LIST.map(({ key, label }, rowIdx) => (
+                <tr key={key} className={rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}>
+                  {/* Feature label — sticky */}
+                  <td className={`px-4 py-2 font-medium text-text-1 text-xs border-r border-border sticky left-0 z-10 ${rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}`}>
+                    {label}
+                  </td>
+                  {/* Permission cell per role */}
+                  {roles.map(role => {
+                    const access  = role.permissions[key] || 'none'
+                    const cellKey = `${role.id}:${key}`
+                    const isSaving = saving.has(cellKey)
+                    const isLocked = role.is_system && role.name !== 'Admin' && key === 'users'
+                    const isClickable = canWrite && !isLocked && !isSaving
 
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-px bg-border">
-            {FEATURES_LIST.map(({ key, label }) => {
-              const access = role.permissions[key] || 'none'
-              return (
-                <div key={key} className="bg-surface px-3 py-2.5 flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-2 truncate">{label}</span>
-                  <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded font-mono shrink-0 ${ACCESS_CLASS[access]}`}>
-                    {ACCESS_LABEL[access]}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
+                    return (
+                      <td key={role.id} className="px-3 py-2 text-center border-r border-border last:border-r-0">
+                        <button
+                          onClick={() => isClickable && handleCell(role, key)}
+                          disabled={!isClickable}
+                          title={isLocked ? 'Locked for this role' : isClickable ? 'Click to change' : undefined}
+                          className={`
+                            w-9 h-7 rounded-md text-xs font-bold font-mono transition-all mx-auto flex items-center justify-center
+                            ${isSaving ? 'opacity-50 cursor-wait' : ''}
+                            ${isLocked ? 'opacity-30 cursor-not-allowed bg-gray-100 text-gray-400' : ACCESS_CELL[access]}
+                            ${isClickable ? 'cursor-pointer' : ''}
+                          `}
+                        >
+                          {isSaving
+                            ? <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg>
+                            : access === 'none' ? '—' : access === 'read' ? 'R' : 'W'
+                          }
+                        </button>
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
-
-      {/* Edit modal */}
-      {editing && (
-        <Modal title={`Edit — ${editing.name}`} onClose={() => setEditing(null)} width="max-w-2xl">
-          <div className="space-y-5">
-            {!editing.is_system && (
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Name">
-                  <input className="input w-full" value={editName} onChange={e => setEditName(e.target.value)} />
-                </Field>
-                <Field label="Description">
-                  <input className="input w-full" value={editDesc} onChange={e => setEditDesc(e.target.value)} />
-                </Field>
-              </div>
-            )}
-
-            <div>
-              <div className="text-xs font-semibold text-text-2 mb-2 uppercase tracking-wide">Permissions</div>
-              <div className="border border-border rounded-xl overflow-hidden">
-                <table className="w-full text-sm border-separate border-spacing-0">
-                  <thead>
-                    <tr className="bg-surface-2">
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-text-3 border-b border-border w-1/3">Feature</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">No access</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">Read</th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-3 border-b border-border">Write</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {FEATURES_LIST.map(({ key, label }, i) => {
-                      const cur = editPerms[key] || 'none'
-                      const isLocked = editing.is_system && editing.name !== 'Admin' && key === 'users'
-                      return (
-                        <tr key={key} className={i % 2 === 0 ? 'bg-surface' : 'bg-surface-2/30'}>
-                          <td className="px-3 py-2.5 font-medium text-text-1 border-b border-border">
-                            {label}
-                            {isLocked && <span className="ml-1.5 text-[10px] text-text-3">(locked)</span>}
-                          </td>
-                          {(['none', 'read', 'write'] as AccessLevel[]).map(level => (
-                            <td key={level} className="px-3 py-2.5 text-center border-b border-border">
-                              <button
-                                disabled={isLocked}
-                                onClick={() => {
-                                  if (!isLocked) setEditPerms(p => ({ ...p, [key]: level }))
-                                }}
-                                className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
-                                  cur === level
-                                    ? ACCESS_CLASS[level] + ' ring-2 ring-offset-1 ring-accent'
-                                    : 'text-text-3 hover:bg-surface-2'
-                                } ${isLocked ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-                              >
-                                {level === 'none' ? '—' : level === 'read' ? 'R' : 'W'}
-                              </button>
-                            </td>
-                          ))}
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSaveEdit} disabled={saving}>
-                {saving ? 'Saving…' : 'Save role'}
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
 
       {/* Create modal */}
@@ -2105,7 +2087,7 @@ function RolesTab() {
               <input className="input w-full" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Kitchen Manager" autoFocus />
             </Field>
             <Field label="Description">
-              <input className="input w-full" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional description" />
+              <input className="input w-full" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional" />
             </Field>
             <Field label="Copy permissions from" hint="Start from an existing role's permission set">
               <select className="input w-full" value={copyFrom} onChange={e => setCopyFrom(e.target.value ? Number(e.target.value) : '')}>
@@ -2117,6 +2099,26 @@ function RolesTab() {
               <button className="btn-outline px-4 py-2 text-sm" onClick={() => setCreating(false)}>Cancel</button>
               <button className="btn-primary px-4 py-2 text-sm" onClick={handleCreate} disabled={newSaving || !newName.trim()}>
                 {newSaving ? 'Creating…' : 'Create role'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Rename modal */}
+      {renaming && (
+        <Modal title={`Rename — ${renaming.name}`} onClose={() => setRenaming(null)}>
+          <div className="space-y-4">
+            <Field label="Name" required>
+              <input className="input w-full" value={renameName} onChange={e => setRenameName(e.target.value)} autoFocus />
+            </Field>
+            <Field label="Description">
+              <input className="input w-full" value={renameDesc} onChange={e => setRenameDesc(e.target.value)} placeholder="Optional" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setRenaming(null)}>Cancel</button>
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleRename} disabled={renameSaving || !renameName.trim()}>
+                {renameSaving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
