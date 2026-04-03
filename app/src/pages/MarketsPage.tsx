@@ -746,7 +746,7 @@ export default function MarketsPage() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title="Markets"
+        title="Location Structure"
         subtitle={
           <span className="flex flex-wrap items-center gap-x-1">
             <span>Manage franchise markets, local currencies, tax rates and brand partners.</span>

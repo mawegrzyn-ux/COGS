@@ -1248,7 +1248,6 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               nutForm={nutForm}
               setNutForm={setNutForm}
               nutSearch={nutSearch}
-              setNutSearch={setNutSearch}
               nutResults={nutResults}
               nutLoading={nutLoading}
               onSearch={searchNutrition}
@@ -2295,11 +2294,10 @@ const DIETARY_FLAG_LABELS: Record<string, string> = {
   dairy_free:  'Dairy Free',
 }
 
-function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nutResults, nutLoading, onSearch, onApply, dietaryFlags, setDietaryFlags, onSave, saving, onClose, ingredientName = '' }: {
+function NutritionTabContent({ nutForm, setNutForm, nutSearch, nutResults, nutLoading, onSearch, onApply, dietaryFlags, setDietaryFlags, onSave, saving, onClose, ingredientName = '' }: {
   nutForm:          Record<string, string>
   setNutForm:       (f: Record<string, string>) => void
   nutSearch:        string
-  setNutSearch:     (v: string) => void
   nutResults:       any[]
   nutLoading:       boolean
   onSearch:         (q?: string) => void
@@ -2341,8 +2339,6 @@ function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nut
   const filteredResults = nutResults.filter(r =>
     sourceFilter === 'all' || r.source === sourceFilter
   )
-
-  const hasValues = Object.values(nutForm).some(v => v !== '')
 
   const nutFields = [
     { key: 'energy_kcal', label: 'Energy',       unit: 'kcal' },

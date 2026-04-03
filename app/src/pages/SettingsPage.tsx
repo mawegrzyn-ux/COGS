@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
@@ -27,51 +27,80 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'exchange-rates' | 'system' | 'thresholds' | 'test-data' | 'ai' | 'import' | 'users' | 'roles'
+type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'import' | 'users' | 'roles'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
 const TAB_LABELS: Record<Tab, string> = {
-  'units':          'Base Units',
-  'price-levels':   'Price Levels',
-  'exchange-rates': 'Exchange Rates',
-  'system':         'System',
-  'thresholds':     'COGS Thresholds',
-  'test-data':      'Test Data',
-  'ai':             'AI',
-  'import':         'Import',
-  'users':          'Users',
-  'roles':          'Roles',
+  'units':        'Base Units',
+  'price-levels': 'Price Levels',
+  'currency':     'Currency',
+  'thresholds':   'COGS Thresholds',
+  'test-data':    'Test Data',
+  'ai':           'AI',
+  'import':       'Import',
+  'users':        'Users',
+  'roles':        'Roles',
 }
 
 const TAB_TUTORIALS: Record<Tab, string> = {
-  'units':          'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
-  'price-levels':   'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
-  'exchange-rates': 'How does the Exchange Rates sync work? How are exchange rates used when I have menus priced in different currencies, and how often should I sync them?',
-  'system':         'What is on the System settings tab? What admin information and tools are available here?',
-  'thresholds':     'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
-  'test-data':      'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
-  'ai':             'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
-  'import':         'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
-  'users':          'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
-  'roles':          'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
+  'units':        'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
+  'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
+  'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
+  'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
+  'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
+  'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
+  'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
+  'users':        'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
+  'roles':        'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
 
-export default function SettingsPage() {
-  const [tab, setTab] = useState<Tab>('units')
+export default function SettingsPage({ embedded, initialTab }: { embedded?: boolean; initialTab?: Tab } = {}) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'units')
   const { isDev } = usePermissions()
 
-  const visibleTabs = (['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[])
+  // Sync active tab when initialTab prop changes (used in embedded/Configuration context)
+  useEffect(() => {
+    if (initialTab) setTab(initialTab)
+  }, [initialTab])
+
+  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[])
     .filter(t => t !== 'test-data' || isDev)
 
+  function renderTabContent(t: Tab) {
+    return (
+      <>
+        {t === 'units'        && <UnitsTab />}
+        {t === 'price-levels' && <PriceLevelsTab />}
+        {t === 'currency'     && <CurrencyTab />}
+        {t === 'thresholds'   && <ThresholdsTab />}
+        {t === 'test-data'    && isDev && <TestDataTab />}
+        {t === 'ai'           && <AiTab />}
+        {t === 'import'       && <ImportPage hideHeader />}
+        {t === 'users'        && <UsersTab />}
+        {t === 'roles'        && <RolesTab />}
+      </>
+    )
+  }
+
+  // ── Embedded mode: render only the content, no header/tab bar ─────────────
+  if (embedded) {
+    return (
+      <div className={tab === 'import' ? 'flex-1 overflow-y-auto' : 'flex-1 overflow-y-auto p-6'}>
+        {renderTabContent(tab)}
+      </div>
+    )
+  }
+
+  // ── Full standalone page ───────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
       <PageHeader
         title="Settings"
-        subtitle="Units, price levels and exchange rates"
-        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Exchange Rates, COGS Thresholds, and AI — and which should I configure first when setting up a new account?"
+        subtitle="Units, price levels, currency and more"
+        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Currency, COGS Thresholds, and AI — and which should I configure first when setting up a new account?"
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
@@ -96,16 +125,7 @@ export default function SettingsPage() {
       </div>
 
       <div className={tab === 'import' ? 'flex-1 overflow-y-auto' : 'flex-1 overflow-y-auto p-6'}>
-        {tab === 'units'          && <UnitsTab />}
-        {tab === 'price-levels'   && <PriceLevelsTab />}
-        {tab === 'exchange-rates' && <ExchangeRatesTab />}
-        {tab === 'system'         && <SystemTab />}
-        {tab === 'thresholds'     && <ThresholdsTab />}
-        {tab === 'test-data'      && isDev && <TestDataTab />}
-        {tab === 'ai'             && <AiTab />}
-        {tab === 'import'         && <ImportPage hideHeader />}
-        {tab === 'users'          && <UsersTab />}
-        {tab === 'roles'          && <RolesTab />}
+        {renderTabContent(tab)}
       </div>
     </div>
   )
@@ -462,108 +482,22 @@ function PriceLevelModal({ level, onSave, onClose }: {
 
 // ── Exchange Rates Tab ────────────────────────────────────────────────────────
 
-function ExchangeRatesTab() {
+// ── Currency Tab (Base Currency + Exchange Rates) ─────────────────────────────
+
+function CurrencyTab() {
   const api = useApi()
-  const [syncing, setSyncing]       = useState(false)
-  const [result, setResult]         = useState<{ synced_at: string; base: string; updated: { currency_code: string; rate: number }[] } | null>(null)
-  const [error, setError]           = useState('')
-  const [baseCurrency, setBaseCurrency] = useState<string | null>(null)
 
-  useEffect(() => {
-    api.get('/settings')
-      .then((s: any) => setBaseCurrency(s?.base_currency?.code || 'USD'))
-      .catch(() => setBaseCurrency('USD'))
-  }, [api])
+  // ── Base currency form ─────────────────────────────────────────────────────
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [currToast, setCurrToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [form, setForm]         = useState({ code: 'USD', symbol: '$', name: 'US Dollar' })
+  const [errors, setErrors]     = useState<Partial<typeof form>>({})
 
-  const handleSync = async () => {
-    setSyncing(true)
-    setError('')
-    setResult(null)
-    try {
-      const data = await api.post('/sync-exchange-rates', {})
-      setResult(data)
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  return (
-    <div className="max-w-xl">
-      <p className="text-sm text-text-3 mb-6">
-        Fetch the latest exchange rates from the Frankfurter API.
-        Rates are calculated relative to your base currency
-        {baseCurrency
-          ? <> (<span className="font-mono font-bold text-text-1">{baseCurrency}</span>)</>
-          : ''
-        }.
-        Stored on each country and used for cross-country COGS calculations.
-      </p>
-
-      <div className="bg-surface rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="font-bold text-text-1">Frankfurter API</h3>
-            <p className="text-xs text-text-3 mt-0.5">
-              api.frankfurter.app — free, no key required
-              {baseCurrency && (
-                <span className="ml-2 font-mono text-accent font-semibold">base: {baseCurrency}</span>
-              )}
-            </p>
-          </div>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="btn-primary px-4 py-2 text-sm disabled:opacity-60"
-          >
-            {syncing ? (
-              <span className="flex items-center gap-2">
-                <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"/>
-                Syncing…
-              </span>
-            ) : '↻ Sync Rates'}
-          </button>
-        </div>
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">{error}</div>
-        )}
-
-        {result && (
-          <div className="mt-4">
-            <p className="text-xs text-text-3 mb-3">
-              Synced at {new Date(result.synced_at).toLocaleString()} — {result.updated.length} countries updated
-              {result.base && (
-                <span className="ml-2 font-mono text-accent font-semibold">(base: {result.base})</span>
-              )}
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {result.updated.map(r => (
-                <div key={r.currency_code} className="flex justify-between items-center bg-surface-2 rounded px-3 py-2 text-sm">
-                  <span className="font-semibold text-text-1">{r.currency_code}</span>
-                  <span className="font-mono text-text-3">{r.rate.toFixed(4)}</span>
-                </div>
-              ))}
-            </div>
-            {result.updated.length === 0 && (
-              <p className="text-sm text-text-3 italic">No countries with matching currencies found. Add countries first.</p>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-// ── System Tab (Base Currency) ────────────────────────────────────────────────
-
-function SystemTab() {
-  const api = useApi()
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [toast, setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
-  const [form, setForm]       = useState({ code: 'USD', symbol: '$', name: 'US Dollar' })
-  const [errors, setErrors]   = useState<Partial<typeof form>>({})
+  // ── Exchange rate sync ────────────────────────────────────────────────────
+  const [syncing, setSyncing]   = useState(false)
+  const [syncResult, setSyncResult] = useState<{ synced_at: string; base: string; updated: { currency_code: string; rate: number }[] } | null>(null)
+  const [syncError, setSyncError]   = useState('')
 
   useEffect(() => {
     api.get('/settings')
@@ -600,75 +534,146 @@ function SystemTab() {
           name:   form.name.trim(),
         }
       })
-      setToast({ message: 'Base currency saved', type: 'success' })
+      setCurrToast({ message: 'Base currency saved', type: 'success' })
     } catch (err: any) {
-      setToast({ message: err.message || 'Save failed', type: 'error' })
+      setCurrToast({ message: err.message || 'Save failed', type: 'error' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    setSyncError('')
+    setSyncResult(null)
+    try {
+      const data = await api.post('/sync-exchange-rates', {})
+      setSyncResult(data)
+    } catch (err: any) {
+      setSyncError(err.message)
+    } finally {
+      setSyncing(false)
     }
   }
 
   if (loading) return <Spinner />
 
   return (
-    <div className="max-w-lg">
-      <div className="mb-6">
-        <h2 className="text-base font-bold text-text-1 mb-1">Base / System Currency</h2>
-        <p className="text-sm text-text-3">
-          All costs are converted to this currency internally before being re-converted to each
+    <div className="max-w-xl space-y-8">
+
+      {/* ── Section 1: Base Currency ────────────────────────────────────────── */}
+      <div>
+        <h2 className="text-base font-bold text-text-1 mb-1">Base Currency</h2>
+        <p className="text-sm text-text-3 mb-4">
+          All costs are stored and compared in this currency internally, then converted to each
           country's local currency for display.
         </p>
-      </div>
 
-      {/* Live preview */}
-      <div className="flex items-center gap-4 bg-surface-2 border border-border rounded-xl px-5 py-4 mb-6">
-        <div className="w-12 h-12 rounded-lg bg-accent-dim flex items-center justify-center text-accent text-xl font-bold shrink-0">
-          {form.symbol || '$'}
+        {/* Live preview */}
+        <div className="flex items-center gap-4 bg-surface-2 border border-border rounded-xl px-5 py-4 mb-5">
+          <div className="w-12 h-12 rounded-lg bg-accent-dim flex items-center justify-center text-accent text-xl font-bold shrink-0">
+            {form.symbol || '$'}
+          </div>
+          <div>
+            <div className="font-extrabold text-text-1 text-base">{form.name || 'Currency Name'}</div>
+            <div className="font-mono text-sm text-text-3 mt-0.5">{form.code?.toUpperCase() || 'CODE'}</div>
+          </div>
         </div>
-        <div>
-          <div className="font-extrabold text-text-1 text-base">{form.name || 'Currency Name'}</div>
-          <div className="font-mono text-sm text-text-3 mt-0.5">{form.code?.toUpperCase() || 'CODE'}</div>
-        </div>
-      </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Currency Code" required error={errors.code}>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <Field label="Currency Code" required error={errors.code}>
+            <input
+              className="input w-full"
+              value={form.code}
+              onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+              placeholder="USD"
+              maxLength={10}
+            />
+            <p className="text-xs text-text-3 mt-1">ISO 4217 — USD, GBP, EUR…</p>
+          </Field>
+          <Field label="Symbol" required error={errors.symbol}>
+            <input
+              className="input w-full"
+              value={form.symbol}
+              onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
+              placeholder="$"
+              maxLength={10}
+            />
+          </Field>
+        </div>
+        <Field label="Display Name" required error={errors.name}>
           <input
             className="input w-full"
-            value={form.code}
-            onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
-            placeholder="USD"
-            maxLength={10}
-          />
-          <p className="text-xs text-text-3 mt-1">ISO 4217 — USD, GBP, EUR…</p>
-        </Field>
-        <Field label="Symbol" required error={errors.symbol}>
-          <input
-            className="input w-full"
-            value={form.symbol}
-            onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
-            placeholder="$"
-            maxLength={10}
+            value={form.name}
+            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+            placeholder="US Dollar"
           />
         </Field>
+        <div className="flex justify-end pt-2">
+          <button className="btn-primary px-5 py-2 text-sm" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save Currency'}
+          </button>
+        </div>
+        {currToast && <Toast message={currToast.message} type={currToast.type} onClose={() => setCurrToast(null)} />}
       </div>
 
-      <Field label="Display Name" required error={errors.name}>
-        <input
-          className="input w-full"
-          value={form.name}
-          onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          placeholder="US Dollar"
-        />
-      </Field>
+      {/* ── Section 2: Exchange Rates ────────────────────────────────────────── */}
+      <div className="border-t border-border pt-6">
+        <h2 className="text-base font-bold text-text-1 mb-1">Exchange Rates</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Fetch the latest rates from the Frankfurter API (free, no key required).
+          Rates are calculated relative to <span className="font-mono font-bold text-text-1">{form.code || 'USD'}</span> and
+          stored on each country for cross-market COGS calculations.
+        </p>
 
-      <div className="flex justify-end pt-2">
-        <button className="btn-primary px-5 py-2 text-sm" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        <div className="bg-surface rounded-lg border border-border p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold text-text-1 text-sm">Frankfurter API</h3>
+              <p className="text-xs text-text-3 mt-0.5">api.frankfurter.app — free, no API key required</p>
+            </div>
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="btn-primary px-4 py-2 text-sm disabled:opacity-60"
+            >
+              {syncing ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"/>
+                  Syncing…
+                </span>
+              ) : '↻ Sync Rates'}
+            </button>
+          </div>
+
+          {syncError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">{syncError}</div>
+          )}
+
+          {syncResult && (
+            <div className="mt-3">
+              <p className="text-xs text-text-3 mb-3">
+                Synced at {new Date(syncResult.synced_at).toLocaleString()} — {syncResult.updated.length} countries updated
+                {syncResult.base && (
+                  <span className="ml-2 font-mono text-accent font-semibold">(base: {syncResult.base})</span>
+                )}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {syncResult.updated.map(r => (
+                  <div key={r.currency_code} className="flex justify-between items-center bg-surface-2 rounded px-3 py-2 text-sm">
+                    <span className="font-semibold text-text-1">{r.currency_code}</span>
+                    <span className="font-mono text-text-3">{r.rate.toFixed(4)}</span>
+                  </div>
+                ))}
+              </div>
+              {syncResult.updated.length === 0 && (
+                <p className="text-sm text-text-3 italic">No countries with matching currencies found. Add countries first.</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   )
 }

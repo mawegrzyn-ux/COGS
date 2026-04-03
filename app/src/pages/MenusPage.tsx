@@ -2241,6 +2241,7 @@ function MarketPriceTool({
   saving, saved, onCountryChange, onSearch, onSavePrice,
 }: MarketPriceToolProps) {
 
+  const cogsThresholds = useCogsThresholds()
   const [dispCurrCode, setDispCurrCode] = useState<string>('')  // '' = market's own currency
 
   const levels  = data?.levels ?? []

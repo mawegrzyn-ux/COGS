@@ -1,23 +1,25 @@
 import { useAuth0 } from '@auth0/auth0-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import LoginPage          from './pages/LoginPage'
-import AppLayout          from './components/AppLayout'
-import DashboardPage      from './pages/DashboardPage'
-import SettingsPage       from './pages/SettingsPage'
-import LoadingScreen      from './components/LoadingScreen'
-import MarketsPage        from './pages/MarketsPage'
-import CategoriesPage     from './pages/CategoriesPage'
-import InventoryPage      from './pages/InventoryPage'
-import RecipesPage        from './pages/RecipesPage'
-import MenusPage          from './pages/MenusPage'
-import AllergenMatrixPage from './pages/AllergenMatrixPage'
-import HACCPPage          from './pages/HACCPPage'
-import HelpPage           from './pages/HelpPage'
-import ImportPage         from './pages/ImportPage'
-import SharedMenuPage     from './pages/SharedMenuPage'
-import PendingPage        from './pages/PendingPage'
-import PermissionsProvider from './components/PermissionsProvider'
-import { usePermissions } from './hooks/usePermissions'
+import LoginPage            from './pages/LoginPage'
+import AppLayout            from './components/AppLayout'
+import DashboardPage        from './pages/DashboardPage'
+import SettingsPage         from './pages/SettingsPage'
+import LoadingScreen        from './components/LoadingScreen'
+import MarketsPage          from './pages/MarketsPage'
+import CategoriesPage       from './pages/CategoriesPage'
+import InventoryPage        from './pages/InventoryPage'
+import RecipesPage          from './pages/RecipesPage'
+import MenusPage            from './pages/MenusPage'
+import AllergenMatrixPage   from './pages/AllergenMatrixPage'
+import HACCPPage            from './pages/HACCPPage'
+import HelpPage             from './pages/HelpPage'
+import ImportPage           from './pages/ImportPage'
+import ConfigurationPage    from './pages/ConfigurationPage'
+import SystemPage           from './pages/SystemPage'
+import SharedMenuPage       from './pages/SharedMenuPage'
+import PendingPage          from './pages/PendingPage'
+import PermissionsProvider  from './components/PermissionsProvider'
+import { usePermissions }   from './hooks/usePermissions'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth0()
@@ -46,20 +48,22 @@ export default function App() {
               <AppLayout />
             </ProtectedRoute>
           }>
-            <Route index             element={<Navigate to="/dashboard" replace />} />
-            <Route path="dashboard"  element={<DashboardPage />} />
-            <Route path="settings"   element={<SettingsPage />} />
-            <Route path="markets"    element={<MarketsPage />} />
-            <Route path="countries"  element={<Navigate to="/markets" replace />} />
-            <Route path="locations"  element={<Navigate to="/markets" replace />} />
-            <Route path="categories" element={<CategoriesPage />} />
-            <Route path="inventory"  element={<InventoryPage />} />
-            <Route path="recipes"    element={<RecipesPage />} />
-            <Route path="menus"      element={<MenusPage />} />
-            <Route path="allergens"  element={<AllergenMatrixPage />} />
-            <Route path="haccp"      element={<HACCPPage />} />
-            <Route path="help"       element={<HelpPage />} />
-            <Route path="import"     element={<ImportPage />} />
+            <Route index                element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard"     element={<DashboardPage />} />
+            <Route path="configuration" element={<ConfigurationPage />} />
+            <Route path="system"        element={<SystemPage />} />
+            <Route path="settings"      element={<Navigate to="/configuration" replace />} />
+            <Route path="markets"       element={<Navigate to="/configuration" replace />} />
+            <Route path="countries"     element={<Navigate to="/configuration" replace />} />
+            <Route path="locations"     element={<Navigate to="/configuration" replace />} />
+            <Route path="categories"    element={<Navigate to="/configuration" replace />} />
+            <Route path="inventory"     element={<InventoryPage />} />
+            <Route path="recipes"       element={<RecipesPage />} />
+            <Route path="menus"         element={<MenusPage />} />
+            <Route path="allergens"     element={<AllergenMatrixPage />} />
+            <Route path="haccp"         element={<HACCPPage />} />
+            <Route path="help"          element={<HelpPage />} />
+            <Route path="import"        element={<Navigate to="/configuration" replace />} />
           </Route>
 
           {/* Public shared pages — no auth, outside RBAC */}
