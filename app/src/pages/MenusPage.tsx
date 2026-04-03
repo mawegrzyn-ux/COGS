@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
+import { useCogsThresholds, type CogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { useSortFilter } from '../hooks/useSortFilter'
@@ -160,10 +161,10 @@ interface ScenarioSummary { id: number; name: string; menu_id: number | null; me
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt2 = (n: number | null | undefined) => Number(n ?? 0).toFixed(2)
-const cogsClass = (pct: number): 'green' | 'yellow' | 'red' =>
-  pct <= 28 ? 'green' : pct <= 35 ? 'yellow' : 'red'
-const cogsColourClass = (pct: number) => {
-  const c = cogsClass(pct)
+const cogsClass = (pct: number, thr: CogsThresholds): 'green' | 'yellow' | 'red' =>
+  pct <= thr.excellent ? 'green' : pct <= thr.acceptable ? 'yellow' : 'red'
+const cogsColourClass = (pct: number, thr: CogsThresholds) => {
+  const c = cogsClass(pct, thr)
   return c === 'green' ? 'text-emerald-600' : c === 'yellow' ? 'text-amber-500' : 'text-red-500'
 }
 
@@ -171,6 +172,7 @@ const cogsColourClass = (pct: number) => {
 
 export default function MenusPage() {
   const api = useApi()
+  const cogsThresholds = useCogsThresholds()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // shared data
@@ -359,7 +361,7 @@ export default function MenusPage() {
       if (itemFilterCat && item.category !== itemFilterCat) return false
       if (itemFilterStatus) {
         const hasPrice = item.sell_price_gross > 0
-        if (!hasPrice || cogsClass(item.cogs_pct_net) !== itemFilterStatus) return false
+        if (!hasPrice || cogsClass(item.cogs_pct_net, cogsThresholds) !== itemFilterStatus) return false
       }
       return true
     })
@@ -896,6 +898,7 @@ export default function MenusPage() {
                 onEditItem={openEditItemModal}
                 onDeleteItem={id => setConfirmDelete({ type: 'item', id })}
                 onApplyTax={applyDefaultTax}
+                cogsThresholds={cogsThresholds}
               />
             )}
           </section>
@@ -1250,6 +1253,7 @@ interface MenuDetailProps {
   priceLevels: PriceLevel[]; activeMenuLevel: number | ''; sym: string
   itemFilterQ: string; itemFilterType: string; itemFilterStatus: string; itemFilterCat: string
   itemSortCol: string; itemSortDir: 1 | -1
+  cogsThresholds: CogsThresholds
   categories: string[]
   onLevelChange(v: number | ''): void
   onFilterQ(v: string): void; onFilterType(v: string): void; onFilterStatus(v: string): void; onFilterCat(v: string): void
@@ -1262,6 +1266,7 @@ interface MenuDetailProps {
 
 function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, priceLevels, activeMenuLevel, sym,
   itemFilterQ, itemFilterType, itemFilterStatus, itemFilterCat, itemSortCol, itemSortDir, categories,
+  cogsThresholds,
   onLevelChange, onFilterQ, onFilterType, onFilterStatus, onFilterCat, onSort, onSavePrice,
   onEdit, onDelete, onAddItem, onEditItem, onDeleteItem, onApplyTax }: MenuDetailProps) {
 
@@ -1300,7 +1305,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
 
   function renderRow(item: CogsItem, inGroup: boolean) {
     const hasPrice = item.sell_price_gross > 0
-    const cls = cogsClass(item.cogs_pct_net)
+    const cls = cogsClass(item.cogs_pct_net, cogsThresholds)
     const qty = item.qty % 1 === 0 ? String(item.qty) : item.qty.toFixed(2)
     const qtyLabel = `${qty} ${item.item_type === 'ingredient' ? item.base_unit_abbr : 'ptn'}`
     const isEditing = inlineEdit?.menuItemId === item.menu_item_id
@@ -1359,7 +1364,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
         </td>
         <td
-          className={`px-3 py-2.5 text-right text-xs font-semibold ${hasPrice ? cogsColourClass(item.cogs_pct_net) : ''}`}
+          className={`px-3 py-2.5 text-right text-xs font-semibold ${hasPrice ? cogsColourClass(item.cogs_pct_net, cogsThresholds) : ''}`}
           data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
         >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
         <td className="px-3 py-2.5">
@@ -1426,8 +1431,8 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       <div className="grid grid-cols-5 gap-3 mb-4">
         {[
           { label: 'Items', value: String(items.length), cls: '' },
-          { label: 'Avg COGS %', value: hasLevel && avgCogs ? `${avgCogs.toFixed(1)}%` : hasLevel ? '—' : 'Select level', cls: hasLevel && avgCogs ? cogsClass(avgCogs) : '' },
-          { label: 'Max COGS %', value: hasLevel && maxCogs ? `${maxCogs.toFixed(1)}%` : '—', cls: hasLevel && maxCogs ? cogsClass(maxCogs) : '' },
+          { label: 'Avg COGS %', value: hasLevel && avgCogs ? `${avgCogs.toFixed(1)}%` : hasLevel ? '—' : 'Select level', cls: hasLevel && avgCogs ? cogsClass(avgCogs, cogsThresholds) : '' },
+          { label: 'Max COGS %', value: hasLevel && maxCogs ? `${maxCogs.toFixed(1)}%` : '—', cls: hasLevel && maxCogs ? cogsClass(maxCogs, cogsThresholds) : '' },
           { label: 'Avg Net Price', value: hasLevel && avgPrice ? `${sym}${avgPrice.toFixed(2)}` : '—', cls: '' },
           { label: 'Max Net Price', value: hasLevel && maxPrice ? `${sym}${maxPrice.toFixed(2)}` : '—', cls: '' },
         ].map(k => (
@@ -1820,13 +1825,11 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
 //  SHARED GRID HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const COGS_THRESHOLDS = { excellent: 28, acceptable: 35 }
-
-function cogsBadge(pct: number | null) {
+function cogsBadge(pct: number | null, thr: CogsThresholds) {
   if (pct === null) return null
-  if (pct <= COGS_THRESHOLDS.excellent)  return { cls: 'bg-green-100 text-green-700',  label: `${pct.toFixed(1)}%` }
-  if (pct <= COGS_THRESHOLDS.acceptable) return { cls: 'bg-yellow-100 text-yellow-700', label: `${pct.toFixed(1)}%` }
-  return                                        { cls: 'bg-red-100 text-red-700',       label: `${pct.toFixed(1)}%` }
+  if (pct <= thr.excellent)  return { cls: 'bg-green-100 text-green-700',  label: `${pct.toFixed(1)}%` }
+  if (pct <= thr.acceptable) return { cls: 'bg-yellow-100 text-yellow-700', label: `${pct.toFixed(1)}%` }
+  return                            { cls: 'bg-red-100 text-red-700',       label: `${pct.toFixed(1)}%` }
 }
 
 // Inline editable price cell — shared by both tools
@@ -1917,6 +1920,7 @@ function PriceLevelTool({
   onSearch, onCat, onSavePrice, showToast,
 }: PriceLevelToolProps) {
 
+  const cogsThresholds = useCogsThresholds()
   const [savingKey, setSavingKey] = useState<Record<string, boolean>>({})
   const [savedKey,  setSavedKey]  = useState<Record<string, boolean>>({})
 
@@ -2165,7 +2169,7 @@ function PriceLevelTool({
                 {sortedRows.map(row => {
                   const sym     = row.country_sym
                   const saveKey = `${row.menu_item_id}_${selectedLevel}`
-                  const badge   = cogsBadge(row.cogs_pct)
+                  const badge   = cogsBadge(row.cogs_pct, cogsThresholds)
                   return (
                     <tr key={row.key} className="hover:bg-gray-50">
                       <td className="px-3 py-2.5 text-gray-700 font-medium">{row.menu_name || <span className="text-gray-300">—</span>}</td>
@@ -2420,7 +2424,7 @@ function MarketPriceTool({
                         const key   = `${row.menu_item_id}_${l.id}`
                         const gross = row[`lvl_${l.id}_gross`] as number | null
                         const cogs  = row[`lvl_${l.id}_cogs`]  as number | null
-                        const badge = cogsBadge(cogs)
+                        const badge = cogsBadge(cogs, cogsThresholds)
                         return [
                           <td key={`${l.id}_g`} className="px-2 py-1.5">
                             <div className="flex justify-end">
@@ -3339,10 +3343,11 @@ function ScenarioTool({
   const fmtPct   = (n: number | null) => n != null ? `${n.toFixed(1)}%` : '—'
   const fmtMix   = (n: number, total: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '—'
 
+  const scCogsThresholds = useCogsThresholds()
   const cogsColour = (pct: number | null) => {
     if (pct === null) return 'text-gray-300'
-    if (pct <= 28)   return 'text-emerald-600 font-semibold'
-    if (pct <= 35)   return 'text-amber-500 font-semibold'
+    if (pct <= scCogsThresholds.excellent)  return 'text-emerald-600 font-semibold'
+    if (pct <= scCogsThresholds.acceptable) return 'text-amber-500 font-semibold'
     return 'text-red-500 font-semibold'
   }
 

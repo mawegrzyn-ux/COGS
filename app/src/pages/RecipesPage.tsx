@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
+import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -128,8 +129,9 @@ const fmtCost = (n: number | string | null | undefined) => Number(n ?? 0).toFixe
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RecipesPage() {
-  const api      = useApi()
-  const navigate = useNavigate()
+  const api            = useApi()
+  const cogsThresholds = useCogsThresholds()
+  const navigate       = useNavigate()
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -839,8 +841,8 @@ export default function RecipesPage() {
 
   const recipeCogsColour = (pct: number | null): string => {
     if (pct == null) return 'text-text-3'
-    if (pct <= 30)   return 'text-emerald-600'
-    if (pct <= 40)   return 'text-amber-500'
+    if (pct <= cogsThresholds.excellent)  return 'text-emerald-600'
+    if (pct <= cogsThresholds.acceptable) return 'text-amber-500'
     return 'text-red-500'
   }
 
