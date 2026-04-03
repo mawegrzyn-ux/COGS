@@ -878,12 +878,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     finally { setSavingAllergens(false) }
   }
 
-  async function searchNutrition() {
-    if (!nutSearch.trim()) return
+  async function searchNutrition(q?: string) {
+    const query = (q ?? nutSearch).trim()
+    if (!query) return
+    if (q !== undefined) setNutSearch(q)
     setNutLoading(true); setNutResults([])
     try {
-      const data = await api.get(`/nutrition/search?q=${encodeURIComponent(nutSearch.trim())}&source=usda`)
-      setNutResults(data?.results || [])
+      const data = await api.get(`/nutrition/search?q=${encodeURIComponent(query)}&source=both`)
+      setNutResults([...(data?.usda || []), ...(data?.off || [])])
     } catch { showToast('Search failed', 'error') }
     finally { setNutLoading(false) }
   }
@@ -1256,6 +1258,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               onSave={saveNutrition}
               saving={savingNut}
               onClose={() => setModal(null)}
+              ingredientName={(modal as Ingredient)?.name ?? ''}
             />
           )}
         </Modal>
@@ -2292,69 +2295,80 @@ const DIETARY_FLAG_LABELS: Record<string, string> = {
   dairy_free:  'Dairy Free',
 }
 
-function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nutResults, nutLoading, onSearch, onApply, dietaryFlags, setDietaryFlags, onSave, saving, onClose }: {
-  nutForm:         Record<string, string>
-  setNutForm:      (f: Record<string, string>) => void
-  nutSearch:       string
-  setNutSearch:    (v: string) => void
-  nutResults:      any[]
-  nutLoading:      boolean
-  onSearch:        () => void
-  onApply:         (r: any) => void
-  dietaryFlags:    Record<string, boolean>
-  setDietaryFlags: (f: Record<string, boolean>) => void
-  onSave:          () => void
-  saving:          boolean
-  onClose:         () => void
+function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nutResults, nutLoading, onSearch, onApply, dietaryFlags, setDietaryFlags, onSave, saving, onClose, ingredientName = '' }: {
+  nutForm:          Record<string, string>
+  setNutForm:       (f: Record<string, string>) => void
+  nutSearch:        string
+  setNutSearch:     (v: string) => void
+  nutResults:       any[]
+  nutLoading:       boolean
+  onSearch:         (q?: string) => void
+  onApply:          (r: any) => void
+  dietaryFlags:     Record<string, boolean>
+  setDietaryFlags:  (f: Record<string, boolean>) => void
+  onSave:           () => void
+  saving:           boolean
+  onClose:          () => void
+  ingredientName?:  string
 }) {
+  const [showSearchModal, setShowSearchModal] = useState(false)
+  const [modalQuery,      setModalQuery]      = useState('')
+  const [sourceFilter,    setSourceFilter]    = useState<'all' | 'usda' | 'off'>('all')
+  const modalInputRef = useRef<HTMLInputElement>(null)
+
+  function openSearch() {
+    setModalQuery(nutSearch || ingredientName)
+    setSourceFilter('all')
+    setShowSearchModal(true)
+    // trigger a search immediately if we have a query
+    const q = nutSearch || ingredientName
+    if (q.trim()) {
+      onSearch(q.trim())
+    }
+    setTimeout(() => modalInputRef.current?.focus(), 80)
+  }
+
+  function handleModalSearch() {
+    if (!modalQuery.trim()) return
+    onSearch(modalQuery.trim())
+  }
+
+  function handleApply(r: any) {
+    onApply(r)
+    setShowSearchModal(false)
+  }
+
+  const filteredResults = nutResults.filter(r =>
+    sourceFilter === 'all' || r.source === sourceFilter
+  )
+
+  const hasValues = Object.values(nutForm).some(v => v !== '')
+
   const nutFields = [
-    { key: 'energy_kcal', label: 'Energy',        unit: 'kcal' },
-    { key: 'protein_g',   label: 'Protein',        unit: 'g' },
-    { key: 'carbs_g',     label: 'Carbohydrates',  unit: 'g' },
-    { key: 'fat_g',       label: 'Fat',            unit: 'g' },
-    { key: 'fibre_g',     label: 'Fibre',          unit: 'g' },
-    { key: 'sugar_g',     label: 'Sugars',         unit: 'g' },
-    { key: 'salt_g',      label: 'Salt',           unit: 'g' },
+    { key: 'energy_kcal', label: 'Energy',       unit: 'kcal' },
+    { key: 'protein_g',   label: 'Protein',       unit: 'g' },
+    { key: 'carbs_g',     label: 'Carbohydrates', unit: 'g' },
+    { key: 'fat_g',       label: 'Fat',           unit: 'g' },
+    { key: 'fibre_g',     label: 'Fibre',         unit: 'g' },
+    { key: 'sugar_g',     label: 'Sugars',        unit: 'g' },
+    { key: 'salt_g',      label: 'Salt',          unit: 'g' },
   ]
+
   return (
     <>
-      {/* USDA search */}
-      <div className="mb-4">
-        <p className="text-xs text-text-3 mb-2">Search USDA FoodData Central to auto-populate values (per 100g).</p>
-        <div className="flex gap-2">
-          <input
-            className="input flex-1"
-            placeholder="e.g. chicken breast raw"
-            value={nutSearch}
-            onChange={e => setNutSearch(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && onSearch()}
-          />
-          <button className="btn-outline px-4 py-2 text-sm" onClick={onSearch} disabled={nutLoading}>
-            {nutLoading ? 'Searching…' : 'Search'}
-          </button>
-        </div>
-        {nutResults.length > 0 && (
-          <div className="mt-2 border border-border rounded-lg overflow-hidden max-h-40 overflow-y-auto">
-            {nutResults.map((r, i) => (
-              <button
-                key={i}
-                type="button"
-                className="w-full text-left px-3 py-2 text-sm hover:bg-accent-dim transition-colors border-b border-border last:border-0"
-                onClick={() => onApply(r)}
-              >
-                <div className="font-semibold text-text-1">{r.name}</div>
-                {r.energy_kcal != null && (
-                  <div className="text-xs text-text-3">
-                    {Math.round(r.energy_kcal)}kcal · P:{Number(r.protein_g||0).toFixed(1)}g · C:{Number(r.carbs_g||0).toFixed(1)}g · F:{Number(r.fat_g||0).toFixed(1)}g
-                  </div>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
+      {/* ── Search button row ───────────────────────────────────────── */}
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-xs text-text-3">Values per 100g. Click Search to auto-populate from USDA / Open Food Facts.</p>
+        <button
+          type="button"
+          className="btn-outline px-3 py-1.5 text-sm shrink-0 ml-3"
+          onClick={openSearch}
+        >
+          Search database…
+        </button>
       </div>
 
-      {/* Nutrition fields — per 100g */}
+      {/* ── Nutrition fields — per 100g ─────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         {nutFields.map(f => (
           <Field key={f.key} label={`${f.label} (${f.unit} / 100g)`}>
@@ -2371,7 +2385,7 @@ function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nut
         ))}
       </div>
 
-      {/* Dietary flags */}
+      {/* ── Dietary flags ───────────────────────────────────────────── */}
       <div className="border-t border-border pt-3 mb-4">
         <p className="text-xs text-text-3 mb-2">Dietary flags:</p>
         <div className="flex flex-wrap gap-2">
@@ -2398,6 +2412,159 @@ function NutritionTabContent({ nutForm, setNutForm, nutSearch, setNutSearch, nut
           {saving ? 'Saving…' : 'Save Nutrition'}
         </button>
       </div>
+
+      {/* ── Search modal ─────────────────────────────────────────────── */}
+      {showSearchModal && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.55)' }}
+          onMouseDown={e => { if (e.target === e.currentTarget) setShowSearchModal(false) }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col"
+               style={{ maxHeight: '80vh' }}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <h3 className="text-base font-semibold text-text-1">Search Nutrition Database</h3>
+                <p className="text-xs text-text-3 mt-0.5">USDA FoodData Central + Open Food Facts — values per 100g</p>
+              </div>
+              <button
+                type="button"
+                className="text-text-3 hover:text-text-1 text-xl leading-none ml-4"
+                onClick={() => setShowSearchModal(false)}
+              >✕</button>
+            </div>
+
+            {/* Search input */}
+            <div className="px-5 pt-4 pb-3 border-b border-border">
+              <div className="flex gap-2">
+                <input
+                  ref={modalInputRef}
+                  className="input flex-1"
+                  placeholder="e.g. chicken breast raw"
+                  value={modalQuery}
+                  onChange={e => setModalQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleModalSearch()}
+                />
+                <button
+                  type="button"
+                  className="btn-primary px-4 py-2 text-sm shrink-0"
+                  onClick={handleModalSearch}
+                  disabled={nutLoading}
+                >
+                  {nutLoading ? 'Searching…' : 'Search'}
+                </button>
+              </div>
+
+              {/* Source filter pills */}
+              {nutResults.length > 0 && (
+                <div className="flex gap-2 mt-3">
+                  {(['all', 'usda', 'off'] as const).map(s => {
+                    const count = s === 'all' ? nutResults.length
+                      : nutResults.filter(r => r.source === s).length
+                    const labels: Record<string, string> = { all: 'All', usda: 'USDA', off: 'Open Food Facts' }
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setSourceFilter(s)}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors
+                          ${sourceFilter === s
+                            ? 'bg-accent text-white border-accent'
+                            : 'bg-surface-2 text-text-3 border-border hover:border-accent hover:text-accent'
+                          }`}
+                      >
+                        {labels[s]} ({count})
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Results list */}
+            <div className="flex-1 overflow-y-auto">
+              {nutLoading && (
+                <div className="flex items-center justify-center py-12 text-text-3 text-sm gap-2">
+                  <span className="animate-spin text-accent">⟳</span> Searching…
+                </div>
+              )}
+              {!nutLoading && nutResults.length === 0 && (
+                <div className="text-center py-12 text-text-3 text-sm">
+                  {modalQuery.trim()
+                    ? 'No results found. Try a different search term.'
+                    : 'Enter a search term above to find nutrition data.'
+                  }
+                </div>
+              )}
+              {!nutLoading && filteredResults.length === 0 && nutResults.length > 0 && (
+                <div className="text-center py-12 text-text-3 text-sm">
+                  No {sourceFilter === 'usda' ? 'USDA' : 'Open Food Facts'} results. Try "All" filter.
+                </div>
+              )}
+              {!nutLoading && filteredResults.map((r, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className="w-full text-left px-5 py-3 hover:bg-accent-dim transition-colors border-b border-border last:border-0 flex items-start gap-3"
+                  onClick={() => handleApply(r)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-text-1 text-sm leading-snug">{r.name}</div>
+                    {r.brand && (
+                      <div className="text-xs text-text-3 mt-0.5">{r.brand}</div>
+                    )}
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                      {r.energy_kcal != null && (
+                        <span className="text-xs text-text-2 font-mono">{Math.round(r.energy_kcal)} kcal</span>
+                      )}
+                      {r.protein_g != null && (
+                        <span className="text-xs text-text-3 font-mono">P {Number(r.protein_g).toFixed(1)}g</span>
+                      )}
+                      {r.carbs_g != null && (
+                        <span className="text-xs text-text-3 font-mono">C {Number(r.carbs_g).toFixed(1)}g</span>
+                      )}
+                      {r.fat_g != null && (
+                        <span className="text-xs text-text-3 font-mono">F {Number(r.fat_g).toFixed(1)}g</span>
+                      )}
+                      {r.fibre_g != null && (
+                        <span className="text-xs text-text-3 font-mono">Fb {Number(r.fibre_g).toFixed(1)}g</span>
+                      )}
+                      {r.salt_g != null && (
+                        <span className="text-xs text-text-3 font-mono">Salt {Number(r.salt_g).toFixed(2)}g</span>
+                      )}
+                    </div>
+                  </div>
+                  <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full mt-0.5
+                    ${r.source === 'usda'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-orange-100 text-orange-700'
+                    }`}>
+                    {r.source === 'usda' ? 'USDA' : 'OFF'}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-border flex items-center justify-between">
+              <span className="text-xs text-text-3">
+                {!nutLoading && nutResults.length > 0
+                  ? `${filteredResults.length} result${filteredResults.length !== 1 ? 's' : ''}${sourceFilter !== 'all' ? ' (filtered)' : ''}`
+                  : ''}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost px-4 py-2 text-sm"
+                onClick={() => setShowSearchModal(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
