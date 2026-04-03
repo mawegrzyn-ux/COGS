@@ -137,7 +137,7 @@ function resolveUnit(unitStr, dbUnits) {
 const COL_PRICE    = /price|cost|£|\$|€|usd|gbp|eur|rate|unit\s*price|purchase\s*price|price\s*per/i;
 const COL_VENDOR   = /vendor|supplier/i;
 const COL_PU       = /purchase[\s_-]?unit|buy[\s_-]?unit|pack[\s_-]?size|pack\s*desc|purch\s*unit/i;
-const COL_CONV     = /conv|conversion|qty[\s_-]?in[\s_-]?base|base[\s_-]?qty|purchase[\s_→->]+base/i;
+const COL_CONV     = /conv|conversion|qty[\s_-]?in[\s_-]?base|base[\s_-]?qty|purchase[\s_\-→>]+base/i;
 const COL_INGNAME  = /\bname\b|product[\s_]?name|ingredient|item[\s_]?name|description/i;
 const COL_BASEUNIT = /\bbase[\s_]?unit\b|\buom\b|\bunit\b|\bmeasure\b/i;
 const COL_CATEGORY = /categ|group\b|\btype\b/i;
@@ -693,7 +693,10 @@ async function detectDuplicates(staged) {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 function validateStaged(staged) {
-  for (const r of staged.vendors      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } }
+  for (const r of staged.vendors || []) {
+    if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); }
+    if (!r.country) { if (r._status !== 'error') r._status = 'warning'; r._issues.push('No country set — vendor will be saved without a country'); }
+  }
   for (const r of staged.ingredients  || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.source_category) r._issues.push('No category — will remain uncategorised'); }
   for (const r of staged.price_quotes || []) { if (!r.ingredient_name) { r._status = 'error'; r._issues.push('Ingredient name required'); } if (!(r.purchase_price > 0)) { r._status = r._status === 'error' ? 'error' : 'warning'; r._issues.push('Purchase price is zero'); } }
   for (const r of staged.recipes      || []) { if (!r.name) { r._status = 'error'; r._issues.push('Name is required'); } if (!r.items?.length) r._issues.push('No ingredient lines — recipe name only (you can add ingredients later in the Recipes page)'); }
@@ -966,14 +969,24 @@ router.post('/:id/execute', async (req, res) => {
       for (const row of staged.vendors || []) {
         if (row._action === 'skip') { results.vendors_skipped++; continue; }
         if (!row.name) continue;
-        const cid = row.country ? countryLookup[row.country.toLowerCase()] || null : null;
+        const cid     = row.country ? countryLookup[row.country.toLowerCase()] || null : null;
+        const contact = row.contact || null;
+        const email   = row.email   || null;
+        const phone   = row.phone   || null;
+        const notes   = row.notes   || null;
         if (row._action === 'override' && row._duplicate_of?.id) {
-          await client.query('UPDATE mcogs_vendors SET name=$1,country_id=$2,updated_at=NOW() WHERE id=$3', [row.name, cid, row._duplicate_of.id]);
+          await client.query(
+            `UPDATE mcogs_vendors SET name=$1,country_id=$2,contact=$3,email=$4,phone=$5,notes=$6,updated_at=NOW() WHERE id=$7`,
+            [row.name, cid, contact, email, phone, notes, row._duplicate_of.id]
+          );
           vendorLookup[row.name.toLowerCase()] = row._duplicate_of.id;
           results.vendors_updated++;
           continue;
         }
-        const { rows } = await client.query('INSERT INTO mcogs_vendors (name,country_id) VALUES ($1,$2) RETURNING id', [row.name, cid]);
+        const { rows } = await client.query(
+          `INSERT INTO mcogs_vendors (name,country_id,contact,email,phone,notes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [row.name, cid, contact, email, phone, notes]
+        );
         vendorLookup[row.name.toLowerCase()] = rows[0].id;
         results.vendors++;
       }

@@ -64,6 +64,7 @@ interface ImportResults {
 }
 
 interface DbCategory { id: number; name: string; type: string }
+interface DbCountry { id: number; name: string }
 interface DbUnit {
   id:                              number
   name:                            string
@@ -221,6 +222,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   const [dbCats,        setDbCats]        = useState<DbCategory[]>([])
   const [dbIngredients, setDbIngredients] = useState<{ id: number; name: string; base_unit_abbr?: string }[]>([])
   const [dbUnits,       setDbUnits]       = useState<DbUnit[]>([])
+  const [dbCountries,   setDbCountries]   = useState<DbCountry[]>([])
   const [filterDups,    setFilterDups]    = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -237,6 +239,11 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   // Load base units for BU dropdown + auto-populate defaults
   useEffect(() => {
     api.get('/units').then((d: DbUnit[]) => setDbUnits(d || [])).catch(() => {})
+  }, [api])
+
+  // Load countries for vendor country dropdown
+  useEffect(() => {
+    api.get('/countries').then((d: DbCountry[]) => setDbCountries(d || [])).catch(() => {})
   }, [api])
 
   // Load existing job from ?job=<id> URL param (chatbot deep-link)
@@ -624,6 +631,18 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
           })}
         </div>
 
+        {/* Vendor tab hint */}
+        {reviewTab === 'vendors' && (staged.vendors as StagedRow[]).some(v => v._action !== 'skip' && !v.country) && (
+          <div className="mb-3 p-3 rounded-lg text-sm flex items-start gap-2" style={{ background: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE' }}>
+            <span className="mt-0.5">ℹ</span>
+            <span>
+              <strong>Fill in vendor details before continuing.</strong> Country is required for price quotes to work correctly.
+              Contact, email and phone are optional but recommended.
+              Click any cell to edit.
+            </span>
+          </div>
+        )}
+
         {/* Bulk actions */}
         <div className="flex items-center gap-3 mb-3">
           {dupCount > 0 && (
@@ -645,7 +664,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         {/* Table */}
         <div className="card overflow-x-auto">
           {reviewTab === 'ingredients' && <IngredientsTable rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} dbCats={dbCats} dbUnits={dbUnits} />}
-          {reviewTab === 'vendors'     && <VendorsTable     rows={filtered} updateRow={updateRow} />}
+          {reviewTab === 'vendors'     && <VendorsTable     rows={filtered} updateRow={updateRow} dbCountries={dbCountries} />}
           {reviewTab === 'price_quotes'&& <QuotesTable      rows={filtered} updateRow={updateRow} staged={staged!} />}
           {reviewTab === 'recipes'     && <RecipesTable     rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} />}
           {reviewTab === 'menus'       && <MenusTable       rows={filtered} updateRow={updateRow} />}
@@ -962,12 +981,13 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 // ── Review sub-tables ─────────────────────────────────────────────────────────
 
 interface TableProps {
-  rows:       StagedRow[]
-  updateRow:  (entity: ReviewTab, id: string, changes: Partial<StagedRow>) => void
-  staged?:    StagedData
+  rows:         StagedRow[]
+  updateRow:    (entity: ReviewTab, id: string, changes: Partial<StagedRow>) => void
+  staged?:      StagedData
   resolvedCat?: (src: string) => string
-  dbCats?:    DbCategory[]
-  dbUnits?:   DbUnit[]
+  dbCats?:      DbCategory[]
+  dbUnits?:     DbUnit[]
+  dbCountries?: DbCountry[]
 }
 
 function RowStatusBadge({ row }: { row: StagedRow }) {
@@ -1054,18 +1074,45 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats, dbUnits }: Tab
   )
 }
 
-function VendorsTable({ rows, updateRow }: TableProps) {
+function VendorsTable({ rows, updateRow, dbCountries }: TableProps) {
+  const countryNames = (dbCountries || []).map(c => c.name)
   if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No vendors found.</div>
   return (
-    <table className="w-full min-w-[500px]">
-      <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Country</TH></tr></thead>
+    <table className="w-full min-w-[900px]">
+      <thead>
+        <tr>
+          <TH>Action</TH>
+          <TH>Status</TH>
+          <TH>Name</TH>
+          <TH>Country <span className="font-normal text-text-3">(required)</span></TH>
+          <TH>Contact Name</TH>
+          <TH>Email</TH>
+          <TH>Phone</TH>
+          <TH>Notes</TH>
+        </tr>
+      </thead>
       <tbody>
         {rows.map(row => (
           <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
             <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('vendors', row._id, { _action: v })} /></TD>
             <TD><RowStatusBadge row={row} /></TD>
             <TD><EditCell value={String(row.name||'')}    onChange={v => updateRow('vendors', row._id, { name: v })} /></TD>
-            <TD><EditCell value={String(row.country||'')} onChange={v => updateRow('vendors', row._id, { country: v })} placeholder="e.g. United Kingdom" /></TD>
+            <TD>
+              <EditCell
+                value={String(row.country||'')}
+                onChange={v => updateRow('vendors', row._id, { country: v })}
+                type="select"
+                options={countryNames}
+                placeholder="Select country…"
+              />
+              {row.country && !countryNames.includes(String(row.country)) && (
+                <span className="text-xs text-amber-600 mt-0.5 block">Not in DB — will create without country</span>
+              )}
+            </TD>
+            <TD><EditCell value={String(row.contact||'')} onChange={v => updateRow('vendors', row._id, { contact: v })} placeholder="e.g. Jane Smith" /></TD>
+            <TD><EditCell value={String(row.email||'')}   onChange={v => updateRow('vendors', row._id, { email: v })}   placeholder="e.g. orders@vendor.com" /></TD>
+            <TD><EditCell value={String(row.phone||'')}   onChange={v => updateRow('vendors', row._id, { phone: v })}   placeholder="e.g. 020 1234 5678" /></TD>
+            <TD><EditCell value={String(row.notes||'')}   onChange={v => updateRow('vendors', row._id, { notes: v })}   placeholder="Optional…" /></TD>
           </tr>
         ))}
       </tbody>
