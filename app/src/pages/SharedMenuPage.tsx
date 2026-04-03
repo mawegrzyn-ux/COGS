@@ -508,6 +508,15 @@ export default function SharedMenuPage() {
     }
   }, [data])
 
+  // ── Stable levels + mobile filter ────────────────────────────────────────────
+  // MUST be declared before any early returns to keep hook call count stable
+  const levels = useMemo(() => data?.price_levels ?? [], [data])
+
+  const visibleLevels = useMemo(
+    () => isMobile && mobileLevelFilter !== 'all' ? levels.filter(l => l.id === mobileLevelFilter) : levels,
+    [levels, isMobile, mobileLevelFilter]
+  )
+
   // ── Render: loading / error ───────────────────────────────────────────────────
 
   if (metaLoading) return (
@@ -663,13 +672,6 @@ export default function SharedMenuPage() {
 
   const isEdit = meta?.mode === 'edit'
   const sym    = data?.menu.currency_symbol ?? ''
-  const levels = data?.price_levels ?? []
-
-  // Mobile level filter
-  const visibleLevels = useMemo(
-    () => isMobile && mobileLevelFilter !== 'all' ? levels.filter(l => l.id === mobileLevelFilter) : levels,
-    [levels, isMobile, mobileLevelFilter]
-  )
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
@@ -1375,7 +1377,7 @@ export default function SharedMenuPage() {
                                   <div className={`group relative ${cellChange ? 'rounded-md ring-1 ring-amber-300 bg-amber-50/40 px-1' : ''}`}>
                                     {/* Stable display — always in DOM, invisible when editing to preserve cell dimensions */}
                                     <button
-                                      className={`w-full text-right ${isEdit && !isEditing ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default invisible'}`}
+                                      className={`w-full text-right ${isEdit && !isEditing ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : isEditing ? 'cursor-default invisible' : 'cursor-default'}`}
                                       style={isEdit && isEditing ? { pointerEvents: 'none' } : undefined}
                                       onClick={isEdit && !isEditing ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
                                       disabled={!isEdit || isEditing}
