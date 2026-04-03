@@ -1105,7 +1105,7 @@ function VendorsTable({ rows, updateRow, dbCountries }: TableProps) {
                 options={countryNames}
                 placeholder="Select country…"
               />
-              {row.country && !countryNames.includes(String(row.country)) && (
+              {!!row.country && !countryNames.includes(String(row.country)) && (
                 <span className="text-xs text-amber-600 mt-0.5 block">Not in DB — will create without country</span>
               )}
             </TD>
