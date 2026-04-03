@@ -22,11 +22,12 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 12. [Pages Built](#12-pages-built)
 13. [Pages Remaining to Build](#13-pages-remaining-to-build)
 14. [Pepper AI Assistant](#14-pepper-ai-assistant)
-15. [Known Bugs Fixed](#15-known-bugs-fixed)
-16. [Critical Gotchas & Lessons Learned](#16-critical-gotchas--lessons-learned)
-17. [Backlog](#17-backlog)
-18. [Domain Migration Log](#18-domain-migration-log)
-19. [Key Contacts & Resources](#19-key-contacts--resources)
+15. [RBAC — Role-Based Access Control](#15-rbac--role-based-access-control)
+16. [Known Bugs Fixed](#16-known-bugs-fixed)
+17. [Critical Gotchas & Lessons Learned](#17-critical-gotchas--lessons-learned)
+18. [Backlog](#18-backlog)
+19. [Domain Migration Log](#19-domain-migration-log)
+20. [Key Contacts & Resources](#20-key-contacts--resources)
 
 ---
 
@@ -370,6 +371,10 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 23 | `mcogs_brand_partners` | Brand/franchise partners (e.g. "McDonald's UK") — linked to markets |
 | 24 | `mcogs_import_jobs` | AI import staging jobs: raw AI output, enriched rows, status, created_by |
 | 25 | `mcogs_ai_chat_log` | Pepper AI conversation log: messages, tools_called, token counts, context JSONB |
+| 26 | `mcogs_roles` | RBAC roles (Admin/Operator/Viewer + custom). `is_system` protects built-in roles |
+| 27 | `mcogs_role_permissions` | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
+| 28 | `mcogs_users` | App users mapped from Auth0 sub. Stores status (`pending`/`active`/`disabled`), role, last login |
+| 29 | `mcogs_user_brand_partners` | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
 
 ### Key Schema Details
 
@@ -434,7 +439,10 @@ All routes registered in `api/src/routes/index.js`.
 
 | Route | File | Status |
 |---|---|---|
-| `GET /api/health` | `health.js` | ✅ Active |
+| `GET /api/health` | `health.js` | ✅ Active — public, no auth |
+| `GET /api/me` | `me.js` | ✅ Active — returns current user profile, permissions, allowedCountries |
+| `GET/PUT/DELETE /api/users` | `users.js` | ✅ Active — requires `users:read` / `users:write` |
+| `GET/POST/PUT/DELETE /api/roles` | `roles.js` | ✅ Active — requires `users:read` / `users:write` |
 | `GET/PUT /api/settings` | `settings.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/units` | `units.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/price-levels` | `price-levels.js` | ✅ Active |
@@ -651,7 +659,7 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 
 ### ✅ Settings Page (`/settings`)
 
-**Tabs:** Units | Price Levels | Exchange Rates | System | COGS Thresholds
+**Tabs:** Units | Price Levels | Exchange Rates | System | COGS Thresholds | AI | Import | Users | Roles
 
 - Full CRUD for Units (`mcogs_units`) and Price Levels (`mcogs_price_levels`)
 - Exchange Rates tab syncs from Frankfurter API — no key needed
@@ -889,7 +897,73 @@ Enforced via system prompt: Claude must verbally describe any create/update/dele
 
 ---
 
-## 15. Known Bugs Fixed
+## 15. RBAC — Role-Based Access Control
+
+### Overview
+
+Every user has a **role**, and every role has a **permission level** per feature: `none`, `read`, or `write`.
+
+| Level | Effect |
+|---|---|
+| `none` | Nav item hidden, API returns 403 |
+| `read` | Can view data, cannot create/edit/delete |
+| `write` | Full access |
+
+Three system roles are seeded automatically and cannot be deleted:
+
+| Role | Default access |
+|---|---|
+| **Admin** | `write` on all 12 features |
+| **Operator** | `write` on most features; `read` on settings; `none` on users |
+| **Viewer** | `read` on all features except settings/import/users (`none`) |
+
+Custom roles can be created in Settings → Roles and assigned any combination.
+
+### Features (12)
+
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users`
+
+### User Lifecycle
+
+```
+Register (Auth0) → pending status → Admin approves → active → can sign in
+First user ever  → auto-bootstrapped as Admin + active (no chicken-and-egg)
+Disabled         → 403 on every request, shown disabled message
+```
+
+### Market Scope (Brand Partner Filtering)
+
+Users can be restricted to specific markets via brand partner assignments (`mcogs_user_brand_partners`). The scope chain is:
+
+```
+mcogs_user_brand_partners → mcogs_brand_partners → mcogs_countries
+```
+
+`allowedCountries = null` means unrestricted (Admin default). Non-null = array of country IDs the user may access.
+
+### Backend Architecture
+
+- **`api/src/middleware/auth.js`** — `requireAuth`, `requirePermission(feature, level)`, `applyMarketScope`
+- Token verification: calls Auth0 `/userinfo` endpoint; responses cached 5 min (500-entry cap)
+- `loadOrCreateUser()` — creates pending user on first login; bootstraps first-ever user as Admin
+- All routes (except `/health` and `/public/share/*`) require `requireAuth`
+
+### Frontend Architecture
+
+- **`app/src/hooks/usePermissions.ts`** — `usePermissions()` hook, `Feature` type, `AccessLevel` type, `MeUser` interface
+- **`app/src/components/PermissionsProvider.tsx`** — loads `/api/me` on auth change, provides `can(feature, level)` and `allowedCountries`
+- **`app/src/pages/PendingPage.tsx`** — shown when `user.status === 'pending'`
+- **Sidebar** — hides nav items where `can(feature, 'read')` is false
+- **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope
+- **Settings → Roles tab** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
+
+### Pepper AI Auth Fix
+
+Pepper (`AiChat.tsx`) uses raw `fetch()` calls for SSE streaming — not `useApi()`. These calls had no auth header before RBAC. Fix: `getAccessTokenSilently()` from `useAuth0()` is called before each fetch and injected as `Authorization: Bearer <token>`.
+
+---
+
+## 16. Known Bugs Fixed
 
 ### Fix 1 — Mixed Content Error (HTTP vs HTTPS)
 
@@ -1066,7 +1140,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-## 16. Critical Gotchas & Lessons Learned
+## 17. Critical Gotchas & Lessons Learned
 
 ### Server User Context
 
@@ -1177,7 +1251,7 @@ The user commits and pushes all changes themselves from their local machine. **C
 
 ---
 
-## 17. Backlog
+## 18. Backlog
 
 ### Category Groups Migration
 
@@ -1279,7 +1353,7 @@ Pepper's response arrives as SSE text chunks, not complete sentences. For real-t
 
 ---
 
-## 18. Domain Migration Log
+## 19. Domain Migration Log
 
 ### April 2026 — `obscurekitty.com` → `cogs.flavorconnect.tech`
 
@@ -1313,7 +1387,7 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-## 19. Key Contacts & Resources
+## 20. Key Contacts & Resources
 
 | Resource | URL/Value |
 |---|---|
@@ -1327,4 +1401,4 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Domain migrated from obscurekitty.com to cogs.flavorconnect.tech — DNS A record, Nginx server_name, Certbot SSL cert, Auth0 URLs, GitHub Secrets all updated; docs/DOMAIN_MIGRATION.md created; HelpPage Domain Migration section expanded with numbered step-by-step process; Allergen Matrix header padding + horizontal centering fix; SharedMenuPage UI: menu name as large title, All▼/▶ toggle in Item column header, price·cost·COGS% inline row layout, amber highlight only on actual value change; 4-level recipe variant priority chain: market+PL > market > PL > global; mcogs_recipe_market_pl_variations table; Shared Links multi-view comment routing fix; AllergenMatrixPage clear-filters button on empty state)*
+*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated)*

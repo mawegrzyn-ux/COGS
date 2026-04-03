@@ -111,6 +111,7 @@ const SECTIONS = [
   { id: 'allergen-matrix',  icon: '⚠️', label: 'Allergen Matrix' },
   { id: 'haccp',            icon: '🛡️', label: 'HACCP' },
   { id: 'settings',         icon: '⚙️', label: 'Settings' },
+  { id: 'user-management',  icon: '👥', label: 'User Management' },
   { id: 'ai-assistant',     icon: '🤖', label: 'Pepper (AI)' },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
   { id: 'api-reference',    icon: '📡', label: 'API Reference' },
@@ -709,6 +710,87 @@ export default function HelpPage() {
           The setting is saved in the database and persists across sessions.
         </p>
 
+        {/* ═══════════════════════════════════ USER MANAGEMENT */}
+        <H2 id="user-management" icon="👥" title="User Management" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          COGS Manager has a built-in role-based access control (RBAC) system. Every user has a{' '}
+          <strong>role</strong>, and every role has a <strong>permission level</strong> per feature:{' '}
+          <em>none</em>, <em>read</em>, or <em>write</em>. Manage users and roles in{' '}
+          <strong>Settings → Users</strong> and <strong>Settings → Roles</strong>.
+        </p>
+
+        <H3 id="rbac-roles">Built-in Roles</H3>
+        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
+          <thead><tr><Th>Role</Th><Th>Default access</Th><Th>Notes</Th></tr></thead>
+          <tbody>
+            {[
+              ['Admin',    'Write on all 12 features',                          'Full access. Cannot be deleted.'],
+              ['Operator', 'Write on most features; Read on settings; None on users', 'Day-to-day operators. Cannot manage users/roles.'],
+              ['Viewer',   'Read on all features except settings/import/users (None)', 'Read-only. Cannot make any changes.'],
+            ].map(([role, access, note]) => (
+              <tr key={role}><Td><strong>{role}</strong></Td><Td>{access}</Td><Td>{note}</Td></tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Custom roles can be created in <strong>Settings → Roles</strong> by copying an existing role
+          and adjusting the permission matrix.
+        </p>
+
+        <H3 id="rbac-features">Features</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The 12 controllable features map directly to the sidebar navigation:
+        </p>
+        <div className="grid grid-cols-3 gap-1.5 my-3">
+          {['Dashboard','Inventory','Recipes','Menus','Allergens','HACCP','Markets','Categories','Settings','Import','AI Chat','Users'].map(f => (
+            <span key={f} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded px-2 py-1 text-xs font-mono text-[#2D4A38] text-center">{f}</span>
+          ))}
+        </div>
+
+        <H3 id="rbac-lifecycle">User Lifecycle</H3>
+        <ProcessFlow steps={[
+          { label: 'Register', sub: 'Via Auth0 login' },
+          { label: 'Pending', sub: 'Awaiting approval' },
+          { label: 'Admin approves', sub: 'Settings → Users' },
+          { label: 'Active', sub: 'Can sign in' },
+        ]} />
+        <InfoBox type="tip" title="First user">
+          The very first person to log in is automatically set to <strong>Admin + active</strong> — no
+          chicken-and-egg problem. Every subsequent user starts as <strong>pending</strong> until
+          an admin approves them.
+        </InfoBox>
+        <InfoBox type="info" title="Disabling vs deleting">
+          <strong>Disable</strong> blocks access immediately but preserves the account record.{' '}
+          <strong>Delete</strong> removes the record entirely — the person can re-register but will
+          start as pending again.
+        </InfoBox>
+
+        <H3 id="rbac-market-scope">Market Scope</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Users can be restricted to specific markets by assigning <strong>Brand Partners</strong> in
+          the edit modal (Settings → Users → pencil icon). A user with brand partner assignments can
+          only see markets/countries linked to those partners. Leaving all brand partners unchecked
+          grants <strong>unrestricted access</strong> to all markets (Admin default).
+        </p>
+
+        <H3 id="rbac-roles-matrix">Editing the Permission Matrix</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Settings → Roles shows a matrix of all roles × features. Click any cell to cycle its level:
+        </p>
+        <div className="flex gap-3 my-3 flex-wrap">
+          {[['—','No access','bg-gray-100 text-gray-500'],['R','Read-only','bg-blue-50 text-blue-700'],['W','Write (full)','bg-[#E8F5ED] text-[#146A34]']].map(([badge, label, cls]) => (
+            <div key={badge} className="flex items-center gap-2">
+              <span className={`w-8 h-7 rounded-md text-xs font-bold font-mono flex items-center justify-center ${cls}`}>{badge}</span>
+              <span className="text-sm text-[#2D4A38]">{label}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Changes save <strong>instantly</strong> — no Save button needed. A spinner appears in the
+          cell while the update is in flight. System roles (Admin/Operator/Viewer) cannot be renamed
+          or deleted. Custom roles have a pencil (rename) and ✕ (delete) icon in their column header.
+        </p>
+
         {/* ═══════════════════════════════════ AI ASSISTANT */}
         <H2 id="ai-assistant" icon="🤖" title="Pepper — AI Assistant" />
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
@@ -1198,14 +1280,15 @@ export default function HelpPage() {
 
         <H3 id="auth0-flow">Auth0 Authentication Flow</H3>
         <ProcessFlow steps={[
-          { label: 'User visits', sub: 'cogs.flavorconnect.tech' },
+          { label: 'User visits', sub: 'cogs.macaroonie.com' },
           { label: 'Auth0 check', sub: 'Token valid?' },
           { label: 'Redirect to Auth0', sub: 'If not authenticated' },
           { label: 'Login', sub: 'Password or Google' },
           { label: 'Callback', sub: 'Access token returned' },
           { label: 'React SPA', sub: 'Token in memory' },
-          { label: 'useApi() calls', sub: 'Bearer token sent' },
-          { label: 'API responds', sub: '(JWT not yet verified)' },
+          { label: 'API request', sub: 'Bearer token sent' },
+          { label: 'Auth0 /userinfo', sub: 'Token verified + cached' },
+          { label: 'RBAC check', sub: 'Role + permissions loaded' },
         ]} />
 
         <H3 id="security-controls">Security Controls</H3>
@@ -1215,8 +1298,10 @@ export default function HelpPage() {
             {[
               ['HTTPS', "Nginx + Let's Encrypt SSL", '✅ Active'],
               ['Auth0 Frontend Guard', 'React ProtectedRoute + useAuth0()', '✅ Active'],
-              ['Bearer Token', 'Auth0 JWT in Authorization header via useApi()', '✅ Sent'],
-              ['API JWT Verification', 'Express middleware to verify JWT signature', '⚠️ Not implemented — planned'],
+              ['Bearer Token', 'Auth0 access token in Authorization header on every request', '✅ Active'],
+              ['API Token Verification', 'requireAuth middleware calls Auth0 /userinfo — 5 min cache', '✅ Active'],
+              ['RBAC', 'Role + per-feature permission check on every protected route', '✅ Active'],
+              ['Pending Approval', 'New users start as pending — admin must approve before access', '✅ Active'],
               ['Rate Limiting', '500 req / 15 min (express-rate-limit)', '✅ Active'],
               ['Security Headers', 'Helmet.js (HSTS, CSP, X-Frame-Options, etc.)', '✅ Active'],
               ['Trust Proxy', 'app.set("trust proxy", 1) for Nginx X-Forwarded-For', '✅ Active'],
@@ -1230,11 +1315,11 @@ export default function HelpPage() {
           </tbody>
         </table>
 
-        <InfoBox type="critical" title="JWT Verification Gap">
-          The Express API does not currently verify Auth0 JWT tokens. Any request reaching the API with
-          correct headers would be accepted. This is acceptable for the current single-operator deployment
-          but <strong>must be implemented before multi-tenant or production launch</strong>.
-          See <Mono>docs/ENTERPRISE_SCALE.md</Mono> for the Auth0 API audience + express-jwt middleware plan.
+        <InfoBox type="info" title="Token verification approach">
+          The API verifies tokens by calling Auth0's <Mono>/userinfo</Mono> endpoint on each request
+          (responses cached 5 min). This works without configuring an Auth0 API audience.
+          For higher-security deployments, full JWT signature verification can be added via{' '}
+          <Mono>express-jwt</Mono> + Auth0 JWKS — see <Mono>docs/ENTERPRISE_SCALE.md</Mono>.
         </InfoBox>
 
         <H3 id="key-storage">AI Key Storage Model</H3>
