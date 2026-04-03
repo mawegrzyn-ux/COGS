@@ -8,10 +8,12 @@ import type { Feature, AccessLevel } from '../hooks/usePermissions'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Unit {
-  id:           number
-  name:         string
-  abbreviation: string
-  type:         'mass' | 'volume' | 'count'
+  id:                              number
+  name:                            string
+  abbreviation:                    string
+  type:                            'mass' | 'volume' | 'count'
+  default_recipe_unit:             string | null
+  default_recipe_unit_conversion:  number | null
 }
 
 interface PriceLevel {
@@ -203,6 +205,8 @@ function UnitsTab() {
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Name</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Abbreviation</th>
                 <th className="text-left px-4 py-2.5 font-semibold text-text-2">Type</th>
+                <th className="text-left px-4 py-2.5 font-semibold text-text-2">Default Recipe Unit</th>
+                <th className="text-left px-4 py-2.5 font-semibold text-text-2">Conversion</th>
                 <th className="w-20"/>
               </tr>
             </thead>
@@ -212,6 +216,12 @@ function UnitsTab() {
                   <td className="px-4 py-3 font-semibold text-text-1">{unit.name}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{unit.abbreviation}</td>
                   <td className="px-4 py-3"><Badge label={unit.type} variant="neutral" /></td>
+                  <td className="px-4 py-3 font-mono text-text-2">{unit.default_recipe_unit || <span className="text-text-3">—</span>}</td>
+                  <td className="px-4 py-3 font-mono text-text-2 text-xs">
+                    {unit.default_recipe_unit_conversion != null
+                      ? <span title={`1 ${unit.default_recipe_unit || 'recipe unit'} = ${unit.default_recipe_unit_conversion} ${unit.abbreviation}`}>{unit.default_recipe_unit_conversion}</span>
+                      : <span className="text-text-3">—</span>}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 justify-end">
                       <button onClick={() => setModal(unit)} className="btn-ghost px-2 py-1 text-xs">Edit</button>
@@ -253,16 +263,20 @@ function UnitModal({ unit, onSave, onClose }: {
   onSave:  (v: Omit<Unit, 'id'>) => Promise<void>
   onClose: () => void
 }) {
-  const [name, setName]     = useState(unit?.name || '')
-  const [abbr, setAbbr]     = useState(unit?.abbreviation || '')
-  const [type, setType]     = useState<Unit['type']>(unit?.type || 'mass')
-  const [saving, setSaving] = useState(false)
-  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [name,       setName]       = useState(unit?.name || '')
+  const [abbr,       setAbbr]       = useState(unit?.abbreviation || '')
+  const [type,       setType]       = useState<Unit['type']>(unit?.type || 'mass')
+  const [recipeUnit, setRecipeUnit] = useState(unit?.default_recipe_unit || '')
+  const [conversion, setConversion] = useState(unit?.default_recipe_unit_conversion?.toString() || '')
+  const [saving,     setSaving]     = useState(false)
+  const [errors,     setErrors]     = useState<Record<string, string>>({})
 
   const validate = () => {
     const e: Record<string, string> = {}
     if (!name.trim()) e.name = 'Name is required'
     if (!abbr.trim()) e.abbr = 'Abbreviation is required'
+    if (conversion && isNaN(parseFloat(conversion))) e.conversion = 'Must be a number'
+    if (conversion && parseFloat(conversion) <= 0)   e.conversion = 'Must be greater than 0'
     return e
   }
 
@@ -270,7 +284,13 @@ function UnitModal({ unit, onSave, onClose }: {
     const e = validate()
     if (Object.keys(e).length) { setErrors(e); return }
     setSaving(true)
-    await onSave({ name: name.trim(), abbreviation: abbr.trim(), type })
+    await onSave({
+      name:                           name.trim(),
+      abbreviation:                   abbr.trim(),
+      type,
+      default_recipe_unit:            recipeUnit.trim() || null,
+      default_recipe_unit_conversion: conversion ? parseFloat(conversion) : null,
+    })
     setSaving(false)
   }
 
@@ -287,6 +307,21 @@ function UnitModal({ unit, onSave, onClose }: {
           {UNIT_TYPES.map(t => <option key={t} value={t} className="capitalize">{t}</option>)}
         </select>
       </Field>
+      <div className="border-t border-border pt-4 mt-2">
+        <p className="text-xs text-text-3 mb-3">Default recipe unit — pre-filled when this base unit is selected on a new ingredient.</p>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Default Recipe Unit">
+            <input className="input" value={recipeUnit} onChange={e => setRecipeUnit(e.target.value)}
+              placeholder={`e.g. ${abbr || 'g'}`} />
+          </Field>
+          <Field label="Conversion to Base Unit" error={errors.conversion}
+            hint={recipeUnit && abbr ? `1 ${recipeUnit} = ${conversion || '?'} ${abbr}` : undefined}>
+            <input className="input font-mono" type="number" min="0.000001" step="any"
+              value={conversion} onChange={e => setConversion(e.target.value)}
+              placeholder="e.g. 0.001" />
+          </Field>
+        </div>
+      </div>
       <div className="flex gap-3 justify-end pt-2">
         <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
         <button onClick={handleSubmit} disabled={saving} className="btn-primary px-4 py-2 text-sm disabled:opacity-60">

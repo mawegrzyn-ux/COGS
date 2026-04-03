@@ -64,6 +64,14 @@ interface ImportResults {
 }
 
 interface DbCategory { id: number; name: string; type: string }
+interface DbUnit {
+  id:                              number
+  name:                            string
+  abbreviation:                    string
+  type:                            string
+  default_recipe_unit:             string | null
+  default_recipe_unit_conversion:  number | null
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -210,9 +218,10 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   const [reviewTab,   setReviewTab]   = useState<ReviewTab>('ingredients')
   const [results,     setResults]     = useState<ImportResults | null>(null)
   const [execError,   setExecError]   = useState<string | null>(null)
-  const [dbCats,      setDbCats]      = useState<DbCategory[]>([])
+  const [dbCats,        setDbCats]        = useState<DbCategory[]>([])
   const [dbIngredients, setDbIngredients] = useState<{ id: number; name: string; base_unit_abbr?: string }[]>([])
-  const [filterDups,  setFilterDups]  = useState(false)
+  const [dbUnits,       setDbUnits]       = useState<DbUnit[]>([])
+  const [filterDups,    setFilterDups]    = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Load categories
@@ -223,6 +232,11 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   // Load DB ingredients for recipe ingredient resolution
   useEffect(() => {
     api.get('/ingredients').then((d: any[]) => setDbIngredients(d || [])).catch(() => {})
+  }, [api])
+
+  // Load base units for BU dropdown + auto-populate defaults
+  useEffect(() => {
+    api.get('/units').then((d: DbUnit[]) => setDbUnits(d || [])).catch(() => {})
   }, [api])
 
   // Load existing job from ?job=<id> URL param (chatbot deep-link)
@@ -630,7 +644,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
         {/* Table */}
         <div className="card overflow-x-auto">
-          {reviewTab === 'ingredients' && <IngredientsTable rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} dbCats={dbCats} />}
+          {reviewTab === 'ingredients' && <IngredientsTable rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} dbCats={dbCats} dbUnits={dbUnits} />}
           {reviewTab === 'vendors'     && <VendorsTable     rows={filtered} updateRow={updateRow} />}
           {reviewTab === 'price_quotes'&& <QuotesTable      rows={filtered} updateRow={updateRow} staged={staged!} />}
           {reviewTab === 'recipes'     && <RecipesTable     rows={filtered} staged={staged} updateRow={updateRow} resolvedCat={resolvedCat} />}
@@ -953,6 +967,7 @@ interface TableProps {
   staged?:    StagedData
   resolvedCat?: (src: string) => string
   dbCats?:    DbCategory[]
+  dbUnits?:   DbUnit[]
 }
 
 function RowStatusBadge({ row }: { row: StagedRow }) {
@@ -980,9 +995,25 @@ const TD = ({ children, className = '' }: { children?: React.ReactNode; classNam
   </td>
 )
 
-function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) {
-  const catOptions = [...new Set((dbCats||[]).map(c => c.name))]
+function IngredientsTable({ rows, updateRow, resolvedCat, dbCats, dbUnits }: TableProps) {
+  const catOptions  = [...new Set((dbCats||[]).map(c => c.name))]
+  const unitOptions = (dbUnits||[]).map(u => u.abbreviation)
+
   if (!rows.length) return <div className="p-6 text-center text-sm text-text-3">No ingredients found.</div>
+
+  const handleUnitChange = (rowId: string, abbr: string) => {
+    const matched  = (dbUnits||[]).find(u => u.abbreviation === abbr)
+    const existing = rows.find(r => r._id === rowId)
+    updateRow('ingredients', rowId, {
+      unit: abbr,
+      // Auto-populate prep unit + conversion from unit defaults (only when the row's field is currently blank)
+      ...(matched?.default_recipe_unit && !existing?.prep_unit
+        ? { prep_unit: matched.default_recipe_unit } : {}),
+      ...(matched?.default_recipe_unit_conversion && !existing?.prep_to_base_conversion
+        ? { prep_to_base_conversion: matched.default_recipe_unit_conversion } : {}),
+    })
+  }
+
   return (
     <table className="w-full min-w-[900px]">
       <thead><tr><TH>Action</TH><TH>Status</TH><TH>Name</TH><TH>Category</TH><TH>Base Unit</TH><TH>Prep Unit</TH><TH>Conv. to Base</TH><TH>Waste %</TH></tr></thead>
@@ -991,11 +1022,18 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
           <tr key={row._id} style={{ opacity: row._action === 'skip' ? 0.5 : 1 }}>
             <TD><ActionToggle value={row._action} hasDuplicate={!!row._duplicate_of} onChange={v => updateRow('ingredients', row._id, { _action: v })} /></TD>
             <TD><RowStatusBadge row={row} /></TD>
-            <TD><EditCell value={String(row.name||'')}          onChange={v => updateRow('ingredients', row._id, { name: v })} /></TD>
+            <TD><EditCell value={String(row.name||'')} onChange={v => updateRow('ingredients', row._id, { name: v })} /></TD>
             <TD><EditCell value={resolvedCat!(String(row.source_category||''))} onChange={v => updateRow('ingredients', row._id, { source_category: v })} type="select" options={catOptions} /></TD>
             <TD>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <EditCell value={String(row.unit||'')} onChange={v => updateRow('ingredients', row._id, { unit: v })} placeholder="e.g. kg" />
+                {/* BU is a dropdown limited to configured base units */}
+                <EditCell
+                  value={String(row.unit||'')}
+                  onChange={v => handleUnitChange(row._id, v)}
+                  type="select"
+                  options={unitOptions}
+                  placeholder="Select…"
+                />
                 {row.unit_source && row.unit_source !== row.unit && (
                   <span
                     className="text-xs px-1.5 py-0.5 rounded font-medium cursor-help shrink-0"
@@ -1006,9 +1044,9 @@ function IngredientsTable({ rows, updateRow, resolvedCat, dbCats }: TableProps) 
                 )}
               </div>
             </TD>
-            <TD><EditCell value={String(row.prep_unit||'')} onChange={v => updateRow('ingredients', row._id, { prep_unit: v })} placeholder="e.g. portion" /></TD>
+            <TD><EditCell value={String(row.prep_unit||'')} onChange={v => updateRow('ingredients', row._id, { prep_unit: v })} placeholder="e.g. g" /></TD>
             <TD><EditCell value={String(row.prep_to_base_conversion||1)} onChange={v => updateRow('ingredients', row._id, { prep_to_base_conversion: parseFloat(v)||1 })} type="number" /></TD>
-            <TD><EditCell value={String(row.waste_pct||0)}      onChange={v => updateRow('ingredients', row._id, { waste_pct: parseFloat(v)||0 })} type="number" /></TD>
+            <TD><EditCell value={String(row.waste_pct||0)} onChange={v => updateRow('ingredients', row._id, { waste_pct: parseFloat(v)||0 })} type="number" /></TD>
           </tr>
         ))}
       </tbody>

@@ -660,6 +660,10 @@ const migrations = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_user_bp_user ON mcogs_user_brand_partners(user_id)`,
 
+  // ── 37. Base units — default recipe unit fields ───────────────────────────
+  `ALTER TABLE mcogs_units ADD COLUMN IF NOT EXISTS default_recipe_unit            VARCHAR(50)`,
+  `ALTER TABLE mcogs_units ADD COLUMN IF NOT EXISTS default_recipe_unit_conversion NUMERIC(18,8)`,
+
   // ── 33–36 Seed: default system roles + permission matrix ─────────────────
   `INSERT INTO mcogs_roles (name, description, is_system) VALUES
     ('Admin',    'Full access including user management', true),

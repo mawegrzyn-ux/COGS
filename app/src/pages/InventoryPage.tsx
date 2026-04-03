@@ -91,10 +91,12 @@ interface Quote {
 }
 
 interface Unit {
-  id:           number
-  name:         string
-  abbreviation: string
-  type:         string
+  id:                              number
+  name:                            string
+  abbreviation:                    string
+  type:                            string
+  default_recipe_unit:             string | null
+  default_recipe_unit_conversion:  number | null
 }
 
 interface MenuRef { id: number; name: string; country_name: string }
@@ -1138,7 +1140,20 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   <CategoryCombo value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={categories} />
                 </Field>
                 <Field label="Base Unit" required error={errors.base_unit_id}>
-                  <select className="select w-full" value={form.base_unit_id} onChange={e => setForm(f => ({ ...f, base_unit_id: e.target.value }))}>
+                  <select className="select w-full" value={form.base_unit_id} onChange={e => {
+                    const selectedUnit = units.find(u => u.id === Number(e.target.value))
+                    setForm(f => ({
+                      ...f,
+                      base_unit_id: e.target.value,
+                      // Auto-populate recipe unit defaults if fields are currently blank
+                      ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
+                        ? { default_prep_unit: selectedUnit.default_recipe_unit }
+                        : {}),
+                      ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
+                        ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
+                        : {}),
+                    }))
+                  }}>
                     <option value="">Select unit…</option>
                     {['mass', 'volume', 'count'].map(type => (
                       <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>

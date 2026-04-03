@@ -14,11 +14,11 @@ router.get('/', async (req, res, next) => {
 // POST /api/units
 router.post('/', async (req, res, next) => {
   try {
-    const { name, abbreviation, type } = req.body;
+    const { name, abbreviation, type, default_recipe_unit, default_recipe_unit_conversion } = req.body;
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_units (name, abbreviation, type)
-       VALUES ($1, $2, $3) RETURNING *`,
-      [name, abbreviation, type]
+      `INSERT INTO mcogs_units (name, abbreviation, type, default_recipe_unit, default_recipe_unit_conversion)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [name, abbreviation, type, default_recipe_unit || null, default_recipe_unit_conversion || null]
     );
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
@@ -27,11 +27,14 @@ router.post('/', async (req, res, next) => {
 // PUT /api/units/:id
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, abbreviation, type } = req.body;
+    const { name, abbreviation, type, default_recipe_unit, default_recipe_unit_conversion } = req.body;
     const { rows } = await pool.query(
-      `UPDATE mcogs_units SET name=$1, abbreviation=$2, type=$3, updated_at=NOW()
-       WHERE id=$4 RETURNING *`,
-      [name, abbreviation, type, req.params.id]
+      `UPDATE mcogs_units
+          SET name=$1, abbreviation=$2, type=$3,
+              default_recipe_unit=$4, default_recipe_unit_conversion=$5,
+              updated_at=NOW()
+        WHERE id=$6 RETURNING *`,
+      [name, abbreviation, type, default_recipe_unit || null, default_recipe_unit_conversion || null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Unit not found' } });
     res.json(rows[0]);
