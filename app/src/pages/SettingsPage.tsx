@@ -1082,6 +1082,8 @@ interface AiKeyStatus {
   voyage_key_set:      boolean
   brave_key_set:       boolean
   claude_code_key_set: boolean
+  github_pat_set:      boolean
+  github_repo_set:     boolean
 }
 
 interface UsageSummary {
@@ -1103,10 +1105,12 @@ function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
+  const [githubPat,    setGithubPat]    = useState('')
+  const [githubRepo,   setGithubRepo]   = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
@@ -1158,9 +1162,11 @@ function AiTab() {
 
   async function handleSave() {
     const payload: Record<string, string> = {}
-    if (anthropic.trim()) payload.ANTHROPIC_API_KEY    = anthropic.trim()
-    if (voyage.trim())    payload.VOYAGE_API_KEY       = voyage.trim()
-    if (brave.trim())     payload.BRAVE_SEARCH_API_KEY = brave.trim()
+    if (anthropic.trim())  payload.ANTHROPIC_API_KEY    = anthropic.trim()
+    if (voyage.trim())     payload.VOYAGE_API_KEY       = voyage.trim()
+    if (brave.trim())      payload.BRAVE_SEARCH_API_KEY = brave.trim()
+    if (githubPat.trim())  payload.GITHUB_PAT           = githubPat.trim()
+    if (githubRepo.trim()) payload.GITHUB_REPO          = githubRepo.trim()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -1169,6 +1175,8 @@ function AiTab() {
       setAnthropic('')
       setVoyage('')
       setBrave('')
+      setGithubPat('')
+      setGithubRepo('')
       setToast({ message: 'Keys saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
@@ -1177,7 +1185,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -1285,13 +1293,48 @@ function AiTab() {
           />
           <p className="text-xs text-text-3 mt-1">Optional — enables full web search for the COGS Assistant. Falls back to DuckDuckGo instant answers if not set. Get your key at brave.com/search/api (free tier: 2,000 queries/month)</p>
         </Field>
+
+        <Field label="GitHub Personal Access Token (PAT)">
+          <input
+            type="password"
+            className="input w-full font-mono text-sm"
+            value={githubPat}
+            onChange={e => setGithubPat(e.target.value)}
+            placeholder={status.github_pat_set ? '••••••••  (leave blank to keep existing)' : 'github_pat_…'}
+            autoComplete="off"
+          />
+          <p className="text-xs text-text-3 mt-1">
+            Optional — grants Pepper read/write access to your GitHub repository.
+            Create a fine-grained PAT at github.com/settings/tokens with <strong>Contents</strong> (read/write) and <strong>Pull requests</strong> (read/write) permissions on the target repo.
+            {status.github_pat_set && (
+              <button onClick={() => handleClear('GITHUB_PAT')} className="ml-2 text-red-500 hover:underline">Clear</button>
+            )}
+          </p>
+        </Field>
+
+        <Field label="GitHub Repository">
+          <input
+            type="text"
+            className="input w-full font-mono text-sm"
+            value={githubRepo}
+            onChange={e => setGithubRepo(e.target.value)}
+            placeholder={status.github_repo_set ? '(configured — leave blank to keep)' : 'owner/repo'}
+            autoComplete="off"
+          />
+          <p className="text-xs text-text-3 mt-1">
+            Default repository for Pepper's GitHub tools, e.g. <code>mawegrzyn-ux/COGS</code>.
+            {status.github_repo_set && (
+              <button onClick={() => handleClear('GITHUB_REPO')} className="ml-2 text-red-500 hover:underline">Clear</button>
+            )}
+          </p>
+        </Field>
       </div>
 
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>

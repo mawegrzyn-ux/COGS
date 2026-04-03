@@ -12,6 +12,8 @@ const _keys = {
   VOYAGE_API_KEY:       process.env.VOYAGE_API_KEY       || null,
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || null,
   CLAUDE_CODE_API_KEY:  process.env.CLAUDE_CODE_API_KEY  || null,
+  GITHUB_PAT:           process.env.GITHUB_PAT           || null,
+  GITHUB_REPO:          process.env.GITHUB_REPO          || null,
 };
 
 // Load DB-stored keys into the runtime store (called at startup)
@@ -25,11 +27,14 @@ async function init() {
     if (stored.VOYAGE_API_KEY)       _keys.VOYAGE_API_KEY       = stored.VOYAGE_API_KEY;
     if (stored.BRAVE_SEARCH_API_KEY) _keys.BRAVE_SEARCH_API_KEY = stored.BRAVE_SEARCH_API_KEY;
     if (stored.CLAUDE_CODE_API_KEY)  _keys.CLAUDE_CODE_API_KEY  = stored.CLAUDE_CODE_API_KEY;
+    if (stored.GITHUB_PAT)           _keys.GITHUB_PAT           = stored.GITHUB_PAT;
+    if (stored.GITHUB_REPO)          _keys.GITHUB_REPO          = stored.GITHUB_REPO;
     console.log('[aiConfig] Keys loaded:', {
       anthropic:  !!_keys.ANTHROPIC_API_KEY,
       voyage:     !!_keys.VOYAGE_API_KEY,
       brave:      !!_keys.BRAVE_SEARCH_API_KEY,
       claude_code: !!_keys.CLAUDE_CODE_API_KEY,
+      github:     !!_keys.GITHUB_PAT,
     });
   } catch (err) {
     console.warn('[aiConfig] Could not load keys from DB:', err.message);
@@ -50,6 +55,8 @@ function status() {
     voyage_key_set:       !!_keys.VOYAGE_API_KEY,
     brave_key_set:        !!_keys.BRAVE_SEARCH_API_KEY,
     claude_code_key_set:  !!_keys.CLAUDE_CODE_API_KEY,
+    github_pat_set:       !!_keys.GITHUB_PAT,
+    github_repo_set:      !!_keys.GITHUB_REPO,
   };
 }
 

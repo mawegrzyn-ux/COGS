@@ -12,6 +12,7 @@ const pool      = require('../db/pool');
 const rag       = require('../helpers/rag');
 const aiConfig  = require('../helpers/aiConfig');
 const { agenticStream } = require('../helpers/agenticStream');
+const github    = require('../helpers/github');
 
 // Client is created per-request so it always picks up the latest key
 function getClient() {
@@ -1134,6 +1135,116 @@ Always call list_menus first to resolve the menu ID. No confirmation needed — 
         },
       },
       required: ['menu_id', 'scenario_name', 'total_revenue', 'category_pcts'],
+    },
+  },
+
+  // ── GitHub ────────────────────────────────────────────────────────────────────
+  {
+    name: 'github_list_files',
+    description: 'Lists files and directories at a path in the GitHub repository. Uses the configured default repo (Settings → AI → GitHub Repo) unless overridden.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:  { type: 'string', description: 'Directory path to list (default: repo root "")' },
+        ref:   { type: 'string', description: 'Branch, tag, or commit SHA (default: repo default branch)' },
+        repo:  { type: 'string', description: 'Override repo as "owner/repo" (uses configured default if omitted)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'github_read_file',
+    description: 'Reads the full content of a file from the GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path, e.g. "api/src/routes/ai-chat.js"' },
+        ref:  { type: 'string', description: 'Branch, tag, or commit SHA (default: repo default branch)' },
+        repo: { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'github_search_code',
+    description: 'Searches code in the GitHub repository using GitHub code search. Returns matching file paths.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:       { type: 'string', description: 'Search query, e.g. "executeTool" or "function loadUser"' },
+        max_results: { type: 'integer', description: 'Max results to return (default 10, max 30)' },
+        repo:        { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'github_create_or_update_file',
+    description: 'Creates or updates a single file in a GitHub repository branch. ALWAYS create or use a feature branch — NEVER write directly to main. CONFIRMATION REQUIRED — state the file path, branch, and change summary before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:    { type: 'string', description: 'File path in the repo, e.g. "api/src/routes/ai-chat.js"' },
+        content: { type: 'string', description: 'Full new file content (UTF-8 string)' },
+        message: { type: 'string', description: 'Commit message' },
+        branch:  { type: 'string', description: 'Branch to commit to — must NOT be main/master' },
+        sha:     { type: 'string', description: 'Current file SHA (required when updating an existing file — get from github_read_file)' },
+        repo:    { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['path', 'content', 'message', 'branch'],
+    },
+  },
+  {
+    name: 'github_create_branch',
+    description: 'Creates a new branch in the GitHub repository. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        branch:      { type: 'string', description: 'New branch name, e.g. "pepper/fix-typo"' },
+        from_branch: { type: 'string', description: 'Source branch to branch from (default: "main")' },
+        repo:        { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['branch'],
+    },
+  },
+  {
+    name: 'github_list_prs',
+    description: 'Lists open (or closed) pull requests in the GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        state:       { type: 'string', enum: ['open', 'closed', 'all'], description: 'PR state filter (default: "open")' },
+        max_results: { type: 'integer', description: 'Max PRs to return (default 10)' },
+        repo:        { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'github_get_pr_diff',
+    description: 'Returns the diff/patch for a pull request. Large diffs are truncated at 8,000 characters.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pr_number: { type: 'integer', description: 'Pull request number' },
+        repo:      { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['pr_number'],
+    },
+  },
+  {
+    name: 'github_create_pr',
+    description: 'Creates a pull request in the GitHub repository. CONFIRMATION REQUIRED — state the title, head branch, and base branch before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'PR title' },
+        body:  { type: 'string', description: 'PR description (markdown supported)' },
+        head:  { type: 'string', description: 'Source branch (the branch with your changes)' },
+        base:  { type: 'string', description: 'Target branch to merge into (default: "main")' },
+        repo:  { type: 'string', description: 'Override repo as "owner/repo"' },
+      },
+      required: ['title', 'head'],
     },
   },
 ];
@@ -2693,6 +2804,77 @@ async function executeTool(name, input) {
       };
     }
 
+    // ── GitHub ─────────────────────────────────────────────────────────────────
+
+    case 'github_list_files': {
+      try {
+        return await github.listFiles({ path: input.path, ref: input.ref, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_read_file': {
+      try {
+        return await github.readFile({ path: input.path, ref: input.ref, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_search_code': {
+      try {
+        return await github.searchCode({ query: input.query, max_results: input.max_results, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_create_or_update_file': {
+      const { path, content, message, branch, sha, repo } = input;
+      if (!branch) return { error: 'branch is required' };
+      if (/^(main|master)$/i.test(branch.trim())) {
+        return { error: 'Direct writes to main/master are not permitted — please use a feature branch.' };
+      }
+      try {
+        return await github.createOrUpdateFile({ path, content, message, branch, sha, repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_create_branch': {
+      try {
+        return await github.createBranch({ branch: input.branch, from_branch: input.from_branch, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_list_prs': {
+      try {
+        return await github.listPRs({ state: input.state, max_results: input.max_results, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_get_pr_diff': {
+      try {
+        return await github.getPRDiff({ pr_number: input.pr_number, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'github_create_pr': {
+      try {
+        return await github.createPR({ title: input.title, body: input.body, head: input.head, base: input.base, repo: input.repo });
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -2833,7 +3015,29 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 78 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), and **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices).
+You have 86 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), and **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr).
+
+## GITHUB TOOLS
+Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
+
+### Rules for GitHub writes (MANDATORY):
+- NEVER write directly to main or master — always use a feature branch
+- Before github_create_or_update_file: state the file path, branch, and what you are changing — confirm with user
+- Before github_create_pr: state the PR title, head→base direction — confirm with user
+- Before github_create_branch: state the branch name — confirm with user
+- For multi-file changes: create the branch once, then write each file one at a time
+
+### Workflow for code changes:
+1. github_read_file — read the current file to get its content AND sha
+2. Modify the content as needed
+3. github_create_branch (if branch doesn't exist yet) — CONFIRMATION REQUIRED
+4. github_create_or_update_file — pass the sha from step 1 — CONFIRMATION REQUIRED
+5. github_create_pr when all files are committed — CONFIRMATION REQUIRED
+
+### Reading code:
+- Use github_list_files to browse directories and find files
+- Use github_search_code to locate code by keyword (function names, variable names, etc.)
+- Use github_read_file to read a specific file — files over ~8,000 chars may be very long
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
