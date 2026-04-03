@@ -166,7 +166,7 @@ export default function SharedMenuPage() {
 
   // Tiles layout: 'top' | 'left' — persisted
   const [tilesLayout, setTilesLayout] = useState<'top' | 'left'>(
-    () => (localStorage.getItem(tilesLayoutKey()) as 'top' | 'left' | null) ?? 'top'
+    () => (localStorage.getItem(tilesLayoutKey()) as 'top' | 'left' | null) ?? (window.innerWidth >= 768 ? 'left' : 'top')
   )
   function toggleTilesLayout() {
     setTilesLayout(prev => {
@@ -175,6 +175,12 @@ export default function SharedMenuPage() {
       return next
     })
   }
+
+  // Mobile + view mode state
+  const [isMobile,          setIsMobile]          = useState(() => window.innerWidth < 768)
+  const [gridView,          setGridView]          = useState(false)
+  const [mobileSummaryOpen, setMobileSummaryOpen] = useState(true)
+  const [mobileLevelFilter, setMobileLevelFilter] = useState<number | 'all'>('all')
 
   // Context menu (right-click to comment on an item)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: SharedItem } | null>(null)
@@ -230,6 +236,13 @@ export default function SharedMenuPage() {
       loadChanges(token)
     }
   }, [token]) // eslint-disable-line
+
+  // Track mobile viewport
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
 
   // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -652,6 +665,12 @@ export default function SharedMenuPage() {
   const sym    = data?.menu.currency_symbol ?? ''
   const levels = data?.price_levels ?? []
 
+  // Mobile level filter
+  const visibleLevels = useMemo(
+    () => isMobile && mobileLevelFilter !== 'all' ? levels.filter(l => l.id === mobileLevelFilter) : levels,
+    [levels, isMobile, mobileLevelFilter]
+  )
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
 
@@ -733,6 +752,24 @@ export default function SharedMenuPage() {
                 <span className="hidden sm:inline">Help</span>
               </button>
 
+              {/* Grid / list toggle */}
+              <button
+                className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${gridView ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}
+                onClick={() => setGridView(v => !v)}
+                title={gridView ? 'Switch to table view' : 'Switch to grid view'}
+              >
+                {gridView ? (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+                  </svg>
+                )}
+                <span className="hidden sm:inline">{gridView ? 'List' : 'Grid'}</span>
+              </button>
+
               {/* Changes toggle */}
               <button
                 className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${changePanelOpen ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
@@ -763,6 +800,19 @@ export default function SharedMenuPage() {
               {data.menus.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
+        </div>
+      )}
+
+      {/* ── Mobile level filter ─────────────────────────────────────────────── */}
+      {isMobile && data && levels.length > 1 && (
+        <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-center gap-2 overflow-x-auto flex-shrink-0">
+          {([{ id: 'all' as const, name: 'All levels' }, ...levels] as { id: number | 'all'; name: string }[]).map(l => (
+            <button
+              key={String(l.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap flex-shrink-0 transition-colors ${mobileLevelFilter === l.id ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+              onClick={() => setMobileLevelFilter(l.id)}
+            >{l.name}</button>
+          ))}
         </div>
       )}
 
@@ -809,7 +859,7 @@ export default function SharedMenuPage() {
       <div className="flex flex-1 min-h-0">
 
         {/* ── Left tiles panel (docked mode) ──────────────────────────────────── */}
-        {tilesLayout === 'left' && data && summary && (
+        {tilesLayout === 'left' && !isMobile && data && summary && (
           <aside className="w-72 flex-shrink-0 bg-white border-r border-gray-100 overflow-y-auto flex flex-col gap-4 p-5">
             {/* KPI tiles — vertical */}
             {summary.hasWeightedData ? (
@@ -914,8 +964,67 @@ export default function SharedMenuPage() {
 
         {!dataLoading && data && data.items.length > 0 && summary && (
           <>
+            {/* ── Mobile collapsible summary ──────────────────────────────────────── */}
+            {isMobile && (
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex-shrink-0">
+                <button
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                  onClick={() => setMobileSummaryOpen(v => !v)}
+                >
+                  <span className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                    </svg>
+                    Summary
+                  </span>
+                  <svg className={`w-4 h-4 text-gray-400 transition-transform ${mobileSummaryOpen ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7"/>
+                  </svg>
+                </button>
+                {mobileSummaryOpen && summary && (
+                  <div className="px-4 pb-4 border-t border-gray-50">
+                    <div className="grid grid-cols-2 gap-2 pt-3">
+                      {summary.hasWeightedData ? (
+                        <>
+                          <KpiTile label="Covers"   value={summary.qtyTotal.toLocaleString()}   sub="sold"     colour="gray" />
+                          <KpiTile label="Revenue"  value={`${sym}${fmt2(summary.totalRevNet)}`} sub="ex-tax"   colour="blue" />
+                          <KpiTile label="GP (net)" value={`${sym}${fmt2(summary.netGp)}`}
+                            sub={summary.totalRevNet > 0 ? `${fmt2((summary.netGp / summary.totalRevNet) * 100)}%` : '—'}
+                            colour={summary.netGp >= 0 ? 'green' : 'red'} />
+                          <KpiTile label="COGS %"  value={`${fmt2(summary.weightedCogs)}%`} sub="weighted"
+                            colour={summary.weightedCogs === null ? 'gray' : summary.weightedCogs <= 28 ? 'green' : summary.weightedCogs <= 35 ? 'amber' : 'red'} />
+                        </>
+                      ) : (
+                        <>
+                          <KpiTile label="Avg COGS" value={`${fmt2(summary.avgCogs)}%`} sub="all levels"
+                            colour={summary.avgCogs === null ? 'gray' : summary.avgCogs <= 28 ? 'green' : summary.avgCogs <= 35 ? 'amber' : 'red'} />
+                          <KpiTile label="Items"    value={String(data!.items.length)} sub="on menu" colour="blue" />
+                        </>
+                      )}
+                    </div>
+                    {summary.catBreakdown.length > 0 && (
+                      <div className="mt-3 space-y-1.5">
+                        {summary.catBreakdown.slice(0, 5).map(cat => (
+                          <div key={cat.name} className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 truncate w-24 flex-shrink-0">{cat.name}</span>
+                            <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`}
+                                style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                            </div>
+                            {cat.cogsPct !== null && (
+                              <span className={`text-xs flex-shrink-0 tabular-nums ${cogsCls(cat.cogsPct)}`}>{fmt2(cat.cogsPct)}%</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ── KPI tiles (top mode only) ─────────────────────────────────────── */}
-            {tilesLayout === 'top' && (
+            {tilesLayout === 'top' && !isMobile && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 flex-shrink-0">
               {summary.hasWeightedData ? (
                 <>
@@ -963,7 +1072,7 @@ export default function SharedMenuPage() {
             )}  {/* end tilesLayout === 'top' KPI tiles */}
 
             {/* ── Split charts (top mode only) ─────────────────────────────────── */}
-            {tilesLayout === 'top' && (
+            {tilesLayout === 'top' && !isMobile && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 flex-shrink-0">
 
               {/* Category split */}
@@ -1028,7 +1137,108 @@ export default function SharedMenuPage() {
             </div>
             )}  {/* end tilesLayout === 'top' charts */}
 
-            {/* ── Table — flex-1 scroll container with sticky thead ─────────────── */}
+            {/* ── Grid view ──────────────────────────────────────────────────────── */}
+            {gridView && (
+              <div className="flex-1 min-h-0 overflow-auto pb-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {categories.map(cat => {
+                    const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                    return (
+                      <React.Fragment key={cat}>
+                        {/* Category label spanning full row */}
+                        <div className="col-span-full px-1 pt-2 pb-0.5">
+                          <span className="text-xs font-bold uppercase tracking-wide text-gray-400">{cat}</span>
+                        </div>
+                        {catItems.map(item => (
+                          <div
+                            key={item.menu_item_id}
+                            className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col gap-1.5 hover:border-emerald-200 transition-colors"
+                            onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
+                          >
+                            {/* Item name */}
+                            <button
+                              className={`text-sm font-semibold text-gray-800 text-left leading-tight ${item.item_type === 'recipe' ? 'hover:text-emerald-600 transition-colors cursor-pointer' : 'cursor-default'}`}
+                              onClick={() => item.item_type === 'recipe' && openBreakdown(item.menu_item_id)}
+                              disabled={item.item_type !== 'recipe'}
+                            >
+                              {item.display_name}
+                            </button>
+                            {/* Cost */}
+                            <div className="text-xs text-gray-400">Cost: {sym}{fmt2(item.cost)}</div>
+                            {/* Per-level pricing */}
+                            <div className="space-y-1 mt-0.5">
+                              {visibleLevels.map(l => {
+                                const entry    = item.levels[l.id]
+                                const isEditing = editCell?.itemId === item.menu_item_id && editCell?.levelId === l.id
+                                if (!entry?.set) {
+                                  return (
+                                    <div key={l.id} className="flex items-center justify-between">
+                                      <span className="text-xs text-gray-300">{l.name}</span>
+                                      {isEdit ? (
+                                        isEditing ? (
+                                          <InlineInput
+                                            value={editCell!.value}
+                                            onChange={v => setEditCell(prev => prev ? { ...prev, value: v } : null)}
+                                            onCommit={commitEdit}
+                                            onCancel={() => setEditCell(null)}
+                                          />
+                                        ) : (
+                                          <button
+                                            className="text-xs text-gray-300 hover:text-emerald-500 transition-colors"
+                                            onClick={() => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: '', originalValue: '' })}
+                                          >+ set</button>
+                                        )
+                                      ) : (
+                                        <span className="text-xs text-gray-200">—</span>
+                                      )}
+                                    </div>
+                                  )
+                                }
+                                return (
+                                  <div key={l.id} className="flex items-center justify-between gap-1">
+                                    <span className="text-xs text-gray-400 truncate">{l.name}</span>
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {isEdit && isEditing ? (
+                                        <InlineInput
+                                          value={editCell!.value}
+                                          onChange={v => setEditCell(prev => prev ? { ...prev, value: v } : null)}
+                                          onCommit={commitEdit}
+                                          onCancel={() => setEditCell(null)}
+                                        />
+                                      ) : (
+                                        <button
+                                          className={`text-sm font-semibold tabular-nums text-gray-800 ${isEdit ? 'hover:text-emerald-600 cursor-pointer' : 'cursor-default'}`}
+                                          onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
+                                          disabled={!isEdit}
+                                        >
+                                          {sym}{fmt2(entry.gross)}
+                                        </button>
+                                      )}
+                                      {entry.cogs_pct !== null && (
+                                        <>
+                                          <span
+                                            className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.cogs_pct <= 28 ? 'bg-emerald-400' : entry.cogs_pct <= 35 ? 'bg-amber-400' : 'bg-red-400'}`}
+                                            title={`COGS: ${fmt2(entry.cogs_pct)}%`}
+                                          />
+                                          <span className={`text-xs tabular-nums ${cogsCls(entry.cogs_pct)}`}>{fmt2(entry.cogs_pct)}%</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </React.Fragment>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── Table view ─────────────────────────────────────────────────────── */}
+            {!gridView && (
             <div className="flex-1 min-h-0 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
@@ -1046,7 +1256,7 @@ export default function SharedMenuPage() {
                           </button>
                         </div>
                       </th>
-                      {levels.map(l => (
+                      {visibleLevels.map(l => (
                         <th key={l.id} className="text-right px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide bg-gray-200 whitespace-nowrap min-w-[120px]">
                           {l.name}
                         </th>
@@ -1086,7 +1296,7 @@ export default function SharedMenuPage() {
                               </span>
                             </div>
                           </td>
-                          {levels.map(l => {
+                          {visibleLevels.map(l => {
                             const lvlAvg = avgCogsPerLevel[l.id] ?? null
                             return (
                               <td key={l.id} className="px-4 py-2.5 text-right">
@@ -1126,7 +1336,7 @@ export default function SharedMenuPage() {
                             </td>
 
                             {/* Price level columns */}
-                            {levels.map(l => {
+                            {visibleLevels.map(l => {
                               const entry    = item.levels[l.id]
                               const isEditing = editCell?.itemId === item.menu_item_id && editCell?.levelId === l.id
 
@@ -1161,59 +1371,64 @@ export default function SharedMenuPage() {
                               const changeKey = `${item.menu_item_id}_l${l.id}`
                               const cellChange = changedCells[changeKey]
                               return (
-                                <td key={l.id} className={`px-4 py-3 ${cellChange ? 'relative' : ''}`}>
-                                  {isEdit && isEditing ? (
-                                    <InlineInput
-                                      value={editCell!.value}
-                                      onChange={v => setEditCell(prev => prev ? { ...prev, value: v } : null)}
-                                      onCommit={commitEdit}
-                                      onCancel={() => setEditCell(null)}
-                                    />
-                                  ) : (
-                                    <div className={`group relative ${cellChange ? 'rounded-md ring-1 ring-amber-300 bg-amber-50/40 px-1' : ''}`}>
-                                      <button
-                                        className={`w-full text-right ${isEdit ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default'}`}
-                                        onClick={isEdit ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
-                                        disabled={!isEdit}
-                                      >
-                                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                                          {(cellChange || entry.is_scenario_override) && (
-                                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title={cellChange ? 'Recently changed' : 'Scenario override'} />
-                                          )}
-                                          <span className="font-semibold text-gray-800 tabular-nums">
-                                            {sym}{fmt2(entry.gross)}
-                                          </span>
-                                          <span className="text-gray-200 text-xs">·</span>
-                                          <span className="text-xs tabular-nums text-gray-400">
-                                            {sym}{fmt2(item.cost)}
-                                          </span>
-                                          <span className="text-gray-200 text-xs">·</span>
-                                          <span className={`text-xs tabular-nums font-medium ${cogsCls(entry.cogs_pct)}`}>
-                                            {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
-                                          </span>
-                                        </div>
-                                        {entry.cogs_pct !== null && (
-                                          <div className="mt-1 h-1 rounded-full bg-gray-100 overflow-hidden flex justify-end">
-                                            <div
-                                              className={`h-full rounded-full ${cogsBarCls(entry.cogs_pct)} transition-all`}
-                                              style={{ width: `${Math.min(100, Math.max(0, 100 - (entry.cogs_pct ?? 0)))}%` }}
-                                            />
-                                          </div>
+                                <td key={l.id} className={`px-4 py-3 relative ${cellChange ? '' : ''}`}>
+                                  <div className={`group relative ${cellChange ? 'rounded-md ring-1 ring-amber-300 bg-amber-50/40 px-1' : ''}`}>
+                                    {/* Stable display — always in DOM, invisible when editing to preserve cell dimensions */}
+                                    <button
+                                      className={`w-full text-right ${isEdit && !isEditing ? 'hover:bg-emerald-50 rounded-md px-1 -mx-1 cursor-pointer transition-colors' : 'cursor-default invisible'}`}
+                                      style={isEdit && isEditing ? { pointerEvents: 'none' } : undefined}
+                                      onClick={isEdit && !isEditing ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
+                                      disabled={!isEdit || isEditing}
+                                      tabIndex={isEditing ? -1 : undefined}
+                                    >
+                                      <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                        {(cellChange || entry.is_scenario_override) && (
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title={cellChange ? 'Recently changed' : 'Scenario override'} />
                                         )}
-                                      </button>
-                                      {cellChange && (
-                                        <div className="absolute right-0 bottom-full mb-1.5 z-30 hidden group-hover:block pointer-events-none">
-                                          <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-xl">
-                                            <p className="font-semibold mb-0.5">{cellChange.user_name}</p>
-                                            <p className="text-gray-300">{fmtTime(cellChange.created_at)}</p>
-                                            {cellChange.old_value !== null && (
-                                              <p className="mt-1 text-amber-300">{sym}{Number(cellChange.old_value).toFixed(2)} → {sym}{Number(cellChange.new_value ?? 0).toFixed(2)}</p>
-                                            )}
-                                          </div>
+                                        <span className="font-semibold text-gray-800 tabular-nums">
+                                          {sym}{fmt2(entry.gross)}
+                                        </span>
+                                        <span className="text-gray-200 text-xs">·</span>
+                                        <span className="text-xs tabular-nums text-gray-400">
+                                          {sym}{fmt2(item.cost)}
+                                        </span>
+                                        <span className="text-gray-200 text-xs">·</span>
+                                        <span className={`text-xs tabular-nums font-medium ${cogsCls(entry.cogs_pct)}`}>
+                                          {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                        </span>
+                                      </div>
+                                      {entry.cogs_pct !== null && (
+                                        <div className="mt-1 h-1 rounded-full bg-gray-100 overflow-hidden flex justify-end">
+                                          <div
+                                            className={`h-full rounded-full ${cogsBarCls(entry.cogs_pct)} transition-all`}
+                                            style={{ width: `${Math.min(100, Math.max(0, 100 - (entry.cogs_pct ?? 0)))}%` }}
+                                          />
                                         </div>
                                       )}
-                                    </div>
-                                  )}
+                                    </button>
+                                    {/* Input overlay — absolutely positioned over the stable display */}
+                                    {isEdit && isEditing && (
+                                      <div className="absolute inset-0 flex items-center justify-end pr-1">
+                                        <InlineInput
+                                          value={editCell!.value}
+                                          onChange={v => setEditCell(prev => prev ? { ...prev, value: v } : null)}
+                                          onCommit={commitEdit}
+                                          onCancel={() => setEditCell(null)}
+                                        />
+                                      </div>
+                                    )}
+                                    {cellChange && (
+                                      <div className="absolute right-0 bottom-full mb-1.5 z-30 hidden group-hover:block pointer-events-none">
+                                        <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-xl">
+                                          <p className="font-semibold mb-0.5">{cellChange.user_name}</p>
+                                          <p className="text-gray-300">{fmtTime(cellChange.created_at)}</p>
+                                          {cellChange.old_value !== null && (
+                                            <p className="mt-1 text-amber-300">{sym}{Number(cellChange.old_value).toFixed(2)} → {sym}{Number(cellChange.new_value ?? 0).toFixed(2)}</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                               )
                             })}
@@ -1237,6 +1452,7 @@ export default function SharedMenuPage() {
                 <span className="text-gray-300 ml-auto hidden sm:block">Right-click any row to add a comment</span>
               </div>
             </div>  {/* end table card */}
+            )}  {/* end !gridView */}
 
           </>
         )}
