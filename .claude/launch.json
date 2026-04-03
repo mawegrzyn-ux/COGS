@@ -20,5 +20,10 @@
       "port": 8765
     }
   ],
-  "autoVerify": false
+  "autoVerify": false,
+  "xlsx-reader": {
+    "runtimeExecutable": "C:/Program Files/Git/bin/bash.exe",
+    "runtimeArgs": ["-c", "python /c/Users/micha/Downloads/read_xlsx.py"],
+    "port": 9876
+  }
 }

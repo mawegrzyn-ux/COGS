@@ -69,6 +69,7 @@ const UNIT_ALIASES = {
   // Volume
   milliliter: 'ml', millilitre: 'ml', milliliters: 'ml', millilitres: 'ml', mls: 'ml',
   liter: 'L',  litre: 'L',  liters: 'L',  litres: 'L',
+  lt: 'L', ltr: 'L', lts: 'L',
   centiliter: 'ml', centilitre: 'ml', cl: 'ml',
   'fl oz': 'ml', floz: 'ml',
   // Count
@@ -126,6 +127,153 @@ function resolveUnit(unitStr, dbUnits) {
   }
 
   return { resolved: src, source: src, method: 'unmatched' };
+}
+
+// ── Sheet schema analyser (deterministic, no AI) ─────────────────────────────
+// Reads column headers from every sheet in an XLSX buffer and classifies what
+// data each sheet contains.  The resulting hints are injected into the AI
+// extraction prompt so Claude understands the file structure before extracting.
+
+const COL_PRICE    = /price|cost|£|\$|€|usd|gbp|eur|rate|unit\s*price|purchase\s*price|price\s*per/i;
+const COL_VENDOR   = /vendor|supplier/i;
+const COL_PU       = /purchase[\s_-]?unit|buy[\s_-]?unit|pack[\s_-]?size|pack\s*desc|purch\s*unit/i;
+const COL_CONV     = /conv|conversion|qty[\s_-]?in[\s_-]?base|base[\s_-]?qty|purchase[\s_→->]+base/i;
+const COL_INGNAME  = /\bname\b|product[\s_]?name|ingredient|item[\s_]?name|description/i;
+const COL_BASEUNIT = /\bbase[\s_]?unit\b|\buom\b|\bunit\b|\bmeasure\b/i;
+const COL_CATEGORY = /categ|group\b|\btype\b/i;
+const COL_SKU      = /sku|code|ref|product[\s_]?code|item[\s_]?no/i;
+
+function analyseSheetHeaders(headers) {
+  const h = headers.map(c => String(c || '').trim()).filter(Boolean);
+  const has = pat => h.some(col => pat.test(col));
+  const find = pat => h.find(col => pat.test(col)) || null;
+  return {
+    hasIngredientName: has(COL_INGNAME),
+    hasCategory:       has(COL_CATEGORY),
+    hasBaseUnit:       has(COL_BASEUNIT),
+    hasPrice:          has(COL_PRICE),
+    hasVendor:         has(COL_VENDOR),
+    hasPurchaseUnit:   has(COL_PU),
+    hasConversion:     has(COL_CONV),
+    hasSku:            has(COL_SKU),
+    priceCol:          find(COL_PRICE),
+    vendorCol:         find(COL_VENDOR),
+    puCol:             find(COL_PU),
+    convCol:           find(COL_CONV),
+    nameCol:           find(COL_INGNAME),
+    baseUnitCol:       find(COL_BASEUNIT),
+    categoryCol:       find(COL_CATEGORY),
+    rawHeaders:        h,
+  };
+}
+
+function buildSheetSchemas(buffer) {
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const schemas = {};
+    for (const sheetName of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
+      // Find the first row that has ≥3 non-empty cells — treat as the header row
+      const headerRow = rows.find(r => r.filter(c => String(c).trim()).length >= 3) || rows[0] || [];
+      schemas[sheetName] = analyseSheetHeaders(headerRow);
+    }
+    return schemas;
+  } catch { return {}; }
+}
+
+function schemaHintsToPrompt(schemas) {
+  if (!Object.keys(schemas).length) return '';
+  const lines = ['\nFILE STRUCTURE ANALYSIS (auto-detected from column headers):'];
+  for (const [sheet, s] of Object.entries(schemas)) {
+    const isCombined = s.hasIngredientName && s.hasPrice;
+    lines.push(`\nSheet "${sheet}":`);
+    lines.push(`  Headers: ${s.rawHeaders.join(' | ')}`);
+    if (isCombined) {
+      lines.push(`  ⚠ COMBINED SHEET — contains BOTH ingredient data AND pricing data`);
+      lines.push(`  → Extract one ingredient AND one price_quote per data row`);
+      if (s.vendorCol) lines.push(`  → Vendor column: "${s.vendorCol}" — use for ALL quotes in this sheet`);
+      if (s.priceCol)  lines.push(`  → Price column: "${s.priceCol}" — strip currency symbols (£$€), parse as number`);
+      if (s.puCol)     lines.push(`  → Purchase unit column: "${s.puCol}" → price_quote.purchase_unit`);
+      if (s.convCol)   lines.push(`  → Conversion column: "${s.convCol}" → price_quote.qty_in_base_units`);
+      if (s.baseUnitCol) lines.push(`  → Base unit column: "${s.baseUnitCol}" → ingredient.unit`);
+    } else if (s.hasIngredientName) {
+      lines.push(`  → Ingredient sheet (no price data detected)`);
+    } else if (s.hasPrice && s.hasVendor) {
+      lines.push(`  → Price quotes sheet`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// ── Deterministic quote synthesis (fallback when AI misses quotes) ────────────
+// Runs AFTER AI extraction.  If the raw XLSX has sheets with both ingredient-
+// name and price columns but AI returned 0 quotes, synthesise them directly.
+
+function synthesiseMissingQuotes(buffer, staged) {
+  // Only fill in if AI returned significantly fewer quotes than ingredients
+  const ingCount   = (staged.ingredients || []).length;
+  const quoteCount = (staged.price_quotes || []).length;
+  if (!ingCount || quoteCount >= ingCount * 0.5) return; // already reasonably complete
+
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+
+    for (const sheetName of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+      if (!rows.length) continue;
+
+      const headers  = Object.keys(rows[0]).map(h => h.trim());
+      const schemas  = analyseSheetHeaders(headers);
+      if (!schemas.hasPrice || !schemas.hasIngredientName) continue;
+
+      const nameCol  = schemas.nameCol;
+      const priceCol = schemas.priceCol;
+      const vendorCol= schemas.vendorCol;
+      const puCol    = schemas.puCol;
+      const convCol  = schemas.convCol;
+
+      // Build a set of ingredient names that already have a quote
+      const coveredNames = new Set(
+        (staged.price_quotes || []).map(q => String(q.ingredient_name || '').toLowerCase().trim())
+      );
+
+      for (const row of rows) {
+        const name  = String(row[nameCol] || '').trim();
+        if (!name || coveredNames.has(name.toLowerCase())) continue;
+
+        // Strip currency symbols and parse price
+        const rawPrice = String(row[priceCol] || '').replace(/[£$€,\s]/g, '');
+        const price    = parseFloat(rawPrice);
+        if (!price || price <= 0) continue;
+
+        const vendor   = vendorCol ? String(row[vendorCol] || 'Default Vendor').trim() : 'Default Vendor';
+        const pu       = puCol     ? String(row[puCol]     || '').trim() : '';
+        const conv     = convCol   ? parseFloat(row[convCol]) || 1 : 1;
+
+        staged.price_quotes.push(blankRow({
+          ingredient_name:   name,
+          vendor_name:       vendor,
+          purchase_price:    price,
+          purchase_unit:     pu,
+          qty_in_base_units: conv,
+          _issues:           ['Auto-extracted from combined sheet (AI missed this quote — please verify)'],
+          _status:           'warning',
+        }));
+        coveredNames.add(name.toLowerCase());
+
+        // Also make sure vendor appears in vendor list
+        const vendorExists = (staged.vendors || []).some(
+          v => v.name.toLowerCase() === vendor.toLowerCase()
+        );
+        if (!vendorExists && vendor !== 'Default Vendor') {
+          staged.vendors = staged.vendors || [];
+          staged.vendors.push(blankRow({ name: vendor, country: '' }));
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[synthesiseMissingQuotes]', e.message);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -435,7 +583,7 @@ const EXTRACT_TOOL = {
   },
 };
 
-async function extractWithAI(client, fileContent) {
+async function extractWithAI(client, fileContent, schemaHints) {
   const response = await client.messages.create({
     model:       'claude-haiku-4-5-20251001',
     max_tokens:  8192,
@@ -443,27 +591,60 @@ async function extractWithAI(client, fileContent) {
     tools:       [EXTRACT_TOOL],
     system: `You are a data extraction assistant for a restaurant cost-of-goods (COGS) platform.
 Extract all vendors, ingredients, price quotes and recipes from the file.
+${schemaHints || ''}
 
-COLUMN MAPPING
-- "cost"/"price"/"unit cost"/"INR"/"Cost per UOM" → purchase_price
+════════════════════════════════════════════════════════════════
+CRITICAL: COMBINED ROW FILES (supplier price lists)
+════════════════════════════════════════════════════════════════
+Many real-world files are supplier product lists where EVERY ROW contains BOTH:
+  • Ingredient data  (name, category, base unit)
+  • Price quote data (vendor, price, purchase unit, conversion)
+
+When a sheet has ingredient-name columns AND price/vendor columns together, you MUST:
+  1. Extract one INGREDIENT per row   (name + category + base unit)
+  2. Extract one PRICE QUOTE per row  (ingredient_name, vendor_name, purchase_price, purchase_unit, qty_in_base_units)
+
+Do NOT extract only ingredients and skip the quotes. Do NOT extract only quotes and skip the ingredients.
+If there are 80 rows with prices, you must produce 80 ingredients AND 80 price_quotes.
+
+COLUMN → FIELD MAPPING for combined files:
+  "Product Name" / "Name" / "Description" / "Item"   → ingredient.name AND price_quote.ingredient_name (must match exactly)
+  "Category" / "Group" / "Type"                       → ingredient.source_category
+  "Base Unit" / "Unit" / "UOM"                        → ingredient.unit (metric abbreviation: kg, g, L, ml, ea)
+  "Vendor" / "Supplier"                               → price_quote.vendor_name (if single vendor column, use for ALL rows)
+  "Price" / "Cost" / "Price per Purchase Unit" / "£"  → price_quote.purchase_price (strip £$€ symbols, parse as number)
+  "Purchase Unit" / "Pack Size" / "Pack"              → price_quote.purchase_unit (e.g. "1x20kg bag", "6x2900ml")
+  "Conversion (Purchase→Base)" / "Conv" / "Conv Factor" → price_quote.qty_in_base_units (numeric; how many base units in one purchase unit)
+
+EXAMPLE — a sheet with these columns:
+  SKU | Product Name | Category | Purchase Unit | Base Unit | Conversion | Vendor | Price per Purchase Unit (£)
+  Row: RIC102 | Thai Jasmine Rice | Rice | 1x20kg bag | kg | 20 | JJ Food Services | £26.99
+
+Should produce:
+  ingredient: { name: "Thai Jasmine Rice", source_category: "Rice", unit: "kg" }
+  price_quote: { ingredient_name: "Thai Jasmine Rice", vendor_name: "JJ Food Services", purchase_price: 26.99, purchase_unit: "1x20kg bag", qty_in_base_units: 20 }
+════════════════════════════════════════════════════════════════
+
+GENERAL COLUMN MAPPING
+- "cost"/"price"/"unit cost"/"INR"/"Cost per UOM" → purchase_price (always strip currency symbols)
 - "UOM"/"Recipe Use"/"Unit of Measure"/"measure" → unit
-- Keep source_category EXACTLY as it appears in the source file
+- Keep source_category EXACTLY as it appears in the source file — do not normalise
 - waste_pct as 0-100 (e.g. "2%" → 2, not 0.02)
 - If costs are listed without a vendor name, use vendor_name "Default Vendor"
 - Extract ALL ingredients even if they have no cost yet
+- A single vendor listed once at the top of a sheet applies to all rows in that sheet
 
 UNITS — always use metric abbreviations:
 - pounds/lb/lbs → kg  |  oz/ounce → g  |  gram/grams/gm → g  |  kilogram/kgs → kg
-- milliliter/ml/mls → ml  |  liter/litre/L → L
+- milliliter/ml/mls → ml  |  liter/litre/L → L  |  lt/ltr/litre → L
 - piece/pieces/per piece/each/ea → ea  |  per 100g → use unit "100g"
-- "Conversion Factor" or "Conv Factor" columns describe how many recipe units are in one purchase unit — use as qty_in_base_units
+- "Conversion Factor" / "Conv Factor" / "Conversion (Purchase→Base)" → qty_in_base_units
 
-MULTI-TIER RECIPE STRUCTURES (important)
+MULTI-TIER RECIPE STRUCTURES
 - Many spreadsheets have THREE tiers: raw ingredients → sub-recipes (sauces, dips, sides) → main menu items
 - Sheets named "Sauces", "Dips", "Sides", "Components", "Sub-recipes" contain sub-recipes — extract each as a recipe
-- When a main recipe (Menu Builder) references a sub-recipe name (e.g. "Lemon Pepper Sauce", "House Fries", "Ranch"), set item_type="recipe" and item_name to the sub-recipe name
-- Blended averages like "Sauce Average" or "Avg Per Wing" are NOT real sub-recipes — skip them or replace with the primary sauce name
-- A "Burger" or "Side" entry in a main recipe that is also defined as its own sub-recipe → item_type="recipe"`,
+- When a main recipe references a sub-recipe name, set item_type="recipe"
+- Blended averages like "Sauce Average" or "Avg Per Wing" are NOT real sub-recipes — skip them`,
     messages: [{ role: 'user', content: fileContent }],
   });
 
@@ -607,8 +788,15 @@ Examples: "Chicken"→Protein, "Sauces"→Sauce, "Drinks"→Beverage, "Paper"→
 // Takes already-extracted text content, runs AI extraction + enrichment,
 // saves a job row, and returns { job_id, staged_data }.
 
-async function stageFileContent(client, fileContent, filename, userEmail) {
-  const staged = await extractWithAI(client, `File: ${filename}\n\n${fileContent}`);
+async function stageFileContent(client, fileContent, filename, userEmail, rawBuffer) {
+  // Build schema hints from raw XLSX (if available) to guide AI extraction
+  const schemas     = rawBuffer ? buildSheetSchemas(rawBuffer) : {};
+  const schemaHints = schemaHintsToPrompt(schemas);
+
+  const staged = await extractWithAI(client, `File: ${filename}\n\n${fileContent}`, schemaHints);
+
+  // Deterministic fallback: synthesise any quotes the AI missed from raw XLSX
+  if (rawBuffer) synthesiseMissingQuotes(rawBuffer, staged);
 
   await detectDuplicates(staged);
   validateStaged(staged);
@@ -657,7 +845,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (!key) return res.status(503).json({ error: { message: 'AI import requires an Anthropic API key — configure it in Settings → AI, or use the Template import path.' } });
     const client  = new Anthropic({ apiKey: key });
     const content = await fileToText(file.buffer, file.originalname);
-    const result  = await stageFileContent(client, content, file.originalname, userEmail);
+    const result  = await stageFileContent(client, content, file.originalname, userEmail, file.buffer);
     res.json({ job_id: result.job_id, staged_data: result.staged_data });
 
   } catch (err) {
