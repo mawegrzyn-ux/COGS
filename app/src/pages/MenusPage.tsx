@@ -4070,11 +4070,11 @@ ${tableHtml}
                         onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent-dim)')}
                         onClick={() => toggleCat(cat)}
                       >
-                        <td className="px-3 py-1.5 font-bold text-xs uppercase tracking-wide" colSpan={2}
+                        <td className="px-3 py-1.5 text-xs uppercase tracking-wide" colSpan={2}
                           style={{ color: 'var(--accent-dark)' }}>
                           <span className="inline-flex items-center gap-1.5">
                             <span className="text-[9px] w-2.5 shrink-0" style={{ color: 'var(--accent)' }}>{collapsedCats.has(cat) ? '▶' : '▼'}</span>
-                            {cat}
+                            <span className="font-extrabold">{cat}</span>
                             {collapsedCats.has(cat) && (
                               <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
                             )}
@@ -4279,10 +4279,10 @@ ${tableHtml}
                         className="bg-blue-50/40 border-y border-blue-100 cursor-pointer select-none hover:bg-blue-100/60"
                         onClick={() => toggleCat(cat)}
                       >
-                        <td className="px-3 py-1.5 font-bold text-gray-700 text-xs uppercase tracking-wide">
+                        <td className="px-3 py-1.5 text-gray-700 text-xs uppercase tracking-wide">
                           <span className="inline-flex items-center gap-1.5">
                             <span className="text-gray-400 text-[9px] w-2.5 shrink-0">{collapsedCats.has(cat) ? '▶' : '▼'}</span>
-                            {cat}
+                            <span className="font-extrabold">{cat}</span>
                             {collapsedCats.has(cat) && (
                               <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
                             )}
@@ -4296,13 +4296,13 @@ ${tableHtml}
                           return (
                             <>
                               <td key={`${level.id}-ccost`} className="border-l border-gray-200" />
-                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-center font-mono font-semibold text-gray-700 text-xs">
+                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
                                 {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
                               </td>
                               <td key={`${level.id}-cp`} />
                               {!allLevelsCompact && (
                                 <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
-                                  {cR > 0 ? fmtMoney(cR) : '—'}
+                                  {cR > 0 ? fmtNum(cR) : '—'}
                                 </td>
                               )}
                               <td key={`${level.id}-cc`} className={`px-3 py-1.5 text-right text-xs ${cogsColour(cP)}`}>
