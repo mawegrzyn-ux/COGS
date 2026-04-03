@@ -192,7 +192,14 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   const api            = useApi()
   const navigate       = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user }       = useAuth0()
+  const { user, getAccessTokenSilently } = useAuth0()
+
+  const authHeader = async (): Promise<Record<string, string>> => {
+    try {
+      const token = await getAccessTokenSilently()
+      return token ? { Authorization: `Bearer ${token}` } : {}
+    } catch { return {} }
+  }
 
   const [step,        setStep]        = useState<Step>('upload')
   const [importPath,  setImportPath]  = useState<ImportPath>('ai')
@@ -222,8 +229,9 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   useEffect(() => {
     const jobFromUrl = searchParams.get('job')
     if (!jobFromUrl) return
-    fetch(`${API_BASE}/import/${jobFromUrl}`)
-      .then(r => r.ok ? r.json() : null)
+    authHeader().then(h =>
+      fetch(`${API_BASE}/import/${jobFromUrl}`, { headers: h })
+    ).then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data?.staged_data) return
         setJobId(data.id)
@@ -291,7 +299,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
       form.append('importPath', importPath)
       if (user?.email) form.append('userEmail', user.email)
 
-      const res = await fetch(`${API_BASE}/import/upload`, { method: 'POST', body: form })
+      const res = await fetch(`${API_BASE}/import/upload`, { method: 'POST', body: form, headers: await authHeader() })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }))
         setParseError(err?.error?.message || 'Parse failed')
@@ -316,7 +324,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     try {
       await fetch(`${API_BASE}/import/${jobId}`, {
         method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...await authHeader() },
         body:    JSON.stringify({ staged_data: staged }),
       })
     } catch { /* non-critical */ }
@@ -330,7 +338,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     setStep('executing')
     setExecError(null)
     try {
-      const res = await fetch(`${API_BASE}/import/${jobId}/execute`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/import/${jobId}/execute`, { method: 'POST', headers: await authHeader() })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: { message: 'Execute failed' } }))
         setExecError(err?.error?.message || 'Import failed')
@@ -349,7 +357,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   // ── Discard ──────────────────────────────────────────────────────────────────
 
   const handleDiscard = () => {
-    if (jobId) fetch(`${API_BASE}/import/${jobId}`, { method: 'DELETE' }).catch(() => {})
+    if (jobId) authHeader().then(h => fetch(`${API_BASE}/import/${jobId}`, { method: 'DELETE', headers: h })).catch(() => {})
     setJobId(null); setStaged(null); setFile(null)
     setParseError(null); setExecError(null); setResults(null)
     setStep('upload')

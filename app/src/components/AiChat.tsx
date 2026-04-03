@@ -216,7 +216,8 @@ function renderMd(text: string): string {
   return out.join('')
 }
 
-const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
+const ACCEPTED_TYPES  = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
+const MAX_FILE_BYTES  = 10 * 1024 * 1024   // 10 MB — must match multer limit in ai-upload.js
 
 export type PepperMode = 'float' | 'docked-left' | 'docked-right'
 
@@ -663,10 +664,21 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
       }
 
       if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }))
+        // Provide friendly messages for common HTTP errors (non-JSON responses from nginx etc.)
+        let friendlyMsg: string
+        if (res.status === 413) {
+          friendlyMsg = '⚠️ **File too large** — the server rejected the upload. Maximum file size is 10 MB. Please try a smaller file or split large spreadsheets before attaching.'
+        } else if (res.status === 429) {
+          friendlyMsg = '⚠️ **Monthly token allowance reached** — you\'ve used your AI quota for this billing period. Contact your administrator to increase the limit.'
+        } else if (res.status === 401 || res.status === 403) {
+          friendlyMsg = '⚠️ **Access denied** — your session may have expired. Please refresh the page and try again.'
+        } else {
+          const err = await res.json().catch(() => null)
+          friendlyMsg = `⚠️ **Request failed** — ${err?.error?.message ?? `HTTP ${res.status}`}`
+        }
         setMessages(prev => {
           const msgs = [...prev]
-          msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${err?.error?.message ?? 'Request failed'}` }
+          msgs[msgs.length - 1] = { role: 'assistant', content: friendlyMsg }
           return msgs
         })
         return
@@ -756,8 +768,17 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
   }, [send])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setAttachedFile(e.target.files?.[0] ?? null)
+    const file = e.target.files?.[0] ?? null
     e.target.value = ''
+    if (file && file.size > MAX_FILE_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1)
+      setMessages(prev => [...prev,
+        { role: 'user',      content: `📎 ${file.name}` },
+        { role: 'assistant', content: `⚠️ **File too large** — "${file.name}" is ${mb} MB. The maximum upload size is 10 MB. Please try a smaller file, or split large spreadsheets into separate sheets before attaching.` },
+      ])
+      return
+    }
+    setAttachedFile(file)
   }, [])
 
   const handleFilePickerClick = useCallback(() => {

@@ -173,7 +173,12 @@ function getClient() {
 router.post('/', (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
-      return res.status(400).json({ error: { message: err.message || 'File upload error' } });
+      // Return 413 for file-size errors so the client shows the right friendly message
+      const status = (err.code === 'LIMIT_FILE_SIZE') ? 413 : 400;
+      const msg    = (err.code === 'LIMIT_FILE_SIZE')
+        ? 'File too large — maximum upload size is 10 MB'
+        : (err.message || 'File upload error');
+      return res.status(status).json({ error: { message: msg } });
     }
     next();
   });

@@ -60,7 +60,10 @@ jobs:
               && sed -i "s|^USDA_API_KEY=.*|USDA_API_KEY=${{ secrets.USDA_API_KEY }}|" .env \
               || echo "USDA_API_KEY=${{ secrets.USDA_API_KEY }}" >> .env
             pm2 restart menu-cogs-api
-            sudo nginx -s reload
+            # Ensure nginx allows uploads up to 11 MB (covers the 10 MB app limit + multipart overhead)
+            grep -q 'client_max_body_size' /etc/nginx/sites-available/menu-cogs \
+              || sudo sed -i '/server_name/a\    client_max_body_size 11m;' /etc/nginx/sites-available/menu-cogs
+            sudo nginx -t && sudo nginx -s reload
 
       - name: Health check
         run: |
