@@ -3341,6 +3341,8 @@ function ScenarioTool({
 
   const fmtMoney = (n: number) =>
     `${dispSym}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtNum = (n: number) =>
+    n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const fmtPct   = (n: number | null) => n != null ? `${n.toFixed(1)}%` : '—'
   const fmtMix   = (n: number, total: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : '—'
 
@@ -3848,9 +3850,15 @@ ${tableHtml}
             <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
           )}
 
-          {/* Push prices to live menu */}
-          {Object.keys(priceOverrides).length > 0 && (
-            <button className="btn btn-sm btn-outline text-xs text-accent border-accent" title="Write price overrides to the live menu" onClick={handlePushPrices}>→ Menu</button>
+          {/* Push prices to live menu — always visible when a menu is loaded */}
+          {menuId && (
+            <button
+              className={`btn btn-sm btn-outline text-xs ${Object.keys(priceOverrides).length > 0 ? 'text-accent border-accent' : 'text-gray-300 border-gray-200 cursor-default'}`}
+              title={Object.keys(priceOverrides).length > 0 ? 'Write scenario price overrides to the live menu' : 'No price differences — scenario matches live menu'}
+              onClick={handlePushPrices}
+            >
+              → Menu
+            </button>
           )}
 
           {/* Notes, History & Comments */}
@@ -4036,9 +4044,9 @@ ${tableHtml}
                     </div>
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold text-gray-500 bg-gray-200">Type</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-500 min-w-[90px] bg-gray-200">Qty Sold</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold text-gray-500 min-w-[90px] bg-gray-200">Qty Sold</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-200">Sales Mix</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 whitespace-nowrap bg-gray-200">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                   <th className="px-3 py-2.5 text-right font-semibold text-gray-500 bg-gray-200">Rev Mix</th>
@@ -4062,7 +4070,7 @@ ${tableHtml}
                         onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent-dim)')}
                         onClick={() => toggleCat(cat)}
                       >
-                        <td className="px-3 py-1.5 font-bold text-xs uppercase tracking-wide" colSpan={4}
+                        <td className="px-3 py-1.5 font-bold text-xs uppercase tracking-wide" colSpan={2}
                           style={{ color: 'var(--accent-dark)' }}>
                           <span className="inline-flex items-center gap-1.5">
                             <span className="text-[9px] w-2.5 shrink-0" style={{ color: 'var(--accent)' }}>{collapsedCats.has(cat) ? '▶' : '▼'}</span>
@@ -4075,9 +4083,10 @@ ${tableHtml}
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
                           {cQ > 0 ? cQ.toLocaleString() : '—'}
                         </td>
+                        <td colSpan={2} />
                         <td className="px-3 py-1.5 text-right text-xs" style={{ color: 'var(--text-3)' }}>{fmtMix(cQ, totalQty)}</td>
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
-                          {cR > 0 ? fmtMoney(cR) : '—'}
+                          {cR > 0 ? fmtNum(cR) : '—'}
                         </td>
                         <td className="px-3 py-1.5 text-right text-xs" style={{ color: 'var(--text-3)' }}>{cR > 0 ? fmtMix(cR, totalNet) : '—'}</td>
                         <td className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
@@ -4096,6 +4105,21 @@ ${tableHtml}
                           <td className="px-3 py-2.5 font-medium text-gray-900 pl-6">{row.display_name}</td>
                           <td className="px-3 py-2.5">
                             <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
+                          </td>
+                          {/* Qty — moved before Cost/ptn */}
+                          <td className="px-1.5 py-1.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={qty[row.nat_key] ?? ''}
+                              onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
+                              placeholder="0"
+                              className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                ${manualQtyKeys.has(row.nat_key)
+                                  ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                  : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                            />
                           </td>
                           {/* Cost/ptn — editable */}
                           <td className="px-1.5 py-1.5 text-right">
@@ -4151,25 +4175,11 @@ ${tableHtml}
                               )
                             })()}
                           </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={qty[row.nat_key] ?? ''}
-                              onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
-                              placeholder="0"
-                              className={`w-16 text-right font-mono text-sm rounded px-2 py-1 focus:outline-none focus:ring-1
-                                ${manualQtyKeys.has(row.nat_key)
-                                  ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                  : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                            />
-                          </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
                             {row.qty > 0 ? fmtMix(row.qty, totalQty) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-gray-400">
-                            {row.net_revenue > 0 ? fmtMoney(row.net_revenue) : <span className="text-gray-200">—</span>}
+                            {row.net_revenue > 0 ? fmtNum(row.net_revenue) : <span className="text-gray-200">—</span>}
                           </td>
                           <td className="px-3 py-2.5 text-right text-xs text-gray-500">
                             {row.net_revenue > 0 ? fmtMix(row.net_revenue, totalNet) : <span className="text-gray-200">—</span>}
@@ -4193,13 +4203,14 @@ ${tableHtml}
               {/* Grand total footer */}
               <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                 <tr>
-                  <td className="px-3 py-3 font-bold text-gray-900" colSpan={4}>Grand Total</td>
+                  <td className="px-3 py-3 font-bold text-gray-900" colSpan={2}>Grand Total</td>
                   <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
                     {totalQty > 0 ? totalQty.toLocaleString() : '—'}
                   </td>
+                  <td colSpan={2} />
                   <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
                   <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                    {totalNet > 0 ? fmtMoney(totalNet) : '—'}
+                    {totalNet > 0 ? fmtNum(totalNet) : '—'}
                   </td>
                   <td className="px-3 py-3 text-right text-xs font-semibold text-gray-600">100%</td>
                   <td className="px-3 py-3 text-right font-mono font-bold text-gray-900">
@@ -4245,8 +4256,8 @@ ${tableHtml}
                 <tr>
                   {allLevelsData.map(({ level }) => (
                     <>
-                      <th key={`${level.id}-costh`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 whitespace-nowrap normal-case">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
-                      <th key={`${level.id}-qh`} className="px-2 py-1.5 text-center font-medium text-gray-500 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
+                      <th key={`${level.id}-qh`} className="px-3 py-1.5 text-right font-medium text-gray-500 border-l border-gray-200 bg-accent-dim/10 normal-case min-w-[70px]">Qty</th>
+                      <th key={`${level.id}-costh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Cost/ptn{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                       <th key={`${level.id}-ph`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Price{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
                       {!allLevelsCompact && (
                         <th key={`${level.id}-rh`} className="px-3 py-1.5 text-right font-medium text-gray-500 bg-accent-dim/10 whitespace-nowrap normal-case">Revenue{sym ? <span className="ml-0.5 font-normal text-gray-400 text-[10px]">({sym})</span> : ''}</th>
@@ -4317,8 +4328,23 @@ ${tableHtml}
                             <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
                             {row.perLevel.map(p => (
                               <>
+                                {/* Qty per level — moved before Cost/ptn */}
+                                <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
+                                  <div className="flex justify-end">
+                                    <input
+                                      type="number" min="0" step="1"
+                                      value={qty[p.qty_key] ?? ''}
+                                      onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
+                                      placeholder="0"
+                                      className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                        ${manualQtyKeys.has(p.qty_key)
+                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                    />
+                                  </div>
+                                </td>
                                 {/* Cost/ptn per level — editable (all levels share same value) */}
-                                <td key={`${p.level.id}-icost`} className="px-1 py-1 border-l border-gray-100">
+                                <td key={`${p.level.id}-icost`} className="px-1 py-1">
                                   <div className="inline-flex items-center justify-end w-full">
                                     <input
                                       type="number" min="0" step="0.01"
@@ -4339,21 +4365,6 @@ ${tableHtml}
                                       <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
                                         onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
                                     )}
-                                  </div>
-                                </td>
-                                {/* Qty per level */}
-                                <td key={`${p.level.id}-iq`} className="px-1 py-1">
-                                  <div className="flex justify-center">
-                                    <input
-                                      type="number" min="0" step="1"
-                                      value={qty[p.qty_key] ?? ''}
-                                      onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
-                                      placeholder="0"
-                                      className={`w-16 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                        ${manualQtyKeys.has(p.qty_key)
-                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                                    />
                                   </div>
                                 </td>
                                 {/* Price — editable */}
@@ -4382,7 +4393,7 @@ ${tableHtml}
                                 </td>
                                 {!allLevelsCompact && (
                                   <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold text-gray-400">
-                                    {p.revenue > 0 ? fmtMoney(p.revenue) : <span className="text-gray-200">—</span>}
+                                    {p.revenue > 0 ? fmtNum(p.revenue) : <span className="text-gray-200">—</span>}
                                   </td>
                                 )}
                                 <td key={`${p.level.id}-ic`}
@@ -4419,14 +4430,14 @@ ${tableHtml}
                         const tP = tR > 0 ? (tC / tR) * 100 : null
                         return (
                           <>
-                            <td key={`${level.id}-fcost`} className="border-l border-gray-200" />
-                            <td key={`${level.id}-fq`} className="px-3 py-3 text-center font-mono font-bold text-gray-900">
+                            <td key={`${level.id}-fq`} className="px-3 py-3 text-right font-mono font-bold text-gray-900 border-l border-gray-200">
                               {tQ > 0 ? tQ.toLocaleString() : '—'}
                             </td>
+                            <td key={`${level.id}-fcost`} className="border-gray-200" />
                             <td key={`${level.id}-fp`} className="border-gray-200" />
                             {!allLevelsCompact && (
                               <td key={`${level.id}-fr`} className="px-3 py-3 text-right font-mono font-bold text-gray-900">
-                                {tR > 0 ? fmtMoney(tR) : '—'}
+                                {tR > 0 ? fmtNum(tR) : '—'}
                               </td>
                             )}
                             <td key={`${level.id}-fc`} className={`px-3 py-3 text-right font-bold text-sm ${cogsColour(tP)}`}>
