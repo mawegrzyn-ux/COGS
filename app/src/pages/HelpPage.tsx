@@ -165,7 +165,7 @@ export default function HelpPage() {
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
-          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.2</p>
+          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.3</p>
         </div>
         <div className="px-2 pt-2">
           <input
@@ -400,6 +400,20 @@ export default function HelpPage() {
             <tr><Td mono>vendor_product_code</Td><Td>Optional vendor SKU / order code</Td></tr>
           </tbody>
         </table>
+
+        <H3 id="menu-filter">Menu Filter</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Both the <strong>Ingredients</strong> and <strong>Price Quotes</strong> tabs include a{' '}
+          <strong>Filter by menu</strong> dropdown in the toolbar. Selecting a menu resolves all
+          ingredient IDs used in that menu's recipe items and narrows the displayed list to only those
+          ingredients (and their quotes). Useful when checking coverage or prices for a specific menu
+          before launch.
+        </p>
+        <InfoBox type="info">
+          The filter resolves one level of recipe nesting — direct ingredient items on recipe lines.
+          Sub-recipes of sub-recipes are not followed. Clear the filter to return to the full list.
+          The menu filter is hidden on the Price Quotes tab when "Missing quotes only" is active.
+        </InfoBox>
 
         <H3 id="preferred-vendors">Preferred Vendors</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
@@ -728,6 +742,23 @@ export default function HelpPage() {
           The setting is saved in the database and persists across sessions.
         </p>
 
+        <H3 id="ai-token-allowance">Monthly Token Allowance</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The <strong>Monthly Token Allowance</strong> field in Settings → AI sets a per-user token cap
+          for each billing period. The billing period runs from the <strong>25th of the previous month
+          to the 24th of the current month</strong> and resets automatically each 25th.
+        </p>
+        <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside space-y-1 mb-2">
+          <li>Set to <strong>0</strong> (default) to disable the limit — all users have unrestricted access.</li>
+          <li>When a user reaches their limit, Pepper returns a friendly message explaining when the allowance resets.</li>
+          <li>The <strong>Pepper panel header</strong> shows a live usage bar: green (under 80%), amber (80–99%), red (exceeded).</li>
+          <li>The <strong>Token Usage</strong> table in Settings → AI shows every user's period consumption with a mini progress bar.</li>
+        </ul>
+        <InfoBox type="info" title="Fail-open design">
+          If the allowance check fails (e.g. database temporarily unreachable), Pepper allows the request
+          rather than blocking the user. The limit is a soft guard, not a hard billing control.
+        </InfoBox>
+
         {/* ═══════════════════════════════════ USER MANAGEMENT */}
         <H2 id="user-management" icon="👥" title="User Management" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
@@ -862,10 +893,12 @@ export default function HelpPage() {
         <H3 id="ai-input">Sending Messages &amp; Attachments</H3>
         <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside space-y-1 mb-2">
           <li><strong>Type &amp; send</strong> — press Enter or click Send</li>
-          <li><strong>Paperclip icon</strong> — attach a file: CSV, XLSX, PNG, JPEG, WEBP (max 5 MB). PDFs not supported.</li>
+          <li><strong>Paperclip icon</strong> — attach a file: CSV, XLSX, DOCX, PPTX, PDF, PNG, JPEG, WEBP (max 10 MB).</li>
           <li><strong>Camera icon</strong> — captures a screenshot of the current page and attaches it to your next message. Pepper's own UI is excluded from the capture. Type your question then send.</li>
           <li><strong>Paste image</strong> — Ctrl+V / Cmd+V pastes an image from your clipboard directly into the chat input as an attachment.</li>
           <li><strong>Right-click → Ask Pepper</strong> — right-click on any highlighted data element (COGS%, coverage bar, cost figures) to open a contextual prompt with an auto-captured screenshot already attached.</li>
+          <li><strong>Markdown responses</strong> — Pepper's replies are fully rendered: tables, code blocks, headings, bullet lists, numbered lists, bold, italic, and inline code are all formatted for easy reading.</li>
+          <li><strong>Usage bar</strong> — if a monthly token allowance is configured in Settings → AI, a colour-coded progress bar appears below the Pepper header showing your current period usage.</li>
         </ul>
         <InfoBox type="tip" title="Tutorial buttons">
           Small <strong>?</strong> icons appear next to page headers and tab labels. Clicking one sends a
@@ -937,7 +970,7 @@ export default function HelpPage() {
 
         <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Pepper has <strong>86 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database, plus optional GitHub integration.
+          Pepper has <strong>87 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database, plus optional GitHub integration and Excel export.
           Tool calls happen automatically — Pepper determines which tools to call based on your question or request.
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
@@ -1462,6 +1495,24 @@ export default function HelpPage() {
               symptom: 'Filter/sort dropdowns were cut off inside overflow-x: auto table wrappers.',
               fix: 'Changed dropdown to position: fixed with coordinates from getBoundingClientRect(), placed at z-index: 99999 to escape any overflow container.',
               file: 'app/src/components/ColumnHeader.tsx',
+            },
+            {
+              title: 'Fix 6 — Pepper loses focus on every keystroke',
+              symptom: 'Typing in the Pepper chat textarea lost focus after each character. Focus was also not restored after an AI response finished streaming.',
+              fix: 'ChatPanel and HistoryPanel were const functions defined inside AiChat(), causing React to create new component identities on every render. Fixed by moving both to module level. A wasStreaming ref + useEffect restores focus 100 ms after streaming ends.',
+              file: 'app/src/components/AiChat.tsx',
+            },
+            {
+              title: 'Fix 7 — Sidebar does not span full viewport height',
+              symptom: "The sidebar's green border stopped short of the bottom of the screen.",
+              fix: 'Wrapper div used h-full, which browsers do not always resolve definitively against a flex-stretched parent. Fixed by changing to flex flex-col self-stretch so the aside fills the full height reliably.',
+              file: 'app/src/components/AppLayout.tsx',
+            },
+            {
+              title: 'Fix 8 — Anthropic 400 error in multi-turn tool conversations',
+              symptom: 'messages.N.content.0.text.input_str: Extra inputs are not permitted — 400 from Anthropic API on message 9+ when Claude called multiple tools.',
+              fix: 'agenticStream.js used input_str as a local streaming accumulator on tool-use blocks. The field was still attached when blocks were pushed to assistantContent and sent back to Anthropic. Fixed by destructuring input_str off each block before pushing: const { input_str, ...cleanBlock } = currentBlock.',
+              file: 'api/src/helpers/agenticStream.js',
             },
           ].map(b => (
             <div key={b.title} className="border border-[#D8E6DD] rounded-lg p-3 bg-white">

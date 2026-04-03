@@ -1103,8 +1103,8 @@ interface UsageSummary {
   last_turn: string | null
 }
 interface UsageDaily { day: string; turns: number; tokens_in: number; tokens_out: number; cost_usd: number }
-interface UsageUser  { user: string; turns: number; tokens_in: number; tokens_out: number; cost_usd: number; last_active: string }
-interface UsageData  { summary: UsageSummary; daily: UsageDaily[]; by_user: UsageUser[] }
+interface UsageUser  { user: string; turns: number; tokens_in: number; tokens_out: number; period_tokens: number; cost_usd: number; last_active: string }
+interface UsageData  { summary: UsageSummary; daily: UsageDaily[]; by_user: UsageUser[]; monthly_limit: number; period_start: string; next_reset: string }
 
 function AiTab() {
   const api = useApi()
@@ -1118,6 +1118,8 @@ function AiTab() {
   const [githubRepo,   setGithubRepo]   = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
+  const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
+  const [savingLimit,        setSavingLimit]        = useState(false)
   const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
   const [usage,            setUsage]            = useState<UsageData | null>(null)
   const [usageLoading,     setUsageLoading]     = useState(false)
@@ -1135,6 +1137,7 @@ function AiTab() {
       .then(([s, settings, keyData]) => {
         setStatus(s)
         setConciseMode(settings?.ai_concise_mode === true)
+        setMonthlyTokenLimit(String(settings?.ai_monthly_token_limit ?? '0'))
         setClaudeCodeKey(keyData?.key ?? null)
       })
       .catch(() => {})
@@ -1160,6 +1163,20 @@ function AiTab() {
       setToast({ message: err.message || 'Failed to save', type: 'error' })
     } finally {
       setSavingMode(false)
+    }
+  }
+
+  async function handleSaveTokenLimit() {
+    const val = Math.max(0, Math.floor(Number(monthlyTokenLimit) || 0))
+    setMonthlyTokenLimit(String(val))
+    setSavingLimit(true)
+    try {
+      await api.patch('/settings', { ai_monthly_token_limit: val })
+      setToast({ message: val === 0 ? 'Token allowance removed (unlimited)' : `Monthly limit set to ${val.toLocaleString()} tokens`, type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingLimit(false)
     }
   }
 
@@ -1376,6 +1393,49 @@ function AiTab() {
         </div>
       </div>
 
+      {/* ── Monthly Token Allowance ── */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">Monthly Token Allowance</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Set a maximum number of tokens each user can consume per billing period (25th → 24th). Set to <strong>0</strong> for unlimited. Applies to all users.
+        </p>
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4">
+          <div className="flex items-end gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-xs font-semibold text-text-2 mb-1.5">
+                Tokens per month <span className="font-normal text-text-3">(0 = unlimited)</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="10000"
+                className="input w-full font-mono"
+                value={monthlyTokenLimit}
+                onChange={e => setMonthlyTokenLimit(e.target.value)}
+                placeholder="0"
+              />
+              {Number(monthlyTokenLimit) > 0 && (
+                <p className="text-xs text-text-3 mt-1">
+                  ≈ ${((Number(monthlyTokenLimit) * 0.5 / 1_000_000) * (0.80 + 4.00)).toFixed(2)} est. cost/user/month at 50% input split
+                </p>
+              )}
+            </div>
+            <button
+              className="btn-primary px-4 py-2 text-sm"
+              onClick={handleSaveTokenLimit}
+              disabled={savingLimit}
+            >
+              {savingLimit ? 'Saving…' : 'Save Limit'}
+            </button>
+          </div>
+          {Number(monthlyTokenLimit) > 0 && (
+            <div className="mt-3 pt-3 border-t border-border text-xs text-text-3">
+              Users who exceed the limit will see a clear error message in Pepper — requests are blocked until the 25th. Admin accounts are subject to the same limit.
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ── Claude Code Integration ── */}
       <div className="mt-8 pt-6 border-t border-border">
         <h2 className="text-base font-bold text-text-1 mb-1">Claude Code Integration</h2>
@@ -1514,27 +1574,53 @@ function AiTab() {
               {/* Per-user table */}
               {usage.by_user.length > 0 && (
                 <div className="rounded-xl border border-border overflow-hidden">
-                  <div className="px-4 py-2.5 bg-surface-2/50 border-b border-border text-xs font-semibold text-text-2">Usage by user</div>
+                  <div className="px-4 py-2.5 bg-surface-2/50 border-b border-border flex items-center justify-between">
+                    <span className="text-xs font-semibold text-text-2">Usage by user</span>
+                    {usage.monthly_limit > 0 && (
+                      <span className="text-xs text-text-3">
+                        Period: {new Date(usage.period_start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} → {new Date(usage.next_reset).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · Limit: {fmtK(usage.monthly_limit)} tokens/user
+                      </span>
+                    )}
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-200 border-b border-gray-300">
                         <tr>
-                          {['User', 'Turns', 'Tokens in', 'Tokens out', 'Est. cost', 'Last active'].map(h => (
+                          {['User', 'Turns', 'Tokens in', 'Tokens out', 'Est. cost',
+                            ...(usage.monthly_limit > 0 ? ['This period'] : []),
+                            'Last active'].map(h => (
                             <th key={h} className="px-3 py-2 text-xs font-semibold text-gray-500 text-left">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {usage.by_user.map(u => (
-                          <tr key={u.user} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 text-xs font-mono text-text-2 max-w-[180px] truncate" title={u.user}>{u.user}</td>
-                            <td className="px-3 py-2 text-xs text-right">{u.turns.toLocaleString()}</td>
-                            <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_in)}</td>
-                            <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_out)}</td>
-                            <td className="px-3 py-2 text-xs text-right font-semibold text-accent">{fmtCost(u.cost_usd)}</td>
-                            <td className="px-3 py-2 text-xs text-text-3">{new Date(u.last_active).toLocaleDateString()}</td>
-                          </tr>
-                        ))}
+                        {usage.by_user.map(u => {
+                          const pct = usage.monthly_limit > 0 ? Math.min(100, Math.round((u.period_tokens / usage.monthly_limit) * 100)) : 0
+                          const exceeded = usage.monthly_limit > 0 && u.period_tokens >= usage.monthly_limit
+                          return (
+                            <tr key={u.user} className="hover:bg-gray-50">
+                              <td className="px-3 py-2 text-xs font-mono text-text-2 max-w-[180px] truncate" title={u.user}>{u.user}</td>
+                              <td className="px-3 py-2 text-xs text-right">{u.turns.toLocaleString()}</td>
+                              <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_in)}</td>
+                              <td className="px-3 py-2 text-xs text-right font-mono">{fmtK(u.tokens_out)}</td>
+                              <td className="px-3 py-2 text-xs text-right font-semibold text-accent">{fmtCost(u.cost_usd)}</td>
+                              {usage.monthly_limit > 0 && (
+                                <td className="px-3 py-2 text-xs min-w-[120px]">
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
+                                      <div className="h-full rounded-full transition-all"
+                                        style={{ width: `${pct}%`, background: exceeded ? '#DC2626' : pct > 80 ? '#D97706' : 'var(--accent)' }} />
+                                    </div>
+                                    <span className={`font-mono whitespace-nowrap ${exceeded ? 'text-red-600 font-semibold' : 'text-text-3'}`}>
+                                      {fmtK(u.period_tokens)}
+                                    </span>
+                                  </div>
+                                </td>
+                              )}
+                              <td className="px-3 py-2 text-xs text-text-3">{new Date(u.last_active).toLocaleDateString()}</td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>

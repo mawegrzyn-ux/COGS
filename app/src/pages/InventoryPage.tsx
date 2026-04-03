@@ -97,6 +97,8 @@ interface Unit {
   type:         string
 }
 
+interface MenuRef { id: number; name: string; country_name: string }
+
 type Tab        = 'ingredients' | 'quotes' | 'vendors'
 type ToastState = { message: string; type: 'success' | 'error' }
 
@@ -559,6 +561,12 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [dietaryFlags, setDietaryFlags] = useState<Record<string, boolean>>({})
   const [ingAllergenMap, setIngAllergenMap] = useState<Map<number, { code: string; status: string }[]>>(new Map())
 
+  // ── Menu filter ──────────────────────────────────────────────────────────────
+  const [menus,          setMenus]          = useState<MenuRef[]>([])
+  const [filterMenuId,   setFilterMenuId]   = useState<number | null>(null)
+  const [menuIngIds,     setMenuIngIds]     = useState<Set<number> | null>(null)
+  const [menuFilterBusy, setMenuFilterBusy] = useState(false)
+
   // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -598,6 +606,38 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     }).catch(() => {})
   }, [api])
 
+  // Load menus list for the filter dropdown
+  useEffect(() => {
+    api.get('/menus').then((d: any[]) =>
+      setMenus((d || []).map((m: any) => ({ id: m.id, name: m.name, country_name: m.country_name || '' })))
+    ).catch(() => {})
+  }, [api])
+
+  // Resolve ingredient IDs when menu filter changes
+  useEffect(() => {
+    if (!filterMenuId) { setMenuIngIds(null); return }
+    setMenuFilterBusy(true)
+    ;(async () => {
+      try {
+        const menuItems: any[] = (await api.get(`/menu-items?menu_id=${filterMenuId}`)) || []
+        const ids = new Set<number>()
+        for (const mi of menuItems)
+          if (mi.item_type === 'ingredient' && mi.ingredient_id) ids.add(mi.ingredient_id)
+        const recipeIds = [...new Set(
+          menuItems.filter(mi => mi.item_type === 'recipe' && mi.recipe_id).map((mi: any) => mi.recipe_id)
+        )]
+        if (recipeIds.length > 0) {
+          const recipes: any[] = await Promise.all(recipeIds.map((id: number) => api.get(`/recipes/${id}`)))
+          for (const r of recipes)
+            for (const item of (r?.items || []))
+              if (item.item_type === 'ingredient' && item.ingredient_id) ids.add(item.ingredient_id)
+        }
+        setMenuIngIds(ids)
+      } catch { setMenuIngIds(null) }
+      finally  { setMenuFilterBusy(false) }
+    })()
+  }, [filterMenuId, api])
+
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const categories = useMemo(() =>
@@ -614,8 +654,12 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     )
   , [ingredients, search])
 
+  const menuFiltered = useMemo(() =>
+    menuIngIds ? searchFiltered.filter(i => menuIngIds.has(i.id)) : searchFiltered
+  , [searchFiltered, menuIngIds])
+
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
-    useSortFilter<Ingredient>(searchFiltered, 'name', 'asc')
+    useSortFilter<Ingredient>(menuFiltered, 'name', 'asc')
 
   // ── Keyboard prev/next while ingredient modal is open ───────────────────────
   useEffect(() => {
@@ -887,7 +931,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   return (
     <>
-      <div className="flex gap-3 mb-5 flex-wrap">
+      <div className="flex gap-3 mb-5 flex-wrap items-center">
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
@@ -896,6 +940,24 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             className="input pl-9 w-full"
           />
         </div>
+        {menus.length > 0 && (
+          <div className="relative min-w-[160px]">
+            <select
+              className={`select w-full pr-7 ${filterMenuId ? 'border-accent text-accent font-semibold' : ''}`}
+              value={filterMenuId ?? ''}
+              onChange={e => setFilterMenuId(e.target.value ? Number(e.target.value) : null)}
+              title="Filter ingredients by menu"
+            >
+              <option value="">All menus</option>
+              {menus.map(m => (
+                <option key={m.id} value={String(m.id)}>{m.name}{m.country_name ? ` (${m.country_name})` : ''}</option>
+              ))}
+            </select>
+            {menuFilterBusy && (
+              <span className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 border border-accent/40 border-t-accent rounded-full animate-spin" style={{ borderTopColor: 'var(--accent)' }} />
+            )}
+          </div>
+        )}
         <GridToggleButton active={gridMode} onToggle={() => setGridMode(g => !g)} />
         <button className="btn-outline px-4 py-2 text-sm flex items-center gap-2" onClick={() => openAdd(false)}>
           <PlusIcon size={14} /> Add Ingredient
@@ -940,8 +1002,8 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         />
       ) : sorted.length === 0 ? (
         <EmptyState
-          message={search || hasActiveFilters ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
-          action={!search && !hasActiveFilters
+          message={search || hasActiveFilters || filterMenuId ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
+          action={!search && !hasActiveFilters && !filterMenuId
             ? <button className="btn-primary px-4 py-2 text-sm" onClick={() => openAdd()}>Add Ingredient</button>
             : undefined
           }
@@ -1228,6 +1290,12 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   const [confirmDelete,    setConfirmDelete]   = useState<Quote | null>(null)
   const [toast,            setToast]           = useState<ToastState | null>(null)
 
+  // ── Menu filter ──────────────────────────────────────────────────────────────
+  const [menus,          setMenus]          = useState<MenuRef[]>([])
+  const [filterMenuId,   setFilterMenuId]   = useState<number | null>(null)
+  const [menuIngIds,     setMenuIngIds]     = useState<Set<number> | null>(null)
+  const [menuFilterBusy, setMenuFilterBusy] = useState(false)
+
   // ── Missing quotes mode ──────────────────────────────────────────────────────
   const [showMissing,      setShowMissing]     = useState(false)
   const [missingCountryId, setMissingCountryId]= useState<string>('')
@@ -1264,6 +1332,38 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
 
   useEffect(() => { load() }, [load])
 
+  // Load menus list for the filter dropdown
+  useEffect(() => {
+    api.get('/menus').then((d: any[]) =>
+      setMenus((d || []).map((m: any) => ({ id: m.id, name: m.name, country_name: m.country_name || '' })))
+    ).catch(() => {})
+  }, [api])
+
+  // Resolve ingredient IDs for selected menu
+  useEffect(() => {
+    if (!filterMenuId) { setMenuIngIds(null); return }
+    setMenuFilterBusy(true)
+    ;(async () => {
+      try {
+        const menuItems: any[] = (await api.get(`/menu-items?menu_id=${filterMenuId}`)) || []
+        const ids = new Set<number>()
+        for (const mi of menuItems)
+          if (mi.item_type === 'ingredient' && mi.ingredient_id) ids.add(mi.ingredient_id)
+        const recipeIds = [...new Set(
+          menuItems.filter(mi => mi.item_type === 'recipe' && mi.recipe_id).map((mi: any) => mi.recipe_id)
+        )]
+        if (recipeIds.length > 0) {
+          const recipes: any[] = await Promise.all(recipeIds.map((id: number) => api.get(`/recipes/${id}`)))
+          for (const r of recipes)
+            for (const item of (r?.items || []))
+              if (item.item_type === 'ingredient' && item.ingredient_id) ids.add(item.ingredient_id)
+        }
+        setMenuIngIds(ids)
+      } catch { setMenuIngIds(null) }
+      finally  { setMenuFilterBusy(false) }
+    })()
+  }, [filterMenuId, api])
+
   // ── Derived ─────────────────────────────────────────────────────────────────
 
   const searchFiltered = useMemo(() =>
@@ -1273,12 +1373,16 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     ), [quotes, search]
   )
 
+  const menuFiltered = useMemo(() =>
+    menuIngIds ? searchFiltered.filter(q => menuIngIds.has(q.ingredient_id)) : searchFiltered
+  , [searchFiltered, menuIngIds])
+
   const initialQuoteFilters = useMemo(
     (): Record<string, string[]> => initialIngredientId ? { ingredient_id: [String(initialIngredientId)] } : {},
     [] // eslint-disable-line react-hooks/exhaustive-deps — intentionally only on mount
   )
   const { sorted, sortField, sortDir, getFilter, setSort, setFilter, hasActiveFilters } =
-    useSortFilter<Quote>(searchFiltered, 'ingredient_name', 'asc', initialQuoteFilters)
+    useSortFilter<Quote>(menuFiltered, 'ingredient_name', 'asc', initialQuoteFilters)
 
   const selectedVendor = useMemo(() =>
     vendors.find(v => String(v.id) === form.vendor_id) || null
@@ -1540,6 +1644,24 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
               value={search} onChange={e => setSearch(e.target.value)}
               className="input pl-9 w-full"
             />
+          </div>
+        )}
+        {!showMissing && menus.length > 0 && (
+          <div className="relative min-w-[160px]">
+            <select
+              className={`select w-full ${filterMenuId ? 'border-accent text-accent font-semibold' : ''}`}
+              value={filterMenuId ?? ''}
+              onChange={e => setFilterMenuId(e.target.value ? Number(e.target.value) : null)}
+              title="Filter quotes by menu"
+            >
+              <option value="">All menus</option>
+              {menus.map(m => (
+                <option key={m.id} value={String(m.id)}>{m.name}{m.country_name ? ` (${m.country_name})` : ''}</option>
+              ))}
+            </select>
+            {menuFilterBusy && (
+              <span className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 border border-accent/40 border-t-accent rounded-full animate-spin" style={{ borderTopColor: 'var(--accent)' }} />
+            )}
           </div>
         )}
         {showMissing && (

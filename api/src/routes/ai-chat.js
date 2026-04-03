@@ -3270,6 +3270,21 @@ router.post('/', async (req, res) => {
   const { message, context = {}, history = [], sessionId, userEmail, userSub } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: { message: 'message is required' } });
 
+  // ── Monthly token allowance check ────────────────────────────────────────────
+  const allowance = await checkTokenAllowance(userSub || req.user?.sub);
+  if (!allowance.allowed) {
+    const resetDate = allowance.nextReset
+      ? new Date(allowance.nextReset).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+      : 'the 25th';
+    return res.status(429).json({
+      error: {
+        message:   `Monthly token allowance of ${Number(allowance.limit).toLocaleString()} tokens reached. Resets on ${resetDate}.`,
+        code:      'token_allowance_exceeded',
+        resets_at: allowance.nextReset,
+      },
+    });
+  }
+
   // SSE headers
   res.setHeader('Content-Type',  'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -3383,6 +3398,84 @@ router.get('/sessions/:session_id', async (req, res) => {
   }
 });
 
+// ── Billing period helpers ────────────────────────────────────────────────────
+// Billing period runs from the 25th of each month to the 24th of the next.
+
+function getBillingPeriodStart() {
+  const now   = new Date();
+  const start = new Date(now);
+  if (now.getDate() >= 25) {
+    start.setDate(25);
+  } else {
+    start.setMonth(start.getMonth() - 1);
+    start.setDate(25);
+  }
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function getNextResetDate() {
+  const next = getBillingPeriodStart();
+  next.setMonth(next.getMonth() + 1);
+  return next;
+}
+
+// Returns { allowed, periodTokens, limit, nextReset }
+// Fails open (allows request) if settings cannot be read.
+async function checkTokenAllowance(userSub) {
+  try {
+    const { rows: sRows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    const globalLimit = Number(sRows[0]?.data?.ai_monthly_token_limit) || 0;
+    if (!globalLimit || !userSub) return { allowed: true, periodTokens: 0, limit: globalLimit, nextReset: null };
+
+    const periodStart = getBillingPeriodStart();
+    const { rows } = await pool.query(`
+      SELECT COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
+      FROM   mcogs_ai_chat_log
+      WHERE  user_sub = $1 AND created_at >= $2
+    `, [userSub, periodStart.toISOString()]);
+
+    const periodTokens = Number(rows[0]?.total || 0);
+    const nextReset    = getNextResetDate();
+    return { allowed: periodTokens < globalLimit, periodTokens, limit: globalLimit, nextReset };
+  } catch {
+    return { allowed: true, periodTokens: 0, limit: 0, nextReset: null }; // fail open
+  }
+}
+
+// GET /ai-chat/my-usage — current billing period usage for the requesting user
+router.get('/my-usage', async (req, res) => {
+  try {
+    const { rows: sRows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    const globalLimit  = Number(sRows[0]?.data?.ai_monthly_token_limit) || 0;
+    const periodStart  = getBillingPeriodStart();
+    const nextReset    = getNextResetDate();
+    const userSub      = req.user?.sub;
+
+    let periodTokens = 0;
+    if (userSub) {
+      const { rows } = await pool.query(`
+        SELECT COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
+        FROM   mcogs_ai_chat_log
+        WHERE  user_sub = $1 AND created_at >= $2
+      `, [userSub, periodStart.toISOString()]);
+      periodTokens = Number(rows[0]?.total || 0);
+    }
+
+    res.json({
+      period_start:  periodStart.toISOString(),
+      next_reset:    nextReset.toISOString(),
+      period_tokens: periodTokens,
+      limit:         globalLimit,
+      remaining:     globalLimit > 0 ? Math.max(0, globalLimit - periodTokens) : null,
+      exceeded:      globalLimit > 0 && periodTokens >= globalLimit,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch usage' } });
+  }
+});
+
 // ── Token Usage Report ────────────────────────────────────────────────────────
 // Haiku 4.5 pricing (USD per 1M tokens, as of early 2026)
 const COST_PER_M_IN  = 0.80;
@@ -3390,7 +3483,9 @@ const COST_PER_M_OUT = 4.00;
 
 router.get('/usage', async (req, res) => {
   try {
-    const [totals, daily, byUser] = await Promise.all([
+    const periodStart = getBillingPeriodStart();
+
+    const [totals, daily, byUser, settingsRow] = await Promise.all([
       // All-time totals
       pool.query(`
         SELECT
@@ -3417,19 +3512,24 @@ router.get('/usage', async (req, res) => {
         ORDER BY 1 ASC
       `),
 
-      // Per-user breakdown — top 20 by total tokens
+      // Per-user breakdown — top 20 by total tokens, including current billing period
       pool.query(`
         SELECT
           COALESCE(user_email, user_sub, 'unknown')  AS user_label,
           COUNT(*)::int                              AS turns,
           COALESCE(SUM(tokens_in),  0)::bigint       AS tokens_in,
           COALESCE(SUM(tokens_out), 0)::bigint       AS tokens_out,
+          COALESCE(SUM(CASE WHEN created_at >= $1
+            THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS period_tokens,
           MAX(created_at)                            AS last_active
         FROM mcogs_ai_chat_log
         GROUP BY COALESCE(user_email, user_sub, 'unknown')
         ORDER BY (COALESCE(SUM(tokens_in), 0) + COALESCE(SUM(tokens_out), 0)) DESC
         LIMIT 20
-      `),
+      `, [periodStart.toISOString()]),
+
+      // Global monthly limit from settings
+      pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`),
     ]);
 
     const t = totals.rows[0];
@@ -3457,13 +3557,17 @@ router.get('/usage', async (req, res) => {
         cost_usd:   Math.round(((Number(r.tokens_in) / 1_000_000) * COST_PER_M_IN + (Number(r.tokens_out) / 1_000_000) * COST_PER_M_OUT) * 10000) / 10000,
       })),
       by_user: byUser.rows.map(r => ({
-        user:       r.user_label,
-        turns:      r.turns,
-        tokens_in:  Number(r.tokens_in),
-        tokens_out: Number(r.tokens_out),
-        cost_usd:   Math.round(((Number(r.tokens_in) / 1_000_000) * COST_PER_M_IN + (Number(r.tokens_out) / 1_000_000) * COST_PER_M_OUT) * 10000) / 10000,
-        last_active: r.last_active,
+        user:          r.user_label,
+        turns:         r.turns,
+        tokens_in:     Number(r.tokens_in),
+        tokens_out:    Number(r.tokens_out),
+        period_tokens: Number(r.period_tokens),
+        cost_usd:      Math.round(((Number(r.tokens_in) / 1_000_000) * COST_PER_M_IN + (Number(r.tokens_out) / 1_000_000) * COST_PER_M_OUT) * 10000) / 10000,
+        last_active:   r.last_active,
       })),
+      monthly_limit:  Number(settingsRow.rows[0]?.data?.ai_monthly_token_limit) || 0,
+      period_start:   periodStart.toISOString(),
+      next_reset:     getNextResetDate().toISOString(),
     });
   } catch (err) {
     console.error(err);
@@ -3471,4 +3575,4 @@ router.get('/usage', async (req, res) => {
   }
 });
 
-module.exports = { router, TOOLS, executeTool, buildSystemPrompt };
+module.exports = { router, TOOLS, executeTool, buildSystemPrompt, checkTokenAllowance };

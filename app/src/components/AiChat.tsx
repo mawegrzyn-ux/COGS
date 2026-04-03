@@ -24,6 +24,14 @@ interface ChatSession {
   last_message: string
 }
 
+interface MyUsage {
+  period_tokens: number
+  limit:         number
+  remaining:     number | null
+  exceeded:      boolean
+  next_reset:    string
+}
+
 type PanelView = 'chat' | 'history'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -85,14 +93,127 @@ function CogIcon({ size = 24, color = '#fff' }: { size?: number; color?: string 
   )
 }
 
-// ── Minimal markdown renderer ──────────────────────────────────────────────────
+// ── Markdown renderer ─────────────────────────────────────────────────────────
 
 function renderMd(text: string): string {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`(.+?)`/g, '<code class="bg-[#e8f5ed] px-1 rounded text-xs font-mono">$1</code>')
-    .replace(/\n/g, '<br>')
+  // Escape HTML entities (applied before inline formatting)
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  // Inline markdown – input is already HTML-escaped
+  const inline = (s: string): string =>
+    s.replace(/`([^`\n]+)`/g, (_, c) =>
+        `<code style="background:var(--accent-dim);padding:1px 4px;border-radius:3px;font-size:0.75em;font-family:ui-monospace,SFMono-Regular,monospace">${c}</code>`)
+     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+     .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+
+  const lines = text.split('\n')
+  const out: string[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i].trim()
+
+    // ── Fenced code block ──────────────────────────────────────────────────────
+    if (line.startsWith('```')) {
+      const body: string[] = []
+      i++
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        body.push(esc(lines[i]))
+        i++
+      }
+      i++ // skip closing ```
+      out.push(
+        `<pre style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;` +
+        `padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:0.72rem;font-family:ui-monospace,` +
+        `SFMono-Regular,monospace;line-height:1.55;white-space:pre-wrap;color:var(--text-2)">${body.join('\n')}</pre>`
+      )
+      continue
+    }
+
+    // ── Heading ────────────────────────────────────────────────────────────────
+    const hm = line.match(/^(#{1,3})\s+(.+)$/)
+    if (hm) {
+      const lvl = hm[1].length
+      const style = lvl === 1
+        ? 'font-size:0.9rem;font-weight:800;margin:10px 0 3px;color:var(--text-1)'
+        : lvl === 2
+        ? 'font-size:0.85rem;font-weight:700;margin:8px 0 2px;color:var(--text-1)'
+        : 'font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:6px 0 2px;color:var(--text-3)'
+      out.push(`<div style="${style}">${inline(esc(hm[2]))}</div>`)
+      i++; continue
+    }
+
+    // ── Pipe table ─────────────────────────────────────────────────────────────
+    if (line.includes('|') && i + 1 < lines.length && /^\|?[\s:\-|]+\|?$/.test(lines[i + 1].trim())) {
+      const parseRow = (r: string) =>
+        r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim())
+      const headers = parseRow(line)
+      i += 2  // skip header + separator
+      const rows: string[][] = []
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        rows.push(parseRow(lines[i]))
+        i++
+      }
+      let tbl = '<div style="overflow-x:auto;margin:6px 0;border-radius:6px;border:1px solid var(--border)">'
+      tbl += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem">'
+      tbl += '<thead><tr style="background:var(--surface-2)">'
+      for (const h of headers)
+        tbl += `<th style="padding:5px 10px;text-align:left;font-weight:600;color:var(--text-2);` +
+               `border-bottom:2px solid var(--border);white-space:nowrap">${inline(esc(h))}</th>`
+      tbl += '</tr></thead><tbody>'
+      rows.forEach((row, ri) => {
+        tbl += `<tr style="background:${ri % 2 === 1 ? 'var(--surface-2)' : 'transparent'}">`
+        headers.forEach((_, hi) => {
+          const cell = row[hi] ?? ''
+          tbl += `<td style="padding:4px 10px;color:var(--text-1);border-top:1px solid var(--border)">${inline(esc(cell))}</td>`
+        })
+        tbl += '</tr>'
+      })
+      tbl += '</tbody></table></div>'
+      out.push(tbl)
+      continue
+    }
+
+    // ── Unordered list ─────────────────────────────────────────────────────────
+    if (/^[-*•]\s/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^[-*•]\s/.test(lines[i].trim())) {
+        items.push(
+          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^[-*•]\s+/, '')))}</li>`
+        )
+        i++
+      }
+      out.push(`<ul style="margin:4px 0;padding-left:18px;list-style-type:disc;display:flex;flex-direction:column;gap:1px">${items.join('')}</ul>`)
+      continue
+    }
+
+    // ── Ordered list ───────────────────────────────────────────────────────────
+    if (/^\d+[.)]\s/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
+        items.push(
+          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^\d+[.)]\s+/, '')))}</li>`
+        )
+        i++
+      }
+      out.push(`<ol style="margin:4px 0;padding-left:18px;list-style-type:decimal;display:flex;flex-direction:column;gap:1px">${items.join('')}</ol>`)
+      continue
+    }
+
+    // ── Blank line → small spacer ──────────────────────────────────────────────
+    if (!line) {
+      out.push('<div style="height:5px"></div>')
+      i++; continue
+    }
+
+    // ── Regular text ──────────────────────────────────────────────────────────
+    out.push(`<div style="line-height:1.6;color:var(--text-1)">${inline(esc(line))}</div>`)
+    i++
+  }
+
+  return out.join('')
 }
 
 const ACCEPTED_TYPES = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
@@ -397,6 +518,7 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
   const [sessionId,          setSessionId]          = useState(newSessionId)
   const [sessions,           setSessions]           = useState<ChatSession[]>([])
   const [sessionsLoad,       setSessionsLoad]       = useState(false)
+  const [myUsage,            setMyUsage]            = useState<MyUsage | null>(null)
 
   const [floatSize, setFloatSize] = useState<{ w: number; h: number }>(() => {
     try {
@@ -430,6 +552,23 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     }
     wasStreaming.current = streaming
   }, [streaming, open, view])
+
+  // Fetch monthly usage when panel opens and after each response completes
+  const refreshUsage = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/ai-chat/my-usage`, { headers: await authHeader() })
+      if (res.ok) setMyUsage(await res.json())
+    } catch { /* non-critical */ }
+  }, [authHeader])
+
+  useEffect(() => {
+    if (open) refreshUsage()
+  }, [open, refreshUsage])
+
+  useEffect(() => {
+    // Refresh after each streaming turn completes
+    if (!streaming && open) refreshUsage()
+  }, [streaming]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── New Chat ──────────────────────────────────────────────────────────────
 
@@ -736,16 +875,23 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
 
   const docked = mode !== 'float'
 
+  // Usage bar values
+  const usagePct      = myUsage?.limit ? Math.min(100, Math.round((myUsage.period_tokens / myUsage.limit) * 100)) : 0
+  const usageExceeded = myUsage?.exceeded ?? false
+  const usageWarning  = myUsage?.limit ? usagePct >= 80 && !usageExceeded : false
+  const fmtTok        = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n/1_000).toFixed(0)}k` : String(n)
+
   const panelHeader = (
-    <div className={`flex items-center justify-between px-4 py-3 flex-shrink-0 ${!docked ? 'rounded-t-xl' : ''}`}
+    <div className={`flex-shrink-0 ${!docked ? 'rounded-t-xl' : ''}`}
       style={{ background: 'var(--accent)', color: '#fff' }}>
-      <div className="flex items-center gap-2.5">
-        <CogIcon size={26} color="#fff" />
-        <div>
-          <div className="font-semibold text-sm leading-tight">Pepper</div>
-          <div className="text-xs opacity-75">Powered by Claude</div>
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <CogIcon size={26} color="#fff" />
+          <div>
+            <div className="font-semibold text-sm leading-tight">Pepper</div>
+            <div className="text-xs opacity-75">Powered by Claude</div>
+          </div>
         </div>
-      </div>
       <div className="flex items-center gap-1">
         {/* Dock-mode toggles */}
         <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
@@ -802,6 +948,31 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
           </svg>
         </button>
       </div>
+      {/* Monthly token usage bar — shown only when a limit is configured */}
+      {myUsage && myUsage.limit > 0 && (
+        <div className="px-3 pb-2">
+          <div className="flex items-center justify-between mb-1" style={{ opacity: 0.9 }}>
+            <span className="text-xs" style={{ color: usageExceeded ? '#fca5a5' : 'rgba(255,255,255,0.8)' }}>
+              {usageExceeded
+                ? `⛔ Limit reached — resets ${new Date(myUsage.next_reset).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+                : usageWarning
+                ? `⚠ ${fmtTok(myUsage.period_tokens)} / ${fmtTok(myUsage.limit)} tokens this period`
+                : `${fmtTok(myUsage.period_tokens)} / ${fmtTok(myUsage.limit)} tokens`
+              }
+            </span>
+            <span className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>{usagePct}%</span>
+          </div>
+          <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.2)' }}>
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${usagePct}%`,
+                background: usageExceeded ? '#EF4444' : usageWarning ? '#F59E0B' : 'rgba(255,255,255,0.8)',
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 

@@ -160,6 +160,7 @@ Configure the Pepper AI assistant. All keys entered here are stored in the datab
 | Voyage AI Key | Enables semantic vector search for Pepper's knowledge base (RAG). Without it, falls back to keyword frequency scoring, which is less accurate. |
 | Brave Search API Key | Enables real web search in Pepper. Without it, Pepper falls back to DuckDuckGo instant answers, which have limited coverage. |
 | Response Behaviour | Concise mode toggle. When on, Pepper skips narration, calls tools silently, and returns bullet-point results instead of prose paragraphs. |
+| Monthly Token Allowance | Per-user monthly token cap. Billing period runs from the 25th of the previous month to the 24th of the current month, resetting automatically each 25th. Set to 0 for unlimited. When a user reaches their limit, Pepper returns a clear message with the reset date. The Pepper panel header shows a live usage bar. |
 | Claude Code API Key | Generate or regenerate a bearer token for the Claude Code developer tool to query the internal feedback API. Not required for end users. |
 
 ---
@@ -293,6 +294,12 @@ Fields per quote:
 **Preferred Vendor assignment:** For each ingredient, you can designate one preferred vendor per market. The preferred vendor's quote is used for all COGS calculations in that market. Only one preferred vendor per ingredient per country is permitted. If no preferred vendor is set, the system falls back to the cheapest active quote for that ingredient in that market.
 
 To set a preferred vendor: find the quote in the Price Quotes list, select the market, and mark it as preferred.
+
+### Menu Filter
+
+Both the **Ingredients** and **Price Quotes** tabs include a **Filter by menu** dropdown in the toolbar. Selecting a menu resolves all ingredient IDs used in that menu's recipe items and narrows the displayed list to only those ingredients (and their quotes). This makes it easy to check pricing coverage or update costs for a specific menu before launch.
+
+The filter resolves one level of recipe nesting — ingredients directly on recipe lines. Clear the filter to return to the full list. On the Price Quotes tab, the menu filter is hidden when the "Missing quotes only" toggle is active.
 
 ---
 
@@ -688,13 +695,17 @@ Switching between dock modes clears the current conversation. The conversation h
 
 - **Text:** Type in the text area and press Enter or click the Send button.
 - **Paste images:** Paste an image directly from your clipboard (Ctrl+V or Cmd+V). Pepper accepts screenshots and photos. An image preview thumbnail appears in the attachment badge.
-- **Upload files:** Click the paperclip icon to attach a file. Supported formats: CSV, XLSX, PNG, JPEG, WEBP. Maximum 5 MB. PDF is not supported.
+- **Upload files:** Click the paperclip icon to attach a file. Supported formats: CSV, XLSX, DOCX, PPTX, PDF, PNG, JPEG, WEBP. Maximum 10 MB.
 - **Screenshot button:** Click the camera icon in the chat input bar to capture the current page view. Pepper's own UI is excluded from the capture. The screenshot is attached to your next message automatically — add your question and send.
 - **Right-click Ask Pepper:** On any data element in the app that supports it, right-click to reveal a context menu with "Ask Pepper". Selecting it opens Pepper with a pre-built contextual prompt and an auto-screenshot of that element. Supported context types include COGS%, coverage, cost per portion, menu COGS summaries, and page tutorials.
 
 ### Tutorial Help Buttons
 
 Small help icons (?) appear next to page headers and tab labels throughout the app. Clicking them sends a pre-written tutorial prompt to Pepper for that specific section, walking you through how to use that feature.
+
+### Markdown Responses
+
+Pepper renders its responses with full markdown formatting. Tables, code blocks, headings, bullet lists, numbered lists, bold, italic, and inline code are all formatted for easy reading rather than displayed as raw text.
 
 ### Concise Mode
 
@@ -706,9 +717,19 @@ Toggle Concise Mode in Settings → AI → Response Behaviour. When on:
 
 Useful when you are doing repetitive data tasks and want fast, clean output.
 
+### Monthly Token Allowance
+
+If a **Monthly Token Allowance** is configured in Settings → AI, a colour-coded progress bar appears below the Pepper panel header showing your usage for the current billing period (25th to 24th each month):
+
+- **Green** — under 80% of the limit used
+- **Amber** — 80–99% used
+- **Red** — limit reached
+
+When the limit is reached, Pepper displays a message indicating when the allowance resets. Users with the limit set to 0 have unlimited access.
+
 ### What Pepper Can Do
 
-Pepper has 74 tools covering every data operation in the app.
+Pepper has 87 tools covering every data operation in the app.
 
 **Read / Lookup (15 tools):**
 
@@ -857,6 +878,25 @@ Pepper has 74 tools covering every data operation in the app.
 | Tool | What it does |
 |---|---|
 | search_web | Searches the web. Uses Brave Search if a key is configured, otherwise DuckDuckGo instant answers. Only called when you explicitly ask Pepper to search the internet. |
+
+**GitHub (8 tools — requires GITHUB_PAT + GITHUB_REPO in Settings → AI):**
+
+| Tool | What it does |
+|---|---|
+| github_list_files | Browses directories and finds files in the configured repository |
+| github_read_file | Reads the full content of any file (including its SHA for subsequent updates) |
+| github_search_code | Searches code by keyword across the repository |
+| github_create_branch | Creates a new feature branch — confirmation required |
+| github_create_or_update_file | Writes a file to a branch — confirmation required; writing to main or master is blocked at the server level |
+| github_list_prs | Lists open or closed pull requests |
+| github_get_pr_diff | Returns the diff/patch for a pull request |
+| github_create_pr | Opens a pull request for human review — confirmation required |
+
+**Excel Export (1 tool):**
+
+| Tool | What it does |
+|---|---|
+| export_to_excel | Generates a multi-sheet .xlsx workbook (ingredients, price quotes, recipes, menus, or a full export) filtered to your market scope. Triggers an automatic browser download. |
 
 ### Safety Rules for Write Operations
 
@@ -1012,6 +1052,18 @@ The Frankfurter API is a free external service (api.frankfurter.app) that requir
 
 COGS data for menu tiles loads in the background. If it does not appear after a few seconds, the most likely cause is missing preferred vendor quotes for the recipes in those menus. Check the Missing Quotes panel.
 
+**Pepper's monthly token allowance has been reached**
+
+The per-user monthly token limit set in Settings → AI has been consumed for the current billing period (25th to 24th). The Pepper panel header shows the reset date. Admins can raise or remove the limit in Settings → AI → Monthly Token Allowance.
+
+**Pepper shows a 400 error or stops mid-conversation after several tool calls**
+
+This was a known bug (Fix 8) caused by an internal tracking field (`input_str`) being accidentally sent back to the Anthropic API in multi-turn conversations. It has been fixed in `agenticStream.js`. If you see this on a deployed instance, ensure the latest code is deployed.
+
+**Inventory Ingredients or Price Quotes list is unexpectedly short**
+
+A menu filter may be active in the toolbar. Check for a selected menu in the "Filter by menu" dropdown and clear it to return to the full list.
+
 ---
 
-*User guide last updated: March 2026*
+*User guide last updated: April 2026*

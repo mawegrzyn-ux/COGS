@@ -23,7 +23,7 @@ const pool     = require('../db/pool');
 const rag      = require('../helpers/rag');
 const aiConfig = require('../helpers/aiConfig');
 const { agenticStream }                        = require('../helpers/agenticStream');
-const { TOOLS, executeTool, buildSystemPrompt } = require('./ai-chat');
+const { TOOLS, executeTool, buildSystemPrompt, checkTokenAllowance } = require('./ai-chat');
 
 // ── MIME type map ─────────────────────────────────────────────────────────────
 
@@ -197,6 +197,21 @@ router.post('/', (req, res, next) => {
   const sessionId  = req.body.sessionId  || null;
   const userEmail  = req.body.userEmail  || null;
   const userSub    = req.body.userSub    || null;
+
+  // ── Monthly token allowance check ────────────────────────────────────────────
+  const allowance = await checkTokenAllowance(userSub || req.user?.sub);
+  if (!allowance.allowed) {
+    const resetDate = allowance.nextReset
+      ? new Date(allowance.nextReset).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+      : 'the 25th';
+    return res.status(429).json({
+      error: {
+        message:   `Monthly token allowance of ${Number(allowance.limit).toLocaleString()} tokens reached. Resets on ${resetDate}.`,
+        code:      'token_allowance_exceeded',
+        resets_at: allowance.nextReset,
+      },
+    });
+  }
 
   // SSE headers
   res.setHeader('Content-Type',  'text/event-stream');

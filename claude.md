@@ -665,7 +665,7 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 - Exchange Rates tab syncs from Frankfurter API — no key needed
 - System tab: database info, future admin tools
 - COGS Thresholds: configure green/amber/red target percentages
-- AI tab: API keys (Anthropic, Voyage, Brave, GitHub PAT + Repo), Concise Mode toggle, Claude Code key generator, token usage stats
+- AI tab: API keys (Anthropic, Voyage, Brave, GitHub PAT + Repo), Concise Mode toggle, Claude Code key generator, **Monthly Token Allowance** (per-user monthly cap, billing period 25th→24th, reset each 25th), token usage stats with per-user period progress bars
 
 ### ✅ Countries Page (`/countries`)
 
@@ -684,9 +684,9 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 
 Three tabs:
 
-1. **Ingredients** — full CRUD, category/unit assignment, waste %, prep conversion
+1. **Ingredients** — full CRUD, category/unit assignment, waste %, prep conversion; **menu filter** dropdown narrows the list to only ingredients used in a selected menu's recipes
 2. **Vendors** — full CRUD, country assignment
-3. **Price Quotes** — full CRUD per ingredient+vendor, active/inactive flag, preferred vendor assignment per country
+3. **Price Quotes** — full CRUD per ingredient+vendor, active/inactive flag, preferred vendor assignment per country; **menu filter** dropdown (hidden when "Missing quotes only" is active) narrows quotes to ingredients in a selected menu
 
 ### ✅ Recipes Page (`/recipes`)
 
@@ -926,6 +926,8 @@ Enforced via system prompt: Claude must verbally describe any create/update/dele
 - **Right-click Ask Pepper**: Any element with `data-ai-context` JSON attribute triggers a custom context menu on right-click. The menu shows "Ask Pepper" which builds a contextual prompt from the element's data and dispatches a `pepper-ask` CustomEvent. The handler in `AiChat.tsx` also captures a screenshot via `html2canvas` and sends it alongside the prompt via `ai-upload`. Supported context types: `cogs_pct`, `coverage`, `cost_per_portion`, `menu_cogs`, `tutorial`.
 - **Dockable panel**: Three mode icons in the Pepper header toggle between `float` (fixed popup), `docked-left` (panel between sidebar and main), `docked-right` (panel right of main). `AppLayout` manages the mode in `pepperMode` state, persisted to `localStorage('pepper-mode')`. Switching mode remounts the component (conversation is cleared).
 - **Contextual help buttons**: `PepperHelpButton` component (`app/src/components/ui.tsx`) renders a small cog icon next to `PageHeader` titles and tab labels. Clicking fires a pre-written tutorial prompt for that section. Also sets `data-ai-context` so right-click works too.
+- **Markdown rendering**: Pepper responses are rendered with a full inline markdown parser (`renderMd` in `AiChat.tsx`). Supports: fenced code blocks, `#`/`##`/`###` headings, pipe tables (with alternating row shading), unordered lists (`-`/`*`/`•`), ordered lists (`1.`), inline code (`` `…` ``), `**bold**`, `*italic*`, `_italic_`. All output uses CSS design tokens for theme compatibility. HTML is escaped before inline formatting to prevent XSS.
+- **Monthly token allowance**: Per-user monthly cap stored in `mcogs_settings.data.ai_monthly_token_limit` (0 = unlimited). Billing period runs 25th→24th each month. `checkTokenAllowance(userSub)` helper in `ai-chat.js` (exported and imported by `ai-upload.js`) queries `mcogs_ai_chat_log` for the period SUM and returns `{ allowed, periodTokens, limit, nextReset }`. If exceeded, a JSON `429` response is returned **before** SSE headers are set. Usage bar displayed in the Pepper panel header (green < 80%, amber ≥ 80%, red = exceeded). `GET /api/ai-chat/my-usage` returns current period stats. Settings → AI tab shows the limit field and a per-user table with period usage progress bars.
 
 ---
 
@@ -1203,6 +1205,48 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
+### Fix 12 — AI Chat Focus Loss on Every Keystroke
+
+**Symptom:** Typing in the Pepper chat textarea loses focus after each character, requiring a click to re-focus. Also, focus was not restored to the textarea after an AI response finished streaming.
+
+**Root Cause:** `ChatPanel` and `HistoryPanel` were defined as `const` functions **inside** `AiChat()`. On every render (triggered by each `setInput` keystroke), new function references were created, giving React unstable component identities. The `disabled={streaming}` attribute on the textarea caused the browser to drop focus when streaming started, and nothing restored it when streaming ended.
+
+**Fix:**
+1. Moved `ChatPanel` and `HistoryPanel` to **module level** (outside the component body), receiving all state via props. React now has a stable identity for these components across renders.
+2. Added a `useEffect` with a `wasStreaming` ref that restores focus to `inputRef` 100 ms after `streaming` transitions `true → false`, so focus automatically returns after each AI response.
+
+**File:** `app/src/components/AiChat.tsx`
+
+---
+
+### Fix 13 — Sidebar Does Not Span Full Viewport Height
+
+**Symptom:** The sidebar's green border stopped short of the bottom of the screen, leaving a gap.
+
+**Root Cause:** The sidebar wrapper div used `h-full` (height: 100%). Browser CSS engines do not always treat a flex-stretched height as a "definite" height for `h-full` children, so the `aside` inside could collapse.
+
+**Fix:** Changed the wrapper div from `h-full` to `flex flex-col self-stretch`. As a flex column container, `self-stretch` guarantees the div fills the parent's cross-axis height definitively, so the `aside`'s own `h-full flex flex-col` resolves correctly all the way to the bottom of the viewport.
+
+**File:** `app/src/components/AppLayout.tsx`
+
+---
+
+### Fix 14 — Anthropic 400 Error (`input_str` Extra Field) in Multi-Turn Tool Conversations
+
+**Symptom:** `messages.N.content.0.text.input_str: Extra inputs are not permitted` — 400 error from the Anthropic API on the 9th+ message in conversations involving multiple tool calls.
+
+**Root Cause:** `agenticStream.js` used `input_str: ''` as a local accumulator for streaming JSON input on tool-use content blocks. When `content_block_stop` fired, the block was pushed to `assistantContent` **with `input_str` still attached**. On the next API call this block was sent back to Anthropic as part of the messages array. Anthropic's schema validation rejects any content block with an unrecognised field.
+
+**Fix:** Destructure `input_str` off the block before pushing to `assistantContent`:
+```js
+const { input_str, ...cleanBlock } = currentBlock;
+assistantContent.push(cleanBlock);
+```
+
+**File:** `api/src/helpers/agenticStream.js`
+
+---
+
 ## 17. Critical Gotchas & Lessons Learned
 
 ### Server User Context
@@ -1464,4 +1508,4 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated)*
+*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated; Markdown rendering added to Pepper — full inline parser (tables, code blocks, headings, lists, bold, italic, inline code, HTML-escaped before formatting); Menu filter added to Inventory Ingredients + Price Quotes tabs — resolves ingredient IDs via menu-items + recipes chain; Monthly token allowance — ai_monthly_token_limit in mcogs_settings, billing period 25th→24th, checkTokenAllowance() helper exported from ai-chat.js/imported by ai-upload.js, 429 JSON before SSE headers, usage bar in Pepper header, GET /ai-chat/my-usage endpoint, Settings → AI limit field + per-user period stats table; tool count 86→87 (export_to_excel); Bug fixes: Fix 12 AI chat focus loss (ChatPanel/HistoryPanel to module level + streaming→focus restore useEffect), Fix 13 sidebar height (h-full → flex flex-col self-stretch), Fix 14 Anthropic 400 error (input_str destructured off content blocks in agenticStream.js before pushing to assistantContent))*

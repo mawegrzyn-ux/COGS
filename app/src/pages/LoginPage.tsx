@@ -1,11 +1,13 @@
 import { useAuth0 } from '@auth0/auth0-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Logo from '../components/Logo'
+import PwaInstallModal, { PwaInstallLink } from '../components/PwaInstallModal'
 
 export default function LoginPage() {
   const { loginWithRedirect, isAuthenticated, isLoading } = useAuth0()
   const navigate = useNavigate()
+  const [showPwa, setShowPwa] = useState(false)
 
   // If already logged in, go straight to dashboard
   useEffect(() => {
@@ -73,6 +75,11 @@ export default function LoginPage() {
           <h1 className="text-2xl font-extrabold text-text-1 mb-1">Welcome back</h1>
           <p className="text-text-3 text-sm mb-8">Sign in to your Menu COGS account</p>
 
+          <PwaInstallLink
+            onClick={() => setShowPwa(true)}
+            className="text-text-3 hover:text-accent mb-3 w-full justify-center"
+          />
+
           <button
             onClick={() => loginWithRedirect()}
             disabled={isLoading}
@@ -97,6 +104,8 @@ export default function LoginPage() {
           © {new Date().getFullYear()} Menu COGS
         </footer>
       </div>
+
+      {showPwa && <PwaInstallModal onClose={() => setShowPwa(false)} />}
     </div>
   )
 }
