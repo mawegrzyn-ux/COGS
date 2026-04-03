@@ -948,6 +948,7 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
           </svg>
         </button>
       </div>
+      </div>
       {/* Monthly token usage bar — shown only when a limit is configured */}
       {myUsage && myUsage.limit > 0 && (
         <div className="px-3 pb-2">
