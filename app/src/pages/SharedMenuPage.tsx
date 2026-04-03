@@ -1451,7 +1451,7 @@ export default function SharedMenuPage() {
                 {isEdit && <span className="text-amber-600 font-medium">Edit mode — saves to live database</span>}
                 <span className="text-gray-300 ml-auto hidden sm:block">Right-click any row to add a comment</span>
               </div>
-            </div>  {/* end table card */}
+            </div>
             )}  {/* end !gridView */}
 
           </>
