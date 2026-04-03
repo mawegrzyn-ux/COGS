@@ -1,19 +1,11 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const https  = require('https');
 
-function fetchRates(base = 'USD') {
-  return new Promise((resolve, reject) => {
-    const url = `https://api.frankfurter.app/latest?base=${base}`;
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
+async function fetchRates(base = 'USD') {
+  const url = `https://api.frankfurter.dev/v1/latest?base=${base}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Frankfurter API error: ${res.status} ${res.statusText}`);
+  return res.json();
 }
 
 // POST /api/sync-exchange-rates
