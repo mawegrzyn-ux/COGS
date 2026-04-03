@@ -12,6 +12,7 @@ router.get('/', requireAuth, (req, res) => {
     status:          req.user.status,
     role_id:         req.user.role_id,
     role_name:       req.user.role_name,
+    is_dev:           req.user.is_dev,
     permissions:     req.user.permissions,
     allowedCountries: req.user.allowedCountries,
   });

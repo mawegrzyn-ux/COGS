@@ -694,6 +694,24 @@ export default function HelpPage() {
               <Td>Enables semantic documentation search (RAG) — improves AI context quality</Td>
               <Td><a href="https://dash.voyageai.com" className="text-[#146A34] underline" target="_blank" rel="noreferrer">dash.voyageai.com</a></Td>
             </tr>
+            <tr>
+              <Td mono>BRAVE_SEARCH_API_KEY</Td>
+              <Td>No</Td>
+              <Td>Full web search for Pepper — falls back to DuckDuckGo instant answers if not set</Td>
+              <Td><a href="https://brave.com/search/api" className="text-[#146A34] underline" target="_blank" rel="noreferrer">brave.com/search/api</a> (free: 2k/mo)</Td>
+            </tr>
+            <tr>
+              <Td mono>GITHUB_PAT</Td>
+              <Td>No</Td>
+              <Td>Lets Pepper read and write files in your GitHub repository. Fine-grained PAT with Contents (read/write) + Pull requests (read/write) on the target repo.</Td>
+              <Td><a href="https://github.com/settings/tokens" className="text-[#146A34] underline" target="_blank" rel="noreferrer">github.com/settings/tokens</a></Td>
+            </tr>
+            <tr>
+              <Td mono>GITHUB_REPO</Td>
+              <Td>No</Td>
+              <Td>Default repository for Pepper's GitHub tools, e.g. <code>mawegrzyn-ux/COGS</code>. Can be overridden per request.</Td>
+              <Td>owner/repo format</Td>
+            </tr>
           </tbody>
         </table>
         <InfoBox type="warning">
@@ -790,6 +808,33 @@ export default function HelpPage() {
           cell while the update is in flight. System roles (Admin/Operator/Viewer) cannot be renamed
           or deleted. Custom roles have a pencil (rename) and ✕ (delete) icon in their column header.
         </p>
+
+        <H3 id="rbac-dev-flag">Developer Access</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Individual users can be granted a <strong>developer flag</strong> that unlocks dev-only features.
+          This is separate from roles — any user regardless of their role can be a dev.
+        </p>
+        <div className="flex items-center gap-3 my-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+          <span className="font-mono text-xs font-bold px-2 py-1.5 bg-purple-100 text-purple-700 rounded">{'</>'}</span>
+          <div>
+            <p className="text-sm font-semibold text-[#0F1F17]">Dev toggle in Settings → Users → Actions column</p>
+            <p className="text-xs text-[#6B7F74] mt-0.5">Purple = dev access on · Grey = dev access off · Click to toggle instantly</p>
+          </div>
+        </div>
+        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
+          <thead><tr><Th>Feature</Th><Th>Normal user</Th><Th>Dev user</Th></tr></thead>
+          <tbody>
+            {[
+              ['Test Data tab in Settings', 'Hidden', 'Visible — marked with purple DEV badge'],
+            ].map(([feature, normal, dev]) => (
+              <tr key={feature}><Td>{feature}</Td><Td><span className="text-[#6B7F74]">{normal}</span></Td><Td><span className="text-purple-700 font-semibold">{dev}</span></Td></tr>
+            ))}
+          </tbody>
+        </table>
+        <InfoBox type="warning" title="Test Data is destructive">
+          The Test Data tab includes <strong>Clear Database</strong> (wipes all data) and <strong>Load Test Data</strong> (wipes then loads dummy data).
+          Only grant dev access to users who understand these operations cannot be undone.
+        </InfoBox>
 
         {/* ═══════════════════════════════════ AI ASSISTANT */}
         <H2 id="ai-assistant" icon="🤖" title="Pepper — AI Assistant" />
@@ -892,7 +937,7 @@ export default function HelpPage() {
 
         <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Pepper has <strong>78 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database.
+          Pepper has <strong>86 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database, plus optional GitHub integration.
           Tool calls happen automatically — Pepper determines which tools to call based on your question or request.
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
@@ -915,6 +960,7 @@ export default function HelpPage() {
             { label: 'Web Search',          note: 'search_web — only when you explicitly ask to search the web' },
             { label: 'Menu Engineer',       note: 'list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices' },
             { label: 'Feedback',            note: 'get_feedback, submit_feedback' },
+            { label: 'GitHub (optional)',   note: 'list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr' },
           ].map(({ label, note }) => (
             <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
               <p className="text-xs font-semibold text-[#0F1F17]">{label}</p>
@@ -977,6 +1023,56 @@ export default function HelpPage() {
           <span className="inline-block bg-blue-100 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded">RAG</span>
           {' '}= answered from vectorised CLAUDE.md documentation
         </p>
+
+        <H3 id="ai-github">GitHub Integration</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          When a <strong>GitHub PAT</strong> and <strong>GitHub Repo</strong> are configured in Settings → AI,
+          Pepper gains 8 additional tools that let it read and write code in your repository.
+        </p>
+        <div className="grid grid-cols-2 gap-2 my-3">
+          {[
+            { label: 'github_list_files',           note: 'Browse directories and find files' },
+            { label: 'github_read_file',             note: 'Read the full content of any file (+ SHA for updates)' },
+            { label: 'github_search_code',           note: 'Search code by keyword across the repo' },
+            { label: 'github_create_branch',         note: 'Create a new feature branch — confirm required' },
+            { label: 'github_create_or_update_file', note: 'Write a file to a branch — confirm required, main/master blocked' },
+            { label: 'github_list_prs',              note: 'List open or closed pull requests' },
+            { label: 'github_get_pr_diff',           note: 'View the diff/patch for a pull request' },
+            { label: 'github_create_pr',             note: 'Open a pull request — confirm required' },
+          ].map(({ label, note }) => (
+            <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
+              <p className="text-[10px] font-mono font-semibold text-[#146A34]">{label}</p>
+              <p className="text-[10px] text-[#6B7F74] mt-0.5 leading-snug">{note}</p>
+            </div>
+          ))}
+        </div>
+        <InfoBox type="tip" title="How to set up GitHub access">
+          <ol className="space-y-1 list-decimal list-inside">
+            <li>Go to <strong>github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens</strong></li>
+            <li>Create a token with <strong>Contents</strong> (read/write) and <strong>Pull requests</strong> (read/write) on your repo</li>
+            <li>Paste the token into <strong>Settings → AI → GitHub Personal Access Token</strong></li>
+            <li>Set <strong>GitHub Repository</strong> to <code>owner/repo</code> (e.g. <code>mawegrzyn-ux/COGS</code>)</li>
+          </ol>
+        </InfoBox>
+        <InfoBox type="warning" title="Write safety guardrails">
+          Pepper <strong>cannot write directly to main or master</strong> — this is enforced at the server level, not just the system prompt.
+          All file changes must go to a feature branch, then a PR is created for human review. Confirmation is required before every branch create, file write, or PR creation.
+        </InfoBox>
+        <div className="space-y-1.5 my-3">
+          {[
+            { q: '"Show me what\'s in the api/src/routes directory"',           layer: 'GitHub' },
+            { q: '"Read the ai-chat.js file"',                                  layer: 'GitHub' },
+            { q: '"Search the codebase for executeTool"',                       layer: 'GitHub' },
+            { q: '"Create a branch called pepper/fix-cogs and update the README"', layer: 'GitHub' },
+            { q: '"What open PRs are there?"',                                  layer: 'GitHub' },
+            { q: '"Show me the diff for PR #42"',                               layer: 'GitHub' },
+          ].map(({ q, layer }) => (
+            <div key={q} className="flex items-start gap-2 text-sm">
+              <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded mt-0.5 bg-purple-100 text-purple-700">{layer}</span>
+              <span className="text-[#2D4A38] italic">{q}</span>
+            </div>
+          ))}
+        </div>
 
         {/* ═══════════════════════════════════ ARCHITECTURE */}
         <H2 id="architecture" icon="🏗️" title="System Architecture" />

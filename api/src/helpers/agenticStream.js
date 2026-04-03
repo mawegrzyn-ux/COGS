@@ -96,7 +96,7 @@ async function agenticStream({ anthropic, systemPrompt, messages, tools, execute
         for (const b of toolBlocks) {
           let result;
           try {
-            result = await executeTool(b.name, b.input || {});
+            result = await executeTool(b.name, b.input || {}, send);
           } catch (err) {
             result = { error: err.message };
           }

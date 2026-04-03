@@ -13,7 +13,7 @@ router.get('/', auth, adminRead, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT
         u.id, u.auth0_sub, u.email, u.name, u.picture,
-        u.status, u.created_at, u.last_login_at,
+        u.status, u.is_dev, u.created_at, u.last_login_at,
         u.role_id,
         r.name AS role_name,
         COALESCE(
@@ -39,7 +39,7 @@ router.get('/', auth, adminRead, async (req, res) => {
 // PUT /api/users/:id — update status, role, and BP assignments
 router.put('/:id', auth, admin, async (req, res) => {
   const { id } = req.params;
-  const { status, role_id, brand_partner_ids } = req.body;
+  const { status, role_id, brand_partner_ids, is_dev } = req.body;
 
   // Prevent self-demotion from admin
   if (Number(id) === req.user.id && status === 'disabled') {
@@ -56,6 +56,7 @@ router.put('/:id', auth, admin, async (req, res) => {
 
     if (status !== undefined)  { updates.push(`status = $${idx++}`);  vals.push(status); }
     if (role_id !== undefined) { updates.push(`role_id = $${idx++}`); vals.push(role_id); }
+    if (is_dev  !== undefined) { updates.push(`is_dev  = $${idx++}`); vals.push(!!is_dev); }
 
     if (updates.length > 0) {
       vals.push(id);

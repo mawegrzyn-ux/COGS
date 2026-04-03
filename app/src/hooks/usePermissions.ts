@@ -15,6 +15,7 @@ export interface MeUser {
   status:          'pending' | 'active' | 'disabled'
   role_id:         number | null
   role_name:       string | null
+  is_dev:          boolean
   permissions:     Partial<Record<Feature, AccessLevel>>
   allowedCountries: number[] | null   // null = unrestricted
 }
@@ -24,6 +25,8 @@ export interface PermissionsContextValue {
   loading: boolean
   /** Returns true if the current user has at least the given access level for a feature */
   can: (feature: Feature, level: 'read' | 'write') => boolean
+  /** True if the current user has the developer flag enabled */
+  isDev: boolean
   /** Allowed country IDs (null = all) */
   allowedCountries: number[] | null
   reload: () => Promise<void>
@@ -33,6 +36,7 @@ export const PermissionsContext = createContext<PermissionsContextValue>({
   user:    null,
   loading: true,
   can:     () => false,
+  isDev:   false,
   allowedCountries: null,
   reload:  async () => {},
 })

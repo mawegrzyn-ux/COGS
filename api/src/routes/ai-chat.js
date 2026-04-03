@@ -8,11 +8,13 @@
 
 const router    = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
+const XLSX      = require('xlsx');
 const pool      = require('../db/pool');
 const rag       = require('../helpers/rag');
 const aiConfig  = require('../helpers/aiConfig');
 const { agenticStream } = require('../helpers/agenticStream');
 const github    = require('../helpers/github');
+const { INTERNAL_SERVICE_KEY } = require('../middleware/auth');
 
 // Client is created per-request so it always picks up the latest key
 function getClient() {
@@ -1247,6 +1249,35 @@ Always call list_menus first to resolve the menu ID. No confirmation needed — 
       required: ['title', 'head'],
     },
   },
+
+  // ── Excel Export ─────────────────────────────────────────────────────────────
+  {
+    name: 'export_to_excel',
+    description: `Generates an Excel workbook (.xlsx) and triggers a browser download for the user.
+Automatically respects the user's market scope — data is filtered to only the markets/countries the user has access to.
+Use when the user asks to "export", "download", "get a spreadsheet", "export to Excel", or similar.
+Datasets: "ingredients" (all ingredients + units + waste%), "price_quotes" (vendor quotes per market), "recipes" (recipe items), "menus" (menu items + prices), "full_export" (all four sheets combined).
+Returns a summary of what was exported; the file downloads automatically in the browser.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        dataset: {
+          type: 'string',
+          enum: ['ingredients', 'price_quotes', 'recipes', 'menus', 'full_export'],
+          description: 'Which data to export. "full_export" includes all four as separate sheets.',
+        },
+        country_id: {
+          type: 'integer',
+          description: 'Optional: restrict to a specific market/country ID. Must be within the user\'s allowed countries.',
+        },
+        filename: {
+          type: 'string',
+          description: 'Optional: custom filename without extension (e.g. "my-cogs-export"). Defaults to "cogs-export-{dataset}-{date}".',
+        },
+      },
+      required: ['dataset'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -1266,7 +1297,7 @@ async function ensureCategory(name, type = 'ingredient') {
   }
 }
 
-async function executeTool(name, input) {
+async function executeTool(name, input, send = null, userCtx = {}) {
   switch (name) {
 
     // ── Read / Lookup (existing) ───────────────────────────────────────────────
@@ -1393,7 +1424,9 @@ async function executeTool(name, input) {
       const { menu_id, scenario_id } = input;
       const port = process.env.PORT || 3001;
       const qs   = scenario_id ? `?menu_id=${menu_id}&scenario_id=${scenario_id}` : `?menu_id=${menu_id}`;
-      const resp = await fetch(`http://localhost:${port}/api/scenarios/analysis${qs}`);
+      const resp = await fetch(`http://localhost:${port}/api/scenarios/analysis${qs}`, {
+        headers: { 'x-internal-service': INTERNAL_SERVICE_KEY },
+      });
       if (!resp.ok) return { error: `Analysis endpoint returned ${resp.status}` };
       return await resp.json();
     }
@@ -1521,7 +1554,9 @@ async function executeTool(name, input) {
       // Call the full COGS calculation endpoint internally
       const port = process.env.PORT || 3001;
       const qs   = effectivePlId ? `?price_level_id=${effectivePlId}` : '';
-      const resp = await fetch(`http://localhost:${port}/api/cogs/menu/${menu_id}${qs}`);
+      const resp = await fetch(`http://localhost:${port}/api/cogs/menu/${menu_id}${qs}`, {
+        headers: { 'x-internal-service': INTERNAL_SERVICE_KEY },
+      });
       if (!resp.ok) return { error: `COGS endpoint returned ${resp.status}` };
       const data = await resp.json();
       if (!data.items?.length) return { error: 'Menu not found or has no items' };
@@ -2875,6 +2910,161 @@ async function executeTool(name, input) {
       }
     }
 
+    // ── Excel Export ───────────────────────────────────────────────────────────
+
+    case 'export_to_excel': {
+      try {
+        const { dataset = 'full_export', country_id, filename: customFilename } = input;
+        const allowedCountries = userCtx.allowedCountries ?? null; // null = unrestricted
+
+        // Validate requested country is within scope
+        if (country_id && allowedCountries && !allowedCountries.includes(Number(country_id))) {
+          return { error: `You do not have access to country ID ${country_id}.` };
+        }
+
+        // Effective country filter: specific country > user scope > all
+        const countryFilter = country_id ? [Number(country_id)] : allowedCountries;
+
+        const wb     = XLSX.utils.book_new();
+        const sheets = [];
+        let totalRows = 0;
+
+        function addSheet(sheetName, rows) {
+          if (!rows.length) return;
+          const ws = XLSX.utils.json_to_sheet(rows);
+          XLSX.utils.book_append_sheet(wb, ws, sheetName);
+          sheets.push(sheetName);
+          totalRows += rows.length;
+        }
+
+        // ── Ingredients ──────────────────────────────────────────────────────
+        if (dataset === 'ingredients' || dataset === 'full_export') {
+          const { rows } = await pool.query(`
+            SELECT
+              i.name                             AS "Ingredient",
+              i.category                         AS "Category",
+              u.name                             AS "Base Unit",
+              u.abbreviation                     AS "Unit Abbr",
+              i.waste_pct                        AS "Waste %",
+              i.default_prep_unit                AS "Prep Unit",
+              i.default_prep_to_base_conversion  AS "Prep→Base Conv.",
+              i.notes                            AS "Notes"
+            FROM mcogs_ingredients i
+            LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
+            ORDER BY i.category, i.name
+          `);
+          addSheet('Ingredients', rows);
+        }
+
+        // ── Price Quotes ─────────────────────────────────────────────────────
+        if (dataset === 'price_quotes' || dataset === 'full_export') {
+          const params = [];
+          let whereClause = 'WHERE pq.is_active = true';
+          if (countryFilter) {
+            params.push(countryFilter);
+            whereClause += ` AND v.country_id = ANY($${params.length})`;
+          }
+          const { rows } = await pool.query(`
+            SELECT
+              i.name                                             AS "Ingredient",
+              v.name                                             AS "Vendor",
+              c.name                                             AS "Market",
+              c.currency_symbol                                  AS "Currency",
+              pq.purchase_price                                  AS "Purchase Price",
+              pq.qty_in_base_units                               AS "Qty in Base Units",
+              pq.purchase_unit                                   AS "Purchase Unit",
+              pq.vendor_product_code                             AS "Product Code",
+              CASE WHEN pv.quote_id = pq.id THEN 'Yes' ELSE 'No' END AS "Preferred"
+            FROM mcogs_price_quotes pq
+            JOIN mcogs_ingredients i   ON i.id  = pq.ingredient_id
+            JOIN mcogs_vendors v       ON v.id  = pq.vendor_id
+            LEFT JOIN mcogs_countries c ON c.id = v.country_id
+            LEFT JOIN mcogs_ingredient_preferred_vendor pv
+              ON  pv.ingredient_id = pq.ingredient_id
+              AND pv.country_id    = v.country_id
+              AND pv.quote_id      = pq.id
+            ${whereClause}
+            ORDER BY i.name, c.name, v.name
+          `, params);
+          addSheet('Price Quotes', rows);
+        }
+
+        // ── Recipes ──────────────────────────────────────────────────────────
+        if (dataset === 'recipes' || dataset === 'full_export') {
+          const { rows } = await pool.query(`
+            SELECT
+              r.name                          AS "Recipe",
+              r.category                      AS "Category",
+              ri.item_type                    AS "Item Type",
+              COALESCE(i.name, sr.name)       AS "Item Name",
+              ri.prep_qty                     AS "Qty",
+              ri.prep_unit                    AS "Unit"
+            FROM mcogs_recipe_items ri
+            JOIN mcogs_recipes r        ON r.id  = ri.recipe_id
+            LEFT JOIN mcogs_ingredients i  ON i.id  = ri.ingredient_id
+            LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
+            ORDER BY r.name, ri.id
+          `);
+          addSheet('Recipes', rows);
+        }
+
+        // ── Menus ────────────────────────────────────────────────────────────
+        if (dataset === 'menus' || dataset === 'full_export') {
+          const params = [];
+          let whereClause = '';
+          if (countryFilter) {
+            params.push(countryFilter);
+            whereClause = `WHERE m.country_id = ANY($${params.length})`;
+          }
+          const { rows } = await pool.query(`
+            SELECT
+              m.name                              AS "Menu",
+              c.name                              AS "Market",
+              mi.display_name                     AS "Item Name",
+              COALESCE(r.name, ing.name)          AS "Recipe/Ingredient",
+              pl.name                             AS "Price Level",
+              mip.sell_price                      AS "Sell Price (USD)"
+            FROM mcogs_menus m
+            JOIN mcogs_countries c        ON c.id  = m.country_id
+            JOIN mcogs_menu_items mi      ON mi.menu_id = m.id
+            LEFT JOIN mcogs_recipes r     ON r.id  = mi.recipe_id
+            LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
+            LEFT JOIN mcogs_menu_item_prices mip ON mip.menu_item_id = mi.id
+            LEFT JOIN mcogs_price_levels pl  ON pl.id = mip.price_level_id
+            ${whereClause}
+            ORDER BY m.name, mi.sort_order, pl.name
+          `, params);
+          addSheet('Menus', rows);
+        }
+
+        if (!sheets.length) {
+          return { error: 'No data found to export for the requested dataset and market scope.' };
+        }
+
+        // Generate Excel buffer and base64-encode it
+        const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const base64 = buffer.toString('base64');
+
+        // Build filename
+        const date  = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const fname = customFilename ? `${customFilename}.xlsx` : `cogs-export-${dataset}-${date}.xlsx`;
+
+        // Emit download event through the SSE stream so the browser can save the file
+        if (send) {
+          send({
+            type:     'download',
+            filename: fname,
+            base64,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          });
+        }
+
+        return { ok: true, filename: fname, sheets, total_rows: totalRows };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -3015,7 +3205,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 86 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), and **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr).
+You have 87 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), and **export_to_excel** (generates an Excel download filtered to the user's market scope).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
@@ -3038,6 +3228,13 @@ Use GitHub tools when the user asks to check code, view files, review PRs, or ma
 - Use github_list_files to browse directories and find files
 - Use github_search_code to locate code by keyword (function names, variable names, etc.)
 - Use github_read_file to read a specific file — files over ~8,000 chars may be very long
+
+## EXCEL EXPORT (export_to_excel tool)
+Use export_to_excel when the user asks to "export", "download", "get a spreadsheet", or "export to Excel".
+- Datasets: ingredients, price_quotes, recipes, menus, full_export (all four combined)
+- The tool automatically filters to only the markets/countries the user is allowed to access
+- The file downloads automatically in the user's browser; tell them it has been downloaded
+- No confirmation required (read-only operation)
 
 ## BULK FILE IMPORT (start_import tool)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
@@ -3097,8 +3294,11 @@ router.post('/', async (req, res) => {
     { role: 'user', content: message.trim() },
   ];
 
+  // Bind user context (allowedCountries, etc.) into executeTool for this request
+  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, req.user || {});
+
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
-    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool, res });
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
 
   // Log to DB (best-effort)
   pool.query(

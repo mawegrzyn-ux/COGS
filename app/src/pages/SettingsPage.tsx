@@ -61,6 +61,10 @@ const TAB_TUTORIALS: Record<Tab, string> = {
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('units')
+  const { isDev } = usePermissions()
+
+  const visibleTabs = (['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[])
+    .filter(t => t !== 'test-data' || isDev)
 
   return (
     <div className="flex flex-col h-full">
@@ -71,7 +75,7 @@ export default function SettingsPage() {
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
-        {(['units', 'price-levels', 'exchange-rates', 'system', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[]).map(t => (
+        {visibleTabs.map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -84,6 +88,7 @@ export default function SettingsPage() {
           >
             <span className="flex items-center gap-1.5">
               {TAB_LABELS[t]}
+              {t === 'test-data' && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">DEV</span>}
               <PepperHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
             </span>
           </button>
@@ -96,7 +101,7 @@ export default function SettingsPage() {
         {tab === 'exchange-rates' && <ExchangeRatesTab />}
         {tab === 'system'         && <SystemTab />}
         {tab === 'thresholds'     && <ThresholdsTab />}
-        {tab === 'test-data'      && <TestDataTab />}
+        {tab === 'test-data'      && isDev && <TestDataTab />}
         {tab === 'ai'             && <AiTab />}
         {tab === 'import'         && <ImportPage hideHeader />}
         {tab === 'users'          && <UsersTab />}
@@ -1561,6 +1566,7 @@ interface AppUser {
   status:        'pending' | 'active' | 'disabled'
   role_id:       number | null
   role_name:     string | null
+  is_dev:        boolean
   brand_partners: { id: number; name: string }[]
   created_at:    string
   last_login_at: string | null
@@ -1678,6 +1684,20 @@ function UsersTab() {
     }
   }
 
+  async function handleToggleDev(u: AppUser) {
+    const next = !u.is_dev
+    // Optimistic update
+    setUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_dev: next } : x))
+    try {
+      await api.put(`/users/${u.id}`, { is_dev: next })
+      setToast({ message: next ? `${u.name || u.email} granted dev access` : `Dev access removed from ${u.name || u.email}`, type: 'success' })
+    } catch (err: any) {
+      // Revert on error
+      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_dev: u.is_dev } : x))
+      setToast({ message: err.message || 'Failed to update dev access', type: 'error' })
+    }
+  }
+
   function toggleBp(id: number) {
     setEditBpIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
@@ -1774,6 +1794,17 @@ function UsersTab() {
                           Enable
                         </button>
                       )}
+                      <button
+                        className={`p-1.5 rounded transition-colors font-mono text-xs font-bold leading-none
+                          ${u.is_dev
+                            ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                            : 'hover:bg-surface-2 text-text-3 hover:text-purple-600'
+                          }`}
+                        title={u.is_dev ? 'Revoke dev access' : 'Grant dev access'}
+                        onClick={() => handleToggleDev(u)}
+                      >
+                        {'</>'}
+                      </button>
                       <button
                         className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
                         title="Edit role & scope"

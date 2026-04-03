@@ -280,12 +280,36 @@ export default function AppLayout() {
         <Sidebar />
       </div>
 
-      {/* Docked-left panel */}
-      {pepperMode === 'docked-left' && (
-        <div className="relative flex-shrink-0 border-r print:hidden"
-          style={{ width: panelWidth, borderColor: 'var(--border)' }}>
-          <AiChat mode={pepperMode} onModeChange={handleModeChange} />
-          {/* Resize handle — right edge */}
+      {/* Main content — explicit order so AiChat wrapper can slot in before or after */}
+      <main className="flex-1 overflow-y-auto min-w-0" style={{ order: 2 }}>
+        <Outlet />
+      </main>
+
+      {/*
+        Single always-mounted AiChat — never unmounts on mode switch so conversation
+        state (messages, sessionId, input) is preserved across dock/undock/float.
+
+        Flex order: docked-left = 1 (between sidebar@0 and main@2)
+                    docked-right / float = 3 (after main@2)
+
+        Width: panelWidth when docked, 0 when float (AiChat renders as position:fixed
+        in float mode so the zero-width wrapper doesn't affect its visual position).
+      */}
+      <div
+        className={`relative flex-shrink-0 print:hidden ${
+          pepperMode === 'docked-left'  ? 'border-r' :
+          pepperMode === 'docked-right' ? 'border-l' : ''
+        }`}
+        style={{
+          width:       pepperMode !== 'float' ? panelWidth : 0,
+          order:       pepperMode === 'docked-left' ? 1 : 3,
+          borderColor: 'var(--border)',
+        }}
+      >
+        <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+
+        {/* Resize handle — right edge (docked-left) */}
+        {pepperMode === 'docked-left' && (
           <div
             onMouseDown={startPanelResize}
             className="absolute top-0 right-0 h-full z-20 flex items-center justify-center group"
@@ -295,19 +319,10 @@ export default function AppLayout() {
             <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
               style={{ background: 'var(--accent)' }} />
           </div>
-        </div>
-      )}
+        )}
 
-      <main className="flex-1 overflow-y-auto min-w-0">
-        <Outlet />
-      </main>
-
-      {/* Docked-right panel */}
-      {pepperMode === 'docked-right' && (
-        <div className="relative flex-shrink-0 border-l print:hidden"
-          style={{ width: panelWidth, borderColor: 'var(--border)' }}>
-          <AiChat mode={pepperMode} onModeChange={handleModeChange} />
-          {/* Resize handle — left edge */}
+        {/* Resize handle — left edge (docked-right) */}
+        {pepperMode === 'docked-right' && (
           <div
             onMouseDown={startPanelResize}
             className="absolute top-0 left-0 h-full z-20 flex items-center justify-center group"
@@ -317,13 +332,8 @@ export default function AppLayout() {
             <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
               style={{ background: 'var(--accent)' }} />
           </div>
-        </div>
-      )}
-
-      {/* Floating panel */}
-      {pepperMode === 'float' && (
-        <AiChat mode={pepperMode} onModeChange={handleModeChange} />
-      )}
+        )}
+      </div>
 
       {ctxMenu && (
         <PepperContextMenu

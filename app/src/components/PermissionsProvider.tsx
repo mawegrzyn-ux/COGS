@@ -50,6 +50,7 @@ export default function PermissionsProvider({ children }: { children: React.Reac
     user,
     loading,
     can,
+    isDev:            !!(user?.is_dev),
     allowedCountries: user?.allowedCountries ?? null,
     reload,
   }), [user, loading, can, reload])

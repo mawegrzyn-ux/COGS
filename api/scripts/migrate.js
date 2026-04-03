@@ -649,6 +649,9 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_users_auth0_sub ON mcogs_users(auth0_sub)`,
   `CREATE INDEX IF NOT EXISTS idx_users_status    ON mcogs_users(status)`,
 
+  // ── 35b. Users — dev flag ────────────────────────────────────────────────
+  `ALTER TABLE mcogs_users ADD COLUMN IF NOT EXISTS is_dev BOOLEAN NOT NULL DEFAULT FALSE`,
+
   // ── 36. RBAC — User Brand Partner Scope ──────────────────────────────────
   `CREATE TABLE IF NOT EXISTS mcogs_user_brand_partners (
     user_id          INTEGER NOT NULL REFERENCES mcogs_users(id) ON DELETE CASCADE,

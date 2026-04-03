@@ -148,7 +148,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # Pepper AI chat (74 tools)
+│           ├── ai-chat.js          # Pepper AI chat (87 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── feedback.js
@@ -373,7 +373,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 25 | `mcogs_ai_chat_log` | Pepper AI conversation log: messages, tools_called, token counts, context JSONB |
 | 26 | `mcogs_roles` | RBAC roles (Admin/Operator/Viewer + custom). `is_system` protects built-in roles |
 | 27 | `mcogs_role_permissions` | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
-| 28 | `mcogs_users` | App users mapped from Auth0 sub. Stores status (`pending`/`active`/`disabled`), role, last login |
+| 28 | `mcogs_users` | App users mapped from Auth0 sub. Stores status (`pending`/`active`/`disabled`), role, `is_dev` flag, last login |
 | 29 | `mcogs_user_brand_partners` | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
 
 ### Key Schema Details
@@ -476,7 +476,7 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
 | `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by Pepper) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 74 tools (includes web search) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 87 tools (includes web search, GitHub, and Excel export) |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
 
@@ -665,6 +665,7 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 - Exchange Rates tab syncs from Frankfurter API — no key needed
 - System tab: database info, future admin tools
 - COGS Thresholds: configure green/amber/red target percentages
+- AI tab: API keys (Anthropic, Voyage, Brave, GitHub PAT + Repo), Concise Mode toggle, Claude Code key generator, token usage stats
 
 ### ✅ Countries Page (`/countries`)
 
@@ -822,9 +823,11 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appea
 - **Logging:** all sessions logged to `mcogs_ai_chat_log` (messages, tools_called JSONB, token counts)
 - **File support:** CSV/text (injected as text block), PNG/JPEG/WEBP (injected as base64 vision block); max 5MB; PDF not supported
 - **Web search config:** `BRAVE_SEARCH_API_KEY` stored via `GET/PUT /api/ai-config` — if set, `search_web` tool uses Brave Search; otherwise DuckDuckGo instant answer fallback
+- **GitHub config:** `GITHUB_PAT` and `GITHUB_REPO` stored via `GET/PUT /api/ai-config` — enables 8 GitHub tools when set. Helper: `api/src/helpers/github.js`
+- **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'float' | 'docked-left' | 'docked-right'` — persisted in `localStorage('pepper-mode')`. Docked modes render as a full-height flex column in `AppLayout`; float is fixed-position popup
 
-### Tool Count: 74
+### Tool Count: 87
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -867,6 +870,35 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appea
 
 **Web Search (1):**
 `search_web` — uses Brave Search API if `BRAVE_SEARCH_API_KEY` is configured in Settings → AI; falls back to DuckDuckGo Instant Answer API (free, no key, limited coverage). **Only invoked when the user explicitly asks to search the internet.** System prompt restricts autonomous use.
+
+**GitHub (8) — requires GITHUB_PAT + GITHUB_REPO in Settings → AI:**
+`github_list_files`, `github_read_file`, `github_search_code`, `github_create_or_update_file`, `github_create_branch`, `github_list_prs`, `github_get_pr_diff`, `github_create_pr`
+
+**Excel Export (1):**
+`export_to_excel` — generates a multi-sheet `.xlsx` workbook (ingredients, price quotes, recipes, menus, or full export) filtered to the user's market scope; triggers a browser download automatically
+
+### GitHub Integration
+
+Pepper can read and write to GitHub when a PAT is configured. Key behaviours:
+
+- **Read tools** (`list_files`, `read_file`, `search_code`, `list_prs`, `get_pr_diff`) — no confirmation required
+- **Write tools** (`create_branch`, `create_or_update_file`, `create_pr`) — CONFIRMATION REQUIRED before calling
+- **Hard safety rule:** `github_create_or_update_file` rejects `main` or `master` as target branch at the executor level — this cannot be bypassed by prompt injection
+- **Default repo:** resolved from `GITHUB_REPO` config; individual tool calls can override with `repo: "owner/repo"` parameter
+- **Helper module:** `api/src/helpers/github.js` wraps GitHub REST API v3 using the PAT; all calls use `application/vnd.github+json` Accept header and `X-GitHub-Api-Version: 2022-11-28`
+- **PR diff truncation:** diffs are capped at 8,000 characters to avoid exceeding context window
+
+**Typical workflow for code changes:**
+1. `github_read_file` — read current file and get its `sha`
+2. `github_create_branch` — create a feature branch (confirm first)
+3. `github_create_or_update_file` — write the modified file, passing the `sha` (confirm first)
+4. `github_create_pr` — open a PR for human review (confirm first)
+
+**Setting up GitHub access:**
+1. GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens
+2. Select the target repo, enable **Contents** (read/write) + **Pull requests** (read/write)
+3. Settings → AI in COGS → paste PAT into GitHub Personal Access Token field
+4. Set GitHub Repository to `owner/repo` format
 
 ### Confirmation Safety
 
@@ -931,6 +963,24 @@ First user ever  → auto-bootstrapped as Admin + active (no chicken-and-egg)
 Disabled         → 403 on every request, shown disabled message
 ```
 
+### Developer Flag (`is_dev`)
+
+Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOLEAN DEFAULT FALSE`). This is toggled per-user by an Admin in Settings → Users via the `</>` button in the Actions column.
+
+**What `is_dev` unlocks:**
+
+| Feature | Normal user | Dev user |
+|---|---|---|
+| **Test Data tab** in Settings | Hidden | Visible (marked DEV badge) |
+
+The flag is separate from roles — a Viewer or Operator can be granted dev access independently of their COGS permissions.
+
+**Access chain:**
+- Backend: `is_dev` is on `req.user` (loaded from DB via `loadOrCreateUser`)
+- API `/me`: returns `is_dev: boolean`
+- Frontend: `PermissionsContextValue.isDev` boolean, consumed via `usePermissions()`
+- Settings page: `isDev` from `usePermissions()` filters `test-data` out of the visible tab list if false; `{tab === 'test-data' && isDev && <TestDataTab />}` guards the render
+
 ### Market Scope (Brand Partner Filtering)
 
 Users can be restricted to specific markets via brand partner assignments (`mcogs_user_brand_partners`). The scope chain is:
@@ -950,12 +1000,13 @@ mcogs_user_brand_partners → mcogs_brand_partners → mcogs_countries
 
 ### Frontend Architecture
 
-- **`app/src/hooks/usePermissions.ts`** — `usePermissions()` hook, `Feature` type, `AccessLevel` type, `MeUser` interface
-- **`app/src/components/PermissionsProvider.tsx`** — loads `/api/me` on auth change, provides `can(feature, level)` and `allowedCountries`
+- **`app/src/hooks/usePermissions.ts`** — `usePermissions()` hook, `Feature` type, `AccessLevel` type, `MeUser` interface (includes `is_dev: boolean`)
+- **`app/src/components/PermissionsProvider.tsx`** — loads `/api/me` on auth change, provides `can(feature, level)`, `isDev`, and `allowedCountries`
 - **`app/src/pages/PendingPage.tsx`** — shown when `user.status === 'pending'`
 - **Sidebar** — hides nav items where `can(feature, 'read')` is false
-- **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope
+- **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope, toggle `is_dev` (the `</>` button)
 - **Settings → Roles tab** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
+- **Settings → Test Data tab** — only visible when `isDev` is true; marked with a purple `DEV` badge in the tab bar
 
 ### Pepper AI Auth Fix
 
@@ -1137,6 +1188,18 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 - `postReply()` passes `replyTo.shared_page_id` — the reply always routes to the same view as the parent comment
 
 **Files:** `app/src/pages/MenusPage.tsx`
+
+---
+
+### Fix 11 — Pepper Conversation Lost on Panel Mode Switch
+
+**Symptom:** Switching Pepper between float, docked-left, and docked-right modes cleared the conversation history.
+
+**Root Cause:** `AppLayout` previously rendered three separate conditional branches — one `<AiChat />` mount per mode. React unmounted the old branch and mounted a fresh instance on every mode change, discarding all in-memory conversation state.
+
+**Fix:** `AppLayout` now renders a single always-mounted `<AiChat />` instance. The panel's position is controlled entirely via CSS: the wrapper div uses `order` inside the flex row (`order-first` for docked-left, `order-last` for docked-right, fixed-position overlay for float) so the component never unmounts when switching modes and conversation state is fully preserved.
+
+**File:** `app/src/components/AppLayout.tsx`
 
 ---
 
@@ -1401,4 +1464,4 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated)*
+*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated)*

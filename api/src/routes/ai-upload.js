@@ -304,8 +304,11 @@ router.post('/', (req, res, next) => {
     file_type: file?.mimetype     || null,
   };
 
+  // Bind user context (allowedCountries, etc.) into executeTool for this request
+  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, req.user || {});
+
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
-    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool, res });
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
 
   pool.query(
     `INSERT INTO mcogs_ai_chat_log

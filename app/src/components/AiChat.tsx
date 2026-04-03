@@ -11,6 +11,8 @@ interface Message {
   content: string
   toolNames?: string[]
   fileName?: string
+  /** Set when an Excel export was triggered during this message */
+  downloadFile?: { filename: string }
 }
 
 interface ChatSession {
@@ -253,6 +255,19 @@ function ChatPanel({
                   ))}
                 </div>
               ) : null}
+              {msg.downloadFile && (
+                <div className="flex items-center gap-1.5 mt-1.5 mb-0.5 text-xs px-2 py-1 rounded"
+                  style={{ background: 'rgba(20,106,52,0.12)', color: 'var(--accent-dark)' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  <span className="truncate max-w-[200px]">{msg.downloadFile.filename}</span>
+                  <span className="opacity-60">downloaded</span>
+                </div>
+              )}
               {msg.content ? (
                 <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
               ) : (
@@ -554,6 +569,27 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
               setMessages(prev => {
                 const msgs = [...prev]
                 msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${event.message}` }
+                return msgs
+              })
+            }
+            if (event.type === 'download') {
+              // Trigger browser file download from base64 payload
+              try {
+                const bytes   = Uint8Array.from(atob(event.base64), (c: string) => c.charCodeAt(0))
+                const blob    = new Blob([bytes], { type: event.mimeType || 'application/octet-stream' })
+                const url     = URL.createObjectURL(blob)
+                const anchor  = document.createElement('a')
+                anchor.href     = url
+                anchor.download = event.filename
+                document.body.appendChild(anchor)
+                anchor.click()
+                document.body.removeChild(anchor)
+                URL.revokeObjectURL(url)
+              } catch { /* download failed silently */ }
+              // Tag the current message so a badge is shown
+              setMessages(prev => {
+                const msgs = [...prev]
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], downloadFile: { filename: event.filename } }
                 return msgs
               })
             }

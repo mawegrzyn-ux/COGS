@@ -3,10 +3,16 @@
 // Uses Auth0 /userinfo to verify tokens and maps to local mcogs_users + roles
 // =============================================================================
 
+const crypto = require('crypto');
 const https  = require('https');
 const pool   = require('../db/pool');
 
 const AUTH0_DOMAIN = process.env.VITE_AUTH0_DOMAIN || 'obscurekitty.uk.auth0.com';
+
+// ── Internal service key ─────────────────────────────────────────────────────
+// Generated once at startup. Used by tool executors that need to call loopback
+// API endpoints (e.g. COGS calculation, scenario analysis) without a real JWT.
+const INTERNAL_SERVICE_KEY = crypto.randomBytes(32).toString('hex');
 
 // ── In-memory cache: token → { sub, email, name, picture, expiresAt } ────────
 const tokenCache = new Map();
@@ -128,8 +134,28 @@ async function loadAllowedCountries(userId) {
 
 // ── requireAuth middleware ────────────────────────────────────────────────────
 // Attaches req.user = { id, sub, email, name, status, role_id, role_name,
-//                       permissions, allowedCountries }
+//                       is_dev, permissions, allowedCountries }
 async function requireAuth(req, res, next) {
+  // Internal loopback calls (tool executor → COGS/scenarios endpoints)
+  // bypass JWT validation using the process-scoped service key.
+  if (req.headers['x-internal-service'] === INTERNAL_SERVICE_KEY) {
+    req.user = {
+      id:              0,
+      sub:             'internal',
+      email:           null,
+      name:            'Internal Service',
+      status:          'active',
+      role_id:         null,
+      role_name:       null,
+      is_dev:          false,
+      permissions:     { dashboard:'write', inventory:'write', recipes:'write', menus:'write',
+                         allergens:'write', haccp:'write', markets:'write', categories:'write',
+                         settings:'write', import:'write', ai_chat:'write', users:'write' },
+      allowedCountries: null, // unrestricted — tool executor applies user scope itself
+    };
+    return next();
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: { message: 'Missing authorization header' } });
@@ -169,6 +195,7 @@ async function requireAuth(req, res, next) {
       status:          dbUser.status,
       role_id:         dbUser.role_id,
       role_name:       dbUser.role_name,
+      is_dev:          !!dbUser.is_dev,
       permissions,
       allowedCountries, // null = unrestricted, number[] = restricted
     };
@@ -202,4 +229,4 @@ function applyMarketScope(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requirePermission, applyMarketScope };
+module.exports = { requireAuth, requirePermission, applyMarketScope, INTERNAL_SERVICE_KEY };
