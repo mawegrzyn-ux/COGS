@@ -5883,6 +5883,16 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, on
     setIngSearch('')
   }
 
+  const [saveError, setSaveError] = useState('')
+
+  const handleSave = () => {
+    if (!form.name.trim()) { setSaveError('Name is required'); return }
+    if (form.item_type === 'recipe' && !form.recipe_id) { setSaveError('Please select a recipe'); return }
+    if (form.item_type === 'ingredient' && !form.ingredient_id) { setSaveError('Please select an ingredient'); return }
+    setSaveError('')
+    onSave({ ...form, name: form.name.trim(), modifier_groups: attachedMgIds.map(id => ({ modifier_group_id: id, name: modifierGroups.find(m => m.id === id)?.name || '' })) })
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5">
@@ -5985,9 +5995,10 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, on
             </div>
           </Field>
         </div>
-        <div className="flex gap-2 justify-end mt-5">
+        {saveError && <p className="text-sm text-red-500 mt-3">{saveError}</p>}
+        <div className="flex gap-2 justify-end mt-4">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => onSave({ ...form, modifier_groups: attachedMgIds.map(id => ({ modifier_group_id: id, name: modifierGroups.find(m => m.id === id)?.name || '' })) })}>Save</button>
+          <button className="btn btn-primary" onClick={handleSave}>Save</button>
         </div>
       </div>
     </div>
