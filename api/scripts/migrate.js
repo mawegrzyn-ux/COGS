@@ -900,7 +900,8 @@ const migrations = [
      ADD COLUMN IF NOT EXISTS combo_id     INTEGER REFERENCES mcogs_combos(id) ON DELETE CASCADE,
      ADD COLUMN IF NOT EXISTS min_select   INTEGER NOT NULL DEFAULT 1,
      ADD COLUMN IF NOT EXISTS max_select   INTEGER NOT NULL DEFAULT 1,
-     ADD COLUMN IF NOT EXISTS allow_repeat BOOLEAN NOT NULL DEFAULT false`,
+     ADD COLUMN IF NOT EXISTS allow_repeat BOOLEAN NOT NULL DEFAULT false,
+     ADD COLUMN IF NOT EXISTS auto_select  BOOLEAN NOT NULL DEFAULT false`,
 
   // ── 70. Sales Items — add combo_id FK ────────────────────────────────────
   `ALTER TABLE mcogs_sales_items

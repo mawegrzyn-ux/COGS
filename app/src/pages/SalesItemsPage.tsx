@@ -31,7 +31,7 @@ interface ComboStepOption {
 interface ComboStep {
   id: number; combo_id: number; name: string
   description: string | null; sort_order: number
-  min_select: number; max_select: number; allow_repeat: boolean
+  min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean
   options?: ComboStepOption[]
 }
 interface Combo {
@@ -545,7 +545,7 @@ export default function SalesItemsPage() {
   const [comboDetailLoading, setComboDetailLoading] = useState(false)
   const [expandedStep,       setExpandedStep]       = useState<number | null>(null)
   const [editingStep,        setEditingStep]        = useState<number | null>(null)
-  const [editStepForm,       setEditStepForm]       = useState<{ min_select: number; max_select: number; allow_repeat: boolean } | null>(null)
+  const [editStepForm,       setEditStepForm]       = useState<{ min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean } | null>(null)
   const [savingStep,         setSavingStep]         = useState(false)
   const [editingOpt,         setEditingOpt]         = useState<ComboStepOption | null>(null)
   const [editingOptStepId,   setEditingOptStepId]   = useState<number | null>(null)
@@ -611,7 +611,7 @@ export default function SalesItemsPage() {
 
   const startEditStep = (step: ComboStep) => {
     setEditingStep(step.id)
-    setEditStepForm({ min_select: step.min_select ?? 1, max_select: step.max_select ?? 1, allow_repeat: step.allow_repeat ?? false })
+    setEditStepForm({ min_select: step.min_select ?? 1, max_select: step.max_select ?? 1, allow_repeat: step.allow_repeat ?? false, auto_select: step.auto_select ?? false })
   }
 
   const saveStepSettings = async (stepId: number) => {
@@ -935,6 +935,7 @@ export default function SalesItemsPage() {
                             <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded" title="Min choices">min {step.min_select ?? 1}</span>
                             <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded" title="Max choices">max {step.max_select ?? 1}</span>
                             {step.allow_repeat && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded" title="Same option can be chosen multiple times">repeat ✓</span>}
+                            {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                           </div>
                           <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                             <button className="btn btn-xs btn-outline" title="Step settings"
@@ -965,6 +966,13 @@ export default function SalesItemsPage() {
                                 onChange={e => setEditStepForm(f => f ? { ...f, allow_repeat: e.target.checked } : f)} />
                               Allow same option multiple times
                             </label>
+                            {(step.options || []).length === 1 && (
+                              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 cursor-pointer select-none">
+                                <input type="checkbox" checked={editStepForm.auto_select}
+                                  onChange={e => setEditStepForm(f => f ? { ...f, auto_select: e.target.checked } : f)} />
+                                Auto-select this option
+                              </label>
+                            )}
                             <div className="flex gap-1.5 ml-auto">
                               <button className="btn btn-xs btn-primary" disabled={savingStep} onClick={() => saveStepSettings(step.id)}>
                                 {savingStep ? '…' : 'Save'}

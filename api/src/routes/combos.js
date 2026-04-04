@@ -133,13 +133,13 @@ router.delete('/:id', async (req, res, next) => {
 
 router.post('/:id/steps', async (req, res, next) => {
   try {
-    const { name, description, sort_order, min_select, max_select, allow_repeat } = req.body;
+    const { name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
     if (!name) return res.status(400).json({ error: { message: 'name is required' } });
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_combo_steps (combo_id, name, description, sort_order, min_select, max_select, allow_repeat)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      `INSERT INTO mcogs_combo_steps (combo_id, name, description, sort_order, min_select, max_select, allow_repeat, auto_select)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [req.params.id, name.trim(), description || null, sort_order || 0,
-       min_select ?? 1, max_select ?? 1, allow_repeat ?? false]
+       min_select ?? 1, max_select ?? 1, allow_repeat ?? false, auto_select ?? false]
     );
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
@@ -147,13 +147,13 @@ router.post('/:id/steps', async (req, res, next) => {
 
 router.put('/:id/steps/:sid', async (req, res, next) => {
   try {
-    const { name, description, sort_order, min_select, max_select, allow_repeat } = req.body;
+    const { name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_combo_steps
-       SET name=$1, description=$2, sort_order=$3, min_select=$4, max_select=$5, allow_repeat=$6
-       WHERE id=$7 AND combo_id=$8 RETURNING *`,
+       SET name=$1, description=$2, sort_order=$3, min_select=$4, max_select=$5, allow_repeat=$6, auto_select=$7
+       WHERE id=$8 AND combo_id=$9 RETURNING *`,
       [name?.trim(), description || null, sort_order ?? 0,
-       min_select ?? 1, max_select ?? 1, allow_repeat ?? false,
+       min_select ?? 1, max_select ?? 1, allow_repeat ?? false, auto_select ?? false,
        req.params.sid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Step not found' } });
