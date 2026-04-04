@@ -1188,7 +1188,7 @@ function StorageTab() {
   }
 
   const set = (k: keyof StorageCfg) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setCfg(prev => ({ ...prev, [k]: e.target.value }))
+    setCfg(prev => ({ ...prev, [k]: e.target.value } as StorageCfg))
 
   if (loading) return <Spinner />
 
