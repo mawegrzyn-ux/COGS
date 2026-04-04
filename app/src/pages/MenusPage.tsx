@@ -5341,7 +5341,6 @@ function SalesItemsTab({
 
   useEffect(() => { load() }, [load])
 
-  const selectedItem = salesItems.find(s => s.id === selectedId) ?? null
   const [detail, setDetail] = useState<SalesItem | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -5534,11 +5533,9 @@ function SalesItemsTab({
       {/* ── Delete confirm ─────────────────────────────────────────────── */}
       {deleteConfirm && (
         <ConfirmDialog
-          title="Delete Sales Item"
-          message={`Delete "${deleteConfirm.name}"? This will remove it from all menus.`}
+          message={`Delete "${deleteConfirm.name}"? This will remove it from all menus and cannot be undone.`}
           onConfirm={deleteItem}
           onCancel={() => setDeleteConfirm(null)}
-          danger
         />
       )}
     </div>
