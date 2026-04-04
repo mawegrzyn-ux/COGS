@@ -5476,6 +5476,8 @@ function SalesItemsTab({
             priceLevels={priceLevels}
             taxRates={taxRates}
             modifierGroups={modifierGroups}
+            recipes={recipes}
+            ingredients={ingredients}
             onEdit={() => setSiModal(detail)}
             onDelete={() => setDeleteConfirm(detail)}
             onSaveMarkets={saveMarkets}
@@ -5551,6 +5553,8 @@ interface SalesItemDetailProps {
   priceLevels: PriceLevel[]
   taxRates: TaxRate[]
   modifierGroups: ModifierGroup[]
+  recipes: Recipe[]
+  ingredients: Ingredient[]
   onEdit(): void
   onDelete(): void
   onSaveMarkets(siId: number, countryIds: number[]): Promise<void>
@@ -5560,7 +5564,7 @@ interface SalesItemDetailProps {
   toast(msg: string): void
 }
 
-function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroups, onEdit, onDelete, onSaveMarkets, onSavePrices, onSaveModifierGroups, onReload, toast }: SalesItemDetailProps) {  // eslint-disable-line @typescript-eslint/no-unused-vars
+function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroups, recipes, ingredients, onEdit, onDelete, onSaveMarkets, onSavePrices, onSaveModifierGroups, onReload, toast }: SalesItemDetailProps) {  // eslint-disable-line @typescript-eslint/no-unused-vars
   const api = useApi()
 
   // Local editable state for prices + markets
@@ -5833,6 +5837,8 @@ function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroup
         <ComboOptionForm
           opt={editingOpt}
           modifierGroups={modifierGroups}
+          recipes={recipes}
+          ingredients={ingredients}
           onSave={saveOption}
           onClose={() => setEditingOpt(null)}
         />
@@ -5843,14 +5849,39 @@ function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroup
 
 // ── Combo Option Form ─────────────────────────────────────────────────────────
 
-function ComboOptionForm({ opt, modifierGroups, onSave, onClose }: {
+function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, onClose }: {
   opt: ComboStepOption
   modifierGroups: ModifierGroup[]
+  recipes: Recipe[]
+  ingredients: Ingredient[]
   onSave(opt: ComboStepOption): void
   onClose(): void
 }) {
   const [form, setForm] = useState({ ...opt })
   const [attachedMgIds, setAttachedMgIds] = useState<number[]>((opt.modifier_groups || []).map(m => m.modifier_group_id))
+
+  // Recipe combobox
+  const [recipeSearch, setRecipeSearch] = useState(() => recipes.find(r => r.id === opt.recipe_id)?.name ?? '')
+  const [recipeOpen,   setRecipeOpen]   = useState(false)
+  const filteredRecipes = useMemo(
+    () => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 50),
+    [recipes, recipeSearch]
+  )
+
+  // Ingredient combobox
+  const [ingSearch, setIngSearch] = useState(() => ingredients.find(i => i.id === opt.ingredient_id)?.name ?? '')
+  const [ingOpen,   setIngOpen]   = useState(false)
+  const filteredIngs = useMemo(
+    () => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 50),
+    [ingredients, ingSearch]
+  )
+
+  // When type changes, clear the linked ID
+  const handleTypeChange = (t: 'recipe' | 'ingredient' | 'manual') => {
+    setForm(f => ({ ...f, item_type: t, recipe_id: null, ingredient_id: null, manual_cost: null }))
+    setRecipeSearch('')
+    setIngSearch('')
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -5861,12 +5892,76 @@ function ComboOptionForm({ opt, modifierGroups, onSave, onClose }: {
             <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
           </Field>
           <Field label="Type">
-            <select className="select w-full" value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual' }))}>
+            <select className="select w-full" value={form.item_type} onChange={e => handleTypeChange(e.target.value as 'recipe' | 'ingredient' | 'manual')}>
               <option value="manual">Manual cost</option>
               <option value="recipe">Recipe</option>
               <option value="ingredient">Ingredient</option>
             </select>
           </Field>
+          {form.item_type === 'recipe' && (
+            <Field label="Recipe">
+              <div className="relative">
+                <input
+                  className="input w-full"
+                  placeholder="Search recipes…"
+                  value={recipeSearch}
+                  onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true) }}
+                  onFocus={() => setRecipeOpen(true)}
+                  onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
+                  autoComplete="off"
+                />
+                {recipeOpen && (
+                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                    {filteredRecipes.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-gray-400 italic">No recipes match "{recipeSearch}"</div>
+                    ) : filteredRecipes.map(r => (
+                      <button key={r.id} type="button"
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${form.recipe_id === r.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setForm(f => ({ ...f, recipe_id: r.id })); setRecipeSearch(r.name); setRecipeOpen(false) }}
+                      >
+                        {form.recipe_id === r.id && <span className="text-accent text-xs">✓</span>}
+                        <span>{r.name}</span>
+                        {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Field>
+          )}
+          {form.item_type === 'ingredient' && (
+            <Field label="Ingredient">
+              <div className="relative">
+                <input
+                  className="input w-full"
+                  placeholder="Search ingredients…"
+                  value={ingSearch}
+                  onChange={e => { setIngSearch(e.target.value); setIngOpen(true) }}
+                  onFocus={() => setIngOpen(true)}
+                  onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                  autoComplete="off"
+                />
+                {ingOpen && (
+                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                    {filteredIngs.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-gray-400 italic">No ingredients match "{ingSearch}"</div>
+                    ) : filteredIngs.map(i => (
+                      <button key={i.id} type="button"
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${form.ingredient_id === i.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setForm(f => ({ ...f, ingredient_id: i.id })); setIngSearch(i.name); setIngOpen(false) }}
+                      >
+                        {form.ingredient_id === i.id && <span className="text-accent text-xs">✓</span>}
+                        <span>{i.name}</span>
+                        {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Field>
+          )}
           {form.item_type === 'manual' && (
             <Field label="Manual cost (USD)">
               <input type="number" step="0.0001" min="0" className="input w-full" value={form.manual_cost ?? ''} onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />
@@ -5931,10 +6026,12 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
     sort_order: initial?.sort_order ?? 0,
   })
   const [recipeSearch, setRecipeSearch] = useState(initial?.recipe_name ?? '')
-  const [ingSearch, setIngSearch] = useState(initial?.ingredient_name ?? '')
+  const [recipeOpen,   setRecipeOpen]   = useState(false)
+  const [ingSearch,    setIngSearch]    = useState(initial?.ingredient_name ?? '')
+  const [ingOpen,      setIngOpen]      = useState(false)
 
-  const filteredRecipes = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 20), [recipes, recipeSearch])
-  const filteredIngs   = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 20), [ingredients, ingSearch])
+  const filteredRecipes = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 50), [recipes, recipeSearch])
+  const filteredIngs   = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 50), [ingredients, ingSearch])
 
   const handleSave = () => {
     if (!form.name.trim()) return
@@ -5968,20 +6065,66 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
         </Field>
         {form.item_type === 'recipe' && (
           <Field label="Recipe">
-            <input className="input w-full mb-1" placeholder="Search recipes…" value={recipeSearch} onChange={e => setRecipeSearch(e.target.value)} />
-            <select className="select w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}>
-              <option value="">— Select recipe —</option>
-              {filteredRecipes.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                className="input w-full"
+                placeholder="Search recipes…"
+                value={recipeSearch}
+                onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true) }}
+                onFocus={() => setRecipeOpen(true)}
+                onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
+                autoComplete="off"
+              />
+              {recipeOpen && (
+                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                  {filteredRecipes.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-gray-400 italic">No recipes match "{recipeSearch}"</div>
+                  ) : filteredRecipes.map(r => (
+                    <button key={r.id} type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${form.recipe_id === r.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setForm(f => ({ ...f, recipe_id: r.id })); setRecipeSearch(r.name); setRecipeOpen(false) }}
+                    >
+                      {form.recipe_id === r.id && <span className="text-accent text-xs">✓</span>}
+                      <span>{r.name}</span>
+                      {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </Field>
         )}
         {form.item_type === 'ingredient' && (
           <Field label="Ingredient">
-            <input className="input w-full mb-1" placeholder="Search ingredients…" value={ingSearch} onChange={e => setIngSearch(e.target.value)} />
-            <select className="select w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}>
-              <option value="">— Select ingredient —</option>
-              {filteredIngs.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                className="input w-full"
+                placeholder="Search ingredients…"
+                value={ingSearch}
+                onChange={e => { setIngSearch(e.target.value); setIngOpen(true) }}
+                onFocus={() => setIngOpen(true)}
+                onBlur={() => setTimeout(() => setIngOpen(false), 150)}
+                autoComplete="off"
+              />
+              {ingOpen && (
+                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                  {filteredIngs.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-gray-400 italic">No ingredients match "{ingSearch}"</div>
+                  ) : filteredIngs.map(i => (
+                    <button key={i.id} type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${form.ingredient_id === i.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setForm(f => ({ ...f, ingredient_id: i.id })); setIngSearch(i.name); setIngOpen(false) }}
+                    >
+                      {form.ingredient_id === i.id && <span className="text-accent text-xs">✓</span>}
+                      <span>{i.name}</span>
+                      {i.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.category_name}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </Field>
         )}
         {form.item_type === 'manual' && (
