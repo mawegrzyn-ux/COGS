@@ -69,31 +69,6 @@ interface CogsData {
   summary:         CogsSummary
 }
 
-interface MenuSalesItemPrice {
-  id: number
-  menu_sales_item_id: number
-  price_level_id: number
-  price_level_name: string
-  sell_price: number
-  tax_rate_id: number | null
-  default_price: number | null
-  is_overridden: boolean
-}
-
-interface MenuSalesItem {
-  id: number
-  menu_id: number
-  sales_item_id: number
-  sales_item_name: string
-  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
-  si_image_url: string | null
-  category: string | null
-  qty: number
-  sort_order: number
-  allergen_notes: string | null
-  prices: MenuSalesItemPrice[]
-  has_price_override: boolean
-}
 
 // Price report types
 interface PriceReportCountry {
@@ -260,7 +235,6 @@ export default function MenusPage() {
   // shared data
   const [countries,       setCountries]       = useState<Country[]>([])
   const [priceLevels,     setPriceLevels]     = useState<PriceLevel[]>([])
-  const [taxRates,        setTaxRates]        = useState<TaxRate[]>([])
   const [menus,           setMenus]           = useState<Menu[]>([])
   const [loading,         setLoading]         = useState(true)
 
@@ -287,7 +261,6 @@ export default function MenusPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'menu' | 'item'; id: number } | null>(null)
 
   // builder — sales items linked to menu
-  const [menuSalesItems,     setMenuSalesItems]     = useState<MenuSalesItem[]>([])
   const [addSiPickerOpen,    setAddSiPickerOpen]    = useState(false)
 
   // price report
@@ -310,7 +283,7 @@ export default function MenusPage() {
   const [scenarioData,      setScenarioData]      = useState<CogsData | null>(null)
   const [scenarioLoading,   setScenarioLoading]   = useState(false)
   const [scenarioQty,       setScenarioQty]       = useState<Record<string, string>>({})
-  const [scenarioRefreshKey, setScenarioRefreshKey] = useState(0)
+  const [scenarioRefreshKey] = useState(0)
 
   // market price tool
   const [levelReportData,    setLevelReportData]    = useState<LevelReportData | null>(null)
@@ -353,16 +326,14 @@ export default function MenusPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [m, c, pl, tr] = await Promise.all([
+      const [m, c, pl] = await Promise.all([
         api.get('/menus'),
         api.get('/countries'),
         api.get('/price-levels'),
-        api.get('/tax-rates'),
       ])
       setMenus(m || [])
       setCountries(c || [])
       setPriceLevels(pl || [])
-      setTaxRates(tr || [])
       // Auto-select default price level if not already overridden by user
       const defLevel = (pl || []).find((l: PriceLevel) => l.is_default)
       if (defLevel && !levelOverridden) setActiveMenuLevel(defLevel.id)
@@ -397,12 +368,8 @@ export default function MenusPage() {
       const url = activeMenuLevel
         ? `/cogs/menu-sales/${id}?price_level_id=${activeMenuLevel}`
         : `/cogs/menu-sales/${id}`
-      const [data, msiData] = await Promise.all([
-        api.get(url),
-        api.get(`/menu-sales-items?menu_id=${id}`),
-      ])
+      const data = await api.get(url)
       setCogsData(data)
-      setMenuSalesItems(msiData || [])
     } finally {
       setLoadingCogs(false)
     }
@@ -578,7 +545,7 @@ export default function MenusPage() {
     try {
       await api.delete(`/menus/${id}`)
       setMenus(prev => prev.filter(m => m.id !== id))
-      if (selectedMenuId === id) { setSelectedMenuId(null); setCogsData(null); setMenuSalesItems([]) }
+      if (selectedMenuId === id) { setSelectedMenuId(null); setCogsData(null) }
       showToast('Menu deleted.')
     } catch { showToast('Failed to delete menu.', 'error') }
   }
@@ -598,13 +565,11 @@ export default function MenusPage() {
   async function addMenuSalesItem(salesItemId: number) {
     if (!selectedMenuId) return
     try {
-      const added: MenuSalesItem = await api.post('/menu-sales-items', { menu_id: selectedMenuId, sales_item_id: salesItemId })
-      setMenuSalesItems(prev => {
-        const exists = prev.find(m => m.id === added.id)
-        return exists ? prev.map(m => m.id === added.id ? added : m) : [...prev, added]
-      })
+      await api.post('/menu-sales-items', { menu_id: selectedMenuId, sales_item_id: salesItemId })
       setAddSiPickerOpen(false)
       showToast('Sales item added to menu.')
+      // Reload COGS so the new item appears in the grid
+      await openMenu(selectedMenuId)
     } catch (e: unknown) {
       const msg = (e as { message?: string })?.message || 'Failed to add sales item.'
       showToast(msg, 'error')
@@ -614,8 +579,9 @@ export default function MenusPage() {
   async function deleteMenuSalesItem(id: number) {
     try {
       await api.delete(`/menu-sales-items/${id}`)
-      setMenuSalesItems(prev => prev.filter(m => m.id !== id))
       showToast('Sales item removed from menu.')
+      // Reload COGS so the removed item disappears
+      if (selectedMenuId) await openMenu(selectedMenuId)
     } catch { showToast('Failed to remove sales item.', 'error') }
   }
 
