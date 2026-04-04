@@ -664,6 +664,9 @@ const migrations = [
   `ALTER TABLE mcogs_units ADD COLUMN IF NOT EXISTS default_recipe_unit            VARCHAR(50)`,
   `ALTER TABLE mcogs_units ADD COLUMN IF NOT EXISTS default_recipe_unit_conversion NUMERIC(18,8)`,
 
+  // ── 38. Menu Items — image URL ────────────────────────────────────────────
+  `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`,
+
   // ── 33–36 Seed: default system roles + permission matrix ─────────────────
   `INSERT INTO mcogs_roles (name, description, is_system) VALUES
     ('Admin',    'Full access including user management', true),

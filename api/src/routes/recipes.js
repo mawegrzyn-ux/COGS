@@ -449,14 +449,13 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /recipes ─────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_text } = req.body;
+  const { name, category, description, yield_qty, yield_unit_text, image_url } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
-      INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_text)
-      VALUES ($1,$2,$3,$4,$5) RETURNING *,
-             COALESCE(yield_unit_text) AS yield_unit_abbr
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null]);
+      INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_text, image_url)
+      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
+    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null]);
     res.status(201).json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
@@ -466,14 +465,14 @@ router.post('/', async (req, res) => {
 
 // ── PUT /recipes/:id ──────────────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_text } = req.body;
+  const { name, category, description, yield_qty, yield_unit_text, image_url } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
       UPDATE mcogs_recipes SET name=$1, category=$2, description=$3,
-             yield_qty=$4, yield_unit_text=$5, updated_at=NOW()
-      WHERE id=$6 RETURNING *
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, req.params.id]);
+             yield_qty=$4, yield_unit_text=$5, image_url=$6, updated_at=NOW()
+      WHERE id=$7 RETURNING *
+    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null, req.params.id]);
     if (!r) return res.status(404).json({ error: { message: 'Not found' } });
     res.json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {

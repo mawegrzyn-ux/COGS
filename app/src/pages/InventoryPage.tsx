@@ -5,6 +5,7 @@ import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
 import type { GridColumn, GridOption } from '../components/DataGrid'
+import ImageUpload from '../components/ImageUpload'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,7 @@ interface Ingredient {
   default_prep_unit:               string | null
   default_prep_to_base_conversion: string
   notes:                           string | null
+  image_url:                       string | null
   waste_pct:                       string
   quote_count:                     string
   active_quote_count:              string
@@ -533,7 +535,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   const blankForm = {
     name: '', category: '', base_unit_id: '', default_prep_unit: '',
-    default_prep_to_base_conversion: '1', waste_pct: '0', notes: '',
+    default_prep_to_base_conversion: '1', waste_pct: '0', notes: '', image_url: '',
   }
   const [form,   setForm]   = useState(blankForm)
   const [errors, setErrors] = useState<Partial<typeof blankForm>>({})
@@ -771,6 +773,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
       default_prep_unit: i.default_prep_unit || '',
       default_prep_to_base_conversion: i.default_prep_to_base_conversion || '1',
       waste_pct: i.waste_pct || '0', notes: i.notes || '',
+      image_url: i.image_url || '',
     })
     setNutForm({
       energy_kcal: i.energy_kcal != null ? String(i.energy_kcal) : '',
@@ -816,6 +819,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         default_prep_to_base_conversion: Number(form.default_prep_to_base_conversion) || 1,
         waste_pct: Number(form.waste_pct) || 0,
         notes: form.notes.trim() || null,
+        image_url: form.image_url.trim() || null,
       }
       if (modal === 'new') {
         const newIng = await api.post('/ingredients', payload)
@@ -1188,6 +1192,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
                 </Field>
               </div>
+              <ImageUpload
+                label="Image"
+                value={form.image_url || null}
+                onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+              />
               {modal === 'new' && !withQuote && (
                 <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
                   Save the ingredient first, then reopen to manage allergens and nutrition.

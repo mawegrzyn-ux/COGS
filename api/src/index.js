@@ -7,6 +7,7 @@ aiConfig.init()
   .then(() => rag.init())
   .catch(err => console.error('[startup] AI init error:', err.message));
 
+const path         = require('path');
 const express      = require('express');
 const helmet       = require('helmet');
 const cors         = require('cors');
@@ -31,6 +32,9 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, l
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Serve locally-uploaded images (fallback when S3 is not configured)
+app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
 
 app.use('/api', routes);
 

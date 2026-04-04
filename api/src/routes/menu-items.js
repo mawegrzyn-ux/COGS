@@ -45,7 +45,7 @@ router.get('/', async (req, res) => {
 
 // POST /menu-items
 router.post('/', async (req, res) => {
-  const { menu_id, item_type = 'recipe', recipe_id, ingredient_id, display_name, qty = 1, sell_price = 0, tax_rate_id } = req.body;
+  const { menu_id, item_type = 'recipe', recipe_id, ingredient_id, display_name, qty = 1, sell_price = 0, tax_rate_id, image_url } = req.body;
   if (!menu_id) return res.status(400).json({ error: { message: 'menu_id is required' } });
   if (!['recipe', 'ingredient'].includes(item_type))
     return res.status(400).json({ error: { message: 'item_type must be recipe or ingredient' } });
@@ -56,8 +56,8 @@ router.post('/', async (req, res) => {
   try {
     const { rows: [row] } = await pool.query(`
       INSERT INTO mcogs_menu_items
-        (menu_id, item_type, recipe_id, ingredient_id, display_name, qty, sell_price, tax_rate_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        (menu_id, item_type, recipe_id, ingredient_id, display_name, qty, sell_price, tax_rate_id, image_url)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       RETURNING *
     `, [
       menu_id,
@@ -68,6 +68,7 @@ router.post('/', async (req, res) => {
       Number(qty) || 1,
       Number(sell_price) || 0,
       tax_rate_id || null,
+      image_url?.trim() || null,
     ]);
     res.status(201).json(await getMenuItemRow(row.id));
   } catch (err) {
@@ -78,13 +79,13 @@ router.post('/', async (req, res) => {
 
 // PUT /menu-items/:id
 router.put('/:id', async (req, res) => {
-  const { item_type = 'recipe', recipe_id, ingredient_id, display_name, qty = 1, sell_price = 0, tax_rate_id } = req.body;
+  const { item_type = 'recipe', recipe_id, ingredient_id, display_name, qty = 1, sell_price = 0, tax_rate_id, image_url } = req.body;
   try {
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_menu_items
       SET    item_type=$1, recipe_id=$2, ingredient_id=$3,
-             display_name=$4, qty=$5, sell_price=$6, tax_rate_id=$7
-      WHERE  id=$8
+             display_name=$4, qty=$5, sell_price=$6, tax_rate_id=$7, image_url=$8
+      WHERE  id=$9
       RETURNING *
     `, [
       item_type,
@@ -94,6 +95,7 @@ router.put('/:id', async (req, res) => {
       Number(qty) || 1,
       Number(sell_price) || 0,
       tax_rate_id || null,
+      image_url?.trim() || null,
       req.params.id,
     ]);
     if (!row) return res.status(404).json({ error: { message: 'Menu item not found' } });

@@ -59,10 +59,20 @@ jobs:
             grep -q "^USDA_API_KEY=" .env \
               && sed -i "s|^USDA_API_KEY=.*|USDA_API_KEY=${{ secrets.USDA_API_KEY }}|" .env \
               || echo "USDA_API_KEY=${{ secrets.USDA_API_KEY }}" >> .env
+            # Ensure uploads directory exists and is writable by the API
+            mkdir -p /var/www/menu-cogs/uploads
+            chmod 755 /var/www/menu-cogs/uploads
+            # Inject APP_URL into .env (used by upload.js to construct local image URLs)
+            grep -q "^APP_URL=" .env \
+              && sed -i "s|^APP_URL=.*|APP_URL=https://cogs.flavorconnect.tech|" .env \
+              || echo "APP_URL=https://cogs.flavorconnect.tech" >> .env
             pm2 restart menu-cogs-api
             # Ensure nginx allows uploads up to 11 MB (covers the 10 MB app limit + multipart overhead)
             grep -q 'client_max_body_size' /etc/nginx/sites-available/menu-cogs \
               || sudo sed -i '/server_name/a\    client_max_body_size 11m;' /etc/nginx/sites-available/menu-cogs
+            # Add /uploads/ location block to nginx config (serves locally-uploaded images)
+            grep -q 'location /uploads/' /etc/nginx/sites-available/menu-cogs \
+              || sudo sed -i '/location \/ {/i\    location /uploads/ {\n        alias /var/www/menu-cogs/uploads/;\n        expires 1y;\n        add_header Cache-Control "public, immutable";\n    }\n' /etc/nginx/sites-available/menu-cogs
             sudo nginx -t && sudo nginx -s reload
 
       - name: Health check

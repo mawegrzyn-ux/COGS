@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import ImageUpload from '../components/ImageUpload'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
@@ -34,6 +35,7 @@ interface MenuItem {
   qty: number
   sell_price: number
   tax_rate_id: number | null
+  image_url: string | null
   recipe_name?: string
   ingredient_name?: string
   base_unit_abbr?: string
@@ -54,6 +56,7 @@ interface CogsItem {
   recipe_id:        number | null
   ingredient_id:    number | null
   display_name:     string
+  image_url:        string | null
   recipe_name:      string
   category:         string
   qty:              number
@@ -215,6 +218,7 @@ export default function MenusPage() {
   const [miIngId,       setMiIngId]       = useState<number | ''>('')
   const [miDisplayName, setMiDisplayName] = useState('')
   const [miQty,         setMiQty]         = useState('1')
+  const [miImageUrl,    setMiImageUrl]    = useState<string | null>(null)
   const [miLevelInputs, setMiLevelInputs] = useState<Record<number, { price: string; taxId: number | '' }>>({})
 
   // price report
@@ -524,7 +528,7 @@ export default function MenusPage() {
 
   function resetMiModal() {
     setMiType('recipe'); setMiRecipeId(''); setMiIngId('')
-    setMiDisplayName(''); setMiQty('1')
+    setMiDisplayName(''); setMiQty('1'); setMiImageUrl(null)
     const init: Record<number, { price: string; taxId: number | '' }> = {}
     priceLevels.forEach(l => { init[l.id] = { price: '', taxId: '' } })
     setMiLevelInputs(init)
@@ -543,6 +547,7 @@ export default function MenusPage() {
     else                                  setMiIngId(item.ingredient_id ?? '')
     setMiDisplayName(item.display_name)
     setMiQty(String(item.qty))
+    setMiImageUrl(item.image_url || null)
     // load existing level prices
     try {
       const prices: MenuItemPrice[] = await api.get(`/menu-item-prices?menu_item_id=${item.menu_item_id}`)
@@ -586,6 +591,7 @@ export default function MenusPage() {
       qty:           parseFloat(miQty) || 1,
       sell_price:    0,
       tax_rate_id:   null,
+      image_url:     miImageUrl || null,
     }
     try {
       let saved: MenuItem
@@ -1192,6 +1198,7 @@ export default function MenusPage() {
           miIngId={miIngId}
           miDisplayName={miDisplayName}
           miQty={miQty}
+          miImageUrl={miImageUrl}
           miLevelInputs={miLevelInputs}
           onTypeChange={t => {
             setMiType(t)
@@ -1213,6 +1220,7 @@ export default function MenusPage() {
           }}
           onDisplayName={setMiDisplayName}
           onQty={setMiQty}
+          onImageUrl={setMiImageUrl}
           onLevelInput={(levelId, field, value) =>
             setMiLevelInputs(prev => ({ ...prev, [levelId]: { ...prev[levelId], [field]: value } }))
           }
@@ -1606,18 +1614,19 @@ interface MenuItemFormProps {
   priceLevels: PriceLevel[]; taxRates: TaxRate[]; countryLevelTax: CountryLevelTax[]
   recipes: Recipe[]; ingredients: Ingredient[]
   miType: 'recipe' | 'ingredient'; miRecipeId: number | ''; miIngId: number | ''
-  miDisplayName: string; miQty: string
+  miDisplayName: string; miQty: string; miImageUrl: string | null
   miLevelInputs: Record<number, { price: string; taxId: number | '' }>
   onTypeChange(t: 'recipe' | 'ingredient'): void
   onRecipeChange(id: number): void; onIngChange(id: number): void
   onDisplayName(v: string): void; onQty(v: string): void
+  onImageUrl(url: string | null): void
   onLevelInput(levelId: number, field: 'price' | 'taxId', value: string | number | ''): void
   onSave(): void; onClose(): void
 }
 
 function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLevelTax, recipes, ingredients,
-  miType, miRecipeId, miIngId, miDisplayName, miQty, miLevelInputs,
-  onTypeChange, onRecipeChange, onIngChange, onDisplayName, onQty, onLevelInput, onSave, onClose }: MenuItemFormProps) {
+  miType, miRecipeId, miIngId, miDisplayName, miQty, miImageUrl, miLevelInputs,
+  onTypeChange, onRecipeChange, onIngChange, onDisplayName, onQty, onImageUrl, onLevelInput, onSave, onClose }: MenuItemFormProps) {
 
   const sym = country.currency_symbol
   const countryTaxRates = taxRates.filter(t => t.country_id === country.id)
@@ -1808,6 +1817,12 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
             </div>
           </div>
         )}
+
+        <ImageUpload
+          label="Item Image"
+          value={miImageUrl}
+          onChange={onImageUrl}
+        />
 
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>

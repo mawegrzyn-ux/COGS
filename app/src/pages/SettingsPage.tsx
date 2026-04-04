@@ -29,7 +29,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'import' | 'users' | 'roles'
+type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'import' | 'users' | 'roles'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -40,6 +40,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'thresholds':   'COGS Thresholds',
   'test-data':    'Test Data',
   'ai':           'AI',
+  'storage':      'Storage',
   'import':       'Import',
   'users':        'Users',
   'roles':        'Roles',
@@ -52,6 +53,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
   'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
+  'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
   'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
   'users':        'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
   'roles':        'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
@@ -68,7 +70,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
     if (initialTab) setTab(initialTab)
   }, [initialTab])
 
-  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'test-data', 'ai', 'import', 'users', 'roles'] as Tab[])
+  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'test-data', 'ai', 'storage', 'import', 'users', 'roles'] as Tab[])
     .filter(t => t !== 'test-data' || isDev)
 
   function renderTabContent(t: Tab) {
@@ -80,6 +82,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
         {t === 'thresholds'   && <ThresholdsTab />}
         {t === 'test-data'    && isDev && <TestDataTab />}
         {t === 'ai'           && <AiTab />}
+        {t === 'storage'      && <StorageTab />}
         {t === 'import'       && <ImportPage hideHeader />}
         {t === 'users'        && <UsersTab />}
         {t === 'roles'        && <RolesTab />}
@@ -1145,6 +1148,139 @@ interface UsageSummary {
 interface UsageDaily { day: string; turns: number; tokens_in: number; tokens_out: number; cost_usd: number }
 interface UsageUser  { user: string; turns: number; tokens_in: number; tokens_out: number; period_tokens: number; cost_usd: number; last_active: string }
 interface UsageData  { summary: UsageSummary; daily: UsageDaily[]; by_user: UsageUser[]; monthly_limit: number; period_start: string; next_reset: string }
+
+// ── Storage Tab ───────────────────────────────────────────────────────────────
+
+interface StorageCfg {
+  type:          'local' | 's3'
+  s3_bucket?:    string
+  s3_region?:    string
+  s3_access_key?: string
+  s3_secret_key?: string
+  s3_base_url?:  string
+}
+
+function StorageTab() {
+  const api                 = useApi()
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [toast,   setToast]   = useState<{ msg: string; type?: 'success' | 'error' } | null>(null)
+  const [cfg,     setCfg]     = useState<StorageCfg>({ type: 'local' })
+  const [showSecret, setShowSecret] = useState(false)
+
+  useEffect(() => {
+    api.get('/settings').then((s: Record<string, unknown>) => {
+      if (s?.storage) setCfg(s.storage as StorageCfg)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [api])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.patch('/settings', { storage: cfg })
+      setToast({ msg: 'Storage settings saved' })
+    } catch {
+      setToast({ msg: 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const set = (k: keyof StorageCfg) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setCfg(prev => ({ ...prev, [k]: e.target.value }))
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-text-1 mb-1">Image Storage</h2>
+        <p className="text-sm text-text-3">Where uploaded images (ingredients, recipes, menu items) are stored.</p>
+      </div>
+
+      {/* Storage type */}
+      <div className="card p-4 space-y-3">
+        <Field label="Storage Type">
+          <div className="flex gap-3">
+            {(['local', 's3'] as const).map(t => (
+              <label key={t} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="storage_type"
+                  value={t}
+                  checked={cfg.type === t}
+                  onChange={() => setCfg(prev => ({ ...prev, type: t }))}
+                  className="accent-accent"
+                />
+                <span className="text-sm font-medium text-text-1">
+                  {t === 'local' ? '📁 Local server disk' : '☁️ Amazon S3'}
+                </span>
+              </label>
+            ))}
+          </div>
+        </Field>
+
+        {cfg.type === 'local' && (
+          <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2">
+            Images are stored in <code className="font-mono text-xs">/uploads/</code> on the server.
+            No additional configuration needed. For production use on multiple servers, S3 is recommended.
+          </p>
+        )}
+      </div>
+
+      {/* S3 fields */}
+      {cfg.type === 's3' && (
+        <div className="card p-4 space-y-4">
+          <p className="text-xs text-text-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-blue-700">
+            Create an IAM user with <code className="font-mono text-xs">s3:PutObject</code> permission on your bucket.
+            Access keys are stored encrypted in the database.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Bucket Name" required>
+              <input className="input" value={cfg.s3_bucket || ''} onChange={set('s3_bucket')} placeholder="my-cogs-images" />
+            </Field>
+            <Field label="Region">
+              <input className="input" value={cfg.s3_region || ''} onChange={set('s3_region')} placeholder="us-east-1" />
+            </Field>
+          </div>
+          <Field label="Access Key ID" required>
+            <input className="input font-mono text-sm" value={cfg.s3_access_key || ''} onChange={set('s3_access_key')} placeholder="AKIAIOSFODNN7EXAMPLE" autoComplete="off" />
+          </Field>
+          <Field label="Secret Access Key" required>
+            <div className="relative">
+              <input
+                className="input font-mono text-sm pr-10"
+                type={showSecret ? 'text' : 'password'}
+                value={cfg.s3_secret_key || ''}
+                onChange={set('s3_secret_key')}
+                placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1"
+                onClick={() => setShowSecret(v => !v)}
+              >{showSecret ? '🙈' : '👁️'}</button>
+            </div>
+          </Field>
+          <Field label="Custom Base URL" >
+            <input className="input" value={cfg.s3_base_url || ''} onChange={set('s3_base_url')} placeholder="https://cdn.example.com (optional)" />
+            <p className="text-xs text-text-3 mt-1">Leave blank to use the default S3 URL. Set this if you use CloudFront or a custom domain.</p>
+          </Field>
+        </div>
+      )}
+
+      <button className="btn-primary px-5 py-2 text-sm" onClick={save} disabled={saving}>
+        {saving ? 'Saving…' : 'Save Storage Settings'}
+      </button>
+
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── AI Tab ────────────────────────────────────────────────────────────────────
 
 function AiTab() {
   const api = useApi()

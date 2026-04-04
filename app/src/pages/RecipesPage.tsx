@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import ImageUpload from '../components/ImageUpload'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Ingredient { id: number; name: string; category: string | null; base_unit_id: number | null; base_unit_abbr: string | null; default_prep_unit: string | null; default_prep_to_base_conversion: number; waste_pct: number }
-interface Recipe     { id: number; name: string; category: string | null; description: string | null; yield_qty: number; yield_unit_id: number | null; yield_unit_abbr: string | null; item_count: number }
+interface Recipe     { id: number; name: string; category: string | null; description: string | null; yield_qty: number; yield_unit_id: number | null; yield_unit_abbr: string | null; item_count: number; image_url: string | null }
 
 interface RecipeItem {
   id:                     number
@@ -429,6 +430,7 @@ export default function RecipesPage() {
       description:     form.description.trim() || null,
       yield_qty:       Number(form.yield_qty) || 1,
       yield_unit_text: form.yield_unit_text.trim() || null,
+      image_url:       form.image_url.trim() || null,
     }
     if (!payload.name) return showToast('Name is required', 'error')
     try {
@@ -1947,7 +1949,7 @@ export default function RecipesPage() {
 // ── Recipe Form Modal ─────────────────────────────────────────────────────────
 
 interface RecipeForm {
-  name: string; category: string; description: string; yield_qty: string; yield_unit_text: string
+  name: string; category: string; description: string; yield_qty: string; yield_unit_text: string; image_url: string
 }
 
 function RecipeFormModal({ recipe, categories, onSave, onClose }: {
@@ -1962,6 +1964,7 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
     description:     recipe?.description    ?? '',
     yield_qty:       String(recipe?.yield_qty ?? 1),
     yield_unit_text: recipe?.yield_unit_abbr ?? '',
+    image_url:       recipe?.image_url       ?? '',
   })
   const [catOpen,           setCatOpen]           = useState(false)
   const [catHighlightedIdx, setCatHighlightedIdx] = useState(-1)
@@ -2041,6 +2044,12 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
         <Field label="Description / Notes">
           <textarea className="input" rows={3} value={form.description} onChange={set('description')} placeholder="Optional method notes…" />
         </Field>
+
+        <ImageUpload
+          label="Recipe Image"
+          value={form.image_url || null}
+          onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+        />
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>

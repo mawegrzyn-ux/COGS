@@ -86,6 +86,9 @@ router.use('/ai-config',          ...can('settings', 'read'),    write('settings
 // ── Nutrition proxy (USDA lookup + ingredient enrichment) ──────────────────────
 router.use('/nutrition',          ...can('inventory', 'read'),   write('inventory'),  require('./nutrition'));
 
+// ── Image upload (local disk or S3) ───────────────────────────────────────────
+router.use('/upload',             auth,                                               require('./upload'));
+
 // ── Misc / internal ────────────────────────────────────────────────────────────
 router.use('/seed',               ...can('settings', 'write'),                        require('./seed'));
 router.use('/feedback',           auth,                                               require('./feedback'));
