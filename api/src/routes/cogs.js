@@ -1092,6 +1092,7 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
       totalSellGross += Math.round(sellGross * 10000) / 10000;
 
       outItems.push({
+        menu_item_id:       item.id,   // alias — used by ScenarioTool price-override keys
         menu_sales_item_id: item.id,
         sales_item_id:      siId,
         item_type:          itemType,

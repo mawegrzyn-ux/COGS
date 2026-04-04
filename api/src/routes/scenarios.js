@@ -207,22 +207,22 @@ router.get('/analysis', async (req, res) => {
 });
 
 // ── POST /scenarios/push-prices ──────────────────────────────────────────────
-// Write price overrides to mcogs_menu_item_prices (makes them live on the menu).
-// Body: { overrides: [{ menu_item_id, price_level_id, sell_price }] }
-// sell_price is in USD base (same unit as mcogs_menu_item_prices.sell_price).
+// Write price overrides to mcogs_menu_sales_item_prices (makes them live on the menu).
+// Body: { overrides: [{ menu_sales_item_id, price_level_id, sell_price }] }
+// sell_price is in USD base.
 router.post('/push-prices', async (req, res) => {
   const { overrides } = req.body;
   if (!Array.isArray(overrides) || !overrides.length) return res.json({ pushed: 0 });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const { menu_item_id, price_level_id, sell_price } of overrides) {
+    for (const { menu_sales_item_id, price_level_id, sell_price } of overrides) {
       await client.query(`
-        INSERT INTO mcogs_menu_item_prices (menu_item_id, price_level_id, sell_price)
+        INSERT INTO mcogs_menu_sales_item_prices (menu_sales_item_id, price_level_id, sell_price)
         VALUES ($1, $2, $3)
-        ON CONFLICT (menu_item_id, price_level_id)
+        ON CONFLICT (menu_sales_item_id, price_level_id)
         DO UPDATE SET sell_price = EXCLUDED.sell_price
-      `, [menu_item_id, price_level_id, sell_price]);
+      `, [menu_sales_item_id, price_level_id, sell_price]);
     }
     await client.query('COMMIT');
     res.json({ pushed: overrides.length });

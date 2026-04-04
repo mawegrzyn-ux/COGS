@@ -13,7 +13,6 @@ import { useSortFilter } from '../hooks/useSortFilter'
 interface Country     { id: number; name: string; currency_code: string; currency_symbol: string; exchange_rate: number }
 interface PriceLevel  { id: number; name: string; is_default: boolean }
 interface TaxRate     { id: number; country_id: number; name: string; rate: number; is_default: boolean }
-interface CountryLevelTax { id: number; country_id: number; price_level_id: number; tax_rate_id: number }
 interface Recipe      { id: number; name: string; category_name: string | null }
 interface Ingredient  { id: number; name: string; base_unit_abbr: string | null }
 
@@ -25,53 +24,32 @@ interface Menu {
   country_name: string
 }
 
-interface MenuItem {
-  id: number
-  menu_id: number
-  item_type: 'recipe' | 'ingredient'
-  recipe_id: number | null
-  ingredient_id: number | null
-  display_name: string
-  qty: number
-  sell_price: number
-  tax_rate_id: number | null
-  image_url: string | null
-  recipe_name?: string
-  ingredient_name?: string
-  base_unit_abbr?: string
-  yield_qty?: number
-}
-
-interface MenuItemPrice {
-  id: number
-  menu_item_id: number
-  price_level_id: number
-  sell_price: number
-  tax_rate_id: number | null
-}
 
 interface CogsItem {
-  menu_item_id:     number
-  item_type:        'recipe' | 'ingredient'
-  recipe_id:        number | null
-  ingredient_id:    number | null
-  display_name:     string
-  image_url:        string | null
-  recipe_name:      string
-  category:         string
-  qty:              number
-  base_unit_abbr:   string
-  cost_per_portion: number
-  sell_price_gross: number
-  sell_price_net:   number
-  tax_rate:         number
-  tax_rate_pct:     number
-  tax_name:         string
-  tax_rate_id:      number | null
-  gp_net:           number
-  gp_gross:         number
-  cogs_pct_net:     number
-  cogs_pct_gross:   number
+  menu_item_id:       number   // alias for menu_sales_item_id
+  menu_sales_item_id: number
+  sales_item_id:      number
+  item_type:          'recipe' | 'ingredient' | 'manual' | 'combo'
+  recipe_id:          number | null
+  ingredient_id:      number | null
+  display_name:       string
+  image_url:          string | null
+  recipe_name:        string
+  category:           string
+  qty:                number
+  base_unit_abbr:     string
+  cost_per_portion:   number
+  sell_price_gross:   number
+  sell_price_net:     number
+  tax_rate:           number
+  tax_rate_pct:       number
+  tax_name:           string
+  tax_rate_id:        number | null
+  gp_net:             number
+  gp_gross:           number
+  cogs_pct_net:       number
+  cogs_pct_gross:     number
+  is_price_overridden?: boolean
 }
 
 interface CogsSummary {
@@ -283,9 +261,6 @@ export default function MenusPage() {
   const [countries,       setCountries]       = useState<Country[]>([])
   const [priceLevels,     setPriceLevels]     = useState<PriceLevel[]>([])
   const [taxRates,        setTaxRates]        = useState<TaxRate[]>([])
-  const [countryLevelTax, setCountryLevelTax] = useState<CountryLevelTax[]>([])
-  const [recipes,         setRecipes]         = useState<Recipe[]>([])
-  const [ingredients,     setIngredients]     = useState<Ingredient[]>([])
   const [menus,           setMenus]           = useState<Menu[]>([])
   const [loading,         setLoading]         = useState(true)
 
@@ -309,18 +284,7 @@ export default function MenusPage() {
 
   // modals
   const [menuModal,     setMenuModal]     = useState<'new' | Menu | null>(null)
-  const [menuItemModal, setMenuItemModal] = useState<'new' | CogsItem | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'menu' | 'item'; id: number } | null>(null)
-  const [levelPrices,   setLevelPrices]   = useState<MenuItemPrice[]>([])
-
-  // menu item form
-  const [miType,        setMiType]        = useState<'recipe' | 'ingredient'>('recipe')
-  const [miRecipeId,    setMiRecipeId]    = useState<number | ''>('')
-  const [miIngId,       setMiIngId]       = useState<number | ''>('')
-  const [miDisplayName, setMiDisplayName] = useState('')
-  const [miQty,         setMiQty]         = useState('1')
-  const [miImageUrl,    setMiImageUrl]    = useState<string | null>(null)
-  const [miLevelInputs, setMiLevelInputs] = useState<Record<number, { price: string; taxId: number | '' }>>({})
 
   // builder — sales items linked to menu
   const [menuSalesItems,     setMenuSalesItems]     = useState<MenuSalesItem[]>([])
@@ -389,22 +353,16 @@ export default function MenusPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [m, c, pl, tr, clt, r, i] = await Promise.all([
+      const [m, c, pl, tr] = await Promise.all([
         api.get('/menus'),
         api.get('/countries'),
         api.get('/price-levels'),
         api.get('/tax-rates'),
-        api.get('/country-level-tax'),
-        api.get('/recipes'),
-        api.get('/ingredients'),
       ])
       setMenus(m || [])
       setCountries(c || [])
       setPriceLevels(pl || [])
       setTaxRates(tr || [])
-      setCountryLevelTax(clt || [])
-      setRecipes(r || [])
-      setIngredients(i || [])
       // Auto-select default price level if not already overridden by user
       const defLevel = (pl || []).find((l: PriceLevel) => l.is_default)
       if (defLevel && !levelOverridden) setActiveMenuLevel(defLevel.id)
@@ -436,7 +394,9 @@ export default function MenusPage() {
     setItemFilterQ(''); setItemFilterType(''); setItemFilterStatus(''); setItemFilterCat('')
     setLoadingCogs(true)
     try {
-      const url = activeMenuLevel ? `/cogs/menu/${id}?price_level_id=${activeMenuLevel}` : `/cogs/menu/${id}`
+      const url = activeMenuLevel
+        ? `/cogs/menu-sales/${id}?price_level_id=${activeMenuLevel}`
+        : `/cogs/menu-sales/${id}`
       const [data, msiData] = await Promise.all([
         api.get(url),
         api.get(`/menu-sales-items?menu_id=${id}`),
@@ -514,16 +474,6 @@ export default function MenusPage() {
     if (!cogsData) return []
     return [...new Set(cogsData.items.map(i => i.category).filter(Boolean))].sort()
   }, [cogsData])
-
-  // ── Tax helpers ───────────────────────────────────────────────────────────
-
-  function getDefaultTaxForCountryLevel(countryId: number, levelId: number | '') {
-    if (levelId) {
-      const clt = countryLevelTax.find(r => r.country_id === countryId && r.price_level_id === Number(levelId))
-      if (clt) return taxRates.find(t => t.id === clt.tax_rate_id) ?? null
-    }
-    return taxRates.find(t => t.country_id === countryId && t.is_default) ?? null
-  }
 
   // ── Shared pages CRUD ────────────────────────────────────────────────────
 
@@ -633,108 +583,14 @@ export default function MenusPage() {
     } catch { showToast('Failed to delete menu.', 'error') }
   }
 
-  // ── Menu item modal helpers ───────────────────────────────────────────────
-
-  function resetMiModal() {
-    setMiType('recipe'); setMiRecipeId(''); setMiIngId('')
-    setMiDisplayName(''); setMiQty('1'); setMiImageUrl(null)
-    const init: Record<number, { price: string; taxId: number | '' }> = {}
-    priceLevels.forEach(l => { init[l.id] = { price: '', taxId: '' } })
-    setMiLevelInputs(init)
-  }
-
-  function openNewItemModal() {
-    resetMiModal()
-    setMenuItemModal('new')
-    setLevelPrices([])
-  }
-
-  async function openEditItemModal(item: CogsItem) {
-    resetMiModal()
-    setMiType(item.item_type)
-    if (item.item_type === 'recipe')      setMiRecipeId(item.recipe_id ?? '')
-    else                                  setMiIngId(item.ingredient_id ?? '')
-    setMiDisplayName(item.display_name)
-    setMiQty(String(item.qty))
-    setMiImageUrl(item.image_url || null)
-    // load existing level prices
-    try {
-      const prices: MenuItemPrice[] = await api.get(`/menu-item-prices?menu_item_id=${item.menu_item_id}`)
-      setLevelPrices(prices)
-      const init: Record<number, { price: string; taxId: number | '' }> = {}
-      priceLevels.forEach(l => {
-        const lp = prices.find(p => p.price_level_id === l.id)
-        init[l.id] = { price: lp ? fmt2(lp.sell_price) : '', taxId: lp?.tax_rate_id ?? '' }
-      })
-      setMiLevelInputs(init)
-    } catch {
-      const init: Record<number, { price: string; taxId: number | '' }> = {}
-      priceLevels.forEach(l => { init[l.id] = { price: '', taxId: '' } })
-      setMiLevelInputs(init)
-    }
-    setMenuItemModal(item)
-  }
-
   async function saveInlinePrice(menuItemId: number, gross: number, levelId: number | '') {
     if (!levelId) return
-    await api.post('/menu-item-prices', {
-      menu_item_id:   menuItemId,
+    // menuItemId is menu_sales_item_id (aliased as menu_item_id in CogsItem)
+    await api.put(`/menu-sales-items/${menuItemId}/prices`, {
       price_level_id: levelId,
       sell_price:     Math.round(gross * 10000) / 10000,
     })
     if (selectedMenuId) await openMenu(selectedMenuId)
-  }
-
-  async function saveMenuItem() {
-    if (!selectedMenuId) return
-    const isEdit = menuItemModal !== 'new' && menuItemModal !== null
-    const itemId = isEdit ? (menuItemModal as CogsItem).menu_item_id : null
-    if (miType === 'recipe'     && !miRecipeId)  { showToast('Select a recipe.', 'error'); return }
-    if (miType === 'ingredient' && !miIngId)     { showToast('Select an ingredient.', 'error'); return }
-    const body = {
-      menu_id:       selectedMenuId,
-      item_type:     miType,
-      recipe_id:     miType === 'recipe'     ? miRecipeId     : null,
-      ingredient_id: miType === 'ingredient' ? miIngId        : null,
-      display_name:  miDisplayName.trim(),
-      qty:           parseFloat(miQty) || 1,
-      sell_price:    0,
-      tax_rate_id:   null,
-      image_url:     miImageUrl || null,
-    }
-    try {
-      let saved: MenuItem
-      if (isEdit && itemId) saved = await api.put(`/menu-items/${itemId}`, body)
-      else                  saved = await api.post('/menu-items', body)
-      // save level prices
-      await Promise.all(priceLevels.map(async l => {
-        const inp = miLevelInputs[l.id]
-        if (!inp) return
-        if (inp.price !== '' && parseFloat(inp.price) >= 0) {
-          await api.post('/menu-item-prices', {
-            menu_item_id:   saved.id,
-            price_level_id: l.id,
-            sell_price:     parseFloat(inp.price),
-            tax_rate_id:    inp.taxId || null,
-          })
-        } else if (inp.price === '') {
-          const existing = levelPrices.find(p => p.price_level_id === l.id)
-          if (existing) await api.delete(`/menu-item-prices/${existing.id}`)
-        }
-      }))
-      setMenuItemModal(null)
-      await openMenu(selectedMenuId)
-      setScenarioRefreshKey(k => k + 1)
-      showToast(isEdit ? 'Item updated.' : 'Item added to menu.')
-    } catch { showToast('Failed to save item.', 'error') }
-  }
-
-  async function deleteMenuItem(id: number) {
-    try {
-      await api.delete(`/menu-items/${id}`)
-      if (selectedMenuId) await openMenu(selectedMenuId)
-      showToast('Item removed from menu.')
-    } catch { showToast('Failed to remove item.', 'error') }
   }
 
   // ── Sales Items in Builder ────────────────────────────────────────────────
@@ -761,33 +617,6 @@ export default function MenusPage() {
       setMenuSalesItems(prev => prev.filter(m => m.id !== id))
       showToast('Sales item removed from menu.')
     } catch { showToast('Failed to remove sales item.', 'error') }
-  }
-
-  async function resetMenuSalesItemPrice(msiId: number, priceLevelId: number, defaultPrice: number) {
-    try {
-      const updated: MenuSalesItem = await api.put(`/menu-sales-items/${msiId}/prices`, { price_level_id: priceLevelId, sell_price: defaultPrice })
-      setMenuSalesItems(prev => prev.map(m => m.id === msiId ? updated : m))
-    } catch { showToast('Failed to reset price.', 'error') }
-  }
-
-  async function applyDefaultTax() {
-    if (!selectedMenu || !activeMenuLevel) { showToast('Select a price level first.', 'error'); return }
-    const defTax = getDefaultTaxForCountryLevel(selectedMenu.country_id, activeMenuLevel)
-    if (!defTax) { showToast('No default tax rate for this country.', 'error'); return }
-    const levelName = priceLevels.find(l => l.id === Number(activeMenuLevel))?.name ?? 'selected level'
-    if (!confirm(`Apply "${defTax.name} (${(defTax.rate * 100).toFixed(2)}%)" to all priced items in level "${levelName}"?`)) return
-    try {
-      const prices: MenuItemPrice[] = await api.get(`/menu-item-prices?menu_id=${selectedMenuId}`)
-      const forLevel = prices.filter(p => p.price_level_id === Number(activeMenuLevel))
-      await Promise.all(forLevel.map(lp => api.post('/menu-item-prices', {
-        menu_item_id:   lp.menu_item_id,
-        price_level_id: lp.price_level_id,
-        sell_price:     lp.sell_price,
-        tax_rate_id:    defTax.id,
-      })))
-      await openMenu(selectedMenuId!)
-      showToast(`Default tax applied to all "${levelName}" prices.`)
-    } catch { showToast('Failed to apply tax.', 'error') }
   }
 
   // ── Price Report ──────────────────────────────────────────────────────────
@@ -885,8 +714,8 @@ export default function MenusPage() {
     if (scenarioLevelId === 'ALL') { setScenarioData(null); return }
     setScenarioLoading(true)
     const url = scenarioLevelId
-      ? `/cogs/menu/${scenarioMenuId}?price_level_id=${scenarioLevelId}`
-      : `/cogs/menu/${scenarioMenuId}`
+      ? `/cogs/menu-sales/${scenarioMenuId}?price_level_id=${scenarioLevelId}`
+      : `/cogs/menu-sales/${scenarioMenuId}`
     api.get(url)
       .then((d: CogsData) => setScenarioData(d))
       .catch(() => {})
@@ -1042,15 +871,9 @@ export default function MenusPage() {
                 onSavePrice={saveInlinePrice}
                 onEdit={m => setMenuModal(m)}
                 onDelete={id => setConfirmDelete({ type: 'menu', id })}
-                onAddItem={openNewItemModal}
-                onEditItem={openEditItemModal}
                 onDeleteItem={id => setConfirmDelete({ type: 'item', id })}
-                onApplyTax={applyDefaultTax}
                 cogsThresholds={cogsThresholds}
-                menuSalesItems={menuSalesItems}
                 onAddSalesItem={() => setAddSiPickerOpen(true)}
-                onDeleteSalesItem={deleteMenuSalesItem}
-                onResetSalesItemPrice={resetMenuSalesItemPrice}
               />
             )}
           </section>
@@ -1123,23 +946,6 @@ export default function MenusPage() {
                 onQtyChange={(key, q) => setScenarioQty(prev => ({ ...prev, [key]: q }))}
                 onResetQty={() => setScenarioQty({})}
                 onReplaceQty={(qMap) => setScenarioQty(qMap)}
-                onAddItem={() => {
-                  if (scenarioMenuId) {
-                    setSelectedMenuId(scenarioMenuId)
-                    resetMiModal()
-                    setMenuItemModal('new')
-                    setLevelPrices([])
-                  }
-                }}
-                onEditItem={menuItemId => {
-                  if (scenarioMenuId) {
-                    const item = scenarioData?.items.find(i => i.menu_item_id === menuItemId)
-                    if (item) {
-                      setSelectedMenuId(scenarioMenuId)
-                      openEditItemModal(item)
-                    }
-                  }
-                }}
                 onDeleteItem={(menuItemId) => {
                   setConfirmDelete({ type: 'item', id: menuItemId })
                 }}
@@ -1329,57 +1135,11 @@ export default function MenusPage() {
         />
       )}
 
-      {/* Menu item modal */}
-      {menuItemModal !== null && selectedMenu && selectedCountry && (
-        <MenuItemFormModal
-          isEdit={menuItemModal !== 'new'}
-          country={selectedCountry}
-          priceLevels={priceLevels}
-          taxRates={taxRates}
-          countryLevelTax={countryLevelTax}
-          recipes={recipes}
-          ingredients={ingredients}
-          miType={miType}
-          miRecipeId={miRecipeId}
-          miIngId={miIngId}
-          miDisplayName={miDisplayName}
-          miQty={miQty}
-          miImageUrl={miImageUrl}
-          miLevelInputs={miLevelInputs}
-          onTypeChange={t => {
-            setMiType(t)
-            setMiDisplayName('')
-          }}
-          onRecipeChange={id => {
-            setMiRecipeId(id)
-            if (!miDisplayName) {
-              const r = recipes.find(r => r.id === id)
-              if (r) setMiDisplayName(r.name)
-            }
-          }}
-          onIngChange={id => {
-            setMiIngId(id)
-            if (!miDisplayName) {
-              const i = ingredients.find(i => i.id === id)
-              if (i) setMiDisplayName(i.name)
-            }
-          }}
-          onDisplayName={setMiDisplayName}
-          onQty={setMiQty}
-          onImageUrl={setMiImageUrl}
-          onLevelInput={(levelId, field, value) =>
-            setMiLevelInputs(prev => ({ ...prev, [levelId]: { ...prev[levelId], [field]: value } }))
-          }
-          onSave={saveMenuItem}
-          onClose={() => setMenuItemModal(null)}
-        />
-      )}
-
       {/* Sales Item picker modal */}
       {addSiPickerOpen && selectedMenu && (
         <SalesItemPickerModal
           countryId={selectedMenu.country_id}
-          alreadyAdded={menuSalesItems.map(m => m.sales_item_id)}
+          alreadyAdded={(cogsData?.items ?? []).map(i => i.sales_item_id).filter(Boolean) as number[]}
           priceLevels={priceLevels}
           onAdd={addMenuSalesItem}
           onClose={() => setAddSiPickerOpen(false)}
@@ -1394,7 +1154,7 @@ export default function MenusPage() {
             : 'Remove this item from the menu?'}
           onConfirm={() => {
             if (confirmDelete.type === 'menu') deleteMenu(confirmDelete.id)
-            else deleteMenuItem(confirmDelete.id)
+            else deleteMenuSalesItem(confirmDelete.id)
             setConfirmDelete(null)
           }}
           onCancel={() => setConfirmDelete(null)}
@@ -1420,25 +1180,21 @@ interface MenuDetailProps {
   itemSortCol: string; itemSortDir: 1 | -1
   cogsThresholds: CogsThresholds
   categories: string[]
-  menuSalesItems: MenuSalesItem[]
   onLevelChange(v: number | ''): void
   onFilterQ(v: string): void; onFilterType(v: string): void; onFilterStatus(v: string): void; onFilterCat(v: string): void
   onSort(col: string): void
   onSavePrice(menuItemId: number, gross: number, levelId: number | ''): Promise<void>
   onEdit(m: Menu): void; onDelete(id: number): void
-  onAddItem(): void; onEditItem(item: CogsItem): void; onDeleteItem(id: number): void
-  onApplyTax(): void
+  onDeleteItem(id: number): void
   onAddSalesItem(): void
-  onDeleteSalesItem(id: number): void
-  onResetSalesItemPrice(msiId: number, priceLevelId: number, defaultPrice: number): void
 }
 
 function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, priceLevels, activeMenuLevel, sym,
   itemFilterQ, itemFilterType, itemFilterStatus, itemFilterCat, itemSortCol, itemSortDir, categories,
-  cogsThresholds, menuSalesItems,
+  cogsThresholds,
   onLevelChange, onFilterQ, onFilterType, onFilterStatus, onFilterCat, onSort, onSavePrice,
-  onEdit, onDelete, onAddItem, onEditItem, onDeleteItem, onApplyTax,
-  onAddSalesItem, onDeleteSalesItem, onResetSalesItemPrice }: MenuDetailProps) {
+  onEdit, onDelete, onDeleteItem,
+  onAddSalesItem }: MenuDetailProps) {
 
   const hasLevel = !!activeMenuLevel
   const items = cogsData.items
@@ -1486,8 +1242,8 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           <td className="px-3 py-2.5 text-xs text-text-3">{item.category || dash}</td>
         )}
         <td className="px-3 py-2.5">
-          <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded">
-            {item.item_type === 'ingredient' ? 'Ingredient' : 'Recipe'}
+          <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded capitalize">
+            {item.item_type === 'ingredient' ? 'Ingredient' : item.item_type === 'manual' ? 'Manual' : item.item_type === 'combo' ? 'Combo' : 'Recipe'}
           </span>
         </td>
         <td className="px-3 py-2.5 text-right font-mono text-xs whitespace-nowrap text-text-2">{qtyLabel}</td>
@@ -1545,22 +1301,13 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           ) : dash}
         </td>
         <td className="px-3 py-1.5">
-          <div className="flex gap-1 items-center">
-            <button
-              className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
-              onClick={() => onEditItem(item)}
-              title="Edit item"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-            <button
-              className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
-              onClick={() => onDeleteItem(item.menu_item_id)}
-              title="Remove from menu"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
-            </button>
-          </div>
+          <button
+            className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
+            onClick={() => onDeleteItem(item.menu_item_id)}
+            title="Remove from menu"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+          </button>
         </td>
       </tr>
     )
@@ -1589,11 +1336,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
               {priceLevels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
-          <button className="btn btn-sm btn-outline" onClick={onApplyTax} title="Apply country default tax to all items">
-            % Tax
-          </button>
           <button className="btn btn-sm btn-primary" onClick={onAddSalesItem}>+ Add Sales Item</button>
-          <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a legacy recipe or ingredient directly">+ Legacy Item</button>
           <button className="btn btn-sm btn-ghost text-red-500" onClick={() => onDelete(menu.id)}>🗑</button>
         </div>
       </div>
@@ -1637,6 +1380,8 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           <option value="">All Types</option>
           <option value="recipe">Recipe</option>
           <option value="ingredient">Ingredient</option>
+          <option value="manual">Manual</option>
+          <option value="combo">Combo</option>
         </select>
         {categories.length > 0 && (
           <select className="input text-sm shrink-0" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
@@ -1727,75 +1472,6 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
         </div>
       </div>
 
-      {/* ── Sales Items section ──────────────────────────────────────────────── */}
-      {menuSalesItems.length > 0 && (
-        <div className="mt-6">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-text-1">Sales Items ({menuSalesItems.length})</h3>
-          </div>
-          <div className="overflow-x-auto rounded-lg border border-border bg-white">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
-                  <th className="px-3 py-2 text-left font-medium">Name</th>
-                  <th className="px-3 py-2 text-left font-medium">Type</th>
-                  <th className="px-3 py-2 text-left font-medium">Category</th>
-                  <th className="px-3 py-2 text-right font-medium">
-                    Price {activeMenuLevel ? `(${priceLevels.find(l => l.id === activeMenuLevel)?.name ?? ''})` : '(select level)'}
-                  </th>
-                  <th className="px-3 py-2 text-center font-medium w-16"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {menuSalesItems.map(msi => {
-                  const activePriceRow = activeMenuLevel ? msi.prices.find(p => p.price_level_id === activeMenuLevel) : null
-                  const isOverridden = activePriceRow?.is_overridden ?? false
-                  const defaultPrice = activePriceRow?.default_price ?? null
-                  return (
-                    <tr key={msi.id} className="hover:bg-surface-2/50">
-                      <td className="px-3 py-2.5 font-medium text-text-1">{msi.sales_item_name}</td>
-                      <td className="px-3 py-2.5">
-                        <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded capitalize">
-                          {msi.item_type}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-text-3">{msi.category || '—'}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-xs">
-                        {activePriceRow ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="text-text-1">{sym}{fmt2(activePriceRow.sell_price)}</span>
-                            {isOverridden && defaultPrice !== null && (
-                              <button
-                                className="inline-flex items-center gap-1 text-amber-500 hover:text-amber-600 transition-colors"
-                                title={`Overrides Sales Item default (${sym}${fmt2(defaultPrice)}). Click to reset.`}
-                                onClick={() => onResetSalesItemPrice(msi.id, activePriceRow.price_level_id, defaultPrice)}
-                              >
-                                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                              </button>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-text-3 italic text-xs">{activeMenuLevel ? 'no price' : '—'}</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <button
-                          className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors mx-auto"
-                          onClick={() => onDeleteSalesItem(msi.id)}
-                          title="Remove from menu"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
     </div>
   )
 }
@@ -1839,235 +1515,6 @@ function MenuFormModal({ menu, countries, onSave, onClose }: {
     </Modal>
   )
 }
-
-// ── Menu Item Form Modal ──────────────────────────────────────────────────────
-
-interface MenuItemFormProps {
-  isEdit: boolean; country: Country
-  priceLevels: PriceLevel[]; taxRates: TaxRate[]; countryLevelTax: CountryLevelTax[]
-  recipes: Recipe[]; ingredients: Ingredient[]
-  miType: 'recipe' | 'ingredient'; miRecipeId: number | ''; miIngId: number | ''
-  miDisplayName: string; miQty: string; miImageUrl: string | null
-  miLevelInputs: Record<number, { price: string; taxId: number | '' }>
-  onTypeChange(t: 'recipe' | 'ingredient'): void
-  onRecipeChange(id: number): void; onIngChange(id: number): void
-  onDisplayName(v: string): void; onQty(v: string): void
-  onImageUrl(url: string | null): void
-  onLevelInput(levelId: number, field: 'price' | 'taxId', value: string | number | ''): void
-  onSave(): void; onClose(): void
-}
-
-function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLevelTax, recipes, ingredients,
-  miType, miRecipeId, miIngId, miDisplayName, miQty, miImageUrl, miLevelInputs,
-  onTypeChange, onRecipeChange, onIngChange, onDisplayName, onQty, onImageUrl, onLevelInput, onSave, onClose }: MenuItemFormProps) {
-
-  const sym = country.currency_symbol
-  const countryTaxRates = taxRates.filter(t => t.country_id === country.id)
-
-  function getEffectiveDefaultTax(levelId: number) {
-    const clt = countryLevelTax.find(r => r.country_id === country.id && r.price_level_id === levelId)
-    if (clt) return taxRates.find(t => t.id === clt.tax_rate_id)
-    return taxRates.find(t => t.country_id === country.id && t.is_default)
-  }
-
-  const selectedIng = ingredients.find(i => i.id === miIngId)
-
-  // ── Searchable combobox state ──────────────────────────────────────────────
-  const selectedRecipeName = recipes.find(r => r.id === miRecipeId)?.name ?? ''
-  const selectedIngName    = ingredients.find(i => i.id === miIngId)
-    ? `${ingredients.find(i => i.id === miIngId)!.name}${ingredients.find(i => i.id === miIngId)!.base_unit_abbr ? ` (${ingredients.find(i => i.id === miIngId)!.base_unit_abbr})` : ''}`
-    : ''
-
-  const [recipeSearch, setRecipeSearch] = useState(selectedRecipeName)
-  const [recipeOpen,   setRecipeOpen]   = useState(false)
-  const [ingSearch,    setIngSearch]    = useState(selectedIngName)
-  const [ingOpen,      setIngOpen]      = useState(false)
-
-  // Sync search text when parent changes the selection (e.g. when editing an existing item)
-  useEffect(() => { setRecipeSearch(selectedRecipeName) }, [selectedRecipeName])
-  useEffect(() => { setIngSearch(selectedIngName) }, [selectedIngName])
-
-  const filteredRecipes = useMemo(() => {
-    const q = recipeSearch.toLowerCase()
-    return recipes.filter(r => r.name.toLowerCase().includes(q))
-  }, [recipes, recipeSearch])
-
-  const filteredIngredients = useMemo(() => {
-    const q = ingSearch.toLowerCase()
-    return ingredients.filter(i => i.name.toLowerCase().includes(q))
-  }, [ingredients, ingSearch])
-
-  function selectRecipe(r: Recipe) {
-    onRecipeChange(r.id)
-    setRecipeSearch(r.name)
-    setRecipeOpen(false)
-  }
-
-  function selectIngredient(i: Ingredient) {
-    onIngChange(i.id)
-    setIngSearch(`${i.name}${i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}`)
-    setIngOpen(false)
-  }
-
-  return (
-    <Modal title={isEdit ? 'Edit Menu Item' : 'Add Item to Menu'} onClose={onClose}>
-      <div className="space-y-4">
-        {/* Type toggle */}
-        <Field label="Item Type">
-          <div className="flex gap-2">
-            <button
-              className={`btn btn-sm flex-1 ${miType === 'recipe' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { onTypeChange('recipe'); setRecipeSearch(''); setRecipeOpen(false) }}
-            >📖 Recipe</button>
-            <button
-              className={`btn btn-sm flex-1 ${miType === 'ingredient' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => { onTypeChange('ingredient'); setIngSearch(''); setIngOpen(false) }}
-            >📦 Ingredient</button>
-          </div>
-        </Field>
-
-        {/* Selection */}
-        {miType === 'recipe' ? (
-          <Field label="Recipe *">
-            <div className="relative">
-              <input
-                className="input w-full"
-                placeholder="Search recipes…"
-                value={recipeSearch}
-                onChange={e => { setRecipeSearch(e.target.value); setRecipeOpen(true) }}
-                onFocus={() => setRecipeOpen(true)}
-                onBlur={() => setTimeout(() => setRecipeOpen(false), 150)}
-                autoComplete="off"
-              />
-              {recipeOpen && (
-                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
-                  {filteredRecipes.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-gray-400">No recipes match "{recipeSearch}"</div>
-                  ) : filteredRecipes.map(r => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${miRecipeId === r.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
-                      onMouseDown={e => e.preventDefault()}
-                      onClick={() => selectRecipe(r)}
-                    >
-                      {miRecipeId === r.id && <span className="text-accent text-xs">✓</span>}
-                      <span>{r.name}</span>
-                      {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Field>
-        ) : (
-          <Field label="Ingredient *">
-            <div className="relative">
-              <input
-                className="input w-full"
-                placeholder="Search ingredients…"
-                value={ingSearch}
-                onChange={e => { setIngSearch(e.target.value); setIngOpen(true) }}
-                onFocus={() => setIngOpen(true)}
-                onBlur={() => setTimeout(() => setIngOpen(false), 150)}
-                autoComplete="off"
-              />
-              {ingOpen && (
-                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
-                  {filteredIngredients.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-gray-400">No ingredients match "{ingSearch}"</div>
-                  ) : filteredIngredients.map(i => (
-                    <button
-                      key={i.id}
-                      type="button"
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${miIngId === i.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
-                      onMouseDown={e => e.preventDefault()}
-                      onClick={() => selectIngredient(i)}
-                    >
-                      {miIngId === i.id && <span className="text-accent text-xs">✓</span>}
-                      <span>{i.name}</span>
-                      {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Field>
-        )}
-
-        {/* Display name */}
-        <Field label="Menu Display Name">
-          <input className="input w-full" placeholder="Auto-filled from selection — override here"
-            value={miDisplayName} onChange={e => onDisplayName(e.target.value)} />
-        </Field>
-
-        {/* Qty */}
-        <Field label={`Qty${miType === 'ingredient' && selectedIng?.base_unit_abbr ? ` (${selectedIng.base_unit_abbr})` : ' (portions)'}`}>
-          <input className="input w-32" type="number" min="0.01" step="0.01"
-            value={miQty} onChange={e => onQty(e.target.value)} />
-        </Field>
-
-        {/* Price levels */}
-        {priceLevels.length > 0 && (
-          <div className="border-t pt-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-gray-400 mb-3">Prices per Level</div>
-            <div className="text-xs text-gray-400 mb-3">Set gross price + tax rate per level. Leave blank to exclude from that level.</div>
-            <div className="grid gap-2">
-              <div className="grid grid-cols-3 gap-2 text-xs text-gray-400 font-medium mb-1">
-                <span>Level</span><span>Gross price (inc. tax)</span><span>Tax rate</span>
-              </div>
-              {priceLevels.map(level => {
-                const inp = miLevelInputs[level.id] ?? { price: '', taxId: '' }
-                const defTax = getEffectiveDefaultTax(level.id)
-                const defLabel = defTax ? `Default: ${defTax.name} (${(defTax.rate * 100).toFixed(0)}%)` : 'Country default'
-                return (
-                  <div key={level.id} className="grid grid-cols-3 gap-2 items-center">
-                    <span className="text-sm font-semibold text-gray-700">{level.name}</span>
-                    <div className="flex items-center border rounded px-2 bg-white">
-                      <span className="text-gray-400 text-sm mr-1">{sym}</span>
-                      <input
-                        type="number" min="0" step="0.01" placeholder="Not priced"
-                        className="w-full py-1.5 text-sm outline-none"
-                        value={inp.price}
-                        onChange={e => onLevelInput(level.id, 'price', e.target.value)}
-                      />
-                    </div>
-                    <select
-                      className="select select-sm"
-                      value={inp.taxId}
-                      onChange={e => onLevelInput(level.id, 'taxId', e.target.value ? Number(e.target.value) : '')}
-                    >
-                      <option value="">{defLabel}</option>
-                      {countryTaxRates.map(t => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} {(t.rate * 100).toFixed(0)}%{t.is_default ? ' ✓' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        <ImageUpload
-          label="Item Image"
-          value={miImageUrl}
-          onChange={onImageUrl}
-        />
-
-        <div className="flex justify-end gap-2 pt-2">
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={onSave}>
-            {isEdit ? 'Save Changes' : 'Add to Menu'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SHARED GRID HELPERS
@@ -3174,7 +2621,7 @@ interface SavedScenario {
   name:             string
   menu_id:          number | null
   price_level_id:   number | null
-  qty_data:         Record<string, number>   // "r_{recipe_id}" | "i_{ingredient_id}[__l{level_id}]"
+  qty_data:         Record<string, number>   // "si_{sales_item_id}[__l{level_id}]"
   price_overrides:  Record<string, number>   // USD: "${menu_item_id}_l${level_id}" → sell_price
   cost_overrides:   Record<string, number>   // USD: nat_key → cost_per_portion
   history:          HistoryEntry[]
@@ -3199,8 +2646,6 @@ interface ScenarioToolProps {
   onQtyChange(key: string, q: string): void
   onResetQty(): void
   onReplaceQty(qMap: Record<string, string>): void
-  onAddItem?(): void
-  onEditItem?(menuItemId: number): void
   onDeleteItem?(menuItemId: number, displayName: string): void
   onShare?(menuId: number, scenarioId: number | null): void
   onScenarioChange?(scenarioId: number | null): void
@@ -3213,7 +2658,7 @@ interface ScenarioToolProps {
 function ScenarioTool({
   menus, countries, priceLevels, data, loading, menuId, levelId, qty,
   onMenuChange, onLevelChange, onQtyChange, onResetQty, onReplaceQty,
-  onAddItem, onEditItem, onDeleteItem, onShare, onScenarioChange,
+  onDeleteItem, onShare, onScenarioChange,
   comments, commentsLoading, onAddComment, onClearComments,
   refreshKey = 0,
 }: ScenarioToolProps) {
@@ -3242,7 +2687,7 @@ function ScenarioTool({
     setAllLevelsLoading(true)
     Promise.all(
       priceLevels.map(async level => {
-        const d: CogsData = await api.get(`/cogs/menu/${menuId}?price_level_id=${level.id}`)
+        const d: CogsData = await api.get(`/cogs/menu-sales/${menuId}?price_level_id=${level.id}`)
         return { level, data: d }
       })
     )
@@ -3368,8 +2813,8 @@ function ScenarioTool({
       const safeDispRate = dispRate || 1
       const overrides = keys.map(key => {
         const [mid, lid] = key.replace('_l', '__l').split('__l')
-        return { menu_item_id: Number(mid), price_level_id: Number(lid), sell_price: (parseFloat(priceOverrides[key]) || 0) / safeDispRate }
-      }).filter(o => o.sell_price > 0 && o.menu_item_id && o.price_level_id)
+        return { menu_sales_item_id: Number(mid), price_level_id: Number(lid), sell_price: (parseFloat(priceOverrides[key]) || 0) / safeDispRate }
+      }).filter(o => o.sell_price > 0 && o.menu_sales_item_id && o.price_level_id)
       await api.post('/scenarios/push-prices', { overrides })
       addHistoryEntry('push_prices', `${overrides.length} prices pushed to live menu`)
       showToast('Prices pushed to menu ✓')
@@ -3508,7 +2953,7 @@ function ScenarioTool({
 
   interface ScenRow {
     menu_item_id:       number
-    nat_key:            string   // "r_{recipe_id}" | "i_{ingredient_id}" — market-agnostic key
+    nat_key:            string   // "si_{sales_item_id}" — market-agnostic key
     display_name:       string
     category:           string
     item_type:          string
@@ -3529,10 +2974,8 @@ function ScenarioTool({
   const rows = useMemo((): ScenRow[] => {
     if (!data?.items) return []
     return data.items.map(item => {
-      // Natural key matches across markets — same recipe appears in all market menus
-      const key          = item.item_type === 'recipe'
-        ? `r_${item.recipe_id}`
-        : `i_${item.ingredient_id}`
+      // Natural key — sales item ID is the stable cross-menu identifier
+      const key          = `si_${item.sales_item_id}`
       const q            = Math.max(0, parseFloat(qty[key] || '0') || 0)
       const baseCost     = item.cost_per_portion * dispRate
       const costOvStr    = costOverrides[key]
@@ -3634,7 +3077,7 @@ function ScenarioTool({
     if (levelId !== 'ALL' || !allLevelsData.length) return []
     const baseItems = allLevelsData[0]?.data?.items ?? []
     return baseItems.map(item => {
-      const natKey         = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const natKey         = `si_${item.sales_item_id}`
       const baseCostDisp   = item.cost_per_portion * dispRate
       const costOvKey      = natKey
       const costOvVal      = costOverrides[costOvKey]
@@ -4123,10 +3566,6 @@ ${tableHtml}
             )}
           </button>
 
-          {/* Add Item — far right */}
-          {menuId && onAddItem && (
-            <button className="btn btn-sm btn-primary text-xs ml-auto" onClick={onAddItem} title="Add a recipe or ingredient to this menu">+ Add Item</button>
-          )}
         </div>
 
         {/* ── Scenario Modal ─────────────────────────────────────────────── */}
@@ -4216,12 +3655,6 @@ ${tableHtml}
               <div className="px-3 py-1.5 border-b border-gray-100 mb-1">
                 <p className="text-xs font-semibold text-gray-800 truncate max-w-[140px]">{rowCtx.displayName}</p>
               </div>
-              {onEditItem && (
-                <button
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                  onClick={() => { onEditItem(rowCtx.menuItemId); setRowCtx(null) }}
-                >✏️ Edit item</button>
-              )}
               {onDeleteItem && (
                 <button
                   className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
