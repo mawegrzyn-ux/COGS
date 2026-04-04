@@ -91,6 +91,32 @@ interface CogsData {
   summary:         CogsSummary
 }
 
+interface MenuSalesItemPrice {
+  id: number
+  menu_sales_item_id: number
+  price_level_id: number
+  price_level_name: string
+  sell_price: number
+  tax_rate_id: number | null
+  default_price: number | null
+  is_overridden: boolean
+}
+
+interface MenuSalesItem {
+  id: number
+  menu_id: number
+  sales_item_id: number
+  sales_item_name: string
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  si_image_url: string | null
+  category: string | null
+  qty: number
+  sort_order: number
+  allergen_notes: string | null
+  prices: MenuSalesItemPrice[]
+  has_price_override: boolean
+}
+
 // Price report types
 interface PriceReportCountry {
   id: number; name: string; code: string; symbol: string; rate: number
@@ -161,6 +187,80 @@ interface SharedPage {
 
 interface ScenarioSummary { id: number; name: string; menu_id: number | null; menu_name: string | null }
 
+// ── Sales Items types ─────────────────────────────────────────────────────────
+
+interface SalesItemMarket { country_id: number; country_name: string; is_active: boolean }
+interface SalesItemPrice  { price_level_id: number; price_level_name: string; sell_price: number; tax_rate_id: number | null }
+
+interface ModifierOption {
+  id: number
+  modifier_group_id: number
+  name: string
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  recipe_id: number | null
+  recipe_name?: string
+  ingredient_id: number | null
+  ingredient_name?: string
+  manual_cost: number | null
+  price_addon: number
+  sort_order: number
+}
+
+interface ModifierGroup {
+  id: number
+  name: string
+  description: string | null
+  min_select: number
+  max_select: number
+  option_count?: number
+  options?: ModifierOption[]
+}
+
+interface ComboStepOption {
+  id: number
+  combo_step_id: number
+  name: string
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  recipe_id: number | null
+  recipe_name?: string
+  ingredient_id: number | null
+  ingredient_name?: string
+  manual_cost: number | null
+  price_addon: number
+  sort_order: number
+  modifier_groups?: { modifier_group_id: number; name: string }[]
+}
+
+interface ComboStep {
+  id: number
+  sales_item_id: number
+  name: string
+  description: string | null
+  sort_order: number
+  options?: ComboStepOption[]
+}
+
+interface SalesItem {
+  id: number
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  name: string
+  category: string | null
+  description: string | null
+  recipe_id: number | null
+  recipe_name?: string
+  ingredient_id: number | null
+  ingredient_name?: string
+  manual_cost: number | null
+  image_url: string | null
+  sort_order: number
+  markets?: SalesItemMarket[]
+  prices?: SalesItemPrice[]
+  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
+  steps?: ComboStep[]
+  modifier_group_count?: number
+  step_count?: number
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt2 = (n: number | null | undefined) => Number(n ?? 0).toFixed(2)
@@ -189,7 +289,7 @@ export default function MenusPage() {
   const [loading,         setLoading]         = useState(true)
 
   // tab
-  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report' | 'scenario' | 'shared-links'>('builder')
+  const [activeTab, setActiveTab] = useState<'sales-items' | 'builder' | 'price-report' | 'level-report' | 'scenario' | 'shared-links'>('sales-items')
 
   // builder state
   const [selectedMenuId,  setSelectedMenuId]  = useState<number | null>(null)
@@ -220,6 +320,22 @@ export default function MenusPage() {
   const [miQty,         setMiQty]         = useState('1')
   const [miImageUrl,    setMiImageUrl]    = useState<string | null>(null)
   const [miLevelInputs, setMiLevelInputs] = useState<Record<number, { price: string; taxId: number | '' }>>({})
+
+  // sales items tab
+  const [salesItems,         setSalesItems]         = useState<SalesItem[]>([])
+  const [modifierGroups,     setModifierGroups]     = useState<ModifierGroup[]>([])
+  const [siLoading,          setSiLoading]          = useState(false)
+  const [siSearch,           setSiSearch]           = useState('')
+  const [siTypeFilter,       setSiTypeFilter]       = useState('')
+  const [siCountryFilter,    setSiCountryFilter]    = useState<number | ''>('')
+  const [selectedSiId,       setSelectedSiId]       = useState<number | null>(null)
+  const [siModal,            setSiModal]            = useState<'new' | SalesItem | null>(null)
+  const [mgModal,            setMgModal]            = useState(false)   // modifier groups manager
+  const [siSaving,           setSiSaving]           = useState(false)
+
+  // builder — sales items linked to menu
+  const [menuSalesItems,     setMenuSalesItems]     = useState<MenuSalesItem[]>([])
+  const [addSiPickerOpen,    setAddSiPickerOpen]    = useState(false)
 
   // price report
   // price level tool
@@ -332,8 +448,12 @@ export default function MenusPage() {
     setLoadingCogs(true)
     try {
       const url = activeMenuLevel ? `/cogs/menu/${id}?price_level_id=${activeMenuLevel}` : `/cogs/menu/${id}`
-      const data = await api.get(url)
+      const [data, msiData] = await Promise.all([
+        api.get(url),
+        api.get(`/menu-sales-items?menu_id=${id}`),
+      ])
       setCogsData(data)
+      setMenuSalesItems(msiData || [])
     } finally {
       setLoadingCogs(false)
     }
@@ -519,7 +639,7 @@ export default function MenusPage() {
     try {
       await api.delete(`/menus/${id}`)
       setMenus(prev => prev.filter(m => m.id !== id))
-      if (selectedMenuId === id) { setSelectedMenuId(null); setCogsData(null) }
+      if (selectedMenuId === id) { setSelectedMenuId(null); setCogsData(null); setMenuSalesItems([]) }
       showToast('Menu deleted.')
     } catch { showToast('Failed to delete menu.', 'error') }
   }
@@ -626,6 +746,39 @@ export default function MenusPage() {
       if (selectedMenuId) await openMenu(selectedMenuId)
       showToast('Item removed from menu.')
     } catch { showToast('Failed to remove item.', 'error') }
+  }
+
+  // ── Sales Items in Builder ────────────────────────────────────────────────
+
+  async function addMenuSalesItem(salesItemId: number) {
+    if (!selectedMenuId) return
+    try {
+      const added: MenuSalesItem = await api.post('/menu-sales-items', { menu_id: selectedMenuId, sales_item_id: salesItemId })
+      setMenuSalesItems(prev => {
+        const exists = prev.find(m => m.id === added.id)
+        return exists ? prev.map(m => m.id === added.id ? added : m) : [...prev, added]
+      })
+      setAddSiPickerOpen(false)
+      showToast('Sales item added to menu.')
+    } catch (e: unknown) {
+      const msg = (e as { message?: string })?.message || 'Failed to add sales item.'
+      showToast(msg, 'error')
+    }
+  }
+
+  async function deleteMenuSalesItem(id: number) {
+    try {
+      await api.delete(`/menu-sales-items/${id}`)
+      setMenuSalesItems(prev => prev.filter(m => m.id !== id))
+      showToast('Sales item removed from menu.')
+    } catch { showToast('Failed to remove sales item.', 'error') }
+  }
+
+  async function resetMenuSalesItemPrice(msiId: number, priceLevelId: number, defaultPrice: number) {
+    try {
+      const updated: MenuSalesItem = await api.put(`/menu-sales-items/${msiId}/prices`, { price_level_id: priceLevelId, sell_price: defaultPrice })
+      setMenuSalesItems(prev => prev.map(m => m.id === msiId ? updated : m))
+    } catch { showToast('Failed to reset price.', 'error') }
   }
 
   async function applyDefaultTax() {
@@ -796,6 +949,7 @@ export default function MenusPage() {
       {/* ── Tabs ── */}
       <div className="flex gap-1 px-6 border-b border-gray-200 mb-0">
         {([
+          { key: 'sales-items',  label: 'Sales Items',           tutorial: 'What is the Sales Items catalog? How do I create recipe, ingredient, manual, and combo sales items, set default prices, control market visibility, and attach modifier groups?' },
           { key: 'builder',      label: '🍽 Menus',              tutorial: 'How do I use the Menu Builder tab? Explain creating a menu for a country, adding recipe and ingredient items, setting sort order, and assigning sell prices across different price levels.' },
           { key: 'scenario',     label: '📊 Menu Engineer',      tutorial: 'How does the Menu Engineer work? Explain the sales mix concept, how to enter quantities sold, what COGS% means in this context, how to use the Mix Manager, and how to save and push scenarios.' },
           { key: 'price-report', label: '📈 Compare Markets',    tutorial: 'What is the Compare Markets (Price Level Table) view? How do I use it to compare and edit sell prices across different markets and price levels, and how does currency conversion work here?' },
@@ -819,6 +973,38 @@ export default function MenusPage() {
           </button>
         ))}
       </div>
+
+      {/* ══ TAB: SALES ITEMS ═════════════════════════════════════════════════ */}
+      {activeTab === 'sales-items' && (
+        <SalesItemsTab
+          salesItems={salesItems}
+          setSalesItems={setSalesItems}
+          modifierGroups={modifierGroups}
+          setModifierGroups={setModifierGroups}
+          loading={siLoading}
+          setLoading={setSiLoading}
+          search={siSearch}
+          setSearch={setSiSearch}
+          typeFilter={siTypeFilter}
+          setTypeFilter={setSiTypeFilter}
+          countryFilter={siCountryFilter}
+          setCountryFilter={setSiCountryFilter}
+          selectedId={selectedSiId}
+          setSelectedId={setSelectedSiId}
+          siModal={siModal}
+          setSiModal={setSiModal}
+          mgModal={mgModal}
+          setMgModal={setMgModal}
+          saving={siSaving}
+          setSaving={setSiSaving}
+          countries={countries}
+          priceLevels={priceLevels}
+          taxRates={taxRates}
+          recipes={recipes}
+          ingredients={ingredients}
+          toast={t => setToast({ msg: t })}
+        />
+      )}
 
       {/* ══ TAB: BUILDER ══════════════════════════════════════════════════════ */}
       {activeTab === 'builder' && (
@@ -905,6 +1091,10 @@ export default function MenusPage() {
                 onDeleteItem={id => setConfirmDelete({ type: 'item', id })}
                 onApplyTax={applyDefaultTax}
                 cogsThresholds={cogsThresholds}
+                menuSalesItems={menuSalesItems}
+                onAddSalesItem={() => setAddSiPickerOpen(true)}
+                onDeleteSalesItem={deleteMenuSalesItem}
+                onResetSalesItemPrice={resetMenuSalesItemPrice}
               />
             )}
           </section>
@@ -1229,6 +1419,17 @@ export default function MenusPage() {
         />
       )}
 
+      {/* Sales Item picker modal */}
+      {addSiPickerOpen && selectedMenu && (
+        <SalesItemPickerModal
+          countryId={selectedMenu.country_id}
+          alreadyAdded={menuSalesItems.map(m => m.sales_item_id)}
+          priceLevels={priceLevels}
+          onAdd={addMenuSalesItem}
+          onClose={() => setAddSiPickerOpen(false)}
+        />
+      )}
+
       {/* Confirm delete */}
       {confirmDelete && (
         <ConfirmDialog
@@ -1263,6 +1464,7 @@ interface MenuDetailProps {
   itemSortCol: string; itemSortDir: 1 | -1
   cogsThresholds: CogsThresholds
   categories: string[]
+  menuSalesItems: MenuSalesItem[]
   onLevelChange(v: number | ''): void
   onFilterQ(v: string): void; onFilterType(v: string): void; onFilterStatus(v: string): void; onFilterCat(v: string): void
   onSort(col: string): void
@@ -1270,13 +1472,17 @@ interface MenuDetailProps {
   onEdit(m: Menu): void; onDelete(id: number): void
   onAddItem(): void; onEditItem(item: CogsItem): void; onDeleteItem(id: number): void
   onApplyTax(): void
+  onAddSalesItem(): void
+  onDeleteSalesItem(id: number): void
+  onResetSalesItemPrice(msiId: number, priceLevelId: number, defaultPrice: number): void
 }
 
 function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, priceLevels, activeMenuLevel, sym,
   itemFilterQ, itemFilterType, itemFilterStatus, itemFilterCat, itemSortCol, itemSortDir, categories,
-  cogsThresholds,
+  cogsThresholds, menuSalesItems,
   onLevelChange, onFilterQ, onFilterType, onFilterStatus, onFilterCat, onSort, onSavePrice,
-  onEdit, onDelete, onAddItem, onEditItem, onDeleteItem, onApplyTax }: MenuDetailProps) {
+  onEdit, onDelete, onAddItem, onEditItem, onDeleteItem, onApplyTax,
+  onAddSalesItem, onDeleteSalesItem, onResetSalesItemPrice }: MenuDetailProps) {
 
   const hasLevel = !!activeMenuLevel
   const items = cogsData.items
@@ -1430,7 +1636,8 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           <button className="btn btn-sm btn-outline" onClick={onApplyTax} title="Apply country default tax to all items">
             % Tax
           </button>
-          <button className="btn btn-sm btn-primary" onClick={onAddItem}>+ Add Item</button>
+          <button className="btn btn-sm btn-primary" onClick={onAddSalesItem}>+ Add Sales Item</button>
+          <button className="btn btn-sm btn-outline text-xs" onClick={onAddItem} title="Add a legacy recipe or ingredient directly">+ Legacy Item</button>
           <button className="btn btn-sm btn-ghost text-red-500" onClick={() => onDelete(menu.id)}>🗑</button>
         </div>
       </div>
@@ -1563,6 +1770,76 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           </table>
         </div>
       </div>
+
+      {/* ── Sales Items section ──────────────────────────────────────────────── */}
+      {menuSalesItems.length > 0 && (
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-text-1">Sales Items ({menuSalesItems.length})</h3>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-border bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
+                  <th className="px-3 py-2 text-left font-medium">Name</th>
+                  <th className="px-3 py-2 text-left font-medium">Type</th>
+                  <th className="px-3 py-2 text-left font-medium">Category</th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    Price {activeMenuLevel ? `(${priceLevels.find(l => l.id === activeMenuLevel)?.name ?? ''})` : '(select level)'}
+                  </th>
+                  <th className="px-3 py-2 text-center font-medium w-16"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {menuSalesItems.map(msi => {
+                  const activePriceRow = activeMenuLevel ? msi.prices.find(p => p.price_level_id === activeMenuLevel) : null
+                  const isOverridden = activePriceRow?.is_overridden ?? false
+                  const defaultPrice = activePriceRow?.default_price ?? null
+                  return (
+                    <tr key={msi.id} className="hover:bg-surface-2/50">
+                      <td className="px-3 py-2.5 font-medium text-text-1">{msi.sales_item_name}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded capitalize">
+                          {msi.item_type}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-text-3">{msi.category || '—'}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs">
+                        {activePriceRow ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="text-text-1">{sym}{fmt2(activePriceRow.sell_price)}</span>
+                            {isOverridden && defaultPrice !== null && (
+                              <button
+                                className="inline-flex items-center gap-1 text-amber-500 hover:text-amber-600 transition-colors"
+                                title={`Overrides Sales Item default (${sym}${fmt2(defaultPrice)}). Click to reset.`}
+                                onClick={() => onResetSalesItemPrice(msi.id, activePriceRow.price_level_id, defaultPrice)}
+                              >
+                                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                              </button>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-text-3 italic text-xs">{activeMenuLevel ? 'no price' : '—'}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors mx-auto"
+                          onClick={() => onDeleteSalesItem(msi.id)}
+                          title="Remove from menu"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
@@ -5000,6 +5277,1057 @@ function HistoryNotesModal({
             <div />
           )}
           <button className="btn btn-sm btn-outline" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Sales Items Tab ────────────────────────────────────────────────────────────
+
+interface SalesItemsTabProps {
+  salesItems: SalesItem[]
+  setSalesItems: (items: SalesItem[]) => void
+  modifierGroups: ModifierGroup[]
+  setModifierGroups: (groups: ModifierGroup[]) => void
+  loading: boolean
+  setLoading: (v: boolean) => void
+  search: string
+  setSearch: (v: string) => void
+  typeFilter: string
+  setTypeFilter: (v: string) => void
+  countryFilter: number | ''
+  setCountryFilter: (v: number | '') => void
+  selectedId: number | null
+  setSelectedId: (v: number | null) => void
+  siModal: 'new' | SalesItem | null
+  setSiModal: (v: 'new' | SalesItem | null) => void
+  mgModal: boolean
+  setMgModal: (v: boolean) => void
+  saving: boolean
+  setSaving: (v: boolean) => void
+  countries: Country[]
+  priceLevels: PriceLevel[]
+  taxRates: TaxRate[]
+  recipes: Recipe[]
+  ingredients: Ingredient[]
+  toast: (msg: string) => void
+}
+
+function SalesItemsTab({
+  salesItems, setSalesItems, modifierGroups, setModifierGroups,
+  loading, setLoading, search, setSearch, typeFilter, setTypeFilter,
+  countryFilter, setCountryFilter, selectedId, setSelectedId,
+  siModal, setSiModal, mgModal, setMgModal, saving, setSaving,
+  countries, priceLevels, taxRates, recipes, ingredients, toast,
+}: SalesItemsTabProps) {
+  const api = useApi()
+
+  // Load catalog + modifier groups on mount
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [items, groups] = await Promise.all([
+        api.get('/sales-items?include_inactive=true'),
+        api.get('/modifier-groups'),
+      ])
+      setSalesItems(items || [])
+      setModifierGroups(groups || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [api, setSalesItems, setModifierGroups, setLoading])
+
+  useEffect(() => { load() }, [load])
+
+  const selectedItem = salesItems.find(s => s.id === selectedId) ?? null
+  const [detail, setDetail] = useState<SalesItem | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+
+  // Load full detail when selection changes
+  useEffect(() => {
+    if (!selectedId) { setDetail(null); return }
+    setDetailLoading(true)
+    api.get(`/sales-items/${selectedId}`).then((d: SalesItem) => setDetail(d)).catch(() => setDetail(null)).finally(() => setDetailLoading(false))
+  }, [selectedId, api])
+
+  // Filtered list
+  const filtered = useMemo(() => salesItems.filter(si => {
+    if (search && !si.name.toLowerCase().includes(search.toLowerCase())) return false
+    if (typeFilter && si.item_type !== typeFilter) return false
+    if (countryFilter) {
+      const m = si.markets?.find(m => m.country_id === countryFilter)
+      if (!m || !m.is_active) return false
+    }
+    return true
+  }), [salesItems, search, typeFilter, countryFilter])
+
+  const TYPE_BADGE: Record<string, string> = {
+    recipe: 'bg-blue-100 text-blue-700',
+    ingredient: 'bg-green-100 text-green-700',
+    manual: 'bg-purple-100 text-purple-700',
+    combo: 'bg-orange-100 text-orange-700',
+  }
+  const TYPE_LABEL: Record<string, string> = { recipe: 'Recipe', ingredient: 'Ingredient', manual: 'Manual', combo: 'Combo' }
+
+  // ── Save markets ──────────────────────────────────────────────────────────
+  const saveMarkets = async (siId: number, countryIds: number[]) => {
+    await api.put(`/sales-items/${siId}/markets`, { country_ids: countryIds })
+    const updated: SalesItem = await api.get(`/sales-items/${siId}`)
+    setDetail(updated)
+    setSalesItems(salesItems.map(s => s.id === siId ? { ...s, markets: updated.markets } : s))
+  }
+
+  // ── Save default prices ───────────────────────────────────────────────────
+  const savePrices = async (siId: number, prices: { price_level_id: number; sell_price: number; tax_rate_id: number | null }[]) => {
+    await api.put(`/sales-items/${siId}/prices`, { prices })
+    const updated: SalesItem = await api.get(`/sales-items/${siId}`)
+    setDetail(updated)
+  }
+
+  // ── Save modifier group assignments ──────────────────────────────────────
+  const saveModifierGroups = async (siId: number, mgIds: number[]) => {
+    await api.put(`/sales-items/${siId}/modifier-groups`, { modifier_group_ids: mgIds })
+    const updated: SalesItem = await api.get(`/sales-items/${siId}`)
+    setDetail(updated)
+  }
+
+  // ── Delete sales item ─────────────────────────────────────────────────────
+  const [deleteConfirm, setDeleteConfirm] = useState<SalesItem | null>(null)
+  const deleteItem = async () => {
+    if (!deleteConfirm) return
+    setSaving(true)
+    try {
+      await api.delete(`/sales-items/${deleteConfirm.id}`)
+      setSalesItems(salesItems.filter(s => s.id !== deleteConfirm.id))
+      if (selectedId === deleteConfirm.id) setSelectedId(null)
+      setDeleteConfirm(null)
+      toast('Sales Item deleted')
+    } catch { toast('Delete failed') } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="flex flex-1 min-h-0">
+      {/* ── Left panel: catalog list ───────────────────────────────────── */}
+      <aside className="w-72 flex-shrink-0 border-r border-gray-200 flex flex-col bg-white">
+        <div className="p-3 border-b border-gray-100 space-y-2">
+          <input
+            className="input input-sm w-full"
+            placeholder="Search Sales Items…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <div className="flex gap-1.5">
+            <select className="select select-sm flex-1" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+              <option value="">All Types</option>
+              <option value="recipe">Recipe</option>
+              <option value="ingredient">Ingredient</option>
+              <option value="manual">Manual</option>
+              <option value="combo">Combo</option>
+            </select>
+            <select className="select select-sm flex-1" value={countryFilter} onChange={e => setCountryFilter(e.target.value ? Number(e.target.value) : '')}>
+              <option value="">All Markets</option>
+              {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex gap-1.5 p-2 border-b border-gray-100">
+          <button className="btn btn-sm btn-primary flex-1 text-xs" onClick={() => setSiModal('new')}>+ New</button>
+          <button className="btn btn-sm btn-outline text-xs" onClick={() => setMgModal(true)} title="Manage Modifier Groups">Modifiers</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loading && <div className="py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</div>}
+          {!loading && filtered.length === 0 && (
+            <div className="py-8 text-center text-sm text-gray-400">No Sales Items yet.</div>
+          )}
+          {filtered.map(si => (
+            <button
+              key={si.id}
+              onClick={() => setSelectedId(si.id)}
+              className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 transition-colors ${selectedId === si.id ? 'bg-accent-dim' : ''}`}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span>
+                <span className="text-sm font-medium text-gray-900 truncate">{si.name}</span>
+              </div>
+              {si.category && <div className="text-xs text-gray-400 mt-0.5 truncate">{si.category}</div>}
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {/* ── Right panel: item detail ───────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto bg-gray-50">
+        {!selectedId && (
+          <div className="flex items-center justify-center h-full text-sm text-gray-400">
+            Select a Sales Item to view details, or create a new one.
+          </div>
+        )}
+        {selectedId && detailLoading && (
+          <div className="flex items-center justify-center h-full"><Spinner /></div>
+        )}
+        {selectedId && !detailLoading && detail && (
+          <SalesItemDetail
+            item={detail}
+            countries={countries}
+            priceLevels={priceLevels}
+            taxRates={taxRates}
+            modifierGroups={modifierGroups}
+            onEdit={() => setSiModal(detail)}
+            onDelete={() => setDeleteConfirm(detail)}
+            onSaveMarkets={saveMarkets}
+            onSavePrices={savePrices}
+            onSaveModifierGroups={saveModifierGroups}
+            onReload={async () => {
+              const updated: SalesItem = await api.get(`/sales-items/${detail.id}`)
+              setDetail(updated)
+              setSalesItems(salesItems.map(s => s.id === detail.id ? updated : s))
+            }}
+            toast={toast}
+          />
+        )}
+      </div>
+
+      {/* ── Sales Item Create/Edit Modal ───────────────────────────────── */}
+      {siModal !== null && (
+        <SalesItemModal
+          mode={siModal === 'new' ? 'new' : 'edit'}
+          initial={siModal === 'new' ? null : siModal}
+          recipes={recipes}
+          ingredients={ingredients}
+          onSave={async (payload) => {
+            setSaving(true)
+            try {
+              if (siModal === 'new') {
+                const created: SalesItem = await api.post('/sales-items', payload)
+                setSalesItems([...salesItems, created])
+                setSelectedId(created.id)
+              } else {
+                const updated: SalesItem = await api.put(`/sales-items/${(siModal as SalesItem).id}`, payload)
+                setSalesItems(salesItems.map(s => s.id === updated.id ? updated : s))
+                setDetail(updated)
+              }
+              setSiModal(null)
+              toast(siModal === 'new' ? 'Sales Item created' : 'Sales Item updated')
+            } catch { toast('Save failed') } finally { setSaving(false) }
+          }}
+          saving={saving}
+          onClose={() => setSiModal(null)}
+        />
+      )}
+
+      {/* ── Modifier Groups Manager Modal ──────────────────────────────── */}
+      {mgModal && (
+        <ModifierGroupsModal
+          groups={modifierGroups}
+          recipes={recipes}
+          ingredients={ingredients}
+          onUpdate={setModifierGroups}
+          onClose={() => setMgModal(false)}
+          toast={toast}
+        />
+      )}
+
+      {/* ── Delete confirm ─────────────────────────────────────────────── */}
+      {deleteConfirm && (
+        <ConfirmDialog
+          title="Delete Sales Item"
+          message={`Delete "${deleteConfirm.name}"? This will remove it from all menus.`}
+          onConfirm={deleteItem}
+          onCancel={() => setDeleteConfirm(null)}
+          danger
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Sales Item Detail Panel ────────────────────────────────────────────────────
+
+interface SalesItemDetailProps {
+  item: SalesItem
+  countries: Country[]
+  priceLevels: PriceLevel[]
+  taxRates: TaxRate[]
+  modifierGroups: ModifierGroup[]
+  onEdit(): void
+  onDelete(): void
+  onSaveMarkets(siId: number, countryIds: number[]): Promise<void>
+  onSavePrices(siId: number, prices: { price_level_id: number; sell_price: number; tax_rate_id: number | null }[]): Promise<void>
+  onSaveModifierGroups(siId: number, mgIds: number[]): Promise<void>
+  onReload(): Promise<void>
+  toast(msg: string): void
+}
+
+function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroups, onEdit, onDelete, onSaveMarkets, onSavePrices, onSaveModifierGroups, onReload, toast }: SalesItemDetailProps) {  // eslint-disable-line @typescript-eslint/no-unused-vars
+  const api = useApi()
+
+  // Local editable state for prices + markets
+  const [priceInputs, setPriceInputs] = useState<Record<number, { price: string; taxId: number | '' }>>(() => {
+    const m: Record<number, { price: string; taxId: number | '' }> = {}
+    for (const p of item.prices || []) m[p.price_level_id] = { price: String(p.sell_price), taxId: p.tax_rate_id || '' }
+    return m
+  })
+  const [marketIds, setMarketIds] = useState<number[]>((item.markets || []).filter(m => m.is_active).map(m => m.country_id))
+  const [savingPrices, setSavingPrices] = useState(false)
+  const [savingMarkets, setSavingMarkets] = useState(false)
+
+  // Keep in sync when item changes (e.g. after reload)
+  useEffect(() => {
+    const m: Record<number, { price: string; taxId: number | '' }> = {}
+    for (const p of item.prices || []) m[p.price_level_id] = { price: String(p.sell_price), taxId: p.tax_rate_id || '' }
+    setPriceInputs(m)
+    setMarketIds((item.markets || []).filter(m => m.is_active).map(m => m.country_id))
+  }, [item.id])
+
+  // Combo step management
+  const [expandedStep, setExpandedStep] = useState<number | null>(null)
+  const [editingOpt, setEditingOpt] = useState<ComboStepOption | null>(null)
+  const [editingOptStepId, setEditingOptStepId] = useState<number | null>(null)
+
+  const TYPE_BADGE: Record<string, string> = {
+    recipe: 'bg-blue-100 text-blue-700',
+    ingredient: 'bg-green-100 text-green-700',
+    manual: 'bg-purple-100 text-purple-700',
+    combo: 'bg-orange-100 text-orange-700',
+  }
+
+  const saveDefaultPrices = async () => {
+    setSavingPrices(true)
+    try {
+      const prices = priceLevels.map(pl => ({
+        price_level_id: pl.id,
+        sell_price: parseFloat(priceInputs[pl.id]?.price || '0') || 0,
+        tax_rate_id: (priceInputs[pl.id]?.taxId as number) || null,
+      }))
+      await onSavePrices(item.id, prices)
+      toast('Default prices saved')
+    } catch { toast('Failed to save prices') } finally { setSavingPrices(false) }
+  }
+
+  const saveMarkets = async () => {
+    setSavingMarkets(true)
+    try {
+      await onSaveMarkets(item.id, marketIds)
+      toast('Market visibility saved')
+    } catch { toast('Failed to save markets') } finally { setSavingMarkets(false) }
+  }
+
+  const addStep = async () => {
+    const name = window.prompt('Step name (e.g. "Choose your main")')
+    if (!name) return
+    try {
+      await api.post(`/sales-items/${item.id}/steps`, { name: name.trim(), sort_order: (item.steps?.length || 0) })
+      await onReload()
+    } catch { toast('Failed to add step') }
+  }
+
+  const deleteStep = async (stepId: number) => {
+    if (!window.confirm('Delete this step and all its options?')) return
+    try {
+      await api.delete(`/sales-items/${item.id}/steps/${stepId}`)
+      await onReload()
+    } catch { toast('Failed to delete step') }
+  }
+
+  const addOption = async (stepId: number) => {
+    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 })
+    setEditingOptStepId(stepId)
+  }
+
+  const saveOption = async (opt: ComboStepOption) => {
+    if (!editingOptStepId) return
+    try {
+      if (opt.id === 0) {
+        await api.post(`/sales-items/${item.id}/steps/${editingOptStepId}/options`, opt)
+      } else {
+        await api.put(`/sales-items/${item.id}/steps/${editingOptStepId}/options/${opt.id}`, opt)
+      }
+      await onReload()
+      setEditingOpt(null)
+    } catch { toast('Failed to save option') }
+  }
+
+  const deleteOption = async (stepId: number, optId: number) => {
+    if (!window.confirm('Delete this option?')) return
+    try {
+      await api.delete(`/sales-items/${item.id}/steps/${stepId}/options/${optId}`)
+      await onReload()
+    } catch { toast('Failed to delete option') }
+  }
+
+  // Modifier group attach for Sales Item (non-combo)
+  const [mgPickerOpen, setMgPickerOpen] = useState(false)
+  const attachedMgIds = (item.modifier_groups || []).map(m => m.modifier_group_id)
+
+  return (
+    <div className="p-6 max-w-3xl">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[item.item_type]}`}>{item.item_type.charAt(0).toUpperCase() + item.item_type.slice(1)}</span>
+            {item.category && <span className="text-xs text-gray-500">{item.category}</span>}
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900">{item.name}</h2>
+          {item.description && <p className="text-sm text-gray-500 mt-1">{item.description}</p>}
+          {item.item_type === 'recipe' && item.recipe_name && <p className="text-xs text-gray-400 mt-0.5">Recipe: {item.recipe_name}</p>}
+          {item.item_type === 'ingredient' && item.ingredient_name && <p className="text-xs text-gray-400 mt-0.5">Ingredient: {item.ingredient_name}</p>}
+          {item.item_type === 'manual' && <p className="text-xs text-gray-400 mt-0.5">Manual cost: ${Number(item.manual_cost ?? 0).toFixed(4)} USD</p>}
+        </div>
+        <div className="flex gap-1.5 flex-shrink-0">
+          <button className="btn btn-sm btn-outline" onClick={onEdit}>Edit</button>
+          <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
+        </div>
+      </div>
+
+      {/* Market Visibility */}
+      <section className="card p-4 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-700">Market Visibility</h3>
+          <button className="btn btn-sm btn-primary text-xs" disabled={savingMarkets} onClick={saveMarkets}>
+            {savingMarkets ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+          {countries.map(c => (
+            <label key={c.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={marketIds.includes(c.id)}
+                onChange={e => setMarketIds(e.target.checked ? [...marketIds, c.id] : marketIds.filter(id => id !== c.id))}
+              />
+              {c.name}
+            </label>
+          ))}
+        </div>
+        {countries.length === 0 && <p className="text-sm text-gray-400">No markets configured.</p>}
+      </section>
+
+      {/* Default Prices */}
+      <section className="card p-4 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-700">Default Prices</h3>
+          <button className="btn btn-sm btn-primary text-xs" disabled={savingPrices} onClick={saveDefaultPrices}>
+            {savingPrices ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {priceLevels.length === 0 && <p className="text-sm text-gray-400">No price levels configured.</p>}
+        <div className="space-y-2">
+          {priceLevels.map(pl => {
+            const inp = priceInputs[pl.id] || { price: '0', taxId: '' }
+            return (
+              <div key={pl.id} className="flex items-center gap-2">
+                <span className="text-sm text-gray-700 w-28 flex-shrink-0">{pl.name}</span>
+                <input
+                  type="number" step="0.01" min="0"
+                  className="input input-sm w-28 text-right"
+                  value={inp.price}
+                  onChange={e => setPriceInputs(p => ({ ...p, [pl.id]: { ...inp, price: e.target.value } }))}
+                />
+                <select
+                  className="select select-sm flex-1"
+                  value={inp.taxId}
+                  onChange={e => setPriceInputs(p => ({ ...p, [pl.id]: { ...inp, taxId: e.target.value ? Number(e.target.value) : '' } }))}
+                >
+                  <option value="">No tax override</option>
+                  {taxRates.map(t => <option key={t.id} value={t.id}>{t.name} ({t.rate}%)</option>)}
+                </select>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {/* Modifier Groups (non-combo) */}
+      {item.item_type !== 'combo' && (
+        <section className="card p-4 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">Modifier Groups</h3>
+            <button className="btn btn-sm btn-outline text-xs" onClick={() => setMgPickerOpen(true)}>Attach Group</button>
+          </div>
+          {(item.modifier_groups || []).length === 0 && <p className="text-sm text-gray-400">No modifier groups attached.</p>}
+          <div className="flex flex-wrap gap-1.5">
+            {(item.modifier_groups || []).map(mg => (
+              <div key={mg.modifier_group_id} className="flex items-center gap-1 bg-gray-100 rounded px-2 py-1 text-xs">
+                <span>{mg.name}</span>
+                <button
+                  className="text-gray-400 hover:text-red-500 ml-1"
+                  onClick={() => onSaveModifierGroups(item.id, attachedMgIds.filter(id => id !== mg.modifier_group_id)).then(onReload)}
+                >×</button>
+              </div>
+            ))}
+          </div>
+          {mgPickerOpen && (
+            <div className="mt-2 border border-gray-200 rounded p-2 bg-white">
+              <p className="text-xs text-gray-500 mb-1">Select groups to attach:</p>
+              {modifierGroups.map(mg => (
+                <label key={mg.id} className="flex items-center gap-1.5 text-sm cursor-pointer py-0.5">
+                  <input
+                    type="checkbox"
+                    checked={attachedMgIds.includes(mg.id)}
+                    onChange={e => {
+                      const newIds = e.target.checked ? [...attachedMgIds, mg.id] : attachedMgIds.filter(id => id !== mg.id)
+                      onSaveModifierGroups(item.id, newIds).then(onReload)
+                    }}
+                  />
+                  {mg.name}
+                  {mg.option_count !== undefined && <span className="text-gray-400 text-xs">({mg.option_count} options)</span>}
+                </label>
+              ))}
+              <button className="btn btn-sm btn-ghost text-xs mt-1" onClick={() => setMgPickerOpen(false)}>Done</button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Combo Builder */}
+      {item.item_type === 'combo' && (
+        <section className="card p-4 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">Combo Steps</h3>
+            <button className="btn btn-sm btn-primary text-xs" onClick={addStep}>+ Add Step</button>
+          </div>
+          {(item.steps || []).length === 0 && <p className="text-sm text-gray-400">No steps yet. Add steps to build this combo.</p>}
+          <div className="space-y-2">
+            {(item.steps || []).map(step => (
+              <div key={step.id} className="border border-gray-200 rounded">
+                <div
+                  className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100"
+                  onClick={() => setExpandedStep(expandedStep === step.id ? null : step.id)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400">{expandedStep === step.id ? '▼' : '▶'}</span>
+                    <span className="text-sm font-medium text-gray-800">{step.name}</span>
+                    <span className="text-xs text-gray-400">({(step.options || []).length} option{(step.options || []).length !== 1 ? 's' : ''}{(step.options || []).length === 1 ? ' — fixed' : ' — choice'})</span>
+                  </div>
+                  <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                    <button className="btn btn-xs btn-primary" onClick={() => addOption(step.id)}>+ Option</button>
+                    <button className="btn btn-xs btn-danger" onClick={() => deleteStep(step.id)}>×</button>
+                  </div>
+                </div>
+                {expandedStep === step.id && (
+                  <div className="p-2 space-y-1">
+                    {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet.</p>}
+                    {(step.options || []).map(opt => (
+                      <div key={opt.id} className="flex items-center gap-2 px-1 py-1 hover:bg-gray-50 rounded text-sm">
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{opt.item_type}</span>
+                        <span className="flex-1 text-gray-800">{opt.name}</span>
+                        {opt.price_addon > 0 && <span className="text-xs text-gray-500">+${Number(opt.price_addon).toFixed(2)}</span>}
+                        {(opt.modifier_groups || []).length > 0 && <span className="text-xs text-blue-500">{opt.modifier_groups!.length} mod</span>}
+                        <button className="text-xs text-blue-500 hover:underline" onClick={() => { setEditingOpt(opt); setEditingOptStepId(step.id) }}>edit</button>
+                        <button className="text-xs text-red-400 hover:text-red-600" onClick={() => deleteOption(step.id, opt.id)}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Option edit inline form */}
+      {editingOpt && (
+        <ComboOptionForm
+          opt={editingOpt}
+          modifierGroups={modifierGroups}
+          onSave={saveOption}
+          onClose={() => setEditingOpt(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Combo Option Form ─────────────────────────────────────────────────────────
+
+function ComboOptionForm({ opt, modifierGroups, onSave, onClose }: {
+  opt: ComboStepOption
+  modifierGroups: ModifierGroup[]
+  onSave(opt: ComboStepOption): void
+  onClose(): void
+}) {
+  const [form, setForm] = useState({ ...opt })
+  const [attachedMgIds, setAttachedMgIds] = useState<number[]>((opt.modifier_groups || []).map(m => m.modifier_group_id))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5">
+        <h3 className="text-base font-semibold mb-4">{opt.id === 0 ? 'Add Option' : 'Edit Option'}</h3>
+        <div className="space-y-3">
+          <Field label="Name">
+            <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          </Field>
+          <Field label="Type">
+            <select className="select w-full" value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual' }))}>
+              <option value="manual">Manual cost</option>
+              <option value="recipe">Recipe</option>
+              <option value="ingredient">Ingredient</option>
+            </select>
+          </Field>
+          {form.item_type === 'manual' && (
+            <Field label="Manual cost (USD)">
+              <input type="number" step="0.0001" min="0" className="input w-full" value={form.manual_cost ?? ''} onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />
+            </Field>
+          )}
+          <Field label="Price add-on">
+            <input type="number" step="0.01" min="0" className="input w-full" value={form.price_addon} onChange={e => setForm(f => ({ ...f, price_addon: parseFloat(e.target.value) || 0 }))} />
+          </Field>
+          <Field label="Modifier Groups">
+            <div className="space-y-1">
+              {modifierGroups.map(mg => (
+                <label key={mg.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={attachedMgIds.includes(mg.id)}
+                    onChange={e => setAttachedMgIds(ids => e.target.checked ? [...ids, mg.id] : ids.filter(id => id !== mg.id))}
+                  />
+                  {mg.name}
+                </label>
+              ))}
+            </div>
+          </Field>
+        </div>
+        <div className="flex gap-2 justify-end mt-5">
+          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => onSave({ ...form, modifier_groups: attachedMgIds.map(id => ({ modifier_group_id: id, name: modifierGroups.find(m => m.id === id)?.name || '' })) })}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Sales Item Create/Edit Modal ───────────────────────────────────────────────
+
+function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, onClose }: {
+  mode: 'new' | 'edit'
+  initial: SalesItem | null
+  recipes: Recipe[]
+  ingredients: Ingredient[]
+  onSave(payload: Partial<SalesItem>): Promise<void>
+  saving: boolean
+  onClose(): void
+}) {
+  const [form, setForm] = useState({
+    name: initial?.name ?? '',
+    category: initial?.category ?? '',
+    description: initial?.description ?? '',
+    item_type: initial?.item_type ?? 'manual' as SalesItem['item_type'],
+    recipe_id: initial?.recipe_id ?? null as number | null,
+    ingredient_id: initial?.ingredient_id ?? null as number | null,
+    manual_cost: initial?.manual_cost ?? null as number | null,
+    image_url: initial?.image_url ?? null as string | null,
+    sort_order: initial?.sort_order ?? 0,
+  })
+  const [recipeSearch, setRecipeSearch] = useState(initial?.recipe_name ?? '')
+  const [ingSearch, setIngSearch] = useState(initial?.ingredient_name ?? '')
+
+  const filteredRecipes = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 20), [recipes, recipeSearch])
+  const filteredIngs   = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 20), [ingredients, ingSearch])
+
+  const handleSave = () => {
+    if (!form.name.trim()) return
+    onSave({
+      ...form,
+      name: form.name.trim(),
+      category: form.category.trim() || null,
+      description: form.description.trim() || null,
+      recipe_id: form.item_type === 'recipe' ? form.recipe_id : null,
+      ingredient_id: form.item_type === 'ingredient' ? form.ingredient_id : null,
+      manual_cost: form.item_type === 'manual' ? form.manual_cost : null,
+    })
+  }
+
+  return (
+    <Modal title={mode === 'new' ? 'New Sales Item' : 'Edit Sales Item'} onClose={onClose}>
+      <div className="space-y-3 p-1">
+        <Field label="Name *">
+          <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+        </Field>
+        <Field label="Item Type">
+          <div className="flex gap-2">
+            {(['recipe', 'ingredient', 'manual', 'combo'] as const).map(t => (
+              <button
+                key={t}
+                className={`btn btn-sm ${form.item_type === t ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setForm(f => ({ ...f, item_type: t }))}
+              >{t.charAt(0).toUpperCase() + t.slice(1)}</button>
+            ))}
+          </div>
+        </Field>
+        {form.item_type === 'recipe' && (
+          <Field label="Recipe">
+            <input className="input w-full mb-1" placeholder="Search recipes…" value={recipeSearch} onChange={e => setRecipeSearch(e.target.value)} />
+            <select className="select w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}>
+              <option value="">— Select recipe —</option>
+              {filteredRecipes.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </Field>
+        )}
+        {form.item_type === 'ingredient' && (
+          <Field label="Ingredient">
+            <input className="input w-full mb-1" placeholder="Search ingredients…" value={ingSearch} onChange={e => setIngSearch(e.target.value)} />
+            <select className="select w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}>
+              <option value="">— Select ingredient —</option>
+              {filteredIngs.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </Field>
+        )}
+        {form.item_type === 'manual' && (
+          <Field label="Manual Cost (USD per portion)">
+            <input type="number" step="0.0001" min="0" className="input w-full" value={form.manual_cost ?? ''} onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />
+          </Field>
+        )}
+        {form.item_type === 'combo' && (
+          <p className="text-xs text-gray-400">Combo steps are configured in the detail panel after saving.</p>
+        )}
+        <Field label="Category">
+          <input className="input w-full" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} />
+        </Field>
+        <Field label="Description">
+          <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+        </Field>
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!form.name.trim() || saving} onClick={handleSave}>
+          {saving ? 'Saving…' : mode === 'new' ? 'Create' : 'Save'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Modifier Groups Manager Modal ─────────────────────────────────────────────
+
+function ModifierGroupsModal({ groups, recipes, ingredients, onUpdate, onClose, toast }: {
+  groups: ModifierGroup[]
+  recipes: Recipe[]
+  ingredients: Ingredient[]
+  onUpdate(groups: ModifierGroup[]): void
+  onClose(): void
+  toast(msg: string): void
+}) {
+  const api = useApi()
+  const [localGroups, setLocalGroups] = useState<(ModifierGroup & { options?: ModifierOption[] })[]>(groups)
+  const [editGroup, setEditGroup] = useState<ModifierGroup | null>(null)
+  const [newGroupForm, setNewGroupForm] = useState({ name: '', description: '', min_select: 0, max_select: 1 })
+  const [saving, setSaving] = useState(false)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
+
+  const loadOptions = async (groupId: number) => {
+    try {
+      const full: ModifierGroup & { options: ModifierOption[] } = await api.get(`/modifier-groups/${groupId}`)
+      setExpandedOptions(o => ({ ...o, [groupId]: full.options || [] }))
+    } catch { toast('Failed to load options') }
+  }
+
+  const toggleExpand = (groupId: number) => {
+    if (expandedId === groupId) { setExpandedId(null); return }
+    setExpandedId(groupId)
+    loadOptions(groupId)
+  }
+
+  const createGroup = async () => {
+    if (!newGroupForm.name.trim()) return
+    setSaving(true)
+    try {
+      const created: ModifierGroup = await api.post('/modifier-groups', newGroupForm)
+      const updated = [...localGroups, created]
+      setLocalGroups(updated)
+      onUpdate(updated)
+      setNewGroupForm({ name: '', description: '', min_select: 0, max_select: 1 })
+      toast('Group created')
+    } catch { toast('Failed to create group') } finally { setSaving(false) }
+  }
+
+  const saveGroup = async (g: ModifierGroup) => {
+    setSaving(true)
+    try {
+      const updated: ModifierGroup = await api.put(`/modifier-groups/${g.id}`, g)
+      const newList = localGroups.map(lg => lg.id === g.id ? { ...lg, ...updated } : lg)
+      setLocalGroups(newList)
+      onUpdate(newList)
+      setEditGroup(null)
+      toast('Group saved')
+    } catch { toast('Failed to save group') } finally { setSaving(false) }
+  }
+
+  const deleteGroup = async (g: ModifierGroup) => {
+    if (!window.confirm(`Delete modifier group "${g.name}"?`)) return
+    setSaving(true)
+    try {
+      await api.delete(`/modifier-groups/${g.id}?force=true`)
+      const newList = localGroups.filter(lg => lg.id !== g.id)
+      setLocalGroups(newList)
+      onUpdate(newList)
+      if (expandedId === g.id) setExpandedId(null)
+      toast('Group deleted')
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Delete failed'
+      toast(msg)
+    } finally { setSaving(false) }
+  }
+
+  const addOption = async (groupId: number, opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>) => {
+    try {
+      await api.post(`/modifier-groups/${groupId}/options`, opt)
+      loadOptions(groupId)
+    } catch { toast('Failed to add option') }
+  }
+
+  const deleteOption = async (groupId: number, optId: number) => {
+    try {
+      await api.delete(`/modifier-groups/${groupId}/options/${optId}`)
+      setExpandedOptions(o => ({ ...o, [groupId]: (o[groupId] || []).filter(op => op.id !== optId) }))
+    } catch { toast('Failed to delete option') }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+        <div className="flex items-center justify-between px-5 py-3 border-b">
+          <h2 className="text-base font-semibold">Modifier Groups</h2>
+          <button className="text-gray-400 hover:text-gray-600 text-lg" onClick={onClose}>×</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {/* Create new */}
+          <div className="border border-dashed border-gray-300 rounded p-3 space-y-2">
+            <p className="text-xs font-medium text-gray-500">New Group</p>
+            <div className="flex gap-2">
+              <input className="input input-sm flex-1" placeholder="Group name" value={newGroupForm.name} onChange={e => setNewGroupForm(f => ({ ...f, name: e.target.value }))} />
+              <input type="number" className="input input-sm w-20" placeholder="Min" value={newGroupForm.min_select} onChange={e => setNewGroupForm(f => ({ ...f, min_select: Number(e.target.value) }))} title="Min select" />
+              <input type="number" className="input input-sm w-20" placeholder="Max" value={newGroupForm.max_select} onChange={e => setNewGroupForm(f => ({ ...f, max_select: Number(e.target.value) }))} title="Max select" />
+              <button className="btn btn-sm btn-primary" disabled={!newGroupForm.name.trim() || saving} onClick={createGroup}>+ Add</button>
+            </div>
+          </div>
+
+          {/* Existing groups */}
+          {localGroups.map(g => (
+            <div key={g.id} className="border border-gray-200 rounded">
+              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 cursor-pointer" onClick={() => toggleExpand(g.id)}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400">{expandedId === g.id ? '▼' : '▶'}</span>
+                  {editGroup?.id === g.id ? (
+                    <input
+                      className="input input-sm"
+                      value={editGroup.name}
+                      onChange={e => setEditGroup(eg => eg ? { ...eg, name: e.target.value } : eg)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span className="text-sm font-medium">{g.name}</span>
+                  )}
+                  <span className="text-xs text-gray-400">min {g.min_select} / max {g.max_select}</span>
+                  {g.option_count !== undefined && <span className="text-xs text-gray-400">({g.option_count} opts)</span>}
+                </div>
+                <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                  {editGroup?.id === g.id ? (
+                    <>
+                      <button className="btn btn-xs btn-primary" disabled={saving} onClick={() => saveGroup(editGroup)}>Save</button>
+                      <button className="btn btn-xs btn-ghost" onClick={() => setEditGroup(null)}>×</button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn btn-xs btn-outline" onClick={() => setEditGroup(g)}>Edit</button>
+                      <button className="btn btn-xs btn-danger" onClick={() => deleteGroup(g)}>Delete</button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {expandedId === g.id && (
+                <div className="p-2 space-y-1">
+                  {(expandedOptions[g.id] || []).length === 0 && <p className="text-xs text-gray-400 px-1 py-1">No options yet.</p>}
+                  {(expandedOptions[g.id] || []).map(opt => (
+                    <div key={opt.id} className="flex items-center gap-2 px-1 text-sm">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{opt.item_type}</span>
+                      <span className="flex-1">{opt.name}</span>
+                      {opt.price_addon > 0 && <span className="text-xs text-gray-500">+${Number(opt.price_addon).toFixed(2)}</span>}
+                      <button className="text-xs text-red-400 hover:text-red-600" onClick={() => deleteOption(g.id, opt.id)}>×</button>
+                    </div>
+                  ))}
+                  <ModifierOptionAddForm
+                    recipes={recipes}
+                    ingredients={ingredients}
+                    onAdd={opt => addOption(g.id, opt)}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+
+          {localGroups.length === 0 && (
+            <p className="text-sm text-center text-gray-400 py-4">No modifier groups yet. Create one above.</p>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t flex justify-end">
+          <button className="btn btn-outline" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modifier Option Add Form (inline) ─────────────────────────────────────────
+
+function ModifierOptionAddForm({ recipes, ingredients, onAdd }: {
+  recipes: Recipe[]
+  ingredients: Ingredient[]
+  onAdd(opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>): void
+}) {
+  const [form, setForm] = useState({ name: '', item_type: 'manual' as 'recipe' | 'ingredient' | 'manual', recipe_id: null as number | null, ingredient_id: null as number | null, manual_cost: null as number | null, price_addon: 0, sort_order: 0 })
+  const [show, setShow] = useState(false)
+
+  if (!show) return <button className="btn btn-xs btn-outline mt-1" onClick={() => setShow(true)}>+ Add Option</button>
+
+  return (
+    <div className="border border-dashed border-gray-200 rounded p-2 mt-1 space-y-1.5">
+      <div className="flex gap-1.5">
+        <input className="input input-sm flex-1" placeholder="Option name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+        <select className="select select-sm w-28" value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual' }))}>
+          <option value="manual">Manual</option>
+          <option value="recipe">Recipe</option>
+          <option value="ingredient">Ingredient</option>
+        </select>
+      </div>
+      {form.item_type === 'manual' && (
+        <input type="number" step="0.0001" className="input input-sm w-full" placeholder="Cost (USD)" value={form.manual_cost ?? ''} onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />
+      )}
+      {form.item_type === 'recipe' && (
+        <select className="select select-sm w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}>
+          <option value="">— Select recipe —</option>
+          {recipes.slice(0, 100).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+      )}
+      {form.item_type === 'ingredient' && (
+        <select className="select select-sm w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}>
+          <option value="">— Select ingredient —</option>
+          {ingredients.slice(0, 100).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+        </select>
+      )}
+      <div className="flex gap-1.5">
+        <input type="number" step="0.01" className="input input-sm w-28" placeholder="Price add-on" value={form.price_addon} onChange={e => setForm(f => ({ ...f, price_addon: parseFloat(e.target.value) || 0 }))} />
+        <button className="btn btn-xs btn-primary" disabled={!form.name.trim()} onClick={() => { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) }}>Add</button>
+        <button className="btn btn-xs btn-ghost" onClick={() => setShow(false)}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Sales Item Picker Modal ───────────────────────────────────────────────────
+// Opens from Builder's "+ Add Sales Item" button. Fetches catalog filtered by
+// the menu's country, lets the user search + pick, and returns the ID to add.
+
+function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onClose }: {
+  countryId: number
+  alreadyAdded: number[]
+  priceLevels: PriceLevel[]
+  onAdd(salesItemId: number): Promise<void>
+  onClose(): void
+}) {
+  const api = useApi()
+  const [items,   setItems]   = useState<SalesItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search,  setSearch]  = useState('')
+  const [adding,  setAdding]  = useState<number | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    api.get(`/sales-items?country_id=${countryId}`)
+      .then((data: SalesItem[]) => setItems(data || []))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false))
+  }, [api, countryId])
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return items.filter(si =>
+      !alreadyAdded.includes(si.id) &&
+      (si.name.toLowerCase().includes(q) || (si.category ?? '').toLowerCase().includes(q))
+    )
+  }, [items, search, alreadyAdded])
+
+  async function pick(si: SalesItem) {
+    setAdding(si.id)
+    try { await onAdd(si.id) }
+    finally { setAdding(null) }
+  }
+
+  const TYPE_BADGE: Record<string, string> = {
+    recipe: 'bg-blue-50 text-blue-600 border-blue-200',
+    ingredient: 'bg-green-50 text-green-600 border-green-200',
+    manual: 'bg-purple-50 text-purple-600 border-purple-200',
+    combo: 'bg-orange-50 text-orange-600 border-orange-200',
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-xl shadow-xl flex flex-col w-full max-w-lg max-h-[80vh]">
+        <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
+          <h2 className="font-semibold text-gray-900">Add Sales Item to Menu</h2>
+          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
+        </div>
+        <div className="px-4 py-3 border-b shrink-0">
+          <input
+            className="input w-full"
+            placeholder="Search by name or category…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {loading && (
+            <div className="flex justify-center py-10"><Spinner /></div>
+          )}
+          {!loading && filtered.length === 0 && (
+            <p className="text-sm text-center text-gray-400 py-10">
+              {items.length === 0 ? 'No Sales Items available for this market.' : 'No matches found.'}
+            </p>
+          )}
+          {!loading && filtered.map(si => {
+            const defaultPrices = si.prices ?? []
+            return (
+              <div key={si.id} className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 hover:bg-gray-50">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm text-gray-900">{si.name}</span>
+                    <span className={`text-xs border px-1.5 py-0.5 rounded capitalize ${TYPE_BADGE[si.item_type] ?? 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                      {si.item_type}
+                    </span>
+                    {si.category && (
+                      <span className="text-xs text-gray-400">{si.category}</span>
+                    )}
+                  </div>
+                  {defaultPrices.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {defaultPrices.map(p => (
+                        <span key={p.price_level_id} className="text-xs text-gray-500">
+                          {priceLevels.find(l => l.id === p.price_level_id)?.name ?? `Level ${p.price_level_id}`}: {fmt2(p.sell_price)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="btn btn-sm btn-primary shrink-0"
+                  disabled={adding !== null}
+                  onClick={() => pick(si)}
+                >
+                  {adding === si.id ? <Spinner /> : 'Add'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <div className="px-5 py-3 border-t flex justify-end shrink-0">
+          <button className="btn btn-outline" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>,

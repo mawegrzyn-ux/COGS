@@ -62,6 +62,11 @@ router.use('/menu-items',         ...can('menus', 'read'),       write('menus'),
 router.use('/menu-item-prices',   ...can('menus', 'read'),       write('menus'),       require('./menu-item-prices'));
 router.use('/shared-pages',       ...can('menus', 'read'),       write('menus'),       require('./shared-pages').router);
 
+// ── Sales Items (product catalog + menu links + modifier groups) ───────────────
+router.use('/sales-items',        ...can('menus', 'read'),       write('menus'),       require('./sales-items'));
+router.use('/modifier-groups',    ...can('menus', 'read'),       write('menus'),       require('./modifier-groups'));
+router.use('/menu-sales-items',   ...can('menus', 'read'),       write('menus'),       require('./menu-sales-items'));
+
 // ── COGS calculation (read-only, called by Menus page + Pepper tools) ──────────
 router.use('/cogs',               auth,                                               require('./cogs').router);
 

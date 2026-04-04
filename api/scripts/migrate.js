@@ -667,6 +667,131 @@ const migrations = [
   // ── 38. Menu Items — image URL ────────────────────────────────────────────
   `ALTER TABLE mcogs_menu_items ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`,
 
+  // ── 39. Sales Items catalog ───────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_sales_items (
+    id            SERIAL PRIMARY KEY,
+    item_type     TEXT NOT NULL CHECK (item_type IN ('recipe','ingredient','manual','combo')),
+    name          TEXT NOT NULL,
+    category      TEXT,
+    description   TEXT,
+    recipe_id     INTEGER REFERENCES mcogs_recipes(id)     ON DELETE SET NULL,
+    ingredient_id INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+    manual_cost   NUMERIC(12,4),
+    image_url     TEXT,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 40. Sales Item Markets (visibility per country) ──────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_sales_item_markets (
+    id            SERIAL PRIMARY KEY,
+    sales_item_id INTEGER NOT NULL REFERENCES mcogs_sales_items(id) ON DELETE CASCADE,
+    country_id    INTEGER NOT NULL REFERENCES mcogs_countries(id)   ON DELETE CASCADE,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (sales_item_id, country_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sim_country ON mcogs_sales_item_markets(country_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sim_item    ON mcogs_sales_item_markets(sales_item_id)`,
+
+  // ── 41. Sales Item Default Prices (per price level) ──────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_sales_item_prices (
+    id             SERIAL PRIMARY KEY,
+    sales_item_id  INTEGER NOT NULL REFERENCES mcogs_sales_items(id)  ON DELETE CASCADE,
+    price_level_id INTEGER NOT NULL REFERENCES mcogs_price_levels(id) ON DELETE CASCADE,
+    sell_price     NUMERIC(12,4) NOT NULL DEFAULT 0,
+    tax_rate_id    INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL,
+    UNIQUE (sales_item_id, price_level_id)
+  )`,
+
+  // ── 42. Modifier Groups ───────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_modifier_groups (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    min_select  INTEGER NOT NULL DEFAULT 0,
+    max_select  INTEGER NOT NULL DEFAULT 1,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 43. Modifier Options ──────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_modifier_options (
+    id                SERIAL PRIMARY KEY,
+    modifier_group_id INTEGER NOT NULL REFERENCES mcogs_modifier_groups(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    item_type         TEXT NOT NULL CHECK (item_type IN ('recipe','ingredient','manual')),
+    recipe_id         INTEGER REFERENCES mcogs_recipes(id)     ON DELETE SET NULL,
+    ingredient_id     INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+    manual_cost       NUMERIC(12,4),
+    price_addon       NUMERIC(12,4) NOT NULL DEFAULT 0,
+    sort_order        INTEGER NOT NULL DEFAULT 0
+  )`,
+
+  // ── 44. Sales Item Modifier Groups (junction) ─────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_sales_item_modifier_groups (
+    id                SERIAL PRIMARY KEY,
+    sales_item_id     INTEGER NOT NULL REFERENCES mcogs_sales_items(id)     ON DELETE CASCADE,
+    modifier_group_id INTEGER NOT NULL REFERENCES mcogs_modifier_groups(id) ON DELETE CASCADE,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (sales_item_id, modifier_group_id)
+  )`,
+
+  // ── 45. Combo Steps ───────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_steps (
+    id            SERIAL PRIMARY KEY,
+    sales_item_id INTEGER NOT NULL REFERENCES mcogs_sales_items(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    description   TEXT,
+    sort_order    INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cs_sales_item ON mcogs_combo_steps(sales_item_id)`,
+
+  // ── 46. Combo Step Options ────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_step_options (
+    id            SERIAL PRIMARY KEY,
+    combo_step_id INTEGER NOT NULL REFERENCES mcogs_combo_steps(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    item_type     TEXT NOT NULL CHECK (item_type IN ('recipe','ingredient','manual')),
+    recipe_id     INTEGER REFERENCES mcogs_recipes(id)     ON DELETE SET NULL,
+    ingredient_id INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+    manual_cost   NUMERIC(12,4),
+    price_addon   NUMERIC(12,4) NOT NULL DEFAULT 0,
+    sort_order    INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cso_step ON mcogs_combo_step_options(combo_step_id)`,
+
+  // ── 47. Combo Step Option Modifier Groups (junction) ─────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_step_option_modifier_groups (
+    id                   SERIAL PRIMARY KEY,
+    combo_step_option_id INTEGER NOT NULL REFERENCES mcogs_combo_step_options(id) ON DELETE CASCADE,
+    modifier_group_id    INTEGER NOT NULL REFERENCES mcogs_modifier_groups(id)    ON DELETE CASCADE,
+    sort_order           INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (combo_step_option_id, modifier_group_id)
+  )`,
+
+  // ── 48. Menu Sales Items (menus ↔ sales items link) ───────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_menu_sales_items (
+    id            SERIAL PRIMARY KEY,
+    menu_id       INTEGER NOT NULL REFERENCES mcogs_menus(id)       ON DELETE CASCADE,
+    sales_item_id INTEGER NOT NULL REFERENCES mcogs_sales_items(id) ON DELETE CASCADE,
+    qty           NUMERIC(12,4) NOT NULL DEFAULT 1,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    allergen_notes TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (menu_id, sales_item_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_msi_menu ON mcogs_menu_sales_items(menu_id)`,
+
+  // ── 49. Menu Sales Item Prices (per-menu price overrides) ─────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_menu_sales_item_prices (
+    id                 SERIAL PRIMARY KEY,
+    menu_sales_item_id INTEGER NOT NULL REFERENCES mcogs_menu_sales_items(id) ON DELETE CASCADE,
+    price_level_id     INTEGER NOT NULL REFERENCES mcogs_price_levels(id)     ON DELETE CASCADE,
+    sell_price         NUMERIC(12,4) NOT NULL DEFAULT 0,
+    tax_rate_id        INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL,
+    UNIQUE (menu_sales_item_id, price_level_id)
+  )`,
+
   // ── 33–36 Seed: default system roles + permission matrix ─────────────────
   `INSERT INTO mcogs_roles (name, description, is_system) VALUES
     ('Admin',    'Full access including user management', true),

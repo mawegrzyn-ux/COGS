@@ -786,4 +786,351 @@ function formatLevel(l) {
   return { id: l.id, name: l.name, sort_order: 0 };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /cogs/menu-sales/:menu_id
+//  COGS for menus using the Sales Items system (item_type: recipe/ingredient/manual/combo)
+//  Optional query: ?price_level_id=X
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Batch-load combo steps, options, and modifier groups for a set of combo Sales Item IDs.
+ * Returns: { [sales_item_id]: { steps: [{ ...step, options: [{ ...opt, modifier_groups: [...] }] }] } }
+ */
+async function loadComboData(comboIds) {
+  if (!comboIds.length) return {};
+
+  const { rows: steps } = await pool.query(
+    `SELECT * FROM mcogs_combo_steps WHERE sales_item_id = ANY($1::int[]) ORDER BY sales_item_id, sort_order`,
+    [comboIds]
+  );
+  if (!steps.length) return {};
+
+  const stepIds = steps.map(s => s.id);
+  const [optsResult, modsResult] = await Promise.all([
+    pool.query(
+      `SELECT cso.*,
+              r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_combo_step_options cso
+       LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
+       WHERE  cso.combo_step_id = ANY($1::int[])
+       ORDER BY cso.combo_step_id, cso.sort_order`,
+      [stepIds]
+    ),
+    pool.query(
+      `SELECT csomgj.combo_step_option_id,
+              csomgj.modifier_group_id,
+              mo.id AS option_id,
+              mo.item_type,
+              mo.recipe_id,
+              mo.ingredient_id,
+              mo.manual_cost,
+              r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_combo_step_option_modifier_groups csomgj
+       JOIN   mcogs_modifier_options mo ON mo.modifier_group_id = csomgj.modifier_group_id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  csomgj.combo_step_option_id = ANY($1::int[])`,
+      [stepIds] // reuse stepIds — no options without steps
+    ),
+  ]);
+
+  // Map: step_option_id → [modifier options]
+  const modMap = {};
+  for (const m of modsResult.rows) {
+    if (!modMap[m.combo_step_option_id]) modMap[m.combo_step_option_id] = [];
+    modMap[m.combo_step_option_id].push(m);
+  }
+
+  // Map: step_id → [options with modifier options]
+  const optMap = {};
+  for (const opt of optsResult.rows) {
+    if (!optMap[opt.combo_step_id]) optMap[opt.combo_step_id] = [];
+    optMap[opt.combo_step_id].push({ ...opt, mod_options: modMap[opt.id] || [] });
+  }
+
+  // Map: sales_item_id → steps with options
+  const result = {};
+  for (const step of steps) {
+    if (!result[step.sales_item_id]) result[step.sales_item_id] = [];
+    result[step.sales_item_id].push({ ...step, options: optMap[step.id] || [] });
+  }
+  return result;
+}
+
+/**
+ * Resolve cost for a single option (recipe/ingredient/manual).
+ * Returns cost in USD base (caller applies exchange rate).
+ */
+function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
+  if (opt.item_type === 'manual') {
+    return Number(opt.manual_cost || 0);
+  }
+  if (opt.item_type === 'ingredient') {
+    const q = quoteLookup[opt.ingredient_id]?.[countryId];
+    return q ? q.price_per_base_unit : 0;
+  }
+  if (opt.item_type === 'recipe' && opt.recipe_id) {
+    const rItems = recipeItemsMap[opt.recipe_id] || [];
+    const { cost } = calcRecipeCost(
+      { id: opt.recipe_id, yield_qty: opt.recipe_yield_qty || 1 },
+      rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null,
+      priceLevelId, plVariationMap, marketPlVariationMap
+    );
+    return cost;
+  }
+  return 0;
+}
+
+/**
+ * Calculate cost for a combo Sales Item.
+ * Step with 1 option = fixed cost. Step with N options = avg cost.
+ * Each option can have modifier groups; their options also avg.
+ * Returns cost in USD base (per portion, before exchange_rate).
+ */
+function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
+  let total = 0;
+  for (const step of steps) {
+    const opts = step.options || [];
+    if (!opts.length) continue;
+
+    let stepCost = 0;
+    for (const opt of opts) {
+      let optCost = resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
+
+      // Add avg modifier group cost for this option
+      if (opt.mod_options && opt.mod_options.length) {
+        // Group by modifier_group_id to avg per group
+        const groupMap = {};
+        for (const mo of opt.mod_options) {
+          if (!groupMap[mo.modifier_group_id]) groupMap[mo.modifier_group_id] = [];
+          groupMap[mo.modifier_group_id].push(mo);
+        }
+        for (const groupOpts of Object.values(groupMap)) {
+          const costs = groupOpts.map(mo => resolveOptionCost(mo, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId));
+          const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+          optCost += avg;
+        }
+      }
+
+      stepCost += optCost;
+    }
+    // Average across options in this step (1 option = that option's cost directly)
+    total += stepCost / opts.length;
+  }
+  return total;
+}
+
+router.get('/menu-sales/:menu_id', async (req, res) => {
+  const menuId       = Number(req.params.menu_id);
+  const priceLevelId = req.query.price_level_id ? Number(req.query.price_level_id) : null;
+
+  try {
+    const { rows: [menu] } = await pool.query(`
+      SELECT m.*, c.currency_symbol, c.currency_code, c.exchange_rate
+      FROM   mcogs_menus m
+      JOIN   mcogs_countries c ON c.id = m.country_id
+      WHERE  m.id = $1
+    `, [menuId]);
+    if (!menu) return res.status(404).json({ error: { message: 'Menu not found' } });
+
+    const countryId = menu.country_id;
+
+    // All menu-sales-items for this menu
+    const { rows: items } = await pool.query(`
+      SELECT msi.*,
+             si.name       AS sales_item_name,
+             si.item_type,
+             si.category,
+             si.recipe_id,
+             si.ingredient_id,
+             si.manual_cost,
+             r.yield_qty,
+             r.name        AS recipe_name,
+             ing.name      AS ingredient_name,
+             u.abbreviation AS base_unit_abbr
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items si    ON si.id   = msi.sales_item_id
+      LEFT JOIN mcogs_recipes r      ON r.id    = si.recipe_id
+      LEFT JOIN mcogs_ingredients ing ON ing.id = si.ingredient_id
+      LEFT JOIN mcogs_units u        ON u.id    = ing.base_unit_id
+      WHERE  msi.menu_id = $1
+      ORDER BY msi.sort_order, msi.id
+    `, [menuId]);
+
+    if (!items.length) {
+      return res.json({
+        menu_id: menuId, currency_code: menu.currency_code, currency_symbol: menu.currency_symbol,
+        exchange_rate: Number(menu.exchange_rate), items: [],
+        summary: { total_cost: 0, total_sell_net: 0, total_sell_gross: 0, avg_cogs_pct_net: 0, avg_cogs_pct_gross: 0 },
+      });
+    }
+
+    // Preload recipe items deep (for recipe + combo-step-option recipe types)
+    const recipeIds = [...new Set(items
+      .filter(i => i.item_type === 'recipe' && i.recipe_id)
+      .map(i => Number(i.recipe_id)))
+    ];
+
+    // Combo items need step → option → recipe IDs too — defer after loadComboData
+    const comboIds = items.filter(i => i.item_type === 'combo').map(i => Number(i.sales_item_id));
+
+    const [quoteLookup, { rows: defaultTaxRows }, comboData] = await Promise.all([
+      loadQuoteLookup(),
+      pool.query(`SELECT country_id, rate, name FROM mcogs_country_tax_rates WHERE is_default = true`),
+      loadComboData(comboIds),
+    ]);
+
+    // Collect all recipe IDs from combo options too
+    for (const steps of Object.values(comboData)) {
+      for (const step of steps) {
+        for (const opt of step.options || []) {
+          if (opt.item_type === 'recipe' && opt.recipe_id) recipeIds.push(Number(opt.recipe_id));
+          for (const mo of opt.mod_options || []) {
+            if (mo.item_type === 'recipe' && mo.recipe_id) recipeIds.push(Number(mo.recipe_id));
+          }
+        }
+      }
+    }
+    const uniqueRecipeIds = [...new Set(recipeIds)];
+
+    const [recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap] = await Promise.all([
+      loadAllRecipeItemsDeep(uniqueRecipeIds),
+      loadVariationItemsMap(uniqueRecipeIds),
+      loadPlVariationItemsMap(uniqueRecipeIds),
+      loadMarketPlVariationItemsMap(uniqueRecipeIds),
+    ]);
+
+    const defaultTaxMap = {};
+    for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = { rate: Number(r.rate), name: r.name };
+
+    // Per-menu price overrides
+    const msiIds = items.map(i => i.id);
+    let priceMap = {};
+    if (msiIds.length) {
+      const priceQuery = priceLevelId
+        ? await pool.query(
+            `SELECT msip.*, (msip.sell_price IS DISTINCT FROM sip.sell_price) AS is_overridden
+             FROM   mcogs_menu_sales_item_prices msip
+             LEFT JOIN mcogs_sales_item_prices sip
+                       ON sip.sales_item_id = (SELECT sales_item_id FROM mcogs_menu_sales_items WHERE id = msip.menu_sales_item_id)
+                          AND sip.price_level_id = msip.price_level_id
+             WHERE  msip.menu_sales_item_id = ANY($1::int[]) AND msip.price_level_id = $2`,
+            [msiIds, priceLevelId]
+          )
+        : await pool.query(
+            `SELECT msip.*, (msip.sell_price IS DISTINCT FROM sip.sell_price) AS is_overridden
+             FROM   mcogs_menu_sales_item_prices msip
+             LEFT JOIN mcogs_sales_item_prices sip
+                       ON sip.sales_item_id = (SELECT sales_item_id FROM mcogs_menu_sales_items WHERE id = msip.menu_sales_item_id)
+                          AND sip.price_level_id = msip.price_level_id
+             WHERE  msip.menu_sales_item_id = ANY($1::int[])`,
+            [msiIds]
+          );
+      for (const p of priceQuery.rows) {
+        if (!priceMap[p.menu_sales_item_id]) priceMap[p.menu_sales_item_id] = {};
+        priceMap[p.menu_sales_item_id][p.price_level_id] = p;
+      }
+    }
+
+    const taxRateCache = {};
+    const outItems = [];
+    let totalCost = 0, totalSellNet = 0, totalSellGross = 0;
+    const exchRate = Number(menu.exchange_rate) || 1;
+
+    for (const item of items) {
+      const itemType = item.item_type;
+      const qty      = Number(item.qty || 1);
+      const siId     = item.sales_item_id;
+      const display  = item.sales_item_name || '—';
+
+      // Cost per portion (USD base → local)
+      let cppUsd = 0;
+      if (itemType === 'ingredient') {
+        const q = quoteLookup[item.ingredient_id]?.[countryId];
+        if (q) cppUsd = q.price_per_base_unit * qty;
+      } else if (itemType === 'manual') {
+        cppUsd = Number(item.manual_cost || 0) * qty;
+      } else if (itemType === 'recipe') {
+        const rItems = recipeItemsMap[item.recipe_id] || [];
+        const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
+        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, priceLevelId, plVariationMap, marketPlVariationMap);
+        cppUsd = cost * qty;
+      } else if (itemType === 'combo') {
+        const steps = comboData[siId] || [];
+        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) * qty;
+      }
+      const cpp = Math.round(cppUsd * exchRate * 10000) / 10000;
+
+      // Sell price
+      const itemPrices = priceMap[item.id] || {};
+      let sellGross = 0;
+      let useTaxRateId = null;
+      let isOverridden = false;
+      if (priceLevelId && itemPrices[priceLevelId]) {
+        const lp = itemPrices[priceLevelId];
+        sellGross    = Number(lp.sell_price || 0);
+        useTaxRateId = lp.tax_rate_id || null;
+        isOverridden = !!lp.is_overridden;
+      } else if (!priceLevelId) {
+        // Use first price level available
+        const first = Object.values(itemPrices)[0];
+        if (first) { sellGross = Number(first.sell_price || 0); useTaxRateId = first.tax_rate_id || null; isOverridden = !!first.is_overridden; }
+      }
+
+      const { rate: taxRate, name: taxName } = await resolveItemTax(useTaxRateId, countryId, priceLevelId, defaultTaxMap, taxRateCache);
+      const sellNet      = taxRate > 0 ? sellGross / (1 + taxRate) : sellGross;
+      const gpNet        = Math.round((sellNet   - cpp) * 10000) / 10000;
+      const gpGross      = Math.round((sellGross - cpp) * 10000) / 10000;
+      const cogsPctNet   = sellNet   > 0 ? Math.round((cpp / sellNet)   * 10000) / 100 : 0;
+      const cogsPctGross = sellGross > 0 ? Math.round((cpp / sellGross) * 10000) / 100 : 0;
+
+      totalCost      += cpp;
+      totalSellNet   += Math.round(sellNet   * 10000) / 10000;
+      totalSellGross += Math.round(sellGross * 10000) / 10000;
+
+      outItems.push({
+        menu_sales_item_id: item.id,
+        sales_item_id:      siId,
+        item_type:          itemType,
+        recipe_id:          item.recipe_id    || null,
+        ingredient_id:      item.ingredient_id || null,
+        display_name:       display,
+        recipe_name:        display,
+        category:           item.category || '',
+        qty,
+        base_unit_abbr:     item.base_unit_abbr || '',
+        cost_per_portion:   cpp,
+        sell_price_gross:   Math.round(sellGross * 10000) / 10000,
+        sell_price_net:     Math.round(sellNet   * 10000) / 10000,
+        tax_rate:           taxRate,
+        tax_rate_pct:       Math.round(taxRate * 10000) / 100,
+        tax_name:           taxName,
+        tax_rate_id:        useTaxRateId || null,
+        gp_net:             gpNet,
+        gp_gross:           gpGross,
+        cogs_pct_net:       cogsPctNet,
+        cogs_pct_gross:     cogsPctGross,
+        is_price_overridden: isOverridden,
+      });
+    }
+
+    res.json({
+      menu_id:         menuId,
+      currency_code:   menu.currency_code   || '',
+      currency_symbol: menu.currency_symbol || '',
+      exchange_rate:   exchRate,
+      items: outItems,
+      summary: {
+        total_cost:         Math.round(totalCost      * 10000) / 10000,
+        total_sell_net:     Math.round(totalSellNet   * 10000) / 10000,
+        total_sell_gross:   Math.round(totalSellGross * 10000) / 10000,
+        avg_cogs_pct_net:   totalSellNet   > 0 ? Math.round((totalCost / totalSellNet)   * 10000) / 100 : 0,
+        avg_cogs_pct_gross: totalSellGross > 0 ? Math.round((totalCost / totalSellGross) * 10000) / 100 : 0,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to calculate Sales Items COGS' } });
+  }
+});
+
 module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap };
