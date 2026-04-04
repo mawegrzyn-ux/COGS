@@ -290,7 +290,7 @@ export default function MenusPage() {
   const [loading,         setLoading]         = useState(true)
 
   // tab
-  const [activeTab, setActiveTab] = useState<'sales-items' | 'builder' | 'price-report' | 'level-report' | 'scenario' | 'shared-links'>('sales-items')
+  const [activeTab, setActiveTab] = useState<'builder' | 'price-report' | 'level-report' | 'scenario' | 'shared-links'>('builder')
 
   // builder state
   const [selectedMenuId,  setSelectedMenuId]  = useState<number | null>(null)
@@ -321,18 +321,6 @@ export default function MenusPage() {
   const [miQty,         setMiQty]         = useState('1')
   const [miImageUrl,    setMiImageUrl]    = useState<string | null>(null)
   const [miLevelInputs, setMiLevelInputs] = useState<Record<number, { price: string; taxId: number | '' }>>({})
-
-  // sales items tab
-  const [salesItems,         setSalesItems]         = useState<SalesItem[]>([])
-  const [modifierGroups,     setModifierGroups]     = useState<ModifierGroup[]>([])
-  const [siLoading,          setSiLoading]          = useState(false)
-  const [siSearch,           setSiSearch]           = useState('')
-  const [siTypeFilter,       setSiTypeFilter]       = useState('')
-  const [siCountryFilter,    setSiCountryFilter]    = useState<number | ''>('')
-  const [selectedSiId,       setSelectedSiId]       = useState<number | null>(null)
-  const [siModal,            setSiModal]            = useState<'new' | SalesItem | null>(null)
-  const [mgModal,            setMgModal]            = useState(false)   // modifier groups manager
-  const [siSaving,           setSiSaving]           = useState(false)
 
   // builder — sales items linked to menu
   const [menuSalesItems,     setMenuSalesItems]     = useState<MenuSalesItem[]>([])
@@ -950,7 +938,6 @@ export default function MenusPage() {
       {/* ── Tabs ── */}
       <div className="flex gap-1 px-6 border-b border-gray-200 mb-0">
         {([
-          { key: 'sales-items',  label: 'Sales Items',           tutorial: 'What is the Sales Items catalog? How do I create recipe, ingredient, manual, and combo sales items, set default prices, control market visibility, and attach modifier groups?' },
           { key: 'builder',      label: '🍽 Menus',              tutorial: 'How do I use the Menu Builder tab? Explain creating a menu for a country, adding recipe and ingredient items, setting sort order, and assigning sell prices across different price levels.' },
           { key: 'scenario',     label: '📊 Menu Engineer',      tutorial: 'How does the Menu Engineer work? Explain the sales mix concept, how to enter quantities sold, what COGS% means in this context, how to use the Mix Manager, and how to save and push scenarios.' },
           { key: 'price-report', label: '📈 Compare Markets',    tutorial: 'What is the Compare Markets (Price Level Table) view? How do I use it to compare and edit sell prices across different markets and price levels, and how does currency conversion work here?' },
@@ -974,38 +961,6 @@ export default function MenusPage() {
           </button>
         ))}
       </div>
-
-      {/* ══ TAB: SALES ITEMS ═════════════════════════════════════════════════ */}
-      {activeTab === 'sales-items' && (
-        <SalesItemsTab
-          salesItems={salesItems}
-          setSalesItems={setSalesItems}
-          modifierGroups={modifierGroups}
-          setModifierGroups={setModifierGroups}
-          loading={siLoading}
-          setLoading={setSiLoading}
-          search={siSearch}
-          setSearch={setSiSearch}
-          typeFilter={siTypeFilter}
-          setTypeFilter={setSiTypeFilter}
-          countryFilter={siCountryFilter}
-          setCountryFilter={setSiCountryFilter}
-          selectedId={selectedSiId}
-          setSelectedId={setSelectedSiId}
-          siModal={siModal}
-          setSiModal={setSiModal}
-          mgModal={mgModal}
-          setMgModal={setMgModal}
-          saving={siSaving}
-          setSaving={setSiSaving}
-          countries={countries}
-          priceLevels={priceLevels}
-          taxRates={taxRates}
-          recipes={recipes}
-          ingredients={ingredients}
-          toast={t => setToast({ msg: t })}
-        />
-      )}
 
       {/* ══ TAB: BUILDER ══════════════════════════════════════════════════════ */}
       {activeTab === 'builder' && (

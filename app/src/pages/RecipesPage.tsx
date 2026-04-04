@@ -433,6 +433,9 @@ export default function RecipesPage() {
     try {
       if (isNew) {
         const r = await api.post('/recipes', payload)
+        if (form.createSalesItem) {
+          try { await api.post('/sales-items', { name: r.name, item_type: 'recipe', recipe_id: r.id }) } catch {}
+        }
         setRecipes(prev => [...prev, r].sort((a,b) => a.name.localeCompare(b.name)))
         showToast('Recipe created')
         setRecipeModal(null)
@@ -1947,6 +1950,7 @@ export default function RecipesPage() {
 
 interface RecipeForm {
   name: string; category_id: string; description: string; yield_qty: string; yield_unit_text: string; image_url: string
+  createSalesItem?: boolean
 }
 
 function RecipeFormModal({ recipe, categories, onSave, onClose }: {
@@ -2002,6 +2006,13 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
         />
 
+        {!recipe && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-600">
+            <input type="checkbox" checked={form.createSalesItem ?? false}
+              onChange={e => setForm(f => ({ ...f, createSalesItem: e.target.checked }))} />
+            Also create a Sales Item linked to this recipe
+          </label>
+        )}
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>

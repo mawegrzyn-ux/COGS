@@ -7,6 +7,7 @@ import LoadingScreen        from './components/LoadingScreen'
 import InventoryPage        from './pages/InventoryPage'
 import RecipesPage          from './pages/RecipesPage'
 import MenusPage            from './pages/MenusPage'
+import SalesItemsPage       from './pages/SalesItemsPage'
 import AllergenMatrixPage   from './pages/AllergenMatrixPage'
 import HACCPPage            from './pages/HACCPPage'
 import HelpPage             from './pages/HelpPage'
@@ -55,6 +56,7 @@ export default function App() {
             <Route path="categories"    element={<Navigate to="/configuration" replace />} />
             <Route path="inventory"     element={<InventoryPage />} />
             <Route path="recipes"       element={<RecipesPage />} />
+            <Route path="sales-items"   element={<SalesItemsPage />} />
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<AllergenMatrixPage />} />
             <Route path="haccp"         element={<HACCPPage />} />
