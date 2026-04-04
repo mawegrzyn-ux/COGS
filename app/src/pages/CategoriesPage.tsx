@@ -70,6 +70,12 @@ function CategoryManager() {
   const [catSaving,       setCatSaving]       = useState(false)
   const [catFormError,    setCatFormError]    = useState('')
 
+  // Inline edit state
+  const [editingCatId,   setEditingCatId]   = useState<number | null>(null)
+  const [editingName,    setEditingName]    = useState('')
+  const [editingGroupId, setEditingGroupId] = useState<number | ''>('')
+  const [inlineSaving,   setInlineSaving]   = useState(false)
+
   // Confirm deletes
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<CategoryGroup | null>(null)
   const [confirmDeleteCat,   setConfirmDeleteCat]   = useState<Category | null>(null)
@@ -241,6 +247,55 @@ function CategoryManager() {
     } catch { showToast('Failed to update scope.', 'error') }
   }
 
+  // ── Inline edit ──────────────────────────────────────────────────────────────
+
+  function startInlineEdit(cat: Category) {
+    setEditingCatId(cat.id)
+    setEditingName(cat.name)
+    setEditingGroupId(cat.group_id ?? '')
+  }
+
+  function cancelInlineEdit() {
+    setEditingCatId(null)
+    setEditingName('')
+    setEditingGroupId('')
+  }
+
+  async function saveInlineEdit(cat: Category) {
+    const name = editingName.trim()
+    if (!name) return
+    if (name === cat.name && (editingGroupId || null) === cat.group_id) {
+      cancelInlineEdit(); return
+    }
+    setInlineSaving(true)
+    try {
+      const newGroupId = editingGroupId || null
+      const saved: Category = await api.put(`/categories/${cat.id}`, {
+        name,
+        group_id:        newGroupId,
+        for_ingredients: cat.for_ingredients,
+        for_recipes:     cat.for_recipes,
+        for_sales_items: cat.for_sales_items,
+        sort_order:      cat.sort_order,
+      })
+      // Update group counts if group changed
+      if (newGroupId !== cat.group_id) {
+        setGroups(prev => prev.map(g => {
+          if (g.id === cat.group_id)  return { ...g, category_count: Math.max(0, g.category_count - 1) }
+          if (g.id === newGroupId)    return { ...g, category_count: g.category_count + 1 }
+          return g
+        }))
+      }
+      setCategories(prev => prev.map(c => c.id === saved.id ? saved : c))
+      cancelInlineEdit()
+      showToast('Category updated.')
+    } catch (e: unknown) {
+      showToast((e as { message?: string })?.message || 'Save failed.', 'error')
+    } finally {
+      setInlineSaving(false)
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="p-6"><Spinner /></div>
@@ -361,50 +416,106 @@ function CategoryManager() {
               {/* Column header hints */}
               <div className="flex items-center gap-3 px-4 pb-1">
                 <span className="flex-1 text-xs text-text-3 uppercase tracking-wide font-semibold">Category</span>
-                <span className="text-xs text-text-3 w-24 text-center">Scope</span>
+                <span className="text-xs text-text-3 w-36 text-left">Group</span>
+                <span className="text-xs text-text-3 w-40 text-center">Scope</span>
                 <span className="w-16" />
               </div>
-              {visibleCats.map(cat => (
-                <div key={cat.id} className="flex items-center gap-3 bg-surface border border-border rounded-lg px-4 py-2.5 hover:bg-surface-2 transition-colors">
-                  <span className="flex-1 text-sm font-semibold text-text-1">{cat.name}</span>
+              {visibleCats.map(cat => {
+                const isEditing = editingCatId === cat.id
+                return (
+                  <div key={cat.id} className="flex items-center gap-3 bg-surface border border-border rounded-lg px-4 py-2 hover:bg-surface-2 transition-colors">
 
-                  {/* Scope toggle pills */}
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <ScopePill
-                      label="Inventory"
-                      active={cat.for_ingredients}
-                      colour="blue"
-                      onClick={() => toggleFlag(cat, 'for_ingredients')}
-                    />
-                    <ScopePill
-                      label="Recipes"
-                      active={cat.for_recipes}
-                      colour="green"
-                      onClick={() => toggleFlag(cat, 'for_recipes')}
-                    />
-                    <ScopePill
-                      label="Sales"
-                      active={cat.for_sales_items}
-                      colour="purple"
-                      onClick={() => toggleFlag(cat, 'for_sales_items')}
-                    />
-                  </div>
+                    {/* Name — editable inline */}
+                    {isEditing ? (
+                      <input
+                        className="input flex-1 text-sm py-1"
+                        value={editingName}
+                        onChange={e => setEditingName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveInlineEdit(cat); if (e.key === 'Escape') cancelInlineEdit() }}
+                        autoFocus
+                      />
+                    ) : (
+                      <span
+                        className="flex-1 text-sm font-semibold text-text-1 cursor-text hover:text-accent transition-colors"
+                        title="Click to edit name"
+                        onClick={() => startInlineEdit(cat)}
+                      >{cat.name}</span>
+                    )}
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
-                      onClick={() => openCatModal(cat)}
-                      title="Edit category"
-                    ><EditIcon size={12} /></button>
-                    <button
-                      className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
-                      onClick={() => setConfirmDeleteCat(cat)}
-                      title="Delete category"
-                    ><TrashIcon size={12} /></button>
+                    {/* Group — dropdown inline */}
+                    {isEditing ? (
+                      <select
+                        className="input text-xs py-1 w-36"
+                        value={editingGroupId}
+                        onChange={e => setEditingGroupId(e.target.value ? Number(e.target.value) : '')}
+                      >
+                        <option value="">— No Group —</option>
+                        {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </select>
+                    ) : (
+                      <span
+                        className="w-36 text-xs text-text-3 truncate cursor-pointer hover:text-accent transition-colors"
+                        title="Click to change group"
+                        onClick={() => startInlineEdit(cat)}
+                      >
+                        {cat.group_name || <span className="italic opacity-60">No group</span>}
+                      </span>
+                    )}
+
+                    {/* Scope toggle pills */}
+                    <div className="flex items-center gap-1.5 shrink-0 w-40 justify-center">
+                      <ScopePill
+                        label="Inventory"
+                        active={cat.for_ingredients}
+                        colour="blue"
+                        onClick={() => toggleFlag(cat, 'for_ingredients')}
+                      />
+                      <ScopePill
+                        label="Recipes"
+                        active={cat.for_recipes}
+                        colour="green"
+                        onClick={() => toggleFlag(cat, 'for_recipes')}
+                      />
+                      <ScopePill
+                        label="Sales"
+                        active={cat.for_sales_items}
+                        colour="purple"
+                        onClick={() => toggleFlag(cat, 'for_sales_items')}
+                      />
+                    </div>
+
+                    {/* Actions */}
+                    {isEditing ? (
+                      <div className="flex items-center gap-1 shrink-0 w-16 justify-end">
+                        <button
+                          className="w-6 h-6 flex items-center justify-center rounded bg-accent text-white hover:bg-accent-mid transition-colors disabled:opacity-50"
+                          onClick={() => saveInlineEdit(cat)}
+                          disabled={inlineSaving || !editingName.trim()}
+                          title="Save"
+                        ><CheckIcon size={12} /></button>
+                        <button
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 transition-colors"
+                          onClick={cancelInlineEdit}
+                          title="Cancel"
+                        ><XIcon size={12} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 shrink-0 w-16 justify-end">
+                        <button
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                          onClick={() => openCatModal(cat)}
+                          title="Edit (full form)"
+                        ><EditIcon size={12} /></button>
+                        <button
+                          className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
+                          onClick={() => setConfirmDeleteCat(cat)}
+                          title="Delete category"
+                        ><TrashIcon size={12} /></button>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -563,6 +674,22 @@ function TrashIcon({ size = 16 }: { size?: number }) {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <polyline points="3 6 5 6 21 6"/>
       <path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/>
+    </svg>
+  )
+}
+
+function CheckIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  )
+}
+
+function XIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
     </svg>
   )
 }
