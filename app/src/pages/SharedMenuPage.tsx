@@ -38,7 +38,7 @@ interface SharedItem {
   menu_item_id: number
   nat_key:      string
   display_name: string
-  item_type:    'recipe' | 'ingredient'
+  item_type:    'recipe' | 'ingredient' | 'manual' | 'combo'
   category:     string
   cost:         number
   levels:       Record<number, LevelEntry>

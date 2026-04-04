@@ -18,6 +18,10 @@ const {
   loadAllRecipeItemsDeep,
   loadVariationItemsMap,
   loadPlVariationItemsMap,
+  loadMarketPlVariationItemsMap,
+  loadComboData,
+  calcComboCost,
+  resolveItemTax,
 } = require('./cogs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -378,7 +382,7 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
 
     if (tokenMenuId) {
       const { rows: [mi] } = await pool.query(
-        `SELECT id FROM mcogs_menu_items WHERE id = $1 AND menu_id = $2`,
+        `SELECT id FROM mcogs_menu_sales_items WHERE id = $1 AND menu_id = $2`,
         [menu_item_id, tokenMenuId]
       );
       if (!mi) return res.status(403).json({ error: { message: 'Menu item not on this menu' } });
@@ -386,24 +390,25 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
 
     // Fetch old price for change log
     const { rows: [oldRow] } = await pool.query(
-      `SELECT sell_price FROM mcogs_menu_item_prices WHERE menu_item_id = $1 AND price_level_id = $2`,
+      `SELECT sell_price FROM mcogs_menu_sales_item_prices WHERE menu_sales_item_id = $1 AND price_level_id = $2`,
       [menu_item_id, price_level_id]
     );
     const oldValue = oldRow ? Number(oldRow.sell_price) : null;
 
     await pool.query(`
-      INSERT INTO mcogs_menu_item_prices (menu_item_id, price_level_id, sell_price)
+      INSERT INTO mcogs_menu_sales_item_prices (menu_sales_item_id, price_level_id, sell_price)
       VALUES ($1, $2, $3)
-      ON CONFLICT (menu_item_id, price_level_id)
-      DO UPDATE SET sell_price = EXCLUDED.sell_price, updated_at = NOW()
+      ON CONFLICT (menu_sales_item_id, price_level_id)
+      DO UPDATE SET sell_price = EXCLUDED.sell_price
     `, [menu_item_id, price_level_id, Math.round(sell_price * 10000) / 10000]);
 
     // Log the change
     const { rows: [miRow] } = await pool.query(`
-      SELECT mi.display_name, pl.name AS level_name
-      FROM   mcogs_menu_items mi
+      SELECT si.name AS display_name, pl.name AS level_name
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
       JOIN   mcogs_price_levels pl ON pl.id = $2
-      WHERE  mi.id = $1
+      WHERE  msi.id = $1
     `, [menu_item_id, price_level_id]);
 
     await pool.query(`
@@ -477,21 +482,22 @@ publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (re
   const menuItemId = Number(req.params.menu_item_id);
 
   try {
-    // Load menu item
+    // Load menu sales item
     const { rows: [mi] } = await pool.query(`
-      SELECT mi.id, mi.item_type, mi.recipe_id, mi.ingredient_id, mi.qty,
-             mi.display_name,
+      SELECT msi.id, si.item_type, si.recipe_id, si.ingredient_id, msi.qty,
+             si.name AS display_name,
              m.country_id, c.exchange_rate,
              r.name  AS recipe_name,  r.yield_qty,
              ing.name AS ingredient_name, ing.waste_pct,
              u.abbreviation AS base_unit_abbr
-      FROM   mcogs_menu_items mi
-      JOIN   mcogs_menus      m   ON m.id   = mi.menu_id
-      JOIN   mcogs_countries  c   ON c.id   = m.country_id
-      LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
-      LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
-      WHERE  mi.id = $1
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items       si  ON si.id   = msi.sales_item_id
+      JOIN   mcogs_menus             m   ON m.id    = msi.menu_id
+      JOIN   mcogs_countries         c   ON c.id    = m.country_id
+      LEFT JOIN mcogs_recipes        r   ON r.id    = si.recipe_id
+      LEFT JOIN mcogs_ingredients    ing ON ing.id  = si.ingredient_id
+      LEFT JOIN mcogs_units          u   ON u.id    = ing.base_unit_id
+      WHERE  msi.id = $1
     `, [menuItemId]);
 
     if (!mi) return res.status(404).json({ error: { message: 'Menu item not found' } });
@@ -641,21 +647,27 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
       }
     }
 
-    // All items on this menu
+    // All items on this menu (via sales items)
     const { rows: items } = await pool.query(`
-      SELECT mi.*,
-             r.name         AS recipe_name,
-             cat.name       AS recipe_category,
+      SELECT msi.*,
+             si.name        AS sales_item_name,
+             si.item_type,
+             si.recipe_id,
+             si.ingredient_id,
+             si.manual_cost,
+             cat.name       AS category,
              r.yield_qty,
+             r.name         AS recipe_name,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr
-      FROM   mcogs_menu_items mi
-      LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_categories  cat ON cat.id  = r.category_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id  = mi.ingredient_id
-      LEFT JOIN mcogs_units       u   ON u.id    = ing.base_unit_id
-      WHERE  mi.menu_id = $1
-      ORDER BY mi.id ASC
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items       si  ON si.id   = msi.sales_item_id
+      LEFT JOIN mcogs_categories     cat ON cat.id  = si.category_id
+      LEFT JOIN mcogs_recipes        r   ON r.id    = si.recipe_id
+      LEFT JOIN mcogs_ingredients    ing ON ing.id  = si.ingredient_id
+      LEFT JOIN mcogs_units          u   ON u.id    = ing.base_unit_id
+      WHERE  msi.menu_id = $1
+      ORDER BY msi.sort_order, msi.id
     `, [queryMenuId]);
 
     if (!items.length) {
@@ -670,80 +682,87 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
 
     const { rows: levels } = await pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`);
 
-    // All level prices in one query
-    const itemIds = items.map(i => i.id);
+    // All level prices in one query (from menu-sales-item prices table)
+    const msiIds = items.map(i => i.id);
     const { rows: lpRows } = await pool.query(`
-      SELECT * FROM mcogs_menu_item_prices WHERE menu_item_id = ANY($1::int[])
-    `, [itemIds]);
+      SELECT * FROM mcogs_menu_sales_item_prices WHERE menu_sales_item_id = ANY($1::int[])
+    `, [msiIds]);
     const lpMap = {};
     for (const lp of lpRows) {
-      if (!lpMap[lp.menu_item_id]) lpMap[lp.menu_item_id] = {};
-      lpMap[lp.menu_item_id][lp.price_level_id] = lp;
+      if (!lpMap[lp.menu_sales_item_id]) lpMap[lp.menu_sales_item_id] = {};
+      lpMap[lp.menu_sales_item_id][lp.price_level_id] = lp;
     }
 
-    const recipeIds      = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
-    const [recipeItemsMap, variationMap, plVariationMap] = await Promise.all([
-      loadAllRecipeItemsDeep(recipeIds),
-      loadVariationItemsMap(recipeIds),
-      loadPlVariationItemsMap(recipeIds),
-    ]);
+    // Collect recipe IDs (direct + from combo steps)
+    const recipeIds = [...new Set(items.filter(i => i.item_type === 'recipe' && i.recipe_id).map(i => Number(i.recipe_id)))];
+    const comboIds  = items.filter(i => i.item_type === 'combo').map(i => Number(i.sales_item_id));
 
-    const [quoteLookup, { rows: defaultTaxRows }, { rows: cltRows }, { rows: taxRateRows }] = await Promise.all([
+    const [quoteLookup, { rows: defaultTaxRows }, comboData] = await Promise.all([
       loadQuoteLookup(),
       pool.query(`SELECT country_id, rate, name FROM mcogs_country_tax_rates WHERE is_default = true`),
-      pool.query(`
-        SELECT clt.country_id, clt.price_level_id, tr.rate, tr.name
-        FROM   mcogs_country_level_tax clt
-        JOIN   mcogs_country_tax_rates tr ON tr.id = clt.tax_rate_id
-      `),
-      pool.query(`SELECT id, rate, name FROM mcogs_country_tax_rates`),
+      loadComboData(comboIds),
+    ]);
+
+    // Add recipe IDs from combo step options
+    for (const steps of Object.values(comboData)) {
+      for (const step of steps) {
+        for (const opt of step.options || []) {
+          if (opt.item_type === 'recipe' && opt.recipe_id) recipeIds.push(Number(opt.recipe_id));
+          for (const mo of opt.mod_options || []) {
+            if (mo.item_type === 'recipe' && mo.recipe_id) recipeIds.push(Number(mo.recipe_id));
+          }
+        }
+      }
+    }
+    const uniqueRecipeIds = [...new Set(recipeIds)];
+
+    const [recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap] = await Promise.all([
+      loadAllRecipeItemsDeep(uniqueRecipeIds),
+      loadVariationItemsMap(uniqueRecipeIds),
+      loadPlVariationItemsMap(uniqueRecipeIds),
+      loadMarketPlVariationItemsMap(uniqueRecipeIds),
     ]);
 
     const defaultTaxMap = {};
     for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = { rate: Number(r.rate), name: r.name };
-    const cltMap = {};
-    for (const r of cltRows) cltMap[`${r.country_id}-${r.price_level_id}`] = { rate: Number(r.rate), name: r.name };
-    const taxById = {};
-    for (const r of taxRateRows) taxById[r.id] = { rate: Number(r.rate), name: r.name };
 
-    function getEffectiveTax(taxRateId, levelId) {
-      if (taxRateId && taxById[taxRateId]) return taxById[taxRateId];
-      const clt = cltMap[`${countryId}-${levelId}`];
-      if (clt) return clt;
-      return defaultTaxMap[countryId] || { rate: 0, name: 'No Tax' };
+    const taxRateCache = {};
+
+    function getCppForLevel(item, levelId) {
+      const itemType = item.item_type;
+      const qty      = Number(item.qty || 1);
+      let cppUsd = 0;
+      if (itemType === 'ingredient') {
+        const q = quoteLookup[item.ingredient_id]?.[countryId];
+        if (q) cppUsd = q.price_per_base_unit * qty;
+      } else if (itemType === 'manual') {
+        cppUsd = Number(item.manual_cost || 0) * qty;
+      } else if (itemType === 'recipe') {
+        const rItems = recipeItemsMap[item.recipe_id] || [];
+        const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
+        const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, levelId, plVariationMap, marketPlVariationMap);
+        cppUsd = cost * qty;
+      } else if (itemType === 'combo') {
+        const steps = comboData[item.sales_item_id] || [];
+        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, levelId) * qty;
+      }
+      return Math.round(cppUsd * exchangeRate * 10000) / 10000;
     }
 
-    const outItems = items.map(item => {
+    const outItems = await Promise.all(items.map(async item => {
       const itemType = item.item_type || 'recipe';
-      const display  = item.display_name?.trim() ||
-                       (itemType === 'ingredient' ? item.ingredient_name : item.recipe_name) || '—';
-      const qty      = Number(item.qty || 1);
+      const display  = item.sales_item_name || '—';
 
-      // Per-level cost helper — ingredients are the same for every level;
-      // recipes use the PL variant items for that level when they exist.
-      function getCppForLevel(levelId) {
-        if (itemType === 'ingredient') {
-          const q = quoteLookup[item.ingredient_id]?.[countryId];
-          return q ? Math.round(q.price_per_base_unit * qty * exchangeRate * 10000) / 10000 : 0;
-        }
-        const rItems = recipeItemsMap[item.recipe_id] || [];
-        const { cost } = calcRecipeCost(
-          { id: item.recipe_id, yield_qty: item.yield_qty || 1 },
-          rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, levelId, plVariationMap,
-        );
-        return Math.round(cost * qty * exchangeRate * 10000) / 10000;
-      }
-
-      // Base cost (no price level) — shown in the Cost column
-      const cpp = getCppForLevel(null);
+      // Base cost (no price level)
+      const cpp = getCppForLevel(item, null);
 
       const rowLevels = {};
       for (const level of levels) {
-        const lid         = level.id;
-        const ovKey       = `${item.id}_l${lid}`;
-        const lp          = lpMap[item.id]?.[lid];
+        const lid           = level.id;
+        const ovKey         = `${item.id}_l${lid}`;
+        const lp            = lpMap[item.id]?.[lid];
         const hasScenarioOv = ovKey in scenarioPriceOv;
-        const gross       = hasScenarioOv
+        const gross         = hasScenarioOv
           ? Number(scenarioPriceOv[ovKey])
           : (lp ? Number(lp.sell_price) : null);
 
@@ -752,8 +771,8 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
           continue;
         }
 
-        const levelCpp = getCppForLevel(lid);
-        const { rate: taxRate } = getEffectiveTax(lp?.tax_rate_id, lid);
+        const levelCpp = getCppForLevel(item, lid);
+        const { rate: taxRate } = await resolveItemTax(lp?.tax_rate_id || null, countryId, lid, defaultTaxMap, taxRateCache);
         const net     = taxRate > 0 ? gross / (1 + taxRate) : gross;
         const cogsPct = net > 0 && levelCpp > 0 ? Math.round((levelCpp / net) * 10000) / 100 : null;
         rowLevels[lid] = {
@@ -767,20 +786,16 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         };
       }
 
-      const natKey = itemType === 'recipe'
-        ? `r_${item.recipe_id}`
-        : `i_${item.ingredient_id}`;
-
       return {
-        menu_item_id: item.id,
-        nat_key:      natKey,
+        menu_item_id: item.id,   // = menu_sales_item_id
+        nat_key:      `si_${item.sales_item_id}`,
         display_name: display,
         item_type:    itemType,
-        category:     item.recipe_category || '',
+        category:     item.category || '',
         cost:         cpp,
         levels:       rowLevels,
       };
-    });
+    }));
 
     const { rows: marketMenus } = await pool.query(
       `SELECT id, name FROM mcogs_menus WHERE country_id = $1 ORDER BY name`, [countryId]

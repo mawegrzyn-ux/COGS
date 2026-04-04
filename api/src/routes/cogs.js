@@ -1138,4 +1138,4 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
   }
 });
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax };
