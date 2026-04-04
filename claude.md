@@ -351,7 +351,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 3 | `mcogs_countries` | Countries with currency codes, symbols, exchange rates, default price level |
 | 4 | `mcogs_country_tax_rates` | Tax rates per country (e.g. UK VAT 20%) |
 | 5 | `mcogs_country_level_tax` | Junction: which tax rate applies to which price level per country |
-| 6 | `mcogs_categories` | Ingredient/recipe categories with group_name and type (`ingredient`/`recipe`) |
+| 6 | `mcogs_categories` | Ingredient/recipe categories with group_name (flat string) and scope flags (`for_ingredients`, `for_recipes`, `for_sales_items`) |
 | 7 | `mcogs_vendors` | Suppliers/vendors, linked to a country |
 | 8 | `mcogs_ingredients` | Ingredient master list with base unit, waste %, prep conversion |
 | 9 | `mcogs_price_quotes` | Vendor pricing per ingredient: purchase price, qty, unit, active flag |
@@ -386,9 +386,11 @@ default_price_level_id → mcogs_price_levels
 
 **`mcogs_ingredients`**
 ```sql
-id, name, category (string — denormalised), base_unit_id,
-default_prep_unit, default_prep_to_base_conversion,
+id, name, category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL,
+base_unit_id, default_prep_unit, default_prep_to_base_conversion,
 waste_pct (0–100), notes, image_url, allergen_notes TEXT
+-- category_id replaces the old denormalised category VARCHAR column
+-- Queries JOIN mcogs_categories to resolve name: LEFT JOIN mcogs_categories cat ON cat.id = i.category_id
 ```
 
 **`mcogs_price_quotes`**
@@ -411,8 +413,21 @@ item_type: 'ingredient' | 'recipe'   -- supports sub-recipes
 
 **`mcogs_categories`**
 ```sql
-group_name VARCHAR(100) -- currently flat string (e.g. 'Dairy', 'Produce')
--- Planned migration: separate mcogs_category_groups table with parent_id
+id, name VARCHAR(100), group_name VARCHAR(100),   -- group_name is flat string (e.g. 'Dairy')
+group_id INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,
+for_ingredients BOOLEAN DEFAULT true,             -- scope flags (replace old 'type' column)
+for_recipes     BOOLEAN DEFAULT true,
+for_sales_items BOOLEAN DEFAULT false
+-- group_id FK is the modern way to assign groups; group_name kept for legacy compat
+-- Filter by scope: WHERE for_ingredients=true / WHERE for_recipes=true / WHERE for_sales_items=true
+```
+
+**`mcogs_recipes`**
+```sql
+id, name, category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL,
+yield_qty, yield_unit_id
+-- category_id replaces the old denormalised category VARCHAR column
+-- Queries JOIN mcogs_categories: LEFT JOIN mcogs_categories cat ON cat.id = r.category_id
 ```
 
 ### Indexes
@@ -423,8 +438,9 @@ idx_price_quotes_vendor        ON mcogs_price_quotes(vendor_id)
 idx_recipe_items_recipe        ON mcogs_recipe_items(recipe_id)
 idx_menu_items_menu            ON mcogs_menu_items(menu_id)
 idx_vendors_country            ON mcogs_vendors(country_id)
-idx_ingredients_category       ON mcogs_ingredients(category)
-idx_recipes_category           ON mcogs_recipes(category)
+idx_ingredients_category_id    ON mcogs_ingredients(category_id)
+idx_recipes_category_id        ON mcogs_recipes(category_id)
+-- NOTE: old idx_ingredients_category / idx_recipes_category on the dropped VARCHAR column are gone
 idx_country_tax_country        ON mcogs_country_tax_rates(country_id)
 idx_pref_vendor_ingredient     ON mcogs_ingredient_preferred_vendor(ingredient_id)
 ```
@@ -1247,6 +1263,67 @@ assistantContent.push(cleanBlock);
 
 ---
 
+### Fix 15 — `category-groups.js` PM2 Crash (Wrong `require` Path)
+
+**Symptom:** PM2 crashed on startup with `Cannot find module '../db'` from `api/src/routes/category-groups.js`.
+
+**Root Cause:** The file used `require('../db')` but the database pool module lives at `../db/pool` (consistent with all other route files in the project).
+
+**Fix:**
+```js
+// BEFORE
+const pool = require('../db')
+// AFTER
+const pool = require('../db/pool')
+```
+
+**File:** `api/src/routes/category-groups.js`
+
+---
+
+### Fix 16 — Migration Crash: `CREATE INDEX` on Already-Dropped `category` Column
+
+**Symptom:** Running `npm run migrate` on production failed with `column "category" does not exist` at the early `CREATE INDEX IF NOT EXISTS idx_ingredients_category ON mcogs_ingredients(category)` statement. The server API would not start.
+
+**Root Cause:** The migration script has two phases:
+1. Early steps create tables (including `category VARCHAR` columns on `mcogs_ingredients` and `mcogs_recipes`)
+2. Later steps (FK migration) drop those columns and replace them with `category_id INTEGER`
+
+On a database where the FK migration had already run previously, re-running `migrate.js` hit the early `CREATE INDEX` on a column that no longer existed.
+
+**Fix:** Wrapped both old index creations in `DO` blocks that check column existence first:
+```sql
+DO $ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name='mcogs_ingredients' AND column_name='category') THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_ingredients_category ON mcogs_ingredients(category)';
+  END IF;
+END $
+```
+
+**File:** `api/scripts/migrate.js`
+
+---
+
+### Fix 17 — Combo Step Option Modal Missing Recipe/Ingredient Selector
+
+**Symptom:** The "Add Option" / "Edit Option" modal for combo step options showed Type selector (Manual/Recipe/Ingredient) but had no recipe or ingredient search field — selecting "Recipe" or "Ingredient" showed a blank form with no way to link the option to an item.
+
+**Root Cause:** `ComboOptionForm` only rendered the `manual_cost` field for manual type; the recipe and ingredient selector comboboxes were never implemented.
+
+**Fix:**
+- Added `recipes: Recipe[]` and `ingredients: Ingredient[]` to `SalesItemDetailProps` and `ComboOptionForm` props
+- `<SalesItemDetail>` now passes `recipes={recipes}` and `ingredients={ingredients}` at the call site
+- `ComboOptionForm` gains two comboboxes (same floating-dropdown pattern as `SalesItemModal`):
+  - **Recipe** — shown when `item_type === 'recipe'`; searches by name, shows category in secondary slot; sets `form.recipe_id`
+  - **Ingredient** — shown when `item_type === 'ingredient'`; searches by name, shows `base_unit_abbr`; sets `form.ingredient_id`
+- `handleTypeChange()` clears linked IDs and search text when switching types
+- Pre-populates search text from existing `recipe_id` / `ingredient_id` when editing an existing option
+
+**Files:** `app/src/pages/MenusPage.tsx`
+
+---
+
 ## 17. Critical Gotchas & Lessons Learned
 
 ### Server User Context
@@ -1340,6 +1417,49 @@ INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, prep_qty, p
 INSERT INTO mcogs_recipe_items (recipe_id, item_type, ingredient_id, qty, prep_unit, sort_order)
 ```
 
+### `category` Column Dropped — Always Use `category_id` FK
+
+The `category VARCHAR` column has been **dropped** from `mcogs_ingredients`, `mcogs_recipes`, and `mcogs_sales_items`. All category references now use a foreign key:
+
+```sql
+category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL
+```
+
+Any query that selects or filters on the old `category` string column will fail with "column does not exist". Always resolve the name via JOIN:
+
+```sql
+-- CORRECT
+SELECT i.*, cat.name AS category
+FROM mcogs_ingredients i
+LEFT JOIN mcogs_categories cat ON cat.id = i.category_id
+
+-- WRONG — column no longer exists
+SELECT i.*, i.category FROM mcogs_ingredients i
+```
+
+**Affected route files that were updated:** `ingredients.js`, `recipes.js`, `menus.js`, `allergens.js`, `scenarios.js`, `shared-pages.js`, `ai-chat.js`, `import.js`, `cogs.js`.
+
+### `mcogs_categories` Scope Flags Replace the Old `type` Column
+
+The old `type VARCHAR` column (`'ingredient'` | `'recipe'`) on `mcogs_categories` has been replaced by three boolean scope flags:
+
+| Flag | Meaning |
+|---|---|
+| `for_ingredients` | This category can be applied to ingredients |
+| `for_recipes` | This category can be applied to recipes |
+| `for_sales_items` | This category can be applied to sales items / POS menu items |
+
+**Filter pattern:**
+```js
+// Fetch categories for ingredients only
+GET /api/categories?for_ingredients=true
+
+// Fetch categories for recipes only
+GET /api/categories?for_recipes=true
+```
+
+Frontend `ImportPage.tsx` uses `c.for_ingredients` and `c.for_recipes` (not `c.type === 'ingredient'`).
+
 ### `border-collapse` Breaks `position: sticky`
 
 When `border-collapse` is set on a table, `position: sticky` on `<th>` and `<td>` elements does not work in most browsers. This affects sticky column headers and sticky first columns in data matrices.
@@ -1360,21 +1480,24 @@ The user commits and pushes all changes themselves from their local machine. **C
 
 ## 18. Backlog
 
-### Category Groups Migration
+### Category Groups — Partially Migrated
 
-**Current state:** `mcogs_categories` has a flat `group_name VARCHAR(100)` column.
+**Current state:** `mcogs_category_groups` table exists and `mcogs_categories.group_id` FK is live. The old `group_name VARCHAR(100)` column is still present for backwards compatibility but is no longer the primary way to assign groups.
 
-**Planned:** Migrate to a proper `mcogs_category_groups` table:
+`mcogs_category_groups` schema:
 ```sql
 CREATE TABLE mcogs_category_groups (
   id        SERIAL PRIMARY KEY,
   name      VARCHAR(100) NOT NULL,
   parent_id INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,
-  type      VARCHAR(20) NOT NULL CHECK (type IN ('ingredient', 'recipe')),
   sort_order INTEGER NOT NULL DEFAULT 0
 )
 ```
-Then add `group_id INTEGER REFERENCES mcogs_category_groups(id)` to `mcogs_categories` and remove `group_name`.
+
+**Remaining work:**
+- Drop `group_name` from `mcogs_categories` once all consumers use `group_id`
+- Add `type` scope to `mcogs_category_groups` (e.g. `for_ingredients` / `for_recipes`) if needed for group-level filtering
+- Categories page inline editing already uses the `group_id` FK dropdown
 
 **Benefits:** Nested group support, better analytics reporting, proper foreign key integrity.
 

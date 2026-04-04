@@ -6119,7 +6119,7 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
                     >
                       {form.ingredient_id === i.id && <span className="text-accent text-xs">✓</span>}
                       <span>{i.name}</span>
-                      {i.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.category_name}</span>}
+                      {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
                     </button>
                   ))}
                 </div>
