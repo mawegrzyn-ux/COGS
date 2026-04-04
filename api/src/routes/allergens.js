@@ -158,11 +158,13 @@ router.get('/menu/:id', async (req, res) => {
     const { rows: menuItems } = await pool.query(`
       SELECT mi.id, mi.display_name, mi.item_type, mi.recipe_id, mi.ingredient_id,
              mi.allergen_notes,
-             r.name AS recipe_name, r.category AS recipe_category,
-             ing.name AS ingredient_name, ing.category AS ingredient_category
+             r.name AS recipe_name, rcat.name AS recipe_category,
+             ing.name AS ingredient_name, icat.name AS ingredient_category
       FROM   mcogs_menu_items mi
-      LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
+      LEFT JOIN mcogs_recipes     r    ON r.id   = mi.recipe_id
+      LEFT JOIN mcogs_categories  rcat ON rcat.id = r.category_id
+      LEFT JOIN mcogs_ingredients ing  ON ing.id  = mi.ingredient_id
+      LEFT JOIN mcogs_categories  icat ON icat.id = ing.category_id
       WHERE  mi.menu_id = $1
       ORDER BY mi.sort_order ASC
     `, [req.params.id]);

@@ -23,7 +23,7 @@ router.get('/', async (req, res) => {
       SELECT
         pq.*,
         ing.name                            as ingredient_name,
-        ing.category                        as ingredient_category,
+        cat.name                            as ingredient_category,
         u.name                              as base_unit_name,
         u.abbreviation                      as base_unit_abbr,
         v.name                              as vendor_name,
@@ -38,6 +38,7 @@ router.get('/', async (req, res) => {
         pref.id IS NOT NULL                 as is_preferred
       FROM mcogs_price_quotes pq
       JOIN mcogs_ingredients ing ON ing.id = pq.ingredient_id
+      LEFT JOIN mcogs_categories cat ON cat.id = ing.category_id
       LEFT JOIN mcogs_units u    ON u.id   = ing.base_unit_id
       JOIN mcogs_vendors v       ON v.id   = pq.vendor_id
       JOIN mcogs_countries c     ON c.id   = v.country_id

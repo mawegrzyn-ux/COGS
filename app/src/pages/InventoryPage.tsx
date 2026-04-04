@@ -32,7 +32,8 @@ interface Country {
 interface Ingredient {
   id:                              number
   name:                            string
-  category:                        string | null
+  category_id:                     number | null
+  category_name:                   string | null
   base_unit_id:                    number | null
   base_unit_name:                  string | null
   base_unit_abbr:                  string | null
@@ -525,7 +526,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
   const [units,        setUnits]        = useState<Unit[]>([])
-  const [dbCategories, setDbCategories] = useState<string[]>([])
+  const [dbCategories, setDbCategories] = useState<{id: number; name: string}[]>([])
   const [loading,      setLoading]      = useState(true)
   const [search,       setSearch]       = useState('')
   const [gridMode,     setGridMode]     = useState(false)
@@ -534,7 +535,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [toast,        setToast]        = useState<ToastState | null>(null)
 
   const blankForm = {
-    name: '', category: '', base_unit_id: '', default_prep_unit: '',
+    name: '', category_id: '', base_unit_id: '', default_prep_unit: '',
     default_prep_to_base_conversion: '1', waste_pct: '0', notes: '', image_url: '',
   }
   const [form,   setForm]   = useState(blankForm)
@@ -579,12 +580,12 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
       const [ings, us, cats, vends] = await Promise.all([
         api.get('/ingredients'),
         api.get('/units'),
-        api.get('/categories?type=ingredient'),
+        api.get('/categories?for_ingredients=true'),
         api.get('/vendors'),
       ])
       setIngredients(ings || [])
       setUnits(us || [])
-      setDbCategories((cats || []).map((c: any) => c.name).sort())
+      setDbCategories((cats || []).map((c: any) => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name)))
       setVendors(vends || [])
     } catch {
       showToast('Failed to load ingredients', 'error')
@@ -644,17 +645,12 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
   // ── Derived ─────────────────────────────────────────────────────────────────
 
-  const categories = useMemo(() =>
-    [...new Set([
-      ...dbCategories,
-      ...ingredients.map(i => i.category).filter(Boolean) as string[],
-    ])].sort()
-  , [dbCategories, ingredients])
+  const categories = dbCategories
 
   const searchFiltered = useMemo(() =>
     ingredients.filter(i => !search ||
       i.name.toLowerCase().includes(search.toLowerCase()) ||
-      (i.category || '').toLowerCase().includes(search.toLowerCase())
+      (i.category_name || '').toLowerCase().includes(search.toLowerCase())
     )
   , [ingredients, search])
 
@@ -703,7 +699,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         .filter(u => u.type === type)
         .map(u => ({ value: String(u.id), label: u.abbreviation || u.name, group: type.charAt(0).toUpperCase() + type.slice(1) }))
     )
-    const catOptions: GridOption[] = categories.map(c => ({ value: c, label: c }))
+    const catOptions: GridOption[] = categories.map(c => ({ value: String(c.id), label: c.name }))
 
     const unitFilterOptions: GridOption[] = unitOptions.map(u => ({ value: u.value, label: u.label }))
 
@@ -713,9 +709,9 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         minWidth: 160, placeholder: 'New ingredient…', sortable: true,
       },
       {
-        key: 'category', header: 'Category', type: 'combo', editable: true,
-        options: catOptions, minWidth: 130, placeholder: 'Select or add…',
-        filterable: true, filterOptions: catOptions, sortable: true,
+        key: 'category_id', header: 'Category', type: 'select', editable: true,
+        options: catOptions, minWidth: 130,
+        filterable: true, filterOptions: catOptions, sortable: false,
       },
       {
         key: 'base_unit_id', header: 'Base Unit', type: 'select', editable: true,
@@ -743,7 +739,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         align: 'right',
       },
     ]
-  }, [units, categories])
+  }, [units, dbCategories])
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -768,7 +764,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     setModal(i)
     setIngModalTab('details')
     setForm({
-      name: i.name, category: i.category || '',
+      name: i.name, category_id: i.category_id ? String(i.category_id) : '',
       base_unit_id: i.base_unit_id ? String(i.base_unit_id) : '',
       default_prep_unit: i.default_prep_unit || '',
       default_prep_to_base_conversion: i.default_prep_to_base_conversion || '1',
@@ -813,7 +809,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     setSaving(true)
     try {
       const payload = {
-        name: form.name.trim(), category: form.category.trim() || null,
+        name: form.name.trim(), category_id: Number(form.category_id) || null,
         base_unit_id: Number(form.base_unit_id),
         default_prep_unit: form.default_prep_unit.trim() || null,
         default_prep_to_base_conversion: Number(form.default_prep_to_base_conversion) || 1,
@@ -933,7 +929,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
     finally { setSavingNut(false) }
   }
 
-  const categoryFilterOptions = categories.map(c => ({ label: c, value: c }))
+  const categoryFilterOptions = categories.map(c => ({ label: c.name, value: c.name }))
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -984,7 +980,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
           onSave={async (draft, isNew) => {
             const payload = {
               name:                            String(draft.name ?? '').trim(),
-              category:                        String(draft.category ?? '').trim() || null,
+              category_id:                     Number(draft.category_id) || null,
               base_unit_id:                    Number(draft.base_unit_id) || null,
               default_prep_unit:               String(draft.default_prep_unit ?? '').trim() || null,
               default_prep_to_base_conversion: Number(draft.default_prep_to_base_conversion) || 1,
@@ -1022,7 +1018,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             <thead>
               <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
                 <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Category"   field="category"                        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category')} onFilter={v => setFilter('category', v)} />
+                <ColumnHeader<Ingredient> label="Category"   field="category_name"                   sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category_name')} onFilter={v => setFilter('category_name', v)} />
                 <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                 <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
@@ -1036,7 +1032,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               {sorted.map(ing => (
                 <tr key={ing.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
                   <td className="px-4 py-3 font-semibold text-text-1">{ing.name}</td>
-                  <td className="px-4 py-3 text-text-3">{ing.category || '—'}</td>
+                  <td className="px-4 py-3 text-text-3">{ing.category_name || '—'}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{ing.base_unit_abbr ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-text-2">{ing.default_prep_unit || '—'}</td>
                   <td className="px-4 py-3 font-mono text-text-2">
@@ -1141,7 +1137,10 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               </Field>
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Category">
-                  <CategoryCombo value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={categories} />
+                  <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+                    <option value="">No category…</option>
+                    {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                  </select>
                 </Field>
                 <Field label="Base Unit" required error={errors.base_unit_id}>
                   <select className="select w-full" value={form.base_unit_id} onChange={e => {
@@ -1775,7 +1774,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                     return (
                       <tr key={ing.id} className={`border-b border-border last:border-0 ${idx % 2 === 0 ? 'bg-white' : 'bg-surface-2/40'}`}>
                         <td className="px-4 py-2.5 font-semibold text-text-1">{ing.name}</td>
-                        <td className="px-4 py-2.5 text-text-3 text-xs">{ing.category || '—'}</td>
+                        <td className="px-4 py-2.5 text-text-3 text-xs">{ing.category_name || '—'}</td>
                         <td className="px-4 py-2.5 font-mono text-text-3 text-xs">{ing.base_unit_abbr || '—'}</td>
                         <td className="px-4 py-2">
                           <select
@@ -2039,84 +2038,6 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
       )}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </>
-  )
-}
-
-// ── Category Combo (used in ingredient modal) ─────────────────────────────────
-
-function CategoryCombo({ value, onChange, options }: {
-  value: string; onChange: (v: string) => void; options: string[]
-}) {
-  const [open,           setOpen]           = useState(false)
-  const [highlightedIdx, setHighlightedIdx] = useState(-1)
-  const ref      = useRef<HTMLDivElement>(null)
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
-
-  const filtered = options.filter(o => o.toLowerCase().includes(value.toLowerCase()))
-  const showAdd  = value.trim() !== '' && !options.some(o => o.toLowerCase() === value.toLowerCase().trim())
-  const total    = filtered.length + (showAdd ? 1 : 0)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setHighlightedIdx(-1) }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  useEffect(() => {
-    if (highlightedIdx >= 0) itemRefs.current[highlightedIdx]?.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIdx])
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      if (!open && total > 0) { setOpen(true); setHighlightedIdx(0); return }
-      setHighlightedIdx(i => Math.min(i + 1, total - 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setHighlightedIdx(i => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter') {
-      if (!open || highlightedIdx < 0) return
-      e.preventDefault()
-      if (highlightedIdx < filtered.length) {
-        onChange(filtered[highlightedIdx]); setOpen(false); setHighlightedIdx(-1)
-      } else if (showAdd) {
-        onChange(value.trim()); setOpen(false); setHighlightedIdx(-1)
-      }
-    } else if (e.key === 'Escape') {
-      setOpen(false); setHighlightedIdx(-1)
-    }
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <input
-        className="input w-full"
-        value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true); setHighlightedIdx(-1) }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={handleKeyDown}
-        placeholder="Select or type to add new…"
-        autoComplete="off"
-      />
-      {open && (filtered.length > 0 || showAdd) && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg overflow-hidden max-h-52 overflow-y-auto">
-          {filtered.map((o, idx) => (
-            <button key={o} ref={el => { itemRefs.current[idx] = el }} type="button"
-              className={`w-full text-left px-3 py-2 text-sm transition-colors text-text-1 ${highlightedIdx === idx ? 'bg-accent-dim text-accent font-semibold' : 'hover:bg-surface-2'}`}
-              onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false); setHighlightedIdx(-1) }}>{o}</button>
-          ))}
-          {showAdd && (
-            <button ref={el => { itemRefs.current[filtered.length] = el }} type="button"
-              className={`w-full text-left px-3 py-2 text-sm transition-colors font-semibold border-t border-border ${highlightedIdx === filtered.length ? 'bg-accent-dim text-accent' : 'text-accent hover:bg-surface-2'}`}
-              onMouseDown={e => { e.preventDefault(); onChange(value.trim()); setOpen(false); setHighlightedIdx(-1) }}>
-              + Add "{value.trim()}"
-            </button>
-          )}
-        </div>
-      )}
-    </div>
   )
 }
 

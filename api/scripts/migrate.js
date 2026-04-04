@@ -792,6 +792,95 @@ const migrations = [
     UNIQUE (menu_sales_item_id, price_level_id)
   )`,
 
+  // ── 50. Category Groups (unified, no type — groups span all item types) ────
+  `CREATE TABLE IF NOT EXISTS mcogs_category_groups (
+    id         SERIAL PRIMARY KEY,
+    name       VARCHAR(100) NOT NULL UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 51. Categories — add group_id FK + three scope flags ─────────────────
+  `ALTER TABLE mcogs_categories
+    ADD COLUMN IF NOT EXISTS group_id        INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS for_ingredients BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS for_recipes     BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS for_sales_items BOOLEAN NOT NULL DEFAULT FALSE`,
+
+  // ── 52. Seed groups from existing group_name + populate booleans from type
+  `DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='mcogs_categories' AND column_name='group_name') THEN
+      INSERT INTO mcogs_category_groups (name)
+      SELECT DISTINCT group_name FROM mcogs_categories
+      WHERE group_name IS NOT NULL AND group_name <> 'Unassigned'
+      ON CONFLICT (name) DO NOTHING;
+
+      UPDATE mcogs_categories c SET group_id = g.id
+      FROM mcogs_category_groups g
+      WHERE g.name = c.group_name AND c.group_id IS NULL;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='mcogs_categories' AND column_name='type') THEN
+      UPDATE mcogs_categories SET for_ingredients = TRUE
+        WHERE type = 'ingredient' AND NOT for_ingredients;
+      UPDATE mcogs_categories SET for_recipes = TRUE
+        WHERE type = 'recipe' AND NOT for_recipes;
+    END IF;
+  END $$`,
+
+  // ── 53. Ingredients — add category_id FK ─────────────────────────────────
+  `ALTER TABLE mcogs_ingredients
+    ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL`,
+
+  // ── 54. Recipes — add category_id FK ─────────────────────────────────────
+  `ALTER TABLE mcogs_recipes
+    ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL`,
+
+  // ── 55. Sales Items — add category_id FK ─────────────────────────────────
+  `ALTER TABLE mcogs_sales_items
+    ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL`,
+
+  // ── 56. Populate category_id from existing VARCHAR category fields ─────────
+  `DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='mcogs_ingredients' AND column_name='category') THEN
+      UPDATE mcogs_ingredients i SET category_id = c.id
+      FROM mcogs_categories c
+      WHERE c.name = i.category AND c.for_ingredients = TRUE AND i.category_id IS NULL;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='mcogs_recipes' AND column_name='category') THEN
+      UPDATE mcogs_recipes r SET category_id = c.id
+      FROM mcogs_categories c
+      WHERE c.name = r.category AND c.for_recipes = TRUE AND r.category_id IS NULL;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='mcogs_sales_items' AND column_name='category') THEN
+      UPDATE mcogs_sales_items s SET category_id = c.id
+      FROM mcogs_categories c
+      WHERE c.name = s.category AND c.for_sales_items = TRUE AND s.category_id IS NULL;
+    END IF;
+  END $$`,
+
+  // ── 57–61. Drop old VARCHAR category columns (idempotent via IF EXISTS) ───
+  `ALTER TABLE mcogs_categories  DROP COLUMN IF EXISTS group_name`,
+  `ALTER TABLE mcogs_categories  DROP COLUMN IF EXISTS type`,
+  `ALTER TABLE mcogs_ingredients DROP COLUMN IF EXISTS category`,
+  `ALTER TABLE mcogs_recipes      DROP COLUMN IF EXISTS category`,
+  `ALTER TABLE mcogs_sales_items  DROP COLUMN IF EXISTS category`,
+
+  // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
+  `DROP INDEX IF EXISTS idx_ingredients_category`,
+  `DROP INDEX IF EXISTS idx_recipes_category`,
+  `CREATE INDEX IF NOT EXISTS idx_ingredients_category_id ON mcogs_ingredients(category_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_recipes_category_id     ON mcogs_recipes(category_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sales_items_category_id ON mcogs_sales_items(category_id)`,
+
   // ── 33–36 Seed: default system roles + permission matrix ─────────────────
   `INSERT INTO mcogs_roles (name, description, is_system) VALUES
     ('Admin',    'Full access including user management', true),

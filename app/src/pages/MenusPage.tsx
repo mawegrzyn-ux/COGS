@@ -14,7 +14,7 @@ interface Country     { id: number; name: string; currency_code: string; currenc
 interface PriceLevel  { id: number; name: string; is_default: boolean }
 interface TaxRate     { id: number; country_id: number; name: string; rate: number; is_default: boolean }
 interface CountryLevelTax { id: number; country_id: number; price_level_id: number; tax_rate_id: number }
-interface Recipe      { id: number; name: string; category: string | null }
+interface Recipe      { id: number; name: string; category_name: string | null }
 interface Ingredient  { id: number; name: string; base_unit_abbr: string | null }
 
 interface Menu {
@@ -244,7 +244,8 @@ interface SalesItem {
   id: number
   item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
   name: string
-  category: string | null
+  category_id: number | null
+  category_name: string | null
   description: string | null
   recipe_id: number | null
   recipe_name?: string
@@ -1997,7 +1998,7 @@ function MenuItemFormModal({ isEdit, country, priceLevels, taxRates, countryLeve
                     >
                       {miRecipeId === r.id && <span className="text-accent text-xs">✓</span>}
                       <span>{r.name}</span>
-                      {r.category && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category}</span>}
+                      {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
                     </button>
                   ))}
                 </div>
@@ -5452,7 +5453,7 @@ function SalesItemsTab({
                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span>
                 <span className="text-sm font-medium text-gray-900 truncate">{si.name}</span>
               </div>
-              {si.category && <div className="text-xs text-gray-400 mt-0.5 truncate">{si.category}</div>}
+              {si.category_name && <div className="text-xs text-gray-400 mt-0.5 truncate">{si.category_name}</div>}
             </button>
           ))}
         </div>
@@ -5667,7 +5668,7 @@ function SalesItemDetail({ item, countries, priceLevels, taxRates, modifierGroup
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[item.item_type]}`}>{item.item_type.charAt(0).toUpperCase() + item.item_type.slice(1)}</span>
-            {item.category && <span className="text-xs text-gray-500">{item.category}</span>}
+            {item.category_name && <span className="text-xs text-gray-500">{item.category_name}</span>}
           </div>
           <h2 className="text-xl font-semibold text-gray-900">{item.name}</h2>
           {item.description && <p className="text-sm text-gray-500 mt-1">{item.description}</p>}
@@ -5909,9 +5910,18 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
   saving: boolean
   onClose(): void
 }) {
+  const api = useApi()
+  const [siCategories, setSiCategories] = useState<{id: number; name: string}[]>([])
+
+  useEffect(() => {
+    api.get('/categories?for_sales_items=true')
+      .then((d: any[]) => setSiCategories((d || []).map(c => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name))))
+      .catch(() => {})
+  }, [api])
+
   const [form, setForm] = useState({
     name: initial?.name ?? '',
-    category: initial?.category ?? '',
+    category_id: initial?.category_id ? String(initial.category_id) : '',
     description: initial?.description ?? '',
     item_type: initial?.item_type ?? 'manual' as SalesItem['item_type'],
     recipe_id: initial?.recipe_id ?? null as number | null,
@@ -5931,7 +5941,7 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
     onSave({
       ...form,
       name: form.name.trim(),
-      category: form.category.trim() || null,
+      category_id: Number(form.category_id) || null,
       description: form.description.trim() || null,
       recipe_id: form.item_type === 'recipe' ? form.recipe_id : null,
       ingredient_id: form.item_type === 'ingredient' ? form.ingredient_id : null,
@@ -5983,7 +5993,10 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
           <p className="text-xs text-gray-400">Combo steps are configured in the detail panel after saving.</p>
         )}
         <Field label="Category">
-          <input className="input w-full" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} />
+          <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+            <option value="">No category…</option>
+            {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          </select>
         </Field>
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
@@ -6246,7 +6259,7 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
     const q = search.toLowerCase()
     return items.filter(si =>
       !alreadyAdded.includes(si.id) &&
-      (si.name.toLowerCase().includes(q) || (si.category ?? '').toLowerCase().includes(q))
+      (si.name.toLowerCase().includes(q) || (si.category_name ?? '').toLowerCase().includes(q))
     )
   }, [items, search, alreadyAdded])
 
@@ -6298,8 +6311,8 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
                     <span className={`text-xs border px-1.5 py-0.5 rounded capitalize ${TYPE_BADGE[si.item_type] ?? 'bg-gray-50 text-gray-500 border-gray-200'}`}>
                       {si.item_type}
                     </span>
-                    {si.category && (
-                      <span className="text-xs text-gray-400">{si.category}</span>
+                    {si.category_name && (
+                      <span className="text-xs text-gray-400">{si.category_name}</span>
                     )}
                   </div>
                   {defaultPrices.length > 0 && (

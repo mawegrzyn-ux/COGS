@@ -1,74 +1,100 @@
-const router = require('express').Router();
-const pool   = require('../db/pool');
+const router = require('express').Router()
+const pool   = require('../db/pool')
 
-// GET /categories?type=ingredient|recipe
+// GET /categories
+//   ?for_ingredients=true   filter to ingredient-scoped categories
+//   ?for_recipes=true        filter to recipe-scoped categories
+//   ?for_sales_items=true    filter to sales-item-scoped categories
+//   (multiple flags may be combined with OR: ?for_recipes=true&for_sales_items=true)
 router.get('/', async (req, res) => {
   try {
-    const { type } = req.query;
-    let query = `SELECT * FROM mcogs_categories`;
-    const vals = [];
-    if (type) { query += ` WHERE type = $1`; vals.push(type); }
-    query += ` ORDER BY group_name ASC, sort_order ASC, name ASC`;
-    const { rows } = await pool.query(query, vals);
-    res.json(rows);
+    const { for_ingredients, for_recipes, for_sales_items } = req.query
+    const conditions = []
+    if (for_ingredients === 'true') conditions.push('c.for_ingredients = TRUE')
+    if (for_recipes     === 'true') conditions.push('c.for_recipes = TRUE')
+    if (for_sales_items === 'true') conditions.push('c.for_sales_items = TRUE')
+
+    const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : ''
+
+    const { rows } = await pool.query(`
+      SELECT c.id, c.name, c.sort_order,
+             c.for_ingredients, c.for_recipes, c.for_sales_items,
+             c.group_id,
+             g.name AS group_name
+      FROM mcogs_categories c
+      LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
+      ${where}
+      ORDER BY g.name ASC NULLS LAST, c.sort_order ASC, c.name ASC
+    `)
+    res.json(rows)
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: { message: 'Failed to fetch categories' } });
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to fetch categories' } })
   }
-});
+})
 
 // POST /categories
 router.post('/', async (req, res) => {
-  const { name, type, group_name, sort_order } = req.body;
-  if (!name || !type)
-    return res.status(400).json({ error: { message: 'name and type are required' } });
-  if (!['ingredient', 'recipe'].includes(type))
-    return res.status(400).json({ error: { message: 'type must be ingredient or recipe' } });
+  const { name, group_id, for_ingredients = false, for_recipes = false, for_sales_items = false, sort_order = 0 } = req.body
+  if (!name?.trim())
+    return res.status(400).json({ error: { message: 'name is required' } })
   try {
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_categories (name, type, group_name, sort_order)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [name.trim(), type, group_name?.trim() || 'Unassigned', sort_order ?? 0]
-    );
-    res.status(201).json(rows[0]);
+      `INSERT INTO mcogs_categories (name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [name.trim(), group_id || null, !!for_ingredients, !!for_recipes, !!for_sales_items, sort_order]
+    )
+    // Return with group_name joined
+    const { rows: full } = await pool.query(`
+      SELECT c.*, g.name AS group_name
+      FROM mcogs_categories c LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
+      WHERE c.id = $1`, [rows[0].id])
+    res.status(201).json(full[0])
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: { message: 'Failed to create category' } });
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to create category' } })
   }
-});
+})
 
 // PUT /categories/:id
 router.put('/:id', async (req, res) => {
-  const { name, group_name, sort_order } = req.body;
-  if (!name)
-    return res.status(400).json({ error: { message: 'name is required' } });
+  const { name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order } = req.body
+  if (!name?.trim())
+    return res.status(400).json({ error: { message: 'name is required' } })
   try {
     const { rows } = await pool.query(
       `UPDATE mcogs_categories
-       SET name=$1, group_name=$2, sort_order=$3, updated_at=NOW()
-       WHERE id=$4 RETURNING *`,
-      [name.trim(), group_name?.trim() || 'Unassigned', sort_order ?? 0, req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
-    res.json(rows[0]);
+       SET name=$1, group_id=$2, for_ingredients=$3, for_recipes=$4, for_sales_items=$5,
+           sort_order=$6, updated_at=NOW()
+       WHERE id=$7 RETURNING *`,
+      [name.trim(), group_id || null, !!for_ingredients, !!for_recipes, !!for_sales_items,
+       sort_order ?? 0, req.params.id]
+    )
+    if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } })
+    const { rows: full } = await pool.query(`
+      SELECT c.*, g.name AS group_name
+      FROM mcogs_categories c LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
+      WHERE c.id = $1`, [rows[0].id])
+    res.json(full[0])
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: { message: 'Failed to update category' } });
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to update category' } })
   }
-});
+})
 
 // DELETE /categories/:id
+// ON DELETE SET NULL on category_id FKs means ingredients/recipes/sales_items become uncategorised automatically
 router.delete('/:id', async (req, res) => {
   try {
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_categories WHERE id=$1`, [req.params.id]
-    );
-    if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
-    res.status(204).send();
+    )
+    if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } })
+    res.status(204).send()
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: { message: 'Failed to delete category' } });
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to delete category' } })
   }
-});
+})
 
-module.exports = router;
+module.exports = router

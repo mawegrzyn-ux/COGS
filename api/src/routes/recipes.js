@@ -8,11 +8,15 @@ router.get('/', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT r.*,
              COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr,
+             c.name AS category_name,
+             g.name AS category_group_name,
              COUNT(ri.id) FILTER (WHERE ri.variation_id IS NULL AND ri.pl_variation_id IS NULL AND ri.market_pl_variation_id IS NULL)::int AS item_count
       FROM   mcogs_recipes r
-      LEFT JOIN mcogs_units u        ON u.id = r.yield_unit_id
-      LEFT JOIN mcogs_recipe_items ri ON ri.recipe_id = r.id
-      GROUP BY r.id, u.abbreviation
+      LEFT JOIN mcogs_units             u  ON u.id = r.yield_unit_id
+      LEFT JOIN mcogs_categories        c  ON c.id = r.category_id
+      LEFT JOIN mcogs_category_groups   g  ON g.id = c.group_id
+      LEFT JOIN mcogs_recipe_items      ri ON ri.recipe_id = r.id
+      GROUP BY r.id, u.abbreviation, c.name, g.name
       ORDER BY r.name ASC
     `);
     res.json(rows);
@@ -449,13 +453,13 @@ router.get('/:id', async (req, res) => {
 
 // ── POST /recipes ─────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_text, image_url } = req.body;
+  const { name, category_id, description, yield_qty, yield_unit_text, image_url } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
-      INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_text, image_url)
+      INSERT INTO mcogs_recipes (name, category_id, description, yield_qty, yield_unit_text, image_url)
       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null]);
+    `, [name.trim(), category_id||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null]);
     res.status(201).json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
@@ -465,14 +469,14 @@ router.post('/', async (req, res) => {
 
 // ── PUT /recipes/:id ──────────────────────────────────────────────────────────
 router.put('/:id', async (req, res) => {
-  const { name, category, description, yield_qty, yield_unit_text, image_url } = req.body;
+  const { name, category_id, description, yield_qty, yield_unit_text, image_url } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
     const { rows: [r] } = await pool.query(`
-      UPDATE mcogs_recipes SET name=$1, category=$2, description=$3,
+      UPDATE mcogs_recipes SET name=$1, category_id=$2, description=$3,
              yield_qty=$4, yield_unit_text=$5, image_url=$6, updated_at=NOW()
       WHERE id=$7 RETURNING *
-    `, [name.trim(), category?.trim()||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null, req.params.id]);
+    `, [name.trim(), category_id||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null, req.params.id]);
     if (!r) return res.status(404).json({ error: { message: 'Not found' } });
     res.json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {

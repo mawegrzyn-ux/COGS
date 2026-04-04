@@ -13,9 +13,10 @@ async function fetchRow(id, client) {
             si.name       AS sales_item_name,
             si.item_type,
             si.image_url  AS si_image_url,
-            si.category
+            cat.name      AS category
      FROM   mcogs_menu_sales_items msi
      JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+     LEFT JOIN mcogs_categories cat ON cat.id = si.category_id
      WHERE  msi.id = $1`,
     [id]
   );
@@ -50,9 +51,10 @@ router.get('/', async (req, res, next) => {
               si.name      AS sales_item_name,
               si.item_type,
               si.image_url AS si_image_url,
-              si.category
+              cat.name     AS category
        FROM   mcogs_menu_sales_items msi
        JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+       LEFT JOIN mcogs_categories cat ON cat.id = si.category_id
        WHERE  msi.menu_id = $1
        ORDER  BY msi.sort_order, msi.id`,
       [menu_id]

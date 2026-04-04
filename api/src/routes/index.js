@@ -44,6 +44,7 @@ router.use('/country-level-tax',  ...can('markets', 'read'),     write('markets'
 router.use('/brand-partners',     ...can('markets', 'read'),     write('markets'),     require('./brand-partners'));
 
 // ── Categories ─────────────────────────────────────────────────────────────────
+router.use('/category-groups',    ...can('categories', 'read'),  write('categories'),  require('./category-groups'));
 router.use('/categories',         ...can('categories', 'read'),  write('categories'),  require('./categories'));
 
 // ── Inventory ──────────────────────────────────────────────────────────────────

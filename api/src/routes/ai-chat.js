@@ -208,11 +208,13 @@ CONFIRMATION REQUIRED before calling.`,
   },
   {
     name: 'list_categories',
-    description: 'Lists all categories with id, name, type (ingredient/recipe), and group_name.',
+    description: 'Lists all categories with id, name, group_name, and scope flags (for_ingredients, for_recipes, for_sales_items). Filter by scope to get only relevant categories.',
     input_schema: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['ingredient', 'recipe'], description: 'Optional: filter by category type' },
+        for_ingredients: { type: 'boolean', description: 'Filter to categories usable for ingredients' },
+        for_recipes:     { type: 'boolean', description: 'Filter to categories usable for recipes' },
+        for_sales_items: { type: 'boolean', description: 'Filter to categories usable for sales items' },
       },
       required: [],
     },
@@ -244,12 +246,12 @@ CONFIRMATION REQUIRED before calling.`,
   // ── Create ───────────────────────────────────────────────────────────────────
   {
     name: 'create_ingredient',
-    description: 'Creates a new ingredient. If the category name does not exist it will be auto-created. CONFIRMATION REQUIRED before calling.',
+    description: 'Creates a new ingredient. Call list_categories first to get category_id. CONFIRMATION REQUIRED before calling.',
     input_schema: {
       type: 'object',
       properties: {
         name:                         { type: 'string' },
-        category:                     { type: 'string', description: 'Category name (auto-created if missing)' },
+        category_id:                  { type: 'integer', description: 'Category ID from list_categories (for_ingredients=true)' },
         base_unit_id:                 { type: 'integer', description: 'ID from list_units' },
         waste_pct:                    { type: 'number', description: 'Waste percentage 0-100' },
         default_prep_unit:            { type: 'string' },
@@ -313,7 +315,7 @@ CONFIRMATION REQUIRED before calling.`,
       type: 'object',
       properties: {
         name:          { type: 'string' },
-        category:      { type: 'string' },
+        category_id:   { type: 'integer', description: 'Category ID from list_categories (for_recipes=true)' },
         description:   { type: 'string' },
         yield_qty:     { type: 'number' },
         yield_unit_id: { type: 'integer', description: 'Unit ID from list_units' },
@@ -384,16 +386,18 @@ CONFIRMATION REQUIRED before calling.`,
   },
   {
     name: 'create_category',
-    description: 'Creates a new ingredient or recipe category. CONFIRMATION REQUIRED before calling.',
+    description: 'Creates a new category with scope flags. Call list_categories first to check if it already exists. CONFIRMATION REQUIRED before calling.',
     input_schema: {
       type: 'object',
       properties: {
-        name:       { type: 'string' },
-        type:       { type: 'string', enum: ['ingredient', 'recipe'] },
-        group_name: { type: 'string' },
-        sort_order: { type: 'integer' },
+        name:            { type: 'string' },
+        group_id:        { type: 'integer', description: 'Optional category group ID' },
+        for_ingredients: { type: 'boolean', description: 'Available for inventory ingredients' },
+        for_recipes:     { type: 'boolean', description: 'Available for recipes' },
+        for_sales_items: { type: 'boolean', description: 'Available for sales items / menu catalog' },
+        sort_order:      { type: 'integer' },
       },
-      required: ['name', 'type'],
+      required: ['name'],
     },
   },
 
@@ -406,7 +410,7 @@ CONFIRMATION REQUIRED before calling.`,
       properties: {
         id:                           { type: 'integer' },
         name:                         { type: 'string' },
-        category:                     { type: 'string' },
+        category_id:                  { type: 'integer', description: 'Category ID from list_categories (for_ingredients=true)' },
         base_unit_id:                 { type: 'integer' },
         waste_pct:                    { type: 'number' },
         default_prep_unit:            { type: 'string' },
@@ -457,7 +461,7 @@ CONFIRMATION REQUIRED before calling.`,
       properties: {
         id:            { type: 'integer' },
         name:          { type: 'string' },
-        category:      { type: 'string' },
+        category_id:   { type: 'integer', description: 'Category ID from list_categories (for_recipes=true)' },
         description:   { type: 'string' },
         yield_qty:     { type: 'number' },
         yield_unit_id: { type: 'integer' },
@@ -679,14 +683,17 @@ Do NOT use this for small single-record requests; use the individual create_* to
   // ── Category update / delete ──────────────────────────────────────────────────
   {
     name: 'update_category',
-    description: 'Updates a category name, group, or sort order. Call list_categories first to get the ID. CONFIRMATION REQUIRED.',
+    description: 'Updates a category name, group, scope flags, or sort order. Call list_categories first to get the ID. CONFIRMATION REQUIRED.',
     input_schema: {
       type: 'object',
       properties: {
-        id:         { type: 'integer' },
-        name:       { type: 'string' },
-        group_name: { type: 'string' },
-        sort_order: { type: 'integer' },
+        id:              { type: 'integer' },
+        name:            { type: 'string' },
+        group_id:        { type: 'integer', description: 'Category group ID (null to clear)' },
+        for_ingredients: { type: 'boolean' },
+        for_recipes:     { type: 'boolean' },
+        for_sales_items: { type: 'boolean' },
+        sort_order:      { type: 'integer' },
       },
       required: ['id', 'name'],
     },
@@ -1283,19 +1290,6 @@ Returns a summary of what was exported; the file downloads automatically in the 
 // ── Tool executor ─────────────────────────────────────────────────────────────
 
 // Helper: ensure category name exists in mcogs_categories (mirrors ingredients.js)
-async function ensureCategory(name, type = 'ingredient') {
-  if (!name) return;
-  const { rows } = await pool.query(
-    `SELECT id FROM mcogs_categories WHERE name = $1 AND type = $2 LIMIT 1`,
-    [name.trim(), type]
-  );
-  if (!rows.length) {
-    await pool.query(
-      `INSERT INTO mcogs_categories (name, type, group_name) VALUES ($1, $2, 'Unassigned')`,
-      [name.trim(), type]
-    );
-  }
-}
 
 async function executeTool(name, input, send = null, userCtx = {}) {
   switch (name) {
@@ -1329,8 +1323,8 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     case 'list_ingredients': {
       const { search } = input;
       const q = search
-        ? `SELECT id, name, category, waste_pct, base_unit_id FROM mcogs_ingredients WHERE name ILIKE $1 ORDER BY name LIMIT 100`
-        : `SELECT id, name, category, waste_pct, base_unit_id FROM mcogs_ingredients ORDER BY name LIMIT 100`;
+        ? `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id WHERE i.name ILIKE $1 ORDER BY i.name LIMIT 100`
+        : `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id ORDER BY i.name LIMIT 100`;
       const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
       return rows;
     }
@@ -1637,11 +1631,20 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'list_categories': {
-      const { type } = input;
-      const q = type
-        ? `SELECT id, name, type, group_name, sort_order FROM mcogs_categories WHERE type = $1 ORDER BY name`
-        : `SELECT id, name, type, group_name, sort_order FROM mcogs_categories ORDER BY type, name`;
-      const { rows } = await pool.query(q, type ? [type] : []);
+      const { for_ingredients, for_recipes, for_sales_items } = input;
+      const conditions = [];
+      if (for_ingredients) conditions.push('c.for_ingredients = true');
+      if (for_recipes)     conditions.push('c.for_recipes = true');
+      if (for_sales_items) conditions.push('c.for_sales_items = true');
+      const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : '';
+      const { rows } = await pool.query(`
+        SELECT c.id, c.name, c.sort_order, c.for_ingredients, c.for_recipes, c.for_sales_items,
+               c.group_id, g.name AS group_name
+        FROM mcogs_categories c
+        LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
+        ${where}
+        ORDER BY c.name
+      `);
       return rows;
     }
 
@@ -1686,17 +1689,16 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     // ── Ingredient CRUD ────────────────────────────────────────────────────────
 
     case 'create_ingredient': {
-      const { name, category, base_unit_id, waste_pct, default_prep_unit,
+      const { name, category_id, base_unit_id, waste_pct, default_prep_unit,
               default_prep_to_base_conversion, notes } = input;
       if (!name?.trim()) return { error: 'name is required' };
-      await ensureCategory(category, 'ingredient');
       const { rows } = await pool.query(`
         INSERT INTO mcogs_ingredients
-          (name, category, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, name, category, waste_pct
+          (name, category_id, base_unit_id, waste_pct, default_prep_unit, default_prep_to_base_conversion, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, name, category_id, waste_pct
       `, [
         name.trim(),
-        category?.trim()                  || null,
+        category_id                       || null,
         base_unit_id                      || null,
         waste_pct                         ?? 0,
         default_prep_unit?.trim()         || null,
@@ -1707,18 +1709,17 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'update_ingredient': {
-      const { id, name, category, base_unit_id, waste_pct, default_prep_unit,
+      const { id, name, category_id, base_unit_id, waste_pct, default_prep_unit,
               default_prep_to_base_conversion, notes } = input;
       if (!name?.trim()) return { error: 'name is required' };
-      await ensureCategory(category, 'ingredient');
       const { rows } = await pool.query(`
         UPDATE mcogs_ingredients SET
-          name = $1, category = $2, base_unit_id = $3, waste_pct = $4,
+          name = $1, category_id = $2, base_unit_id = $3, waste_pct = $4,
           default_prep_unit = $5, default_prep_to_base_conversion = $6, notes = $7
-        WHERE id = $8 RETURNING id, name, category, waste_pct
+        WHERE id = $8 RETURNING id, name, category_id, waste_pct
       `, [
         name.trim(),
-        category?.trim()                  || null,
+        category_id                       || null,
         base_unit_id                      || null,
         waste_pct                         ?? 0,
         default_prep_unit?.trim()         || null,
@@ -1856,14 +1857,14 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     // ── Recipe CRUD ────────────────────────────────────────────────────────────
 
     case 'create_recipe': {
-      const { name, category, description, yield_qty, yield_unit_id } = input;
+      const { name, category_id, description, yield_qty, yield_unit_id } = input;
       if (!name?.trim()) return { error: 'name is required' };
       const { rows } = await pool.query(`
-        INSERT INTO mcogs_recipes (name, category, description, yield_qty, yield_unit_id)
-        VALUES ($1,$2,$3,$4,$5) RETURNING id, name, category
+        INSERT INTO mcogs_recipes (name, category_id, description, yield_qty, yield_unit_id)
+        VALUES ($1,$2,$3,$4,$5) RETURNING id, name, category_id
       `, [
         name.trim(),
-        category?.trim()    || null,
+        category_id         || null,
         description?.trim() || null,
         yield_qty           || null,
         yield_unit_id       || null,
@@ -1872,14 +1873,14 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'update_recipe': {
-      const { id, name, category, description, yield_qty, yield_unit_id } = input;
+      const { id, name, category_id, description, yield_qty, yield_unit_id } = input;
       if (!name?.trim()) return { error: 'name is required' };
       const { rows } = await pool.query(`
-        UPDATE mcogs_recipes SET name=$1, category=$2, description=$3, yield_qty=$4, yield_unit_id=$5
-        WHERE id=$6 RETURNING id, name, category
+        UPDATE mcogs_recipes SET name=$1, category_id=$2, description=$3, yield_qty=$4, yield_unit_id=$5
+        WHERE id=$6 RETURNING id, name, category_id
       `, [
         name.trim(),
-        category?.trim()    || null,
+        category_id         || null,
         description?.trim() || null,
         yield_qty           || null,
         yield_unit_id       || null,
@@ -1988,16 +1989,18 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     // ── Category CRUD ──────────────────────────────────────────────────────────
 
     case 'create_category': {
-      const { name, type, group_name, sort_order } = input;
+      const { name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order } = input;
       if (!name?.trim()) return { error: 'name is required' };
       const { rows } = await pool.query(`
-        INSERT INTO mcogs_categories (name, type, group_name, sort_order)
-        VALUES ($1,$2,$3,$4) RETURNING id, name, type, group_name
+        INSERT INTO mcogs_categories (name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order)
+        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, name, group_id, for_ingredients, for_recipes, for_sales_items
       `, [
         name.trim(),
-        type,
-        group_name?.trim() || 'Unassigned',
-        sort_order         || 0,
+        group_id        || null,
+        for_ingredients || false,
+        for_recipes     || false,
+        for_sales_items || false,
+        sort_order      || 0,
       ]);
       return rows[0];
     }
@@ -2182,12 +2185,13 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     // ── Category update / delete ───────────────────────────────────────────────
 
     case 'update_category': {
-      const { id, name, group_name, sort_order } = input;
+      const { id, name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order } = input;
       if (!name?.trim()) return { error: 'name is required' };
       const { rows } = await pool.query(`
-        UPDATE mcogs_categories SET name=$1, group_name=$2, sort_order=$3, updated_at=NOW()
-        WHERE id=$4 RETURNING id, name, type, group_name, sort_order
-      `, [name.trim(), group_name?.trim() || 'Unassigned', sort_order ?? 0, id]);
+        UPDATE mcogs_categories
+        SET name=$1, group_id=$2, for_ingredients=$3, for_recipes=$4, for_sales_items=$5, sort_order=$6, updated_at=NOW()
+        WHERE id=$7 RETURNING id, name, group_id, for_ingredients, for_recipes, for_sales_items, sort_order
+      `, [name.trim(), group_id || null, for_ingredients || false, for_recipes || false, for_sales_items || false, sort_order ?? 0, id]);
       if (!rows.length) return { error: 'Category not found' };
       return rows[0];
     }
@@ -2994,15 +2998,16 @@ async function executeTool(name, input, send = null, userCtx = {}) {
           const { rows } = await pool.query(`
             SELECT
               r.name                          AS "Recipe",
-              r.category                      AS "Category",
+              cat.name                        AS "Category",
               ri.item_type                    AS "Item Type",
               COALESCE(i.name, sr.name)       AS "Item Name",
               ri.prep_qty                     AS "Qty",
               ri.prep_unit                    AS "Unit"
             FROM mcogs_recipe_items ri
-            JOIN mcogs_recipes r        ON r.id  = ri.recipe_id
-            LEFT JOIN mcogs_ingredients i  ON i.id  = ri.ingredient_id
-            LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
+            JOIN mcogs_recipes r            ON r.id   = ri.recipe_id
+            LEFT JOIN mcogs_categories cat  ON cat.id = r.category_id
+            LEFT JOIN mcogs_ingredients i   ON i.id   = ri.ingredient_id
+            LEFT JOIN mcogs_recipes sr      ON sr.id  = ri.recipe_item_id
             ORDER BY r.name, ri.id
           `);
           addSheet('Recipes', rows);
@@ -3132,7 +3137,7 @@ Pepper can be displayed as a floating popup (bottom-right), docked to the left s
 1. Always call list_* tools first to resolve names → IDs before any write operation. Never guess IDs.
 2. To add an ingredient to a recipe: list_ingredients → get ID → add_recipe_item
 3. To set a preferred vendor: list_vendors + list_price_quotes → set_preferred_vendor
-4. For new ingredients without a category, use create_category first or let create_ingredient auto-create it
+4. For new ingredients/recipes without a category: call list_categories (with for_ingredients=true or for_recipes=true) first to pick an existing one, or call create_category to make a new one, then pass category_id
 
 ## FILE UPLOADS (when images or CSV text is provided)
 - CSV: parse all rows, summarise the full import plan (count, fields, sample rows), confirm once, then create records

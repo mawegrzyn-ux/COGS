@@ -316,7 +316,7 @@ function InventoryAllergenMatrix() {
       const built: IngAllergenRow[] = (ings || []).map((ing: any) => ({
         ingredient_id:  ing.id,
         name:           ing.name,
-        category:       ing.category,
+        category:       ing.category_name ?? null,
         allergen_notes: ing.allergen_notes ?? null,
         _saveState:     'idle' as AlgSaveState,
         _notesSaving:   false,

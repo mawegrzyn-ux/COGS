@@ -645,14 +645,15 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT mi.*,
              r.name         AS recipe_name,
-             r.category     AS recipe_category,
+             cat.name       AS recipe_category,
              r.yield_qty,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr
       FROM   mcogs_menu_items mi
       LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
-      LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
+      LEFT JOIN mcogs_categories  cat ON cat.id  = r.category_id
+      LEFT JOIN mcogs_ingredients ing ON ing.id  = mi.ingredient_id
+      LEFT JOIN mcogs_units       u   ON u.id    = ing.base_unit_id
       WHERE  mi.menu_id = $1
       ORDER BY mi.id ASC
     `, [queryMenuId]);

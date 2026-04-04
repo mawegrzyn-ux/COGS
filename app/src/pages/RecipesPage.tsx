@@ -7,8 +7,8 @@ import ImageUpload from '../components/ImageUpload'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Ingredient { id: number; name: string; category: string | null; base_unit_id: number | null; base_unit_abbr: string | null; default_prep_unit: string | null; default_prep_to_base_conversion: number; waste_pct: number }
-interface Recipe     { id: number; name: string; category: string | null; description: string | null; yield_qty: number; yield_unit_id: number | null; yield_unit_abbr: string | null; item_count: number; image_url: string | null }
+interface Ingredient { id: number; name: string; category_name: string | null; base_unit_id: number | null; base_unit_abbr: string | null; default_prep_unit: string | null; default_prep_to_base_conversion: number; waste_pct: number }
+interface Recipe     { id: number; name: string; category_id: number | null; category_name: string | null; description: string | null; yield_qty: number; yield_unit_id: number | null; yield_unit_abbr: string | null; item_count: number; image_url: string | null }
 
 interface RecipeItem {
   id:                     number
@@ -136,7 +136,7 @@ export default function RecipesPage() {
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
-  const [apiCategories,setApiCategories]= useState<string[]>([])
+  const [apiCategories,setApiCategories]= useState<{id: number; name: string}[]>([])
   const [loading,      setLoading]      = useState(true)
   const [panelWidth,   setPanelWidth]   = useState(288) // px, default w-72
   const [selected,     setSelected]     = useState<RecipeDetail | null>(null)
@@ -180,7 +180,7 @@ export default function RecipesPage() {
   // search/filter
   const [search,     setSearch]     = useState('')
   const [filterCat,  setFilterCat]  = useState('')
-  const [sortField,  setSortField]  = useState<'name'|'category'|'yield_qty'>('name')
+  const [sortField,  setSortField]  = useState<'name'|'category_name'|'yield_qty'>('name')
   const [sortDir,    setSortDir]    = useState<'asc'|'desc'>('asc')
 
   // toast
@@ -226,11 +226,11 @@ export default function RecipesPage() {
       const [r, i, cats] = await Promise.all([
         api.get('/recipes'),
         api.get('/ingredients'),
-        api.get('/categories?type=recipe'),
+        api.get('/categories?for_recipes=true'),
       ])
       setRecipes(r || [])
       setIngredients(i || [])
-      setApiCategories((cats || []).map((c: { name: string }) => c.name).sort())
+      setApiCategories((cats || []).map((c: any) => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name)))
     } finally {
       setLoading(false)
     }
@@ -301,15 +301,12 @@ export default function RecipesPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const categories = useMemo(() => {
-    const fromRecipes = recipes.map(r => r.category).filter(Boolean) as string[]
-    return [...new Set([...apiCategories, ...fromRecipes])].sort()
-  }, [recipes, apiCategories])
+  const categories = apiCategories
 
   const filtered = useMemo(() => {
     let r = [...recipes]
-    if (search)    r = r.filter(x => x.name.toLowerCase().includes(search.toLowerCase()) || (x.category||'').toLowerCase().includes(search.toLowerCase()))
-    if (filterCat) r = r.filter(x => x.category === filterCat)
+    if (search)    r = r.filter(x => x.name.toLowerCase().includes(search.toLowerCase()) || (x.category_name||'').toLowerCase().includes(search.toLowerCase()))
+    if (filterCat) r = r.filter(x => String(x.category_id) === filterCat)
     r.sort((a, b) => {
       const av = a[sortField] ?? '', bv = b[sortField] ?? ''
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
@@ -426,7 +423,7 @@ export default function RecipesPage() {
     const isNew = recipeModal === 'new'
     const payload = {
       name:            form.name.trim(),
-      category:        form.category.trim() || null,
+      category_id:     Number(form.category_id) || null,
       description:     form.description.trim() || null,
       yield_qty:       Number(form.yield_qty) || 1,
       yield_unit_text: form.yield_unit_text.trim() || null,
@@ -896,11 +893,11 @@ export default function RecipesPage() {
             <div className="flex gap-2">
               <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input text-xs flex-1">
                 <option value="">All categories</option>
-                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
               </select>
               <select value={sortField} onChange={e => setSortField(e.target.value as any)} className="input text-xs w-28">
                 <option value="name">Name</option>
-                <option value="category">Category</option>
+                <option value="category_name">Category</option>
                 <option value="yield_qty">Yield</option>
               </select>
               <button
@@ -933,7 +930,7 @@ export default function RecipesPage() {
                 >
                   <div className="font-semibold text-sm text-text-1 truncate">{r.name}</div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    {r.category && <span className="text-xs text-text-3 truncate">{r.category}</span>}
+                    {r.category_name && <span className="text-xs text-text-3 truncate">{r.category_name}</span>}
                     <span className="text-xs text-text-3 ml-auto shrink-0">
                       {r.item_count} item{r.item_count !== 1 ? 's' : ''}
                       {r.yield_qty !== 1 && ` · ${r.yield_qty}${r.yield_unit_abbr ? ' ' + r.yield_unit_abbr : ''}`}
@@ -982,7 +979,7 @@ export default function RecipesPage() {
                 <div>
                   <h2 className="text-xl font-bold text-text-1">{selected.name}</h2>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {selected.category && <Badge label={selected.category} variant="neutral" />}
+                    {selected.category_name && <Badge label={selected.category_name} variant="neutral" />}
                     <span className="text-sm text-text-3">
                       Yield: <span className="font-mono font-semibold text-text-2">{selected.yield_qty}{selected.yield_unit_abbr ? ' ' + selected.yield_unit_abbr : ''}</span>
                     </span>
@@ -1949,54 +1946,26 @@ export default function RecipesPage() {
 // ── Recipe Form Modal ─────────────────────────────────────────────────────────
 
 interface RecipeForm {
-  name: string; category: string; description: string; yield_qty: string; yield_unit_text: string; image_url: string
+  name: string; category_id: string; description: string; yield_qty: string; yield_unit_text: string; image_url: string
 }
 
 function RecipeFormModal({ recipe, categories, onSave, onClose }: {
   recipe: Recipe | null
-  categories: string[]
+  categories: {id: number; name: string}[]
   onSave: (f: RecipeForm) => void
   onClose: () => void
 }) {
   const [form, setForm] = useState<RecipeForm>({
     name:            recipe?.name           ?? '',
-    category:        recipe?.category       ?? '',
+    category_id:     recipe?.category_id    ? String(recipe.category_id) : '',
     description:     recipe?.description    ?? '',
     yield_qty:       String(recipe?.yield_qty ?? 1),
     yield_unit_text: recipe?.yield_unit_abbr ?? '',
     image_url:       recipe?.image_url       ?? '',
   })
-  const [catOpen,           setCatOpen]           = useState(false)
-  const [catHighlightedIdx, setCatHighlightedIdx] = useState(-1)
-  const catItemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const set = (k: keyof RecipeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
-
-  const filteredCats = categories.filter(c => c.toLowerCase().includes(form.category.toLowerCase()))
-
-  useEffect(() => {
-    if (catHighlightedIdx >= 0) catItemRefs.current[catHighlightedIdx]?.scrollIntoView({ block: 'nearest' })
-  }, [catHighlightedIdx])
-
-  function handleCatKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    const total = filteredCats.length
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      if (!catOpen && total > 0) { setCatOpen(true); setCatHighlightedIdx(0); return }
-      setCatHighlightedIdx(i => Math.min(i + 1, total - 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setCatHighlightedIdx(i => Math.max(i - 1, 0))
-    } else if (e.key === 'Enter') {
-      if (!catOpen || catHighlightedIdx < 0 || catHighlightedIdx >= total) return
-      e.preventDefault()
-      setForm(f => ({ ...f, category: filteredCats[catHighlightedIdx] }))
-      setCatOpen(false); setCatHighlightedIdx(-1)
-    } else if (e.key === 'Escape') {
-      setCatOpen(false); setCatHighlightedIdx(-1)
-    }
-  }
 
   return (
     <Modal title={recipe ? 'Edit Recipe' : 'New Recipe'} onClose={onClose}>
@@ -2005,30 +1974,12 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           <input className="input" value={form.name} onChange={set('name')} placeholder="e.g. Pad Thai" autoFocus />
         </Field>
 
-        {/* Category combo */}
+        {/* Category select */}
         <Field label="Category">
-          <div className="relative">
-            <input
-              className="input"
-              value={form.category}
-              onChange={e => { setForm(f => ({ ...f, category: e.target.value })); setCatOpen(true); setCatHighlightedIdx(-1) }}
-              onFocus={() => setCatOpen(true)}
-              onBlur={() => setTimeout(() => { setCatOpen(false); setCatHighlightedIdx(-1) }, 150)}
-              onKeyDown={handleCatKeyDown}
-              placeholder="Select or type to add…"
-              autoComplete="off"
-            />
-            {catOpen && filteredCats.length > 0 && (
-              <div className="absolute z-50 top-full left-0 right-0 bg-surface border border-border rounded-lg shadow-lg mt-0.5 max-h-40 overflow-y-auto">
-                {filteredCats.map((c, idx) => (
-                  <button key={c} ref={el => { catItemRefs.current[idx] = el }} type="button"
-                    className={`w-full text-left px-3 py-2 text-sm transition-colors ${catHighlightedIdx === idx ? 'bg-accent-dim text-accent font-semibold' : 'hover:bg-surface-2'}`}
-                    onMouseDown={() => { setForm(f => ({ ...f, category: c })); setCatOpen(false); setCatHighlightedIdx(-1) }}
-                  >{c}</button>
-                ))}
-              </div>
-            )}
-          </div>
+          <select className="select w-full" value={form.category_id} onChange={set('category_id')}>
+            <option value="">No category…</option>
+            {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          </select>
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
@@ -2115,7 +2066,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
   const filteredIngs = ingredients.filter(i =>
     i.name.toLowerCase().includes(ingSearch.toLowerCase()) ||
-    (i.category || '').toLowerCase().includes(ingSearch.toLowerCase())
+    (i.category_name || '').toLowerCase().includes(ingSearch.toLowerCase())
   )
   const filteredRecipes = recipes.filter(r =>
     r.name.toLowerCase().includes(recipeSearch.toLowerCase())
@@ -2256,7 +2207,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
                         }}
                       >
                         <span className="font-semibold">{i.name}</span>
-                        <span className="text-xs shrink-0 opacity-70">{i.category || ''}{i.base_unit_abbr ? ` · ${i.base_unit_abbr}` : ''}</span>
+                        <span className="text-xs shrink-0 opacity-70">{i.category_name || ''}{i.base_unit_abbr ? ` · ${i.base_unit_abbr}` : ''}</span>
                       </button>
                     ))}
                   </div>
@@ -2265,7 +2216,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
               {selIngredient && (
                 <p className="text-xs text-text-3 mt-1">
                   Base unit: <span className="font-mono font-semibold text-text-2">{selIngredient.base_unit_abbr || '—'}</span>
-                  {selIngredient.category && <span className="ml-2">· {selIngredient.category}</span>}
+                  {selIngredient.category_name && <span className="ml-2">· {selIngredient.category_name}</span>}
                 </p>
               )}
             </Field>
@@ -2324,7 +2275,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
                         }}
                       >
                         <span className="font-semibold">{r.name}</span>
-                        <span className="text-xs shrink-0 opacity-70">{r.category || ''}{r.yield_unit_abbr ? ` · ${r.yield_qty} ${r.yield_unit_abbr}` : ''}</span>
+                        <span className="text-xs shrink-0 opacity-70">{r.category_name || ''}{r.yield_unit_abbr ? ` · ${r.yield_qty} ${r.yield_unit_abbr}` : ''}</span>
                       </button>
                     ))}
                   </div>
@@ -2333,7 +2284,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
               {selRecipe && (
                 <p className="text-xs text-text-3 mt-1">
                   Yield: <span className="font-mono">{selRecipe.yield_qty}</span>{selRecipe.yield_unit_abbr ? ` ${selRecipe.yield_unit_abbr}` : ''}
-                  {selRecipe.category && <span className="ml-2">· {selRecipe.category}</span>}
+                  {selRecipe.category_name && <span className="ml-2">· {selRecipe.category_name}</span>}
                 </p>
               )}
             </Field>

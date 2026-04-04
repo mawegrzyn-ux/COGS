@@ -325,15 +325,16 @@ router.get('/menu/:menu_id', async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT mi.*,
              r.name         AS recipe_name,
-             r.category     AS recipe_category,
+             cat.name       AS recipe_category,
              r.yield_qty,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr,
              ri_items.item_count
       FROM   mcogs_menu_items mi
-      LEFT JOIN mcogs_recipes r     ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
-      LEFT JOIN mcogs_units u       ON u.id   = ing.base_unit_id
+      LEFT JOIN mcogs_recipes         r   ON r.id   = mi.recipe_id
+      LEFT JOIN mcogs_categories      cat ON cat.id = r.category_id
+      LEFT JOIN mcogs_ingredients     ing ON ing.id = mi.ingredient_id
+      LEFT JOIN mcogs_units           u   ON u.id   = ing.base_unit_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS item_count
         FROM   mcogs_recipe_items WHERE recipe_id = r.id
@@ -492,16 +493,17 @@ router.get('/report/price-levels', async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT mi.*,
              r.name         AS recipe_name,
-             r.category     AS recipe_category,
+             cat.name       AS recipe_category,
              r.yield_qty,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr,
              m.name         AS menu_name
       FROM   mcogs_menu_items mi
-      JOIN   mcogs_menus m      ON m.id   = mi.menu_id
-      LEFT JOIN mcogs_recipes r     ON r.id   = mi.recipe_id
+      JOIN   mcogs_menus          m   ON m.id   = mi.menu_id
+      LEFT JOIN mcogs_recipes     r   ON r.id   = mi.recipe_id
+      LEFT JOIN mcogs_categories  cat ON cat.id = r.category_id
       LEFT JOIN mcogs_ingredients ing ON ing.id = mi.ingredient_id
-      LEFT JOIN mcogs_units u       ON u.id   = ing.base_unit_id
+      LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
       WHERE  m.country_id = $1
       ORDER BY COALESCE(NULLIF(mi.display_name,''), r.name, ing.name) ASC
     `, [countryId]);
@@ -649,8 +651,9 @@ router.get('/report/menu-prices', async (req, res) => {
       pool.query(`SELECT * FROM mcogs_countries ORDER BY name`),
       pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`),
       pool.query(`
-        SELECT DISTINCT r.id, r.name AS recipe_name, r.category, r.yield_qty
+        SELECT DISTINCT r.id, r.name AS recipe_name, cat.name AS category, r.yield_qty
         FROM   mcogs_recipes r
+        LEFT JOIN mcogs_categories cat ON cat.id = r.category_id
         JOIN   mcogs_menu_items mi ON mi.recipe_id = r.id
         ORDER BY r.name
       `),
@@ -939,7 +942,7 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
       SELECT msi.*,
              si.name       AS sales_item_name,
              si.item_type,
-             si.category,
+             cat.name      AS category,
              si.recipe_id,
              si.ingredient_id,
              si.manual_cost,
@@ -948,10 +951,11 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
              ing.name      AS ingredient_name,
              u.abbreviation AS base_unit_abbr
       FROM   mcogs_menu_sales_items msi
-      JOIN   mcogs_sales_items si    ON si.id   = msi.sales_item_id
-      LEFT JOIN mcogs_recipes r      ON r.id    = si.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = si.ingredient_id
-      LEFT JOIN mcogs_units u        ON u.id    = ing.base_unit_id
+      JOIN   mcogs_sales_items       si  ON si.id   = msi.sales_item_id
+      LEFT JOIN mcogs_categories     cat ON cat.id  = si.category_id
+      LEFT JOIN mcogs_recipes        r   ON r.id    = si.recipe_id
+      LEFT JOIN mcogs_ingredients    ing ON ing.id  = si.ingredient_id
+      LEFT JOIN mcogs_units          u   ON u.id    = ing.base_unit_id
       WHERE  msi.menu_id = $1
       ORDER BY msi.sort_order, msi.id
     `, [menuId]);

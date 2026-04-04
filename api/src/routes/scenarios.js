@@ -89,11 +89,11 @@ router.get('/analysis', async (req, res) => {
     const ingIds    = [...new Set(items.filter(i => i.ingredient_id).map(i => Number(i.ingredient_id)))];
     const [recipeMap, ingMap, recipeItemsMap] = await Promise.all([
       recipeIds.length
-        ? pool.query(`SELECT id, name, category, yield_qty FROM mcogs_recipes WHERE id = ANY($1::int[])`, [recipeIds])
+        ? pool.query(`SELECT r.id, r.name, cat.name AS category, r.yield_qty FROM mcogs_recipes r LEFT JOIN mcogs_categories cat ON cat.id = r.category_id WHERE r.id = ANY($1::int[])`, [recipeIds])
             .then(r => Object.fromEntries(r.rows.map(x => [x.id, x])))
         : Promise.resolve({}),
       ingIds.length
-        ? pool.query(`SELECT id, name, category FROM mcogs_ingredients WHERE id = ANY($1::int[])`, [ingIds])
+        ? pool.query(`SELECT i.id, i.name, cat.name AS category FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id WHERE i.id = ANY($1::int[])`, [ingIds])
             .then(r => Object.fromEntries(r.rows.map(x => [x.id, x])))
         : Promise.resolve({}),
       recipeIds.length

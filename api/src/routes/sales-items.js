@@ -11,11 +11,15 @@ async function fetchFull(id, client) {
 
   const { rows: items } = await db.query(
     `SELECT si.*,
-            r.name  AS recipe_name,
-            ing.name AS ingredient_name
+            r.name   AS recipe_name,
+            ing.name AS ingredient_name,
+            c.name   AS category_name,
+            gr.name  AS category_group_name
      FROM   mcogs_sales_items si
-     LEFT JOIN mcogs_recipes     r   ON r.id   = si.recipe_id
-     LEFT JOIN mcogs_ingredients ing ON ing.id = si.ingredient_id
+     LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
+     LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+     LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
+     LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
      WHERE  si.id = $1`,
     [id]
   );
@@ -89,11 +93,15 @@ router.get('/', async (req, res, next) => {
       SELECT si.*,
              r.name   AS recipe_name,
              ing.name AS ingredient_name,
+             c.name   AS category_name,
+             gr.name  AS category_group_name,
              (SELECT COUNT(*) FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count,
              (SELECT COUNT(*) FROM mcogs_combo_steps WHERE sales_item_id = si.id) AS step_count
       FROM   mcogs_sales_items si
-      LEFT JOIN mcogs_recipes     r   ON r.id   = si.recipe_id
-      LEFT JOIN mcogs_ingredients ing ON ing.id = si.ingredient_id
+      LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
+      LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+      LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
+      LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
     `;
     const params = [];
 
@@ -153,16 +161,16 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /sales-items ────────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { item_type, name, category, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
+    const { item_type, name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
     if (!item_type || !name) return res.status(400).json({ error: { message: 'item_type and name are required' } });
     if (!['recipe','ingredient','manual','combo'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, manual, or combo' } });
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_sales_items (item_type, name, category, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order)
+      `INSERT INTO mcogs_sales_items (item_type, name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [item_type, name.trim(), category || null, description || null,
+      [item_type, name.trim(), category_id || null, description || null,
        recipe_id || null, ingredient_id || null, manual_cost || null, image_url || null, sort_order || 0]
     );
     const full = await fetchFull(rows[0].id);
@@ -173,13 +181,13 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /sales-items/:id ─────────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, category, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
+    const { name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_sales_items
-       SET name=$1, category=$2, description=$3, recipe_id=$4, ingredient_id=$5,
+       SET name=$1, category_id=$2, description=$3, recipe_id=$4, ingredient_id=$5,
            manual_cost=$6, image_url=$7, sort_order=$8, updated_at=NOW()
        WHERE id=$9 RETURNING *`,
-      [name?.trim(), category || null, description || null,
+      [name?.trim(), category_id || null, description || null,
        recipe_id || null, ingredient_id || null, manual_cost || null,
        image_url || null, sort_order || 0, req.params.id]
     );

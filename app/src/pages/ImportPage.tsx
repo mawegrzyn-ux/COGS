@@ -63,7 +63,7 @@ interface ImportResults {
   errors: string[]
 }
 
-interface DbCategory { id: number; name: string; type: string }
+interface DbCategory { id: number; name: string; for_ingredients: boolean; for_recipes: boolean; for_sales_items: boolean }
 interface DbCountry { id: number; name: string }
 interface DbUnit {
   id:                              number
@@ -481,8 +481,8 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     if (!staged) return null
     const mapping  = staged.category_mapping || {}
     const entries  = Object.entries(mapping)
-    const dbIngCats = dbCats.filter(c => c.type === 'ingredient').map(c => c.name)
-    const dbRecCats = dbCats.filter(c => c.type === 'recipe').map(c => c.name)
+    const dbIngCats = dbCats.filter(c => c.for_ingredients).map(c => c.name)
+    const dbRecCats = dbCats.filter(c => c.for_recipes && !c.for_ingredients).map(c => c.name)
 
     return (
       <div>

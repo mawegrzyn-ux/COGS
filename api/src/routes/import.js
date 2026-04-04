@@ -749,7 +749,7 @@ async function suggestCategoryMapping(client, staged) {
   }
   if (!sourceCats.size) return {};
 
-  const { rows: dbCats } = await pool.query('SELECT id, name, type FROM mcogs_categories ORDER BY type, name');
+  const { rows: dbCats } = await pool.query('SELECT id, name, for_ingredients, for_recipes, for_sales_items FROM mcogs_categories ORDER BY name');
 
   // No DB categories yet — suggest creating all
   if (!dbCats.length) {
@@ -767,8 +767,8 @@ async function suggestCategoryMapping(client, staged) {
 
 Import categories: ${JSON.stringify([...sourceCats])}
 
-Existing database categories (id, name, type):
-${JSON.stringify(dbCats)}
+Existing database categories (id, name):
+${JSON.stringify(dbCats.map(c => ({ id: c.id, name: c.name })))}
 
 JSON format — keys are the import category names, values are one of:
 - Good match (confidence ≥ 0.70): {"action":"map","maps_to_id":<id>,"maps_to_name":"<name>","suggested_type":"ingredient","confidence":<float>}
@@ -938,19 +938,31 @@ router.post('/:id/execute', async (req, res) => {
       // 1. Create new categories
       for (const [, m] of Object.entries(catMap)) {
         if (m.action !== 'create' || !m.suggested_name) continue;
-        const ex = await client.query('SELECT id FROM mcogs_categories WHERE name=$1 AND type=$2 LIMIT 1', [m.suggested_name, m.suggested_type || 'ingredient']);
+        const ex = await client.query('SELECT id FROM mcogs_categories WHERE name=$1 LIMIT 1', [m.suggested_name]);
         if (!ex.rows.length) {
-          await client.query('INSERT INTO mcogs_categories (name,type,group_name) VALUES ($1,$2,$3)', [m.suggested_name, m.suggested_type || 'ingredient', m.suggested_name]);
+          const forIngredients = !m.suggested_type || m.suggested_type === 'ingredient';
+          const forRecipes     = m.suggested_type === 'recipe';
+          await client.query(
+            'INSERT INTO mcogs_categories (name,for_ingredients,for_recipes,for_sales_items) VALUES ($1,$2,$3,false)',
+            [m.suggested_name, forIngredients, forRecipes]
+          );
           results.categories++;
         }
       }
 
-      // Helper: resolve category display name
-      const catName = (src) => {
+      // Build category name→id lookup for FK resolution (after new categories are created above)
+      const { rows: allCats } = await client.query('SELECT id, LOWER(name) AS n FROM mcogs_categories');
+      const catIdLookup = {};
+      for (const c of allCats) catIdLookup[c.n] = c.id;
+
+      // Helper: resolve source category string → integer category_id (or null)
+      const catId = (src) => {
         if (!src) return null;
         const m = catMap[src];
-        if (!m) return src;
-        return m.action === 'map' ? (m.maps_to_name || src) : (m.suggested_name || src);
+        let name;
+        if (!m) name = src;
+        else name = m.action === 'map' ? (m.maps_to_name || src) : (m.suggested_name || src);
+        return catIdLookup[name.toLowerCase()] || null;
       };
 
       // 2. Lookups
@@ -1002,16 +1014,16 @@ router.post('/:id/execute', async (req, res) => {
         const uid = row.unit ? unitLookup[row.unit.toLowerCase()] || null : null;
         if (row._action === 'override' && row._duplicate_of?.id) {
           await client.query(
-            'UPDATE mcogs_ingredients SET name=$1,category=$2,base_unit_id=$3,waste_pct=$4,notes=$5,default_prep_unit=$6,default_prep_to_base_conversion=$7,updated_at=NOW() WHERE id=$8',
-            [row.name, catName(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1, row._duplicate_of.id]
+            'UPDATE mcogs_ingredients SET name=$1,category_id=$2,base_unit_id=$3,waste_pct=$4,notes=$5,default_prep_unit=$6,default_prep_to_base_conversion=$7,updated_at=NOW() WHERE id=$8',
+            [row.name, catId(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1, row._duplicate_of.id]
           );
           ingLookup[row.name.toLowerCase()] = row._duplicate_of.id;
           results.ingredients_updated++;
           continue;
         }
         const { rows } = await client.query(
-          'INSERT INTO mcogs_ingredients (name,category,base_unit_id,waste_pct,notes,default_prep_unit,default_prep_to_base_conversion) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-          [row.name, catName(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1]
+          'INSERT INTO mcogs_ingredients (name,category_id,base_unit_id,waste_pct,notes,default_prep_unit,default_prep_to_base_conversion) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          [row.name, catId(row.source_category), uid, row.waste_pct||0, row.notes||null, row.prep_unit||null, row.prep_to_base_conversion||1]
         );
         ingLookup[row.name.toLowerCase()] = rows[0].id;
         results.ingredients++;
@@ -1064,8 +1076,8 @@ router.post('/:id/execute', async (req, res) => {
         if (row._action === 'override' && row._duplicate_of?.id) {
           const existingRid = row._duplicate_of.id;
           await client.query(
-            'UPDATE mcogs_recipes SET name=$1,category=$2,yield_qty=$3,yield_unit_id=$4,updated_at=NOW() WHERE id=$5',
-            [row.name, catName(row.source_category), row.yield_qty||1, yuid, existingRid]
+            'UPDATE mcogs_recipes SET name=$1,category_id=$2,yield_qty=$3,yield_unit_id=$4,updated_at=NOW() WHERE id=$5',
+            [row.name, catId(row.source_category), row.yield_qty||1, yuid, existingRid]
           );
           // Remove existing items so they get re-added in pass 2
           await client.query('DELETE FROM mcogs_recipe_items WHERE recipe_id=$1', [existingRid]);
@@ -1075,8 +1087,8 @@ router.post('/:id/execute', async (req, res) => {
           continue;
         }
         const { rows: ins } = await client.query(
-          'INSERT INTO mcogs_recipes (name,category,yield_qty,yield_unit_id) VALUES ($1,$2,$3,$4) RETURNING id',
-          [row.name, catName(row.source_category), row.yield_qty || 1, yuid]
+          'INSERT INTO mcogs_recipes (name,category_id,yield_qty,yield_unit_id) VALUES ($1,$2,$3,$4) RETURNING id',
+          [row.name, catId(row.source_category), row.yield_qty || 1, yuid]
         );
         const rid = ins[0].id;
         recipeLookup[row.name.toLowerCase()] = rid;
