@@ -2942,7 +2942,9 @@ function ScenarioTool({
     return data.items.map(item => {
       // Natural key — sales item ID is the stable cross-menu identifier
       const key          = `si_${item.sales_item_id}`
-      const q            = Math.max(0, parseFloat(qty[key] || '0') || 0)
+      // Fall back to the per-level key (saved when scenario was in ALL levels mode)
+      const perLevelKey  = typeof levelId === 'number' ? `${key}__l${levelId}` : ''
+      const q            = Math.max(0, parseFloat(qty[key] || (perLevelKey ? qty[perLevelKey] : '') || '0') || 0)
       const baseCost     = item.cost_per_portion * dispRate
       const costOvStr    = costOverrides[key]
       const cost         = costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost
@@ -3923,12 +3925,15 @@ ${tableHtml}
                   return (
                     <>
                       <tr key={`cat-${cat}`}
-                        className="bg-blue-50/40 border-y border-blue-100 cursor-pointer select-none hover:bg-blue-100/60"
+                        className="border-y cursor-pointer select-none transition-colors"
+                        style={{ background: 'var(--accent-dim)', borderColor: 'var(--border)' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#d4eddc')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent-dim)')}
                         onClick={() => toggleCat(cat)}
                       >
-                        <td className="px-3 py-1.5 text-gray-700 text-xs uppercase tracking-wide">
+                        <td className="px-3 py-1.5 text-xs uppercase tracking-wide" style={{ color: 'var(--accent-dark)' }}>
                           <span className="inline-flex items-center gap-1.5">
-                            <span className="text-gray-400 text-[9px] w-2.5 shrink-0">{collapsedCats.has(cat) ? '▶' : '▼'}</span>
+                            <span className="text-[9px] w-2.5 shrink-0" style={{ color: 'var(--accent)' }}>{collapsedCats.has(cat) ? '▶' : '▼'}</span>
                             <span className="font-extrabold">{cat}</span>
                             {collapsedCats.has(cat) && (
                               <span className="text-[10px] font-normal text-gray-400 ml-1">({catRows.length} item{catRows.length !== 1 ? 's' : ''} hidden)</span>
@@ -3936,19 +3941,16 @@ ${tableHtml}
                           </span>
                         </td>
                         {allLevelsData.map(({ level }) => {
-                          const cLvlQ = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0), 0)
                           const cR    = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.revenue ?? 0), 0)
                           const cCost = catRows.reduce((s, r) => s + (r.perLevel.find(p => p.level.id === level.id)?.qty ?? 0) * r.cost, 0)
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
-                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
-                                {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
-                              </td>
+                              <td key={`${level.id}-cq`} className="border-l border-gray-200" />
                               <td key={`${level.id}-ccost`} />
                               <td key={`${level.id}-cp`} />
                               {!allLevelsCompact && (
-                                <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
+                                <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs" style={{ color: 'var(--accent-dark)' }}>
                                   {cR > 0 ? fmtNum(cR) : '—'}
                                 </td>
                               )}
