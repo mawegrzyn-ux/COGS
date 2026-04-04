@@ -13,11 +13,13 @@ async function fetchFull(id, client) {
     `SELECT si.*,
             r.name   AS recipe_name,
             ing.name AS ingredient_name,
+            co.name  AS combo_name,
             c.name   AS category_name,
             gr.name  AS category_group_name
      FROM   mcogs_sales_items si
      LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
      LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+     LEFT JOIN mcogs_combos            co  ON co.id  = si.combo_id
      LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
      LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
      WHERE  si.id = $1`,
@@ -26,7 +28,7 @@ async function fetchFull(id, client) {
   if (!items.length) return null;
   const item = items[0];
 
-  const [markets, prices, simgs, steps] = await Promise.all([
+  const [markets, prices, simgs] = await Promise.all([
     db.query(`SELECT sim.country_id, sim.is_active, c.name AS country_name
               FROM   mcogs_sales_item_markets sim
               JOIN   mcogs_countries c ON c.id = sim.country_id
@@ -40,45 +42,13 @@ async function fetchFull(id, client) {
               FROM   mcogs_sales_item_modifier_groups simgj
               JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
               WHERE  simgj.sales_item_id = $1 ORDER BY simgj.sort_order`, [id]),
-    db.query(`SELECT * FROM mcogs_combo_steps WHERE sales_item_id = $1 ORDER BY sort_order`, [id]),
   ]);
-
-  // Fetch options + their modifier groups for each step
-  const stepsWithOptions = await Promise.all(
-    steps.rows.map(async step => {
-      const { rows: opts } = await db.query(
-        `SELECT cso.*,
-                r.name  AS recipe_name,
-                ing.name AS ingredient_name
-         FROM   mcogs_combo_step_options cso
-         LEFT JOIN mcogs_recipes     r   ON r.id   = cso.recipe_id
-         LEFT JOIN mcogs_ingredients ing ON ing.id = cso.ingredient_id
-         WHERE  cso.combo_step_id = $1 ORDER BY cso.sort_order`,
-        [step.id]
-      );
-      const optsWithMods = await Promise.all(
-        opts.map(async opt => {
-          const { rows: mods } = await db.query(
-            `SELECT csomgj.modifier_group_id, csomgj.sort_order,
-                    mg.name, mg.min_select, mg.max_select
-             FROM   mcogs_combo_step_option_modifier_groups csomgj
-             JOIN   mcogs_modifier_groups mg ON mg.id = csomgj.modifier_group_id
-             WHERE  csomgj.combo_step_option_id = $1 ORDER BY csomgj.sort_order`,
-            [opt.id]
-          );
-          return { ...opt, modifier_groups: mods };
-        })
-      );
-      return { ...step, options: optsWithMods };
-    })
-  );
 
   return {
     ...item,
     markets:         markets.rows,
     prices:          prices.rows,
     modifier_groups: simgs.rows,
-    steps:           stepsWithOptions,
   };
 }
 
@@ -93,13 +63,15 @@ router.get('/', async (req, res, next) => {
       SELECT si.*,
              r.name   AS recipe_name,
              ing.name AS ingredient_name,
+             co.name  AS combo_name,
              c.name   AS category_name,
              gr.name  AS category_group_name,
              (SELECT COUNT(*) FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count,
-             (SELECT COUNT(*) FROM mcogs_combo_steps WHERE sales_item_id = si.id) AS step_count
+             (SELECT COUNT(*) FROM mcogs_combo_steps WHERE combo_id = si.combo_id) AS step_count
       FROM   mcogs_sales_items si
       LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
       LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+      LEFT JOIN mcogs_combos            co  ON co.id  = si.combo_id
       LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
       LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
     `;
@@ -161,17 +133,18 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /sales-items ────────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { item_type, name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
+    const { item_type, name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
     if (!item_type || !name) return res.status(400).json({ error: { message: 'item_type and name are required' } });
     if (!['recipe','ingredient','manual','combo'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, manual, or combo' } });
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_sales_items (item_type, name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO mcogs_sales_items (item_type, name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [item_type, name.trim(), category_id || null, description || null,
-       recipe_id || null, ingredient_id || null, manual_cost || null, image_url || null, sort_order || 0]
+       recipe_id || null, ingredient_id || null, combo_id || null,
+       manual_cost || null, image_url || null, sort_order || 0]
     );
     const full = await fetchFull(rows[0].id);
     res.status(201).json(full);
@@ -181,15 +154,15 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /sales-items/:id ─────────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, category_id, description, recipe_id, ingredient_id, manual_cost, image_url, sort_order } = req.body;
+    const { name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_sales_items
-       SET name=$1, category_id=$2, description=$3, recipe_id=$4, ingredient_id=$5,
-           manual_cost=$6, image_url=$7, sort_order=$8, updated_at=NOW()
-       WHERE id=$9 RETURNING *`,
+       SET name=$1, category_id=$2, description=$3, recipe_id=$4, ingredient_id=$5, combo_id=$6,
+           manual_cost=$7, image_url=$8, sort_order=$9, updated_at=NOW()
+       WHERE id=$10 RETURNING *`,
       [name?.trim(), category_id || null, description || null,
-       recipe_id || null, ingredient_id || null, manual_cost || null,
-       image_url || null, sort_order || 0, req.params.id]
+       recipe_id || null, ingredient_id || null, combo_id || null,
+       manual_cost || null, image_url || null, sort_order || 0, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Sales item not found' } });
     const full = await fetchFull(rows[0].id);
@@ -285,115 +258,6 @@ router.put('/:id/modifier-groups', async (req, res, next) => {
           `INSERT INTO mcogs_sales_item_modifier_groups (sales_item_id, modifier_group_id, sort_order)
            VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
           [req.params.id, ids[i], i]
-        );
-      }
-      await client.query('COMMIT');
-    } catch (e) { await client.query('ROLLBACK'); throw e; }
-    finally { client.release(); }
-    res.json({ updated: true });
-  } catch (err) { next(err); }
-});
-
-// ─── Combo steps ──────────────────────────────────────────────────────────────
-
-router.post('/:id/steps', async (req, res, next) => {
-  try {
-    const { name, description, sort_order } = req.body;
-    if (!name) return res.status(400).json({ error: { message: 'name is required' } });
-    const { rows } = await pool.query(
-      `INSERT INTO mcogs_combo_steps (sales_item_id, name, description, sort_order)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [req.params.id, name.trim(), description || null, sort_order || 0]
-    );
-    res.status(201).json({ ...rows[0], options: [] });
-  } catch (err) { next(err); }
-});
-
-router.put('/:id/steps/:sid', async (req, res, next) => {
-  try {
-    const { name, description, sort_order } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE mcogs_combo_steps SET name=$1, description=$2, sort_order=$3
-       WHERE id=$4 AND sales_item_id=$5 RETURNING *`,
-      [name?.trim(), description || null, sort_order ?? 0, req.params.sid, req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: { message: 'Step not found' } });
-    res.json(rows[0]);
-  } catch (err) { next(err); }
-});
-
-router.delete('/:id/steps/:sid', async (req, res, next) => {
-  try {
-    const { rowCount } = await pool.query(
-      'DELETE FROM mcogs_combo_steps WHERE id=$1 AND sales_item_id=$2',
-      [req.params.sid, req.params.id]
-    );
-    if (!rowCount) return res.status(404).json({ error: { message: 'Step not found' } });
-    res.json({ deleted: true });
-  } catch (err) { next(err); }
-});
-
-// ─── Combo step options ───────────────────────────────────────────────────────
-
-router.post('/:id/steps/:sid/options', async (req, res, next) => {
-  try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
-    if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
-    const { rows } = await pool.query(
-      `INSERT INTO mcogs_combo_step_options
-         (combo_step_id, name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.params.sid, name.trim(), item_type,
-       recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0]
-    );
-    res.status(201).json({ ...rows[0], modifier_groups: [] });
-  } catch (err) { next(err); }
-});
-
-router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
-  try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE mcogs_combo_step_options
-       SET name=$1, item_type=$2, recipe_id=$3, ingredient_id=$4, manual_cost=$5, price_addon=$6, sort_order=$7
-       WHERE id=$8 AND combo_step_id=$9 RETURNING *`,
-      [name?.trim(), item_type, recipe_id || null, ingredient_id || null,
-       manual_cost || null, price_addon || 0, sort_order || 0, req.params.oid, req.params.sid]
-    );
-    if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
-    res.json(rows[0]);
-  } catch (err) { next(err); }
-});
-
-router.delete('/:id/steps/:sid/options/:oid', async (req, res, next) => {
-  try {
-    const { rowCount } = await pool.query(
-      'DELETE FROM mcogs_combo_step_options WHERE id=$1 AND combo_step_id=$2',
-      [req.params.oid, req.params.sid]
-    );
-    if (!rowCount) return res.status(404).json({ error: { message: 'Option not found' } });
-    res.json({ deleted: true });
-  } catch (err) { next(err); }
-});
-
-// ─── PUT /sales-items/:id/steps/:sid/options/:oid/modifier-groups ─────────────
-// body: { modifier_group_ids: [...] } — full replace
-router.put('/:id/steps/:sid/options/:oid/modifier-groups', async (req, res, next) => {
-  try {
-    const { modifier_group_ids } = req.body;
-    const ids = Array.isArray(modifier_group_ids) ? modifier_group_ids.map(Number) : [];
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        'DELETE FROM mcogs_combo_step_option_modifier_groups WHERE combo_step_option_id=$1',
-        [req.params.oid]
-      );
-      for (let i = 0; i < ids.length; i++) {
-        await client.query(
-          `INSERT INTO mcogs_combo_step_option_modifier_groups (combo_step_option_id, modifier_group_id, sort_order)
-           VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-          [req.params.oid, ids[i], i]
         );
       }
       await client.query('COMMIT');

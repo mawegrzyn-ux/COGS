@@ -882,6 +882,57 @@ const migrations = [
   `ALTER TABLE mcogs_recipes      DROP COLUMN IF EXISTS category`,
   `ALTER TABLE mcogs_sales_items  DROP COLUMN IF EXISTS category`,
 
+  // ── 68. Standalone Combos table ──────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combos (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    category_id INTEGER REFERENCES mcogs_categories(id) ON DELETE SET NULL,
+    image_url   TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_combos_category ON mcogs_combos(category_id)`,
+
+  // ── 69. Combo Steps — swap FK from sales_item_id → combo_id ─────────────
+  `ALTER TABLE mcogs_combo_steps
+     ADD COLUMN IF NOT EXISTS combo_id     INTEGER REFERENCES mcogs_combos(id) ON DELETE CASCADE,
+     ADD COLUMN IF NOT EXISTS min_select   INTEGER NOT NULL DEFAULT 1,
+     ADD COLUMN IF NOT EXISTS max_select   INTEGER NOT NULL DEFAULT 1,
+     ADD COLUMN IF NOT EXISTS allow_repeat BOOLEAN NOT NULL DEFAULT false`,
+
+  // ── 70. Sales Items — add combo_id FK ────────────────────────────────────
+  `ALTER TABLE mcogs_sales_items
+     ADD COLUMN IF NOT EXISTS combo_id INTEGER REFERENCES mcogs_combos(id) ON DELETE SET NULL`,
+
+  // ── 71. Migrate existing combo-type sales items → mcogs_combos ───────────
+  `DO $$
+   DECLARE
+     si  RECORD;
+     cid INTEGER;
+   BEGIN
+     FOR si IN
+       SELECT * FROM mcogs_sales_items
+       WHERE item_type = 'combo' AND combo_id IS NULL
+     LOOP
+       INSERT INTO mcogs_combos (name, description, category_id, image_url, sort_order)
+       VALUES (si.name, si.description, si.category_id, si.image_url, si.sort_order)
+       RETURNING id INTO cid;
+
+       UPDATE mcogs_combo_steps SET combo_id = cid
+       WHERE sales_item_id = si.id AND combo_id IS NULL;
+
+       UPDATE mcogs_sales_items SET combo_id = cid WHERE id = si.id;
+     END LOOP;
+   END $$`,
+
+  // ── 72. Make sales_item_id nullable on combo_steps (kept for compat) ─────
+  `DO $$ BEGIN
+     ALTER TABLE mcogs_combo_steps ALTER COLUMN sales_item_id DROP NOT NULL;
+   EXCEPTION WHEN others THEN NULL;
+   END $$`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,
