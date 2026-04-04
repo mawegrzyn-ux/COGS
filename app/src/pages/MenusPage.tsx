@@ -5240,7 +5240,7 @@ function HistoryNotesModal({
   )
 }
 
-// ── Sales Items Tab ────────────────────────────────────────────────────────────
+// ── Sales Item Detail Panel (kept for use within Menus builder) ───────────────
 
 interface SalesItemsTabProps {
   salesItems: SalesItem[]
@@ -5271,6 +5271,7 @@ interface SalesItemsTabProps {
   toast: (msg: string) => void
 }
 
+// @ts-ignore — kept for reference; functionality moved to SalesItemsPage.tsx
 function SalesItemsTab({
   salesItems, setSalesItems, modifierGroups, setModifierGroups,
   loading, setLoading, search, setSearch, typeFilter, setTypeFilter,

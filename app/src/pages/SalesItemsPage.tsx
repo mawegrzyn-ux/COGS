@@ -952,7 +952,7 @@ export default function SalesItemsPage() {
           onSave={saveOption} onClose={() => setEditingOpt(null)} />
       )}
 
-      {toast && <Toast msg={toast.msg} onClose={() => setToast(null)} />}
+      {toast && <Toast message={toast.msg} onClose={() => setToast(null)} />}
     </div>
   )
 }
