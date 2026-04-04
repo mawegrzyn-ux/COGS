@@ -4588,10 +4588,10 @@ ${tableHtml}
                           const cP    = cR > 0 ? (cCost / cR) * 100 : null
                           return (
                             <>
-                              <td key={`${level.id}-ccost`} className="border-l border-gray-200" />
-                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs">
+                              <td key={`${level.id}-cq`} className="px-2 py-1.5 text-right font-mono font-semibold text-gray-700 text-xs border-l border-gray-200">
                                 {cLvlQ > 0 ? cLvlQ.toLocaleString() : '—'}
                               </td>
+                              <td key={`${level.id}-ccost`} />
                               <td key={`${level.id}-cp`} />
                               {!allLevelsCompact && (
                                 <td key={`${level.id}-cr`} className="px-3 py-1.5 text-right font-mono font-semibold text-xs text-gray-700">
