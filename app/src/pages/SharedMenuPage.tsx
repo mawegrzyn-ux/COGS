@@ -73,12 +73,28 @@ interface BreakdownLine {
   is_sub_recipe: boolean
 }
 
+interface ComboBreakdownOption {
+  option_name:       string
+  item_type:         string
+  option_cost_local: number
+  lines:             BreakdownLine[]
+}
+
+interface ComboBreakdownStep {
+  step_name:       string
+  step_cost_local: number
+  options:         ComboBreakdownOption[]
+}
+
 interface BreakdownData {
   display_name: string
   item_type:    string
   recipe_name?: string
-  lines:        BreakdownLine[]
+  lines?:       BreakdownLine[]
   total_local:  number
+  // combo fields
+  cost_note?:   string
+  combo_steps?: ComboBreakdownStep[]
 }
 
 interface ChangeEntry {
@@ -1323,10 +1339,10 @@ export default function SharedMenuPage() {
                             <td className="px-4 py-3 sticky left-0 bg-inherit">
                               <div className="flex items-center gap-1.5">
                                 <button
-                                  className={`font-medium text-gray-800 text-left ${item.item_type === 'recipe' ? 'hover:text-emerald-600 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer' : 'cursor-default'}`}
-                                  onClick={() => item.item_type === 'recipe' && openBreakdown(item.menu_item_id)}
-                                  title={item.item_type === 'recipe' ? 'Click for ingredient breakdown' : undefined}
-                                  disabled={item.item_type !== 'recipe'}
+                                  className={`font-medium text-gray-800 text-left ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 transition-colors underline decoration-dotted underline-offset-2 cursor-pointer' : 'cursor-default'}`}
+                                  onClick={() => (item.item_type === 'recipe' || item.item_type === 'combo') && openBreakdown(item.menu_item_id)}
+                                  title={item.item_type === 'recipe' ? 'Click for ingredient breakdown' : item.item_type === 'combo' ? 'Click for combo cost breakdown' : undefined}
+                                  disabled={item.item_type !== 'recipe' && item.item_type !== 'combo'}
                                 >
                                   {item.display_name}
                                 </button>
@@ -1557,11 +1573,11 @@ export default function SharedMenuPage() {
             </div>
 
             {/* Modal body */}
-            <div className="p-5">
+            <div className="p-5 max-h-[70vh] overflow-y-auto">
               {breakdown.loading && (
                 <div className="py-8 text-center text-gray-400 text-sm animate-pulse">Loading…</div>
               )}
-              {!breakdown.loading && breakdown.data && (
+              {!breakdown.loading && breakdown.data && breakdown.data.item_type !== 'combo' && (
                 <>
                   <table className="w-full text-sm">
                     <thead>
@@ -1573,7 +1589,7 @@ export default function SharedMenuPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {breakdown.data.lines.map((line, i) => (
+                      {(breakdown.data.lines ?? []).map((line, i) => (
                         <tr key={i} className="border-b border-gray-50">
                           <td className="py-2 text-gray-700">
                             {line.is_sub_recipe && <span className="mr-1 text-gray-400 text-xs">📋</span>}
@@ -1601,6 +1617,64 @@ export default function SharedMenuPage() {
                     </tfoot>
                   </table>
                 </>
+              )}
+              {!breakdown.loading && breakdown.data && breakdown.data.item_type === 'combo' && (
+                <div className="space-y-3">
+                  {(breakdown.data.combo_steps ?? []).map((step, si) => (
+                    <details key={si} open className="border border-gray-100 rounded-lg overflow-hidden">
+                      <summary className="flex items-center justify-between px-3 py-2.5 bg-gray-50 cursor-pointer select-none hover:bg-gray-100 transition-colors">
+                        <span className="font-semibold text-gray-800 text-sm">{step.step_name}</span>
+                        <span className="text-xs font-mono text-emerald-700 ml-2 flex-shrink-0">
+                          avg {sym}{fmt2(step.step_cost_local)}
+                        </span>
+                      </summary>
+                      <div className="divide-y divide-gray-50">
+                        {step.options.map((opt, oi) => (
+                          <div key={oi} className="px-3 py-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-medium text-gray-700">{opt.option_name}</span>
+                              <span className="text-xs font-mono text-gray-600 ml-2 flex-shrink-0">
+                                {sym}{fmt2(opt.option_cost_local)}
+                              </span>
+                            </div>
+                            {opt.lines.length > 0 && (
+                              <table className="w-full text-xs mt-1">
+                                <tbody>
+                                  {opt.lines.map((line, li) => (
+                                    <tr key={li} className="text-gray-500">
+                                      <td className="py-0.5 pr-2">
+                                        {line.is_sub_recipe && <span className="mr-1 text-gray-400">📋</span>}
+                                        {line.name}
+                                      </td>
+                                      <td className="py-0.5 text-right pr-2 tabular-nums whitespace-nowrap">
+                                        {fmt2(line.qty)}{line.unit ? ` ${line.unit}` : ''}
+                                      </td>
+                                      {line.waste_pct > 0 && (
+                                        <td className="py-0.5 text-right pr-2 tabular-nums text-gray-400">+{line.waste_pct}%</td>
+                                      )}
+                                      <td className="py-0.5 text-right tabular-nums font-mono">
+                                        {sym}{fmt2(line.cost_local)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                  <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                    <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">Total cost</span>
+                    <span className="font-bold text-gray-900 tabular-nums font-mono">
+                      {sym}{fmt2(breakdown.data.total_local)}
+                    </span>
+                  </div>
+                  {breakdown.data.cost_note && (
+                    <p className="text-xs text-gray-400 italic">{breakdown.data.cost_note}</p>
+                  )}
+                </div>
               )}
             </div>
           </div>

@@ -2749,11 +2749,28 @@ ${tableHtml}
             onSave={saveScenario}
             onNew={name => {
               onReplaceQty({})
-              setPriceOverrides({})
+              // Pre-populate price overrides from current live menu prices
+              const initOverrides: Record<string, string> = {}
+              if (levelId === 'ALL' && allLevelRows.length) {
+                for (const row of allLevelRows) {
+                  for (const p of row.perLevel) {
+                    if (p.base_price_gross > 0) {
+                      initOverrides[p.price_override_key] = String(Math.round(p.base_price_gross * 100) / 100)
+                    }
+                  }
+                }
+              } else if (typeof levelId === 'number' && data?.items) {
+                for (const item of data.items) {
+                  if (item.sell_price_gross > 0) {
+                    const key = `${item.menu_item_id}_l${levelId}`
+                    initOverrides[key] = String(Math.round(item.sell_price_gross * (dispRate || 1) * 100) / 100)
+                  }
+                }
+              }
+              setPriceOverrides(initOverrides)
               setCostOverrides({})
               setHistory([])
               setScenarioNotes('')
-              onMenuChange(null)
               setSavedId(null)
               setSavedName(name)
               setDirty(false)

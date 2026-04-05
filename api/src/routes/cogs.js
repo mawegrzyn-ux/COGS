@@ -803,7 +803,7 @@ async function loadComboData(comboIds) {
   if (!comboIds.length) return {};
 
   const { rows: steps } = await pool.query(
-    `SELECT * FROM mcogs_combo_steps WHERE sales_item_id = ANY($1::int[]) ORDER BY sales_item_id, sort_order`,
+    `SELECT * FROM mcogs_combo_steps WHERE combo_id = ANY($1::int[]) ORDER BY combo_id, sort_order`,
     [comboIds]
   );
   if (!steps.length) return {};
@@ -850,11 +850,11 @@ async function loadComboData(comboIds) {
     optMap[opt.combo_step_id].push({ ...opt, mod_options: modMap[opt.id] || [] });
   }
 
-  // Map: sales_item_id → steps with options
+  // Map: combo_id → steps with options
   const result = {};
   for (const step of steps) {
-    if (!result[step.sales_item_id]) result[step.sales_item_id] = [];
-    result[step.sales_item_id].push({ ...step, options: optMap[step.id] || [] });
+    if (!result[step.combo_id]) result[step.combo_id] = [];
+    result[step.combo_id].push({ ...step, options: optMap[step.id] || [] });
   }
   return result;
 }
@@ -942,7 +942,11 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
       SELECT msi.*,
              si.name       AS sales_item_name,
              si.item_type,
-             cat.name      AS category,
+             si.combo_id,
+             CASE WHEN si.item_type = 'combo'
+                  THEN COALESCE(combo_cat.name, cat.name)
+                  ELSE cat.name
+             END           AS category,
              si.recipe_id,
              si.ingredient_id,
              si.manual_cost,
@@ -951,11 +955,13 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
              ing.name      AS ingredient_name,
              u.abbreviation AS base_unit_abbr
       FROM   mcogs_menu_sales_items msi
-      JOIN   mcogs_sales_items       si  ON si.id   = msi.sales_item_id
-      LEFT JOIN mcogs_categories     cat ON cat.id  = si.category_id
-      LEFT JOIN mcogs_recipes        r   ON r.id    = si.recipe_id
-      LEFT JOIN mcogs_ingredients    ing ON ing.id  = si.ingredient_id
-      LEFT JOIN mcogs_units          u   ON u.id    = ing.base_unit_id
+      JOIN   mcogs_sales_items       si        ON si.id        = msi.sales_item_id
+      LEFT JOIN mcogs_categories     cat       ON cat.id       = si.category_id
+      LEFT JOIN mcogs_combos         co        ON co.id        = si.combo_id
+      LEFT JOIN mcogs_categories     combo_cat ON combo_cat.id = co.category_id
+      LEFT JOIN mcogs_recipes        r         ON r.id         = si.recipe_id
+      LEFT JOIN mcogs_ingredients    ing       ON ing.id       = si.ingredient_id
+      LEFT JOIN mcogs_units          u         ON u.id         = ing.base_unit_id
       WHERE  msi.menu_id = $1
       ORDER BY msi.sort_order, msi.id
     `, [menuId]);
@@ -975,7 +981,7 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
     ];
 
     // Combo items need step → option → recipe IDs too — defer after loadComboData
-    const comboIds = items.filter(i => i.item_type === 'combo').map(i => Number(i.sales_item_id));
+    const comboIds = [...new Set(items.filter(i => i.item_type === 'combo' && i.combo_id).map(i => Number(i.combo_id)))];
 
     const [quoteLookup, { rows: defaultTaxRows }, comboData] = await Promise.all([
       loadQuoteLookup(),
@@ -1059,7 +1065,7 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, priceLevelId, plVariationMap, marketPlVariationMap);
         cppUsd = cost * qty;
       } else if (itemType === 'combo') {
-        const steps = comboData[siId] || [];
+        const steps = comboData[Number(item.combo_id)] || [];
         cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) * qty;
       }
       const cpp = Math.round(cppUsd * exchRate * 10000) / 10000;

@@ -484,7 +484,7 @@ publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (re
   try {
     // Load menu sales item
     const { rows: [mi] } = await pool.query(`
-      SELECT msi.id, si.item_type, si.recipe_id, si.ingredient_id, msi.qty,
+      SELECT msi.id, si.item_type, si.recipe_id, si.ingredient_id, si.combo_id, msi.qty,
              si.name AS display_name,
              m.country_id, c.exchange_rate,
              r.name  AS recipe_name,  r.yield_qty,
@@ -523,6 +523,155 @@ publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (re
           is_sub_recipe: false,
         }],
         total_local: Math.round(costUsd * exchangeRate * 10000) / 10000,
+      });
+    }
+
+    // Combo item — load steps/options and build per-step breakdown
+    if (mi.item_type === 'combo') {
+      const comboId = Number(mi.combo_id);
+      if (!comboId) return res.json({ display_name: mi.display_name, item_type: 'combo', combo_steps: [], total_local: 0 });
+
+      const qty          = Number(mi.qty || 1);
+      const exchangeRate = Number(mi.exchange_rate) || 1;
+
+      const comboData = await loadComboData([comboId]);
+      const steps     = comboData[comboId] || [];
+
+      // Collect recipe / ingredient IDs from all options for bulk loading
+      const recipeIdsFromOpts = [];
+      const ingIdsFromOpts    = [];
+      for (const step of steps) {
+        for (const opt of step.options || []) {
+          if (opt.item_type === 'recipe'     && opt.recipe_id)     recipeIdsFromOpts.push(Number(opt.recipe_id));
+          if (opt.item_type === 'ingredient' && opt.ingredient_id) ingIdsFromOpts.push(Number(opt.ingredient_id));
+        }
+      }
+      const uniqueRecipeIds = [...new Set(recipeIdsFromOpts)];
+      const uniqueIngIds    = [...new Set(ingIdsFromOpts)];
+
+      const quoteLookup = await loadQuoteLookup();
+      const [recipeItemsMap, variationMap, ingRows, subRecipeRows] = await Promise.all([
+        uniqueRecipeIds.length ? loadAllRecipeItemsDeep(uniqueRecipeIds) : Promise.resolve({}),
+        uniqueRecipeIds.length ? loadVariationItemsMap(uniqueRecipeIds) : Promise.resolve({}),
+        uniqueIngIds.length
+          ? pool.query(`SELECT i.id, i.name, u.abbreviation AS unit_abbr FROM mcogs_ingredients i LEFT JOIN mcogs_units u ON u.id = i.base_unit_id WHERE i.id = ANY($1::int[])`, [uniqueIngIds])
+              .then(r => Object.fromEntries(r.rows.map(x => [x.id, x])))
+          : Promise.resolve({}),
+        uniqueRecipeIds.length
+          ? pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [uniqueRecipeIds])
+              .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
+          : Promise.resolve({}),
+      ]);
+
+      // Collect recipe ingredient IDs for name lookup
+      const recipeIngIds = [];
+      for (const rid of uniqueRecipeIds) {
+        for (const ri of (recipeItemsMap[rid] || [])) {
+          if (ri.ingredient_id) recipeIngIds.push(Number(ri.ingredient_id));
+        }
+      }
+      const uniqueRecipeIngIds = [...new Set(recipeIngIds)];
+      const recipeIngNames = uniqueRecipeIngIds.length
+        ? await pool.query(`SELECT id, name FROM mcogs_ingredients WHERE id = ANY($1::int[])`, [uniqueRecipeIngIds])
+            .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
+        : {};
+
+      const comboSteps = [];
+      for (const step of steps) {
+        const opts = step.options || [];
+        const optResults = [];
+
+        for (const opt of opts) {
+          const optQty = Number(opt.qty || 1);
+          let optCostUsd = 0;
+          const lines = [];
+
+          if (opt.item_type === 'manual') {
+            optCostUsd = Number(opt.manual_cost || 0) * optQty;
+          } else if (opt.item_type === 'ingredient' && opt.ingredient_id) {
+            const q = quoteLookup[opt.ingredient_id]?.[countryId];
+            optCostUsd = q ? q.price_per_base_unit * optQty : 0;
+            const ing = ingRows[opt.ingredient_id];
+            lines.push({
+              name: ing?.name || opt.name || `Ingredient #${opt.ingredient_id}`,
+              qty: optQty, unit: ing?.unit_abbr || '',
+              waste_pct: 0,
+              cost_local: Math.round(optCostUsd * exchangeRate * 10000) / 10000,
+              is_sub_recipe: false,
+            });
+          } else if (opt.item_type === 'recipe' && opt.recipe_id) {
+            const rItems   = recipeItemsMap[opt.recipe_id] || [];
+            const yieldQty = Math.max(1, Number(opt.recipe_yield_qty || 1));
+            const { cost } = calcRecipeCost(
+              { id: opt.recipe_id, yield_qty: yieldQty },
+              rItems, countryId, quoteLookup, variationMap, recipeItemsMap
+            );
+            optCostUsd = cost * optQty;
+
+            // Ingredient lines for this recipe option
+            const effectiveItems = variationMap?.[opt.recipe_id]?.[countryId] || rItems;
+            for (const ri of effectiveItems) {
+              if (ri.item_type === 'ingredient') {
+                const q       = quoteLookup[ri.ingredient_id]?.[countryId];
+                const baseQty = Number(ri.prep_qty) * Number(ri.prep_to_base_conversion || 1);
+                const waste   = 1 + (Number(ri.waste_pct ?? 0) / 100);
+                const cUsd    = q ? baseQty * waste * q.price_per_base_unit : 0;
+                lines.push({
+                  name:          recipeIngNames[ri.ingredient_id] || `Ingredient #${ri.ingredient_id}`,
+                  qty:           Number(ri.prep_qty),
+                  unit:          ri.prep_unit || '',
+                  waste_pct:     Number(ri.waste_pct || 0),
+                  cost_local:    Math.round((cUsd / yieldQty) * optQty * exchangeRate * 10000) / 10000,
+                  is_sub_recipe: false,
+                });
+              } else if (ri.item_type === 'recipe' && ri.recipe_item_id) {
+                const subId    = Number(ri.recipe_item_id);
+                const subItems = recipeItemsMap[subId] || [];
+                const subYield = Number(ri.sub_recipe_yield_qty || 1);
+                const usage    = Number(ri.prep_qty) * Number(ri.prep_to_base_conversion || 1);
+                const { cost: subCost } = calcRecipeCost(
+                  { id: subId, yield_qty: subYield },
+                  subItems, countryId, quoteLookup, variationMap, recipeItemsMap
+                );
+                lines.push({
+                  name:          subRecipeRows[subId] || `Sub-recipe #${subId}`,
+                  qty:           Number(ri.prep_qty),
+                  unit:          ri.prep_unit || '',
+                  waste_pct:     0,
+                  cost_local:    Math.round((subCost * usage / yieldQty) * optQty * exchangeRate * 10000) / 10000,
+                  is_sub_recipe: true,
+                });
+              }
+            }
+          }
+
+          optResults.push({
+            option_name:      opt.name,
+            item_type:        opt.item_type,
+            option_cost_local: Math.round(optCostUsd * exchangeRate * 10000) / 10000,
+            lines,
+          });
+        }
+
+        // Step cost = average of all option costs
+        const stepCostLocal = opts.length > 0
+          ? optResults.reduce((s, o) => s + o.option_cost_local, 0) / opts.length
+          : 0;
+
+        comboSteps.push({
+          step_name:       step.name,
+          step_cost_local: Math.round(stepCostLocal * 10000) / 10000,
+          options:         optResults,
+        });
+      }
+
+      const totalLocal = Math.round(comboSteps.reduce((s, st) => s + st.step_cost_local, 0) * qty * 10000) / 10000;
+      return res.json({
+        display_name: mi.display_name || '—',
+        item_type:    'combo',
+        cost_note:    'Each step cost = average cost across its options · Total = sum of all step costs',
+        combo_steps:  comboSteps,
+        total_local:  totalLocal,
       });
     }
 
@@ -655,17 +804,23 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
              si.recipe_id,
              si.ingredient_id,
              si.manual_cost,
-             cat.name       AS category,
+             si.combo_id,
+             CASE WHEN si.item_type = 'combo'
+                  THEN COALESCE(combo_cat.name, cat.name)
+                  ELSE cat.name
+             END            AS category,
              r.yield_qty,
              r.name         AS recipe_name,
              ing.name       AS ingredient_name,
              u.abbreviation AS base_unit_abbr
       FROM   mcogs_menu_sales_items msi
-      JOIN   mcogs_sales_items       si  ON si.id   = msi.sales_item_id
-      LEFT JOIN mcogs_categories     cat ON cat.id  = si.category_id
-      LEFT JOIN mcogs_recipes        r   ON r.id    = si.recipe_id
-      LEFT JOIN mcogs_ingredients    ing ON ing.id  = si.ingredient_id
-      LEFT JOIN mcogs_units          u   ON u.id    = ing.base_unit_id
+      JOIN   mcogs_sales_items       si        ON si.id        = msi.sales_item_id
+      LEFT JOIN mcogs_categories     cat       ON cat.id       = si.category_id
+      LEFT JOIN mcogs_combos         co        ON co.id        = si.combo_id
+      LEFT JOIN mcogs_categories     combo_cat ON combo_cat.id = co.category_id
+      LEFT JOIN mcogs_recipes        r         ON r.id         = si.recipe_id
+      LEFT JOIN mcogs_ingredients    ing       ON ing.id       = si.ingredient_id
+      LEFT JOIN mcogs_units          u         ON u.id         = ing.base_unit_id
       WHERE  msi.menu_id = $1
       ORDER BY msi.sort_order, msi.id
     `, [queryMenuId]);
@@ -695,7 +850,7 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
 
     // Collect recipe IDs (direct + from combo steps)
     const recipeIds = [...new Set(items.filter(i => i.item_type === 'recipe' && i.recipe_id).map(i => Number(i.recipe_id)))];
-    const comboIds  = items.filter(i => i.item_type === 'combo').map(i => Number(i.sales_item_id));
+    const comboIds  = [...new Set(items.filter(i => i.item_type === 'combo' && i.combo_id).map(i => Number(i.combo_id)))];
 
     const [quoteLookup, { rows: defaultTaxRows }, comboData] = await Promise.all([
       loadQuoteLookup(),
@@ -743,7 +898,7 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         const { cost } = calcRecipeCost(recipe, rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null, levelId, plVariationMap, marketPlVariationMap);
         cppUsd = cost * qty;
       } else if (itemType === 'combo') {
-        const steps = comboData[item.sales_item_id] || [];
+        const steps = comboData[Number(item.combo_id)] || [];
         cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, levelId) * qty;
       }
       return Math.round(cppUsd * exchangeRate * 10000) / 10000;
