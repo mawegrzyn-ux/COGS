@@ -190,10 +190,10 @@ export default function InventoryPage() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-hidden flex flex-col">
         {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }} />}
         {tab === 'quotes'        && <PriceQuotesTab initialIngredientId={initialQuoteIngId} />}
-        {tab === 'vendors'       && <VendorsTab onCountChange={setVendorCount} />}
+        {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
       </div>
     </div>
   )
@@ -553,6 +553,10 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [quoteErrors, setQuoteErrors] = useState<Partial<typeof blankQuoteForm>>({})
   const [vendors,     setVendors]     = useState<Vendor[]>([])
 
+  // Right panel state
+  const [ingPanelWidth,  setIngPanelWidth]  = useState(400)
+  const [selectedIngId,  setSelectedIngId]  = useState<number | null>(null)
+
   // Phase 4 — allergen & nutrition state
   type IngModalTab = 'details' | 'allergens' | 'nutrition'
   const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
@@ -839,7 +843,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         await api.put(`/ingredients/${(modal as Ingredient).id}`, payload)
         showToast('Ingredient updated')
       }
-      setModal(null); load()
+      setModal(null); setSelectedIngId(null); load()
     } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
     finally { setSaving(false) }
   }
@@ -936,8 +940,9 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <div className="flex gap-3 mb-5 flex-wrap items-center">
+    <div className="flex flex-col h-full">
+      {/* ── Toolbar ── */}
+      <div className="flex gap-3 px-6 pt-6 pb-5 flex-wrap items-center shrink-0">
         <div className="relative flex-1 min-w-[200px]">
           <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
           <input
@@ -973,321 +978,409 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         </button>
       </div>
 
-      {loading ? <Spinner /> : gridMode ? (
-        <DataGrid<Ingredient>
-          gridId="ingredients"
-          columns={ingColumns}
-          rows={searchFiltered}
-          keyField="id"
-          onSave={async (draft, isNew) => {
-            const payload = {
-              name:                            String(draft.name ?? '').trim(),
-              category_id:                     Number(draft.category_id) || null,
-              base_unit_id:                    Number(draft.base_unit_id) || null,
-              default_prep_unit:               String(draft.default_prep_unit ?? '').trim() || null,
-              default_prep_to_base_conversion: Number(draft.default_prep_to_base_conversion) || 1,
-              waste_pct:                       Number(draft.waste_pct) || 0,
-            }
-            if (!payload.name) throw new Error('Name is required')
-            return isNew
-              ? api.post('/ingredients', payload)
-              : api.put(`/ingredients/${(draft as any).id}`, payload)
-          }}
-          onSaved={(saved, isNew) => {
-            if (isNew) setIngredients(prev => [...prev, saved])
-            else       setIngredients(prev => prev.map(i =>
-              // Merge so joined fields (quote_count, active_quote_count, base_unit_abbr etc.) are preserved
-              i.id === saved.id ? { ...i, ...saved } : i
-            ))
-            showToast(isNew ? 'Ingredient added' : 'Ingredient saved')
-          }}
-          onEdit={openEdit}
-          onDelete={ing => setConfirmDelete(ing)}
-          showToast={showToast}
-          hintRight="Tab from last cell saves row · Esc reverts"
-        />
-      ) : sorted.length === 0 ? (
-        <EmptyState
-          message={search || hasActiveFilters || filterMenuId ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
-          action={!search && !hasActiveFilters && !filterMenuId
-            ? <button className="btn-primary px-4 py-2 text-sm" onClick={() => openAdd()}>Add Ingredient</button>
-            : undefined
-          }
-        />
+      {/* ── Body ── */}
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center"><Spinner /></div>
+      ) : gridMode ? (
+        <div className="flex-1 overflow-auto px-6 pb-6">
+          <DataGrid<Ingredient>
+            gridId="ingredients"
+            columns={ingColumns}
+            rows={searchFiltered}
+            keyField="id"
+            onSave={async (draft, isNew) => {
+              const payload = {
+                name:                            String(draft.name ?? '').trim(),
+                category_id:                     Number(draft.category_id) || null,
+                base_unit_id:                    Number(draft.base_unit_id) || null,
+                default_prep_unit:               String(draft.default_prep_unit ?? '').trim() || null,
+                default_prep_to_base_conversion: Number(draft.default_prep_to_base_conversion) || 1,
+                waste_pct:                       Number(draft.waste_pct) || 0,
+              }
+              if (!payload.name) throw new Error('Name is required')
+              return isNew
+                ? api.post('/ingredients', payload)
+                : api.put(`/ingredients/${(draft as any).id}`, payload)
+            }}
+            onSaved={(saved, isNew) => {
+              if (isNew) setIngredients(prev => [...prev, saved])
+              else       setIngredients(prev => prev.map(i =>
+                i.id === saved.id ? { ...i, ...saved } : i
+              ))
+              showToast(isNew ? 'Ingredient added' : 'Ingredient saved')
+            }}
+            onEdit={openEdit}
+            onDelete={ing => setConfirmDelete(ing)}
+            showToast={showToast}
+            hintRight="Tab from last cell saves row · Esc reverts"
+          />
+        </div>
       ) : (
-        <div className="bg-surface border border-border rounded-xl overflow-visible">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
-                <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Category"   field="category_name"                   sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category_name')} onFilter={v => setFilter('category_name', v)} />
-                <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <th className="px-4 py-3 text-left text-xs font-semibold text-text-3">Allergens</th>
-                <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <th className="w-20" />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(ing => (
-                <tr key={ing.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-text-1">{ing.name}</td>
-                  <td className="px-4 py-3 text-text-3">{ing.category_name || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2">{ing.base_unit_abbr ?? '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2">{ing.default_prep_unit || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2">
-                    {Number(ing.default_prep_to_base_conversion) !== 1
-                      ? Number(ing.default_prep_to_base_conversion).toFixed(4) : '1'}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-text-2">
-                    {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-0.5">
-                      {(ingAllergenMap.get(ing.id) || [])
-                        .filter(a => a.status !== 'free_from')
-                        .map(a => (
-                          <span
-                            key={a.code}
-                            title={`${a.code}: ${a.status === 'contains' ? 'Contains' : 'May contain'}`}
-                            className={`text-[10px] font-bold px-1 py-0.5 rounded leading-none
-                              ${a.status === 'contains' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                            {a.code}
-                          </span>
-                        ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <QuoteHoverPopover ing={ing} onViewQuotes={onViewQuotes} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2 justify-end">
-                      <button className="btn-ghost px-2 py-1 text-xs flex items-center gap-1" onClick={() => openEdit(ing)}>
-                        <EditIcon size={12} /> Edit
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* ── Left: ingredient list ── */}
+          <div className="flex-1 overflow-auto px-6 pb-6">
+            {sorted.length === 0 ? (
+              <EmptyState
+                message={search || hasActiveFilters || filterMenuId ? 'No ingredients match your filters.' : 'No ingredients yet. Add your first ingredient to get started.'}
+                action={!search && !hasActiveFilters && !filterMenuId
+                  ? <button className="btn-primary px-4 py-2 text-sm" onClick={() => openAdd()}>Add Ingredient</button>
+                  : undefined
+                }
+              />
+            ) : (
+              <div className="bg-surface border border-border rounded-xl overflow-visible">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
+                      <ColumnHeader<Ingredient> label="Ingredient" field="name"                            sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <ColumnHeader<Ingredient> label="Category"   field="category_name"                   sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions} filterValues={getFilter('category_name')} onFilter={v => setFilter('category_name', v)} />
+                      <ColumnHeader<Ingredient> label="Base Unit"  field="base_unit_abbr"                  sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-3">Allergens</th>
+                      <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <th className="w-20" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(ing => (
+                      <tr
+                        key={ing.id}
+                        className={`border-b border-border last:border-0 transition-colors cursor-pointer
+                          ${selectedIngId === ing.id ? 'bg-accent-dim border-l-2 border-l-accent' : 'hover:bg-surface-2'}`}
+                        onClick={() => { openEdit(ing); setSelectedIngId(ing.id) }}
+                      >
+                        <td className="px-4 py-3 font-semibold text-text-1">{ing.name}</td>
+                        <td className="px-4 py-3 text-text-3">{ing.category_name || '—'}</td>
+                        <td className="px-4 py-3 font-mono text-text-2">{ing.base_unit_abbr ?? '—'}</td>
+                        <td className="px-4 py-3 font-mono text-text-2">{ing.default_prep_unit || '—'}</td>
+                        <td className="px-4 py-3 font-mono text-text-2">
+                          {Number(ing.default_prep_to_base_conversion) !== 1
+                            ? Number(ing.default_prep_to_base_conversion).toFixed(4) : '1'}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-text-2">
+                          {Number(ing.waste_pct) > 0 ? `${ing.waste_pct}%` : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-0.5">
+                            {(ingAllergenMap.get(ing.id) || [])
+                              .filter(a => a.status !== 'free_from')
+                              .map(a => (
+                                <span
+                                  key={a.code}
+                                  title={`${a.code}: ${a.status === 'contains' ? 'Contains' : 'May contain'}`}
+                                  className={`text-[10px] font-bold px-1 py-0.5 rounded leading-none
+                                    ${a.status === 'contains' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                  {a.code}
+                                </span>
+                              ))}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <QuoteHoverPopover ing={ing} onViewQuotes={onViewQuotes} />
+                        </td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              onClick={() => setConfirmDelete(ing)}
+                            >
+                              <TrashIcon size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* ── Drag handle + right panel ── */}
+          {selectedIngId !== null && (() => {
+            const ing = sorted.find(i => i.id === selectedIngId) ?? ingredients.find(i => i.id === selectedIngId)
+            if (!ing) return null
+            return (
+              <>
+                <div
+                  className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize shrink-0 transition-all duration-100 active:bg-accent"
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    const startX = e.clientX; const startW = ingPanelWidth
+                    const onMove = (ev: MouseEvent) => setIngPanelWidth(Math.max(280, Math.min(600, startW - (ev.clientX - startX))))
+                    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+                    window.addEventListener('mousemove', onMove)
+                    window.addEventListener('mouseup', onUp)
+                  }}
+                />
+                <div
+                  className="flex flex-col bg-surface border-l border-border overflow-hidden shrink-0"
+                  style={{ width: ingPanelWidth, minWidth: 280, maxWidth: 600 }}
+                >
+                  {/* Panel header */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface shrink-0">
+                    <span className="font-semibold text-text-1 text-sm truncate">{ing.name}</span>
+                    <button
+                      onClick={() => { setSelectedIngId(null); setModal(null) }}
+                      className="text-text-3 hover:text-text-1 transition-colors ml-2 shrink-0"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
+                  {/* Panel tabs */}
+                  <div className="flex gap-0 border-b border-border px-3 pt-1 shrink-0">
+                    {(['details', 'allergens', 'nutrition'] as const).map(t => (
+                      <button
+                        key={t}
+                        onClick={() => setIngModalTab(t)}
+                        className={`px-3 py-2 text-xs font-semibold rounded-t transition-colors ${ingModalTab === t ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
+                      >
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
                       </button>
-                      <button className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" onClick={() => setConfirmDelete(ing)}>
-                        <TrashIcon size={12} />
+                    ))}
+                  </div>
+                  {/* Panel body */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {ingModalTab === 'details' && (
+                      <>
+                        <Field label="Name" required error={errors.name}>
+                          <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
+                        </Field>
+                        <div className="grid grid-cols-2 gap-4">
+                          <Field label="Category">
+                            <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+                              <option value="">No category…</option>
+                              {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                            </select>
+                          </Field>
+                          <Field label="Base Unit" required error={errors.base_unit_id}>
+                            <select className="select w-full" value={form.base_unit_id} onChange={e => {
+                              const selectedUnit = units.find(u => u.id === Number(e.target.value))
+                              setForm(f => ({
+                                ...f,
+                                base_unit_id: e.target.value,
+                                ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
+                                  ? { default_prep_unit: selectedUnit.default_recipe_unit }
+                                  : {}),
+                                ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
+                                  ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
+                                  : {}),
+                              }))
+                            }}>
+                              <option value="">Select unit…</option>
+                              {['mass', 'volume', 'count'].map(type => (
+                                <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
+                                  {units.filter(u => u.type === type).map(u => (
+                                    <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
+                                  ))}
+                                </optgroup>
+                              ))}
+                            </select>
+                            <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
+                          </Field>
+                        </div>
+                        <div className="border-t border-border pt-4">
+                          <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe.</p>
+                          <div className="grid grid-cols-2 gap-4">
+                            <Field label="Default Prep Unit">
+                              <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
+                            </Field>
+                            <Field label="Conversion to Base Unit">
+                              <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                              <p className="text-xs text-text-3 mt-1">{convHint()}</p>
+                            </Field>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <Field label="Waste %">
+                            <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                          </Field>
+                          <Field label="Notes">
+                            <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
+                          </Field>
+                        </div>
+                        <ImageUpload
+                          label="Image"
+                          value={form.image_url || null}
+                          onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+                        />
+                      </>
+                    )}
+                    {ingModalTab === 'allergens' && (
+                      <AllergenTabContent
+                        allAllergens={allAllergens}
+                        ingAllergens={ingAllergens}
+                        onCycle={cycleAllergenStatus}
+                        onSave={saveAllergens}
+                        saving={savingAllergens}
+                        onClose={() => { setSelectedIngId(null); setModal(null) }}
+                      />
+                    )}
+                    {ingModalTab === 'nutrition' && (
+                      <NutritionTabContent
+                        nutForm={nutForm}
+                        setNutForm={setNutForm}
+                        nutSearch={nutSearch}
+                        nutResults={nutResults}
+                        nutLoading={nutLoading}
+                        onSearch={searchNutrition}
+                        onApply={applyNutritionResult}
+                        dietaryFlags={dietaryFlags}
+                        setDietaryFlags={setDietaryFlags}
+                        onSave={saveNutrition}
+                        saving={savingNut}
+                        onClose={() => { setSelectedIngId(null); setModal(null) }}
+                        ingredientName={ing.name}
+                      />
+                    )}
+                  </div>
+                  {/* Panel footer — only for Details tab */}
+                  {ingModalTab === 'details' && (
+                    <div className="border-t border-border px-4 py-3 flex gap-2 justify-end shrink-0">
+                      <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => { setSelectedIngId(null); setModal(null) }}>Cancel</button>
+                      <button className="btn-primary px-3 py-1.5 text-sm" onClick={handleSave} disabled={saving}>
+                        {saving ? 'Saving…' : 'Save'}
                       </button>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  )}
+                </div>
+              </>
+            )
+          })()}
         </div>
       )}
 
-      {modal !== null && (() => {
-        const modalIdx  = modal === 'new' ? -1 : sorted.findIndex(i => i.id === (modal as Ingredient).id)
-        const prevIng   = modalIdx > 0                   ? sorted[modalIdx - 1] : null
-        const nextIng   = modalIdx < sorted.length - 1   ? sorted[modalIdx + 1] : null
-        return (
+      {/* Modal — only for "Add Ingredient" / "Add Ingredient & Quote" (new) */}
+      {modal === 'new' && (
         <Modal
-          title={modal === 'new' ? (withQuote ? 'Add Ingredient & Quote' : 'Add Ingredient') : `Edit: ${(modal as Ingredient).name}`}
+          title={withQuote ? 'Add Ingredient & Quote' : 'Add Ingredient'}
           onClose={() => setModal(null)}
           width="max-w-2xl"
         >
-          {/* Prev / Next navigation */}
-          {modal !== 'new' && sorted.length > 1 && (
-            <div className="flex items-center justify-between -mt-1 mb-3 pb-2 border-b border-border/50">
-              <button
-                className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${prevIng ? 'text-accent hover:bg-accent-dim' : 'text-text-3 opacity-30 cursor-default'}`}
-                onClick={() => prevIng && openEdit(prevIng)}
-                disabled={!prevIng}
-                title={prevIng ? `Previous: ${prevIng.name}` : undefined}
-              >
-                ← {prevIng ? prevIng.name : 'Prev'}
-              </button>
-              <span className="text-xs text-text-3">{modalIdx + 1} / {sorted.length}</span>
-              <button
-                className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${nextIng ? 'text-accent hover:bg-accent-dim' : 'text-text-3 opacity-30 cursor-default'}`}
-                onClick={() => nextIng && openEdit(nextIng)}
-                disabled={!nextIng}
-                title={nextIng ? `Next: ${nextIng.name}` : undefined}
-              >
-                {nextIng ? nextIng.name : 'Next'} →
-              </button>
-            </div>
-          )}
-
-          {/* Tabs — only for existing ingredients */}
-          {modal !== 'new' && (
-            <div className="flex gap-1 -mt-1 mb-4 border-b border-border">
-              {(['details', 'allergens', 'nutrition'] as const).map(t => (
-                <button
-                  key={t}
-                  onClick={() => setIngModalTab(t)}
-                  className={`px-4 py-2 text-sm font-semibold rounded-t transition-colors
-                    ${ingModalTab === t
-                      ? 'text-accent border-b-2 border-accent'
-                      : 'text-text-3 hover:text-text-1'
-                    }`}
-                >
-                  {t === 'details' ? 'Details' : t === 'allergens' ? 'Allergens' : 'Nutrition'}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* ── Details tab ───────────────────────────────────────────────── */}
-          {(modal === 'new' || ingModalTab === 'details') && (
-            <>
-              <Field label="Name" required error={errors.name}>
-                <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
+          <>
+            <Field label="Name" required error={errors.name}>
+              <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Chicken Breast" autoFocus />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Category">
+                <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
+                  <option value="">No category…</option>
+                  {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                </select>
               </Field>
+              <Field label="Base Unit" required error={errors.base_unit_id}>
+                <select className="select w-full" value={form.base_unit_id} onChange={e => {
+                  const selectedUnit = units.find(u => u.id === Number(e.target.value))
+                  setForm(f => ({
+                    ...f,
+                    base_unit_id: e.target.value,
+                    ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
+                      ? { default_prep_unit: selectedUnit.default_recipe_unit }
+                      : {}),
+                    ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
+                      ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
+                      : {}),
+                  }))
+                }}>
+                  <option value="">Select unit…</option>
+                  {['mass', 'volume', 'count'].map(type => (
+                    <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
+                      {units.filter(u => u.type === type).map(u => (
+                        <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
+              </Field>
+            </div>
+            <div className="border-t border-border pt-4 mt-2">
+              <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe (overridable per recipe).</p>
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Category">
-                  <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-                    <option value="">No category…</option>
-                    {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                  </select>
+                <Field label="Default Prep Unit">
+                  <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
+                  <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
                 </Field>
-                <Field label="Base Unit" required error={errors.base_unit_id}>
-                  <select className="select w-full" value={form.base_unit_id} onChange={e => {
-                    const selectedUnit = units.find(u => u.id === Number(e.target.value))
-                    setForm(f => ({
-                      ...f,
-                      base_unit_id: e.target.value,
-                      // Auto-populate recipe unit defaults if fields are currently blank
-                      ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
-                        ? { default_prep_unit: selectedUnit.default_recipe_unit }
-                        : {}),
-                      ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
-                        ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
-                        : {}),
-                    }))
-                  }}>
-                    <option value="">Select unit…</option>
-                    {['mass', 'volume', 'count'].map(type => (
-                      <optgroup key={type} label={type.charAt(0).toUpperCase() + type.slice(1)}>
-                        {units.filter(u => u.type === type).map(u => (
-                          <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <p className="text-xs text-text-3 mt-1">All price conversions use this unit.</p>
+                <Field label="Conversion to Base Unit">
+                  <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                  <p className="text-xs text-text-3 mt-1">{convHint()}</p>
                 </Field>
               </div>
-              <div className="border-t border-border pt-4 mt-2">
-                <p className="text-xs text-text-3 mb-3">Default prep settings — pre-filled when added to a recipe (overridable per recipe).</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Waste %">
+                <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
+              </Field>
+              <Field label="Notes">
+                <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
+              </Field>
+            </div>
+            <ImageUpload
+              label="Image"
+              value={form.image_url || null}
+              onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+            />
+            {!withQuote && (
+              <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
+                Save the ingredient first, then click it to manage allergens and nutrition.
+              </p>
+            )}
+
+            {withQuote && (
+              <div className="border-t border-border pt-4 mt-4">
+                <p className="text-sm font-semibold text-text-1 mb-3">Price Quote</p>
                 <div className="grid grid-cols-2 gap-4">
-                  <Field label="Default Prep Unit">
-                    <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
-                    <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
+                  <Field label="Vendor" required error={quoteErrors.vendor_id}>
+                    <select className="select w-full" value={quoteForm.vendor_id} onChange={e => setQuoteForm(f => ({ ...f, vendor_id: e.target.value }))}>
+                      <option value="">Select vendor…</option>
+                      {vendors.map(v => (
+                        <option key={v.id} value={v.id}>{v.name}{v.country_name ? ` (${v.country_name})` : ''}</option>
+                      ))}
+                    </select>
                   </Field>
-                  <Field label="Conversion to Base Unit">
-                    <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
-                    <p className="text-xs text-text-3 mt-1">{convHint()}</p>
+                  <Field label="Purchase Unit">
+                    <input className="input w-full" value={quoteForm.purchase_unit} onChange={e => setQuoteForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. 10 kg bag" />
+                  </Field>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Purchase Price" required error={quoteErrors.purchase_price}>
+                    <input className="input w-full font-mono" type="number" min="0" step="0.01" value={quoteForm.purchase_price} onChange={e => setQuoteForm(f => ({ ...f, purchase_price: e.target.value }))} placeholder="0.00" />
+                  </Field>
+                  <Field label={`Qty in ${units.find(u => u.id === Number(form.base_unit_id))?.abbreviation || 'base units'}`} required error={quoteErrors.qty_in_base_units}>
+                    <input className="input w-full font-mono" type="number" min="0.000001" step="0.001" value={quoteForm.qty_in_base_units} onChange={e => setQuoteForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                  </Field>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Vendor Product Code">
+                    <input className="input w-full" value={quoteForm.vendor_product_code} onChange={e => setQuoteForm(f => ({ ...f, vendor_product_code: e.target.value }))} placeholder="Optional…" />
+                  </Field>
+                  <Field label="Status">
+                    <select className="select w-full" value={quoteForm.is_active} onChange={e => setQuoteForm(f => ({ ...f, is_active: e.target.value }))}>
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </select>
                   </Field>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Waste %">
-                  <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
-                  <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
-                </Field>
-                <Field label="Notes">
-                  <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
-                </Field>
-              </div>
-              <ImageUpload
-                label="Image"
-                value={form.image_url || null}
-                onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
-              />
-              {modal === 'new' && !withQuote && (
-                <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
-                  Save the ingredient first, then reopen to manage allergens and nutrition.
-                </p>
-              )}
+            )}
 
-              {/* ── Quote section (Add Ingredient & Quote mode) ─────────────── */}
-              {modal === 'new' && withQuote && (
-                <div className="border-t border-border pt-4 mt-4">
-                  <p className="text-sm font-semibold text-text-1 mb-3">Price Quote</p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <Field label="Vendor" required error={quoteErrors.vendor_id}>
-                      <select className="select w-full" value={quoteForm.vendor_id} onChange={e => setQuoteForm(f => ({ ...f, vendor_id: e.target.value }))}>
-                        <option value="">Select vendor…</option>
-                        {vendors.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}{v.country_name ? ` (${v.country_name})` : ''}</option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Purchase Unit">
-                      <input className="input w-full" value={quoteForm.purchase_unit} onChange={e => setQuoteForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. 10 kg bag" />
-                    </Field>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <Field label="Purchase Price" required error={quoteErrors.purchase_price}>
-                      <input className="input w-full font-mono" type="number" min="0" step="0.01" value={quoteForm.purchase_price} onChange={e => setQuoteForm(f => ({ ...f, purchase_price: e.target.value }))} placeholder="0.00" />
-                    </Field>
-                    <Field label={`Qty in ${units.find(u => u.id === Number(form.base_unit_id))?.abbreviation || 'base units'}`} required error={quoteErrors.qty_in_base_units}>
-                      <input className="input w-full font-mono" type="number" min="0.000001" step="0.001" value={quoteForm.qty_in_base_units} onChange={e => setQuoteForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
-                    </Field>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <Field label="Vendor Product Code">
-                      <input className="input w-full" value={quoteForm.vendor_product_code} onChange={e => setQuoteForm(f => ({ ...f, vendor_product_code: e.target.value }))} placeholder="Optional…" />
-                    </Field>
-                    <Field label="Status">
-                      <select className="select w-full" value={quoteForm.is_active} onChange={e => setQuoteForm(f => ({ ...f, is_active: e.target.value }))}>
-                        <option value="true">Active</option>
-                        <option value="false">Inactive</option>
-                      </select>
-                    </Field>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-3 justify-end pt-2">
-                <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
-                <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
-                  {saving ? 'Saving…' : withQuote && modal === 'new'
-                    ? <>Save Ingredient &amp; Quote <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
-                    : <>Save Ingredient <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
-                  }
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* ── Allergens tab ─────────────────────────────────────────────── */}
-          {modal !== 'new' && ingModalTab === 'allergens' && (
-            <AllergenTabContent
-              allAllergens={allAllergens}
-              ingAllergens={ingAllergens}
-              onCycle={cycleAllergenStatus}
-              onSave={saveAllergens}
-              saving={savingAllergens}
-              onClose={() => setModal(null)}
-            />
-          )}
-
-          {/* ── Nutrition tab ─────────────────────────────────────────────── */}
-          {modal !== 'new' && ingModalTab === 'nutrition' && (
-            <NutritionTabContent
-              nutForm={nutForm}
-              setNutForm={setNutForm}
-              nutSearch={nutSearch}
-              nutResults={nutResults}
-              nutLoading={nutLoading}
-              onSearch={searchNutrition}
-              onApply={applyNutritionResult}
-              dietaryFlags={dietaryFlags}
-              setDietaryFlags={setDietaryFlags}
-              onSave={saveNutrition}
-              saving={savingNut}
-              onClose={() => setModal(null)}
-              ingredientName={(modal as Ingredient)?.name ?? ''}
-            />
-          )}
+            <div className="flex gap-3 justify-end pt-2">
+              <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
+              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving…' : withQuote
+                  ? <>Save Ingredient &amp; Quote <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
+                  : <>Save Ingredient <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>
+                }
+              </button>
+            </div>
+          </>
         </Modal>
-        )
-      })()}
+      )}
 
       {confirmDelete && (
         <ConfirmDialog
@@ -1297,7 +1390,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
         />
       )}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-    </>
+    </div>
   )
 }
 
@@ -1330,6 +1423,10 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     vendor_id: string; purchase_unit: string; qty_in_base_units: string; purchase_price: string
   }>>({})
   const [missingSaving,    setMissingSaving]   = useState<Record<number, boolean>>({})
+
+  // Right panel state
+  const [quotePanelWidth,  setQuotePanelWidth]  = useState(380)
+  const [selectedQuoteId,  setSelectedQuoteId]  = useState<number | null>(null)
 
   const blankForm = {
     ingredient_id: '', vendor_id: '', purchase_unit: '', purchase_price: '',
@@ -1598,6 +1695,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
         setModal('new')
       } else {
         setModal(null)
+        setSelectedQuoteId(null)
       }
     } catch (err: any) { showToast(err.message || 'Save failed', 'error') }
     finally { setSaving(false) }
@@ -1661,8 +1759,8 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <div className="flex gap-3 mb-5 flex-wrap items-center">
+    <div className="flex flex-col h-full">
+      <div className="flex gap-3 px-6 pt-6 pb-5 flex-wrap items-center shrink-0">
         {!showMissing && (
           <div className="relative flex-1 min-w-[200px]">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-text-3" />
@@ -1733,9 +1831,12 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
         </button>
       </div>
 
-      {loading ? <Spinner /> : showMissing ? (
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center"><Spinner /></div>
+      ) : showMissing ? (
         /* ── Missing quotes view ──────────────────────────────────────────────── */
-        !missingCountryId ? (
+        <div className="flex-1 overflow-auto px-6 pb-6">
+        {!missingCountryId ? (
           <EmptyState message="Select a market above to see which ingredients are missing a price quote for that country." />
         ) : missingIngredients.length === 0 ? (
           <EmptyState message={`All ingredients have at least one active price quote for ${countries.find(c => String(c.id) === missingCountryId)?.name ?? 'this market'}. 🎉`} />
@@ -1842,124 +1943,250 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
             </div>
           </div>
         )
+        }
+        </div>
       ) : gridMode ? (
-        <DataGrid<Quote>
-          gridId="quotes"
-          columns={quoteColumns}
-          rows={searchFiltered}
-          keyField="id"
-          onSave={async (draft, isNew) => {
-            if (!draft.ingredient_id || !draft.vendor_id || !draft.purchase_price)
-              throw new Error('Ingredient, vendor and price are required')
-            const payload = {
-              ingredient_id:     Number(draft.ingredient_id),
-              vendor_id:         Number(draft.vendor_id),
-              purchase_unit:     String(draft.purchase_unit ?? '').trim() || null,
-              purchase_price:    Number(draft.purchase_price),
-              qty_in_base_units: Number(draft.qty_in_base_units) || 1,
-              is_active:         String(draft.is_active) === 'true',
-            }
-            return isNew
-              ? api.post('/price-quotes', payload)
-              : api.put(`/price-quotes/${(draft as any).id}`, payload)
-          }}
-          onSaved={(saved, isNew) => {
-            if (isNew) setQuotes(prev => [...prev, saved])
-            else       setQuotes(prev => prev.map(q => q.id === saved.id ? { ...q, ...saved } : q))
-            showToast(isNew ? 'Quote added' : 'Quote saved')
-          }}
-          onEdit={openEdit}
-          onDelete={q => setConfirmDelete(q)}
-          renderActions={q => (
-            <button
-              onClick={() => togglePreferred(q)}
-              title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
-              className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
-                ${q.is_preferred
-                  ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200'
-                  : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'
-                }`}
-            >
-              <StarIcon size={13} filled={q.is_preferred} />
-            </button>
-          )}
-          showToast={showToast}
-          hintRight="Price / Base Unit recalculates live"
-        />
-      ) : sorted.length === 0 ? (
-        <EmptyState
-          message={search || hasActiveFilters ? 'No quotes match your filters.' : 'No price quotes yet. Add your first quote to get started.'}
-          action={!search && !hasActiveFilters
-            ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Quote</button>
-            : undefined
-          }
-        />
+        <div className="flex-1 overflow-auto px-6 pb-6">
+          <DataGrid<Quote>
+            gridId="quotes"
+            columns={quoteColumns}
+            rows={searchFiltered}
+            keyField="id"
+            onSave={async (draft, isNew) => {
+              if (!draft.ingredient_id || !draft.vendor_id || !draft.purchase_price)
+                throw new Error('Ingredient, vendor and price are required')
+              const payload = {
+                ingredient_id:     Number(draft.ingredient_id),
+                vendor_id:         Number(draft.vendor_id),
+                purchase_unit:     String(draft.purchase_unit ?? '').trim() || null,
+                purchase_price:    Number(draft.purchase_price),
+                qty_in_base_units: Number(draft.qty_in_base_units) || 1,
+                is_active:         String(draft.is_active) === 'true',
+              }
+              return isNew
+                ? api.post('/price-quotes', payload)
+                : api.put(`/price-quotes/${(draft as any).id}`, payload)
+            }}
+            onSaved={(saved, isNew) => {
+              if (isNew) setQuotes(prev => [...prev, saved])
+              else       setQuotes(prev => prev.map(q => q.id === saved.id ? { ...q, ...saved } : q))
+              showToast(isNew ? 'Quote added' : 'Quote saved')
+            }}
+            onEdit={openEdit}
+            onDelete={q => setConfirmDelete(q)}
+            renderActions={q => (
+              <button
+                onClick={() => togglePreferred(q)}
+                title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
+                className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
+                  ${q.is_preferred
+                    ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200'
+                    : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'
+                  }`}
+              >
+                <StarIcon size={13} filled={q.is_preferred} />
+              </button>
+            )}
+            showToast={showToast}
+            hintRight="Price / Base Unit recalculates live"
+          />
+        </div>
       ) : (
-        <div className="bg-surface border border-border rounded-xl overflow-visible">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
-                <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={ingredientFilterOptions} filterValues={getFilter('ingredient_id')} onFilter={v => setFilter('ingredient_id', v)} />
-                <ColumnHeader<Quote> label="Category"      field="ingredient_category" sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions}   filterValues={getFilter('ingredient_category')} onFilter={v => setFilter('ingredient_category', v)} />
-                <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={getFilter('vendor_id')} onFilter={v => setFilter('vendor_id',  v)} />
-                <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValues={getFilter('country_id')} onFilter={v => setFilter('country_id', v)} />
-                <ColumnHeader<Quote> label="Purchase Unit" field="purchase_unit"       sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                <ColumnHeader<Quote> label="Price"         field="purchase_price"      sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
-                <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
-                <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions}    filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
-                <ColumnHeader<Quote> label="Preferred"     field="is_preferred"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={preferredFilterOptions}  filterValues={getFilter('is_preferred')} onFilter={v => setFilter('is_preferred', v)} />
-                <th className="w-24" />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(q => (
-                <tr key={q.id} className="border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-text-1">{q.ingredient_name}</td>
-                  <td className="px-4 py-3 text-text-3">{q.ingredient_category || '—'}</td>
-                  <td className="px-4 py-3 text-text-2">{q.vendor_name}</td>
-                  <td className="px-4 py-3 text-text-2">{q.country_name}</td>
-                  <td className="px-4 py-3 font-mono text-text-2">{q.purchase_unit || '—'}</td>
-                  <td className="px-4 py-3 font-mono text-text-2 text-right">{q.currency_symbol}{Number(q.purchase_price).toFixed(2)}</td>
-                  <td className="px-4 py-3 font-mono text-right">
-                    <span className="font-bold text-accent">
-                      {q.price_per_base_unit ? `${q.currency_symbol}${Number(q.price_per_base_unit).toFixed(4)}` : '—'}
-                    </span>
-                    {q.base_unit_abbr && <span className="text-xs text-text-3 ml-1">/{q.base_unit_abbr}</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${q.is_active ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
-                      {q.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => togglePreferred(q)}
-                      title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
-                      className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
-                        ${q.is_preferred ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200' : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'}`}
-                    >
-                      <StarIcon size={13} filled={q.is_preferred} />
-                    </button>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2 justify-end">
-                      <button className="btn-ghost px-2 py-1 text-xs flex items-center gap-1" onClick={() => openEdit(q)}>
-                        <EditIcon size={12} /> Edit
-                      </button>
-                      <button className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" onClick={() => setConfirmDelete(q)}>
-                        <TrashIcon size={12} />
-                      </button>
+        /* ── Normal table + optional right panel ── */
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* Left: quotes list */}
+          <div className="flex-1 overflow-auto px-6 pb-6">
+            {sorted.length === 0 ? (
+              <EmptyState
+                message={search || hasActiveFilters ? 'No quotes match your filters.' : 'No price quotes yet. Add your first quote to get started.'}
+                action={!search && !hasActiveFilters
+                  ? <button className="btn-primary px-4 py-2 text-sm" onClick={openAdd}>Add Quote</button>
+                  : undefined
+                }
+              />
+            ) : (
+              <div className="bg-surface border border-border rounded-xl overflow-visible">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-200 border-b border-gray-300 rounded-t-xl">
+                      <ColumnHeader<Quote> label="Ingredient"    field="ingredient_name"     sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={ingredientFilterOptions} filterValues={getFilter('ingredient_id')} onFilter={v => setFilter('ingredient_id', v)} />
+                      <ColumnHeader<Quote> label="Category"      field="ingredient_category" sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={categoryFilterOptions}   filterValues={getFilter('ingredient_category')} onFilter={v => setFilter('ingredient_category', v)} />
+                      <ColumnHeader<Quote> label="Vendor"        field="vendor_name"         sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={vendorFilterOptions}  filterValues={getFilter('vendor_id')} onFilter={v => setFilter('vendor_id',  v)} />
+                      <ColumnHeader<Quote> label="Country"       field="country_name"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={countryFilterOptions} filterValues={getFilter('country_id')} onFilter={v => setFilter('country_id', v)} />
+                      <ColumnHeader<Quote> label="Purchase Unit" field="purchase_unit"       sortField={sortField} sortDir={sortDir} onSort={setSort} />
+                      <ColumnHeader<Quote> label="Price"         field="purchase_price"      sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
+                      <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
+                      <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions}    filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
+                      <ColumnHeader<Quote> label="Preferred"     field="is_preferred"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={preferredFilterOptions}  filterValues={getFilter('is_preferred')} onFilter={v => setFilter('is_preferred', v)} />
+                      <th className="w-16" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(q => (
+                      <tr
+                        key={q.id}
+                        className={`border-b border-border last:border-0 transition-colors cursor-pointer
+                          ${selectedQuoteId === q.id ? 'bg-accent-dim border-l-2 border-l-accent' : 'hover:bg-surface-2'}`}
+                        onClick={() => { openEdit(q); setSelectedQuoteId(q.id) }}
+                      >
+                        <td className="px-4 py-3 font-semibold text-text-1">{q.ingredient_name}</td>
+                        <td className="px-4 py-3 text-text-3">{q.ingredient_category || '—'}</td>
+                        <td className="px-4 py-3 text-text-2">{q.vendor_name}</td>
+                        <td className="px-4 py-3 text-text-2">{q.country_name}</td>
+                        <td className="px-4 py-3 font-mono text-text-2">{q.purchase_unit || '—'}</td>
+                        <td className="px-4 py-3 font-mono text-text-2 text-right">{q.currency_symbol}{Number(q.purchase_price).toFixed(2)}</td>
+                        <td className="px-4 py-3 font-mono text-right">
+                          <span className="font-bold text-accent">
+                            {q.price_per_base_unit ? `${q.currency_symbol}${Number(q.price_per_base_unit).toFixed(4)}` : '—'}
+                          </span>
+                          {q.base_unit_abbr && <span className="text-xs text-text-3 ml-1">/{q.base_unit_abbr}</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${q.is_active ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
+                            {q.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => togglePreferred(q)}
+                            title={q.is_preferred ? 'Clear preferred' : 'Set as preferred for this country'}
+                            className={`w-7 h-7 flex items-center justify-center rounded-full transition-colors
+                              ${q.is_preferred ? 'bg-yellow-100 text-yellow-500 hover:bg-yellow-200' : 'bg-surface-2 text-text-3 hover:bg-surface border border-border'}`}
+                          >
+                            <StarIcon size={13} filled={q.is_preferred} />
+                          </button>
+                        </td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex gap-1 justify-end">
+                            <button
+                              className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              onClick={() => setConfirmDelete(q)}
+                            >
+                              <TrashIcon size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Drag handle + right panel */}
+          {selectedQuoteId !== null && (() => {
+            const q = sorted.find(x => x.id === selectedQuoteId) ?? quotes.find(x => x.id === selectedQuoteId)
+            if (!q) return null
+            return (
+              <>
+                <div
+                  className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize shrink-0 transition-all duration-100 active:bg-accent"
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    const startX = e.clientX; const startW = quotePanelWidth
+                    const onMove = (ev: MouseEvent) => setQuotePanelWidth(Math.max(300, Math.min(560, startW - (ev.clientX - startX))))
+                    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+                    window.addEventListener('mousemove', onMove)
+                    window.addEventListener('mouseup', onUp)
+                  }}
+                />
+                <div
+                  className="flex flex-col bg-surface border-l border-border overflow-hidden shrink-0"
+                  style={{ width: quotePanelWidth, minWidth: 300, maxWidth: 560 }}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-text-1 text-sm truncate">{q.ingredient_name}</p>
+                      <p className="text-xs text-text-3 truncate">{q.vendor_name} · {q.country_name}</p>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <button
+                      onClick={() => { setSelectedQuoteId(null); setModal(null) }}
+                      className="text-text-3 hover:text-text-1 transition-colors ml-2 shrink-0"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
+                  {/* Body */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <Field label="Ingredient" required error={errors.ingredient_id}>
+                        <SearchCombo
+                          value={form.ingredient_id}
+                          onChange={v => setForm(f => ({ ...f, ingredient_id: v }))}
+                          options={ingredients.map(i => ({ id: String(i.id), label: `${i.name}${i.base_unit_abbr ? ` (${i.base_unit_abbr})` : ''}` }))}
+                          placeholder="Search ingredients…"
+                        />
+                      </Field>
+                      <Field label="Vendor" required error={errors.vendor_id}>
+                        <SearchCombo
+                          value={form.vendor_id}
+                          onChange={v => setForm(f => ({ ...f, vendor_id: v }))}
+                          options={vendors.map(v => ({ id: String(v.id), label: `${v.name} (${v.currency_code})` }))}
+                          placeholder="Search vendors…"
+                        />
+                        {selectedVendor && (
+                          <p className="text-xs text-text-3 mt-1">{selectedVendor.country_name} · {selectedVendor.currency_symbol} {selectedVendor.currency_code}</p>
+                        )}
+                      </Field>
+                    </div>
+                    <div className="border-t border-border pt-3">
+                      <div className="grid grid-cols-2 gap-4">
+                        <Field label="Purchase Unit">
+                          <input className="input w-full" value={form.purchase_unit} onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. Case 12×1kg" />
+                        </Field>
+                        <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol})` : ''}`} required error={errors.purchase_price}>
+                          <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
+                        </Field>
+                      </div>
+                      <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
+                        <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                      </Field>
+                    </div>
+                    {pricePerBaseUnit && selectedVendor && selectedIngredient && (
+                      <div className="bg-accent-dim border border-accent/20 rounded-lg px-3 py-2 text-sm">
+                        <span className="font-semibold text-accent">Per base unit: </span>
+                        <span className="font-mono font-bold text-accent ml-1">{selectedVendor.currency_symbol}{pricePerBaseUnit}</span>
+                        {selectedIngredient.base_unit_abbr && <span className="text-text-3 ml-1">/ {selectedIngredient.base_unit_abbr}</span>}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-4">
+                      <Field label="Status">
+                        <select className="select w-full" value={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.value }))}>
+                          <option value="true">Active</option>
+                          <option value="false">Inactive</option>
+                        </select>
+                      </Field>
+                      <Field label="Product Code">
+                        <input className="input w-full font-mono" value={form.vendor_product_code} onChange={e => setForm(f => ({ ...f, vendor_product_code: e.target.value }))} placeholder="Optional SKU…" />
+                      </Field>
+                    </div>
+                    {q.is_preferred && (
+                      <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+                        <StarIcon size={12} filled={true} /> Preferred vendor for {q.country_name}
+                      </div>
+                    )}
+                  </div>
+                  {/* Footer */}
+                  <div className="border-t border-border px-4 py-3 flex gap-2 justify-end shrink-0">
+                    <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => { setSelectedQuoteId(null); setModal(null) }}>Cancel</button>
+                    <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => handleSave()} disabled={saving}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )
+          })()}
         </div>
       )}
 
-      {modal !== null && (
-        <Modal title={modal === 'new' ? 'Add Price Quote' : 'Edit Price Quote'} onClose={() => setModal(null)}>
+      {/* Modal — only for Add Quote (new) */}
+      {modal === 'new' && (
+        <Modal title="Add Price Quote" onClose={() => setModal(null)}>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Ingredient" required error={errors.ingredient_id}>
               <SearchCombo
@@ -2018,12 +2245,10 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
           </div>
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
-            {modal === 'new' && (
-              <button className="btn-outline px-4 py-2 text-sm" onClick={handleSaveAndNext} disabled={saving}
-                title="Save this quote and open a new one (Alt+S)">
-                {saving ? 'Saving…' : <>Save &amp; Next <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Alt+S</kbd></>}
-              </button>
-            )}
+            <button className="btn-outline px-4 py-2 text-sm" onClick={handleSaveAndNext} disabled={saving}
+              title="Save this quote and open a new one (Alt+S)">
+              {saving ? 'Saving…' : <>Save &amp; Next <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Alt+S</kbd></>}
+            </button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={() => handleSave()} disabled={saving}>
               {saving ? 'Saving…' : <>Save Quote <kbd className="ml-1.5 text-[10px] opacity-60 font-mono border border-current rounded px-1">Ctrl+↵</kbd></>}
             </button>
@@ -2039,7 +2264,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
         />
       )}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-    </>
+    </div>
   )
 }
 

@@ -155,7 +155,11 @@ export default function RecipesPage() {
   // modals
   const [recipeModal,  setRecipeModal]  = useState<'new' | Recipe | null>(null)
   const [itemModal,    setItemModal]    = useState(false)
-  const [editItemModal,setEditItemModal]= useState<RecipeItem | null>(null)
+  // item edit panel (right panel — replaces editItemModal for existing items)
+  const [itemPanelWidth,  setItemPanelWidth]  = useState(340)
+  const [selectedItemId,  setSelectedItemId]  = useState<number | null>(null)
+  const [itemPanelForm,   setItemPanelForm]   = useState<ItemForm | null>(null)
+  const [itemPanelSaving, setItemPanelSaving] = useState(false)
   const [confirmDelete,setConfirmDelete]= useState<{ type: 'recipe' | 'item' | 'variation' | 'copy-to-global' | 'pl-variation' | 'pl-copy-to-global' | 'market-pl-variation'; id: number } | null>(null)
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [itemModalForPlVariation, setItemModalForPlVariation] = useState<number | null>(null) // pl_variation_id when adding to a PL variation
@@ -245,6 +249,8 @@ export default function RecipesPage() {
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true)
     setSelected(null)
+    setSelectedItemId(null)
+    setItemPanelForm(null)
     try {
       const d = await api.get(`/recipes/${id}`)
       setSelected(d)
@@ -519,18 +525,22 @@ export default function RecipesPage() {
   }
 
   const updateItem = async (form: ItemForm) => {
-    if (!selected || !editItemModal) return
+    if (!selected || !selectedItemId) return
+    setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/items/${editItemModal.id}`, {
+      await api.put(`/recipes/${selected.id}/items/${selectedItemId}`, {
         prep_qty:               Number(form.prep_qty),
         prep_unit:              form.prep_unit.trim() || null,
         prep_to_base_conversion:Number(form.prep_to_base_conversion) || 1,
       })
       showToast('Item updated')
-      setEditItemModal(null)
+      setSelectedItemId(null)
+      setItemPanelForm(null)
       loadDetail(selected.id)
     } catch (err: any) {
       showToast(err.message || 'Update failed', 'error')
+    } finally {
+      setItemPanelSaving(false)
     }
   }
 
@@ -666,17 +676,20 @@ export default function RecipesPage() {
   }
 
   const updateVariationItem = async (varId: number, form: ItemForm) => {
-    if (!selected || !editItemModal) return
+    if (!selected || !selectedItemId) return
+    setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/variations/${varId}/items/${editItemModal.id}`, {
+      await api.put(`/recipes/${selected.id}/variations/${varId}/items/${selectedItemId}`, {
         prep_qty:                Number(form.prep_qty),
         prep_unit:               form.prep_unit.trim() || null,
         prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
       })
       showToast('Item updated')
-      setEditItemModal(null)
+      setSelectedItemId(null)
+      setItemPanelForm(null)
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Update failed', 'error') }
+    finally { setItemPanelSaving(false) }
   }
 
   const deleteVariationItem = async (varId: number, itemId: number) => {
@@ -751,17 +764,20 @@ export default function RecipesPage() {
   }
 
   const updatePlVariationItem = async (varId: number, form: ItemForm) => {
-    if (!selected || !editItemModal) return
+    if (!selected || !selectedItemId) return
+    setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/pl-variations/${varId}/items/${editItemModal.id}`, {
+      await api.put(`/recipes/${selected.id}/pl-variations/${varId}/items/${selectedItemId}`, {
         prep_qty:                Number(form.prep_qty),
         prep_unit:               form.prep_unit.trim() || null,
         prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
       })
       showToast('Item updated')
-      setEditItemModal(null)
+      setSelectedItemId(null)
+      setItemPanelForm(null)
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Update failed', 'error') }
+    finally { setItemPanelSaving(false) }
   }
 
   const deletePlVariationItem = async (varId: number, itemId: number) => {
@@ -831,17 +847,20 @@ export default function RecipesPage() {
   }
 
   const updateMarketPlVariationItem = async (varId: number, form: ItemForm) => {
-    if (!selected || !editItemModal) return
+    if (!selected || !selectedItemId) return
+    setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/market-pl-variations/${varId}/items/${editItemModal.id}`, {
+      await api.put(`/recipes/${selected.id}/market-pl-variations/${varId}/items/${selectedItemId}`, {
         prep_qty:                Number(form.prep_qty),
         prep_unit:               form.prep_unit.trim() || null,
         prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
       })
       showToast('Item updated')
-      setEditItemModal(null)
+      setSelectedItemId(null)
+      setItemPanelForm(null)
       loadDetail(selected.id)
     } catch (err: any) { showToast(err.message || 'Update failed', 'error') }
+    finally { setItemPanelSaving(false) }
   }
 
   const deleteMarketPlVariationItem = async (varId: number, itemId: number) => {
@@ -979,7 +998,8 @@ export default function RecipesPage() {
           }}
         />
 
-        {/* ── Right: recipe detail ── */}
+        {/* ── Right: recipe detail + item panel ── */}
+        <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 overflow-y-auto bg-surface-2">
           {loadingDetail ? (
             <div className="flex justify-center p-16"><Spinner /></div>
@@ -1558,15 +1578,26 @@ export default function RecipesPage() {
                           return (
                             <tr
                               key={item.id}
-                              className={`border-b border-border last:border-0 group transition-colors
+                              className={`border-b border-border last:border-0 group transition-colors cursor-pointer
                                 ${isDragging ? 'opacity-40' : ''}
-                                ${isOver ? 'border-t-2 border-t-accent bg-accent-dim/30' : 'hover:bg-surface-2/50'}
+                                ${isOver ? 'border-t-2 border-t-accent bg-accent-dim/30' : selectedItemId === item.id ? 'bg-accent-dim border-l-2 border-l-accent' : 'hover:bg-surface-2/50'}
                               `}
                               draggable={itemSortField === 'custom'}
                               onDragStart={itemSortField === 'custom' ? () => setDragId(item.id) : undefined}
                               onDragOver={itemSortField === 'custom' ? e => { e.preventDefault(); setDragOverId(item.id) } : undefined}
                               onDragLeave={itemSortField === 'custom' ? () => setDragOverId(null) : undefined}
                               onDrop={itemSortField === 'custom' ? e => { e.preventDefault(); if (dragId !== null) reorderItems(dragId, item.id); setDragId(null); setDragOverId(null) } : undefined}
+                              onClick={() => {
+                                setSelectedItemId(item.id)
+                                setItemPanelForm({
+                                  item_type:               item.item_type,
+                                  ingredient_id:           String(item.ingredient_id ?? ''),
+                                  recipe_item_id:          String(item.recipe_item_id ?? ''),
+                                  prep_qty:                String(item.prep_qty),
+                                  prep_unit:               item.prep_unit ?? '',
+                                  prep_to_base_conversion: String(item.prep_to_base_conversion),
+                                })
+                              }}
                             >
                               {/* Drag handle — only in custom sort mode */}
                               {itemSortField === 'custom' && (
@@ -1606,12 +1637,8 @@ export default function RecipesPage() {
                                   }
                                 </td>
                               )}
-                              <td className="px-2 py-1">
+                              <td className="px-2 py-1" onClick={e => e.stopPropagation()}>
                                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button
-                                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 hover:text-accent"
-                                    onClick={() => setEditItemModal(item)}
-                                  ><EditIcon size={11}/></button>
                                   <button
                                     className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50"
                                     onClick={() => setConfirmDelete({ type: 'item', id: item.id })}
@@ -1742,6 +1769,134 @@ export default function RecipesPage() {
             </div>
           )}
         </div>
+
+        {/* ── Item drag handle + edit panel ── */}
+        {selectedItemId !== null && itemPanelForm !== null && (() => {
+          const item = activeItems.find(i => i.id === selectedItemId)
+          if (!item) return null
+          const itemName = item.item_type === 'ingredient' ? item.ingredient_name : item.sub_recipe_name
+          const isSubRecipe = item.item_type === 'recipe'
+          const baseUnit = item.base_unit_abbr || ''
+          const baseEquiv = !isSubRecipe ? Number(itemPanelForm.prep_qty) * Number(itemPanelForm.prep_to_base_conversion) : null
+          return (
+            <>
+              <div
+                className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize shrink-0 transition-all duration-100 active:bg-accent"
+                onMouseDown={e => {
+                  e.preventDefault()
+                  const startX = e.clientX
+                  const startW = itemPanelWidth
+                  const onMove = (ev: MouseEvent) => setItemPanelWidth(Math.max(260, Math.min(520, startW - (ev.clientX - startX))))
+                  const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+                  window.addEventListener('mousemove', onMove)
+                  window.addEventListener('mouseup', onUp)
+                }}
+              />
+              <div
+                className="flex flex-col bg-surface border-l border-border overflow-hidden shrink-0"
+                style={{ width: itemPanelWidth, minWidth: 260, maxWidth: 520 }}
+              >
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-sm text-text-1 truncate">{itemName || '—'}</div>
+                    <div className="text-xs text-text-3 truncate">
+                      {isSubRecipe ? 'Sub-recipe' : `Base unit: ${baseUnit || '—'}`}
+                    </div>
+                  </div>
+                  <button
+                    className="ml-2 w-6 h-6 flex items-center justify-center rounded hover:bg-surface-2 text-text-3 shrink-0"
+                    onClick={() => { setSelectedItemId(null); setItemPanelForm(null) }}
+                  >✕</button>
+                </div>
+
+                {/* Panel body */}
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                  {isSubRecipe ? (
+                    <Field label="Portions used">
+                      <input
+                        className="input font-mono"
+                        type="number" min="0.0001" step="0.0001"
+                        value={itemPanelForm.prep_qty}
+                        onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                        autoFocus
+                      />
+                      <p className="text-xs text-text-3 mt-1">How many portions of this sub-recipe go into the parent recipe</p>
+                    </Field>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Quantity">
+                          <input
+                            className="input font-mono"
+                            type="number" min="0.0001" step="0.0001"
+                            value={itemPanelForm.prep_qty}
+                            onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                            autoFocus
+                          />
+                        </Field>
+                        <Field label="Prep Unit">
+                          <input
+                            className="input"
+                            value={itemPanelForm.prep_unit}
+                            onChange={e => setItemPanelForm(f => f ? { ...f, prep_unit: e.target.value } : f)}
+                            placeholder={baseUnit || 'e.g. g'}
+                          />
+                        </Field>
+                      </div>
+
+                      <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`}>
+                        <input
+                          className="input font-mono"
+                          type="number" min="0.000001" step="0.000001"
+                          value={itemPanelForm.prep_to_base_conversion}
+                          onChange={e => setItemPanelForm(f => f ? { ...f, prep_to_base_conversion: e.target.value } : f)}
+                        />
+                        <p className="text-xs text-text-3 mt-1">
+                          {itemPanelForm.prep_unit && baseUnit
+                            ? <>1 <span className="font-mono">{itemPanelForm.prep_unit}</span> = <span className="font-mono">{itemPanelForm.prep_to_base_conversion}</span> <span className="font-mono">{baseUnit}</span></>
+                            : 'How many base units equal 1 prep unit'
+                          }
+                        </p>
+                      </Field>
+
+                      {baseEquiv !== null && baseUnit && (
+                        <div className="bg-accent-dim border border-accent/20 rounded-lg px-4 py-3 text-sm">
+                          <span className="font-semibold text-accent">= </span>
+                          <span className="font-mono text-text-1 font-bold">{fmt(baseEquiv, 3)} {baseUnit}</span>
+                          {typeof item.waste_pct === 'number' && item.waste_pct > 0 && (
+                            <span className="text-text-3 ml-2">(+{item.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + item.waste_pct / 100), 3)} {baseUnit}</span>)</span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* Panel footer */}
+                <div className="shrink-0 flex justify-end gap-2 px-4 py-3 border-t border-border bg-surface">
+                  <button
+                    className="btn-ghost px-3 py-1.5 text-sm"
+                    onClick={() => { setSelectedItemId(null); setItemPanelForm(null) }}
+                  >Cancel</button>
+                  <button
+                    className="btn-primary px-3 py-1.5 text-sm"
+                    disabled={itemPanelSaving}
+                    onClick={() => {
+                      if (!itemPanelForm) return
+                      if (activeMarketPlVariation && variantMode === 'market-pl') updateMarketPlVariationItem(activeMarketPlVariation.id, itemPanelForm)
+                      else if (activePlVariation && variantMode === 'price-level') updatePlVariationItem(activePlVariation.id, itemPanelForm)
+                      else if (activeVariation) updateVariationItem(activeVariation.id, itemPanelForm)
+                      else updateItem(itemPanelForm)
+                    }}
+                  >{itemPanelSaving ? 'Saving…' : 'Save Changes'}</button>
+                </div>
+              </div>
+            </>
+          )
+        })()}
+
+        </div>{/* end flex flex-1 overflow-hidden for detail+panel */}
       </div>
 
       {/* ── Modals ── */}
@@ -1755,31 +1910,24 @@ export default function RecipesPage() {
         />
       )}
 
-      {(itemModal || editItemModal) && (
+      {itemModal && (
         <ItemFormModal
-          item={editItemModal}
+          item={null}
           ingredients={ingredients}
           recipes={recipes.filter(r => r.id !== selected?.id)}
           onSave={form => {
-            if (editItemModal) {
-              if (activeMarketPlVariation && variantMode === 'market-pl') updateMarketPlVariationItem(activeMarketPlVariation.id, form)
-              else if (activePlVariation && variantMode === 'price-level') updatePlVariationItem(activePlVariation.id, form)
-              else if (activeVariation) updateVariationItem(activeVariation.id, form)
-              else                      updateItem(form)
-            } else {
-              if (itemModalForMarketPlVariation != null) addMarketPlVariationItem(itemModalForMarketPlVariation, form)
-              else if (itemModalForPlVariation != null)  addPlVariationItem(itemModalForPlVariation, form)
-              else if (itemModalForVariation != null)    addVariationItem(itemModalForVariation, form)
-              else                                       addItem(form)
-            }
+            if (itemModalForMarketPlVariation != null) addMarketPlVariationItem(itemModalForMarketPlVariation, form)
+            else if (itemModalForPlVariation != null)  addPlVariationItem(itemModalForPlVariation, form)
+            else if (itemModalForVariation != null)    addVariationItem(itemModalForVariation, form)
+            else                                       addItem(form)
           }}
-          onSaveAndNext={editItemModal ? undefined : form => {
+          onSaveAndNext={form => {
             if (itemModalForMarketPlVariation != null) addMarketPlVariationItemAndNext(itemModalForMarketPlVariation, form)
             else if (itemModalForPlVariation != null)  addPlVariationItemAndNext(itemModalForPlVariation, form)
             else if (itemModalForVariation != null)    addVariationItemAndNext(itemModalForVariation, form)
             else                                       addItemAndNext(form)
           }}
-          onClose={() => { setItemModal(false); setEditItemModal(null); setItemModalForVariation(null); setItemModalForPlVariation(null); setItemModalForMarketPlVariation(null) }}
+          onClose={() => { setItemModal(false); setItemModalForVariation(null); setItemModalForPlVariation(null); setItemModalForMarketPlVariation(null) }}
         />
       )}
 
