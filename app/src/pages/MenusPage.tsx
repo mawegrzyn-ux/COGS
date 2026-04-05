@@ -3505,96 +3505,167 @@ ${tableHtml}
                       {!collapsedCats.has(cat) && catRows.map(row => {
                         // total_cost is already Σ(qty_l × cost) across levels — just divide by total revenue
                         const sumRevAllLevels  = row.perLevel.reduce((s, p) => s + p.revenue, 0)
-                        const totalCogsPct = sumRevAllLevels > 0 ? (row.total_cost / sumRevAllLevels) * 100 : null
+                        const totalCogsPct     = sumRevAllLevels > 0 ? (row.total_cost / sumRevAllLevels) * 100 : null
+                        const msiId            = row.menu_item_id
+                        const hasSubME         = row.item_type === 'combo' || row.modifier_group_count > 0
+                        const isExpandedME     = expandedSubItemsME.has(msiId)
+                        const subDataME        = subPriceDataME[msiId]
+                        const isLoadingSubME   = loadingSubPricesME.has(msiId)
+                        const levelsForSub     = allLevelsData.map(({ level }) => level)
+                        const meColSpan        = 2 + allLevelsData.length * (allLevelsCompact ? 4 : 5)
                         return (
-                          <tr
-                            key={row.menu_item_id}
-                            className="hover:bg-gray-50/80"
-                            onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: row.menu_item_id, displayName: row.display_name }) }}
-                          >
-                            <td className="px-3 py-2 font-medium text-gray-900 pl-6">{row.display_name}</td>
-                            {row.perLevel.map(p => (
-                              <>
-                                {/* Qty per level — moved before Cost/ptn */}
-                                <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
-                                  <div className="flex justify-end">
-                                    <input
-                                      type="number" min="0" step="1"
-                                      value={qty[p.qty_key] ?? ''}
-                                      onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
-                                      placeholder="0"
-                                      className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                        ${manualQtyKeys.has(p.qty_key)
-                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                                    />
-                                  </div>
-                                </td>
-                                {/* Cost/ptn per level — editable (all levels share same value) */}
-                                <td key={`${p.level.id}-icost`} className="px-1 py-1">
-                                  <div className="inline-flex items-center justify-end w-full">
-                                    <input
-                                      type="number" min="0" step="0.01"
-                                      value={costOverrides[row.cost_override_key] ?? ''}
-                                      onChange={e => {
-                                        const v = e.target.value
-                                        setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
-                                        markDirty()
-                                      }}
-                                      onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
-                                      placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
-                                      className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
-                                        ${row.is_cost_overridden
-                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                                    />
-                                    {row.is_cost_overridden && (
-                                      <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
-                                        onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
-                                    )}
-                                  </div>
-                                </td>
-                                {/* Price — editable */}
-                                <td key={`${p.level.id}-ip`} className="px-1 py-1">
-                                  <div className="flex justify-end items-center">
-                                    <input
-                                      type="number" min="0" step="0.01"
-                                      value={priceOverrides[p.price_override_key] ?? ''}
-                                      onChange={e => {
-                                        const v = e.target.value
-                                        setPriceOverrides(prev => v === '' ? (({ [p.price_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [p.price_override_key]: v })
-                                        markDirty()
-                                      }}
-                                      onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} [${p.level.name}] → ${e.target.value}`) }}
-                                      placeholder={p.base_price_gross > 0 ? String(Math.round(p.base_price_gross * 100) / 100) : ''}
-                                      className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
-                                        ${p.is_price_overridden
-                                          ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
-                                          : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
-                                    />
-                                    {p.is_price_overridden && (
-                                      <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset price"
-                                        onClick={() => { setPriceOverrides(prev => (({ [p.price_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
-                                    )}
-                                  </div>
-                                </td>
-                                {!allLevelsCompact && (
-                                  <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold text-gray-400">
-                                    {p.revenue > 0 ? fmtNum(p.revenue) : <span className="text-gray-200">—</span>}
+                          <Fragment key={msiId}>
+                            <tr
+                              className="hover:bg-gray-50/80"
+                              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setRowCtx({ x: e.clientX, y: e.clientY, menuItemId: msiId, displayName: row.display_name }) }}
+                            >
+                              <td className="px-3 py-2 font-medium text-gray-900 pl-6">
+                                <div className="flex items-center gap-1.5">
+                                  {hasSubME && (
+                                    <button
+                                      className={`w-5 h-5 flex items-center justify-center rounded border text-[10px] transition-colors flex-shrink-0 ${isExpandedME ? 'border-accent text-accent bg-accent-dim' : 'border-gray-300 text-gray-400 hover:border-accent hover:text-accent'}`}
+                                      onClick={() => toggleSubExpandME(msiId)}
+                                      title={isExpandedME ? 'Collapse options/modifiers' : 'Expand to price options/modifiers'}
+                                    >{isExpandedME ? '▼' : '▶'}</button>
+                                  )}
+                                  {row.display_name}
+                                </div>
+                              </td>
+                              {row.perLevel.map(p => (
+                                <>
+                                  {/* Qty per level — moved before Cost/ptn */}
+                                  <td key={`${p.level.id}-iq`} className="px-1 py-1 border-l border-gray-100">
+                                    <div className="flex justify-end">
+                                      <input
+                                        type="number" min="0" step="1"
+                                        value={qty[p.qty_key] ?? ''}
+                                        onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, p.qty_key])); onQtyChange(p.qty_key, e.target.value) }}
+                                        placeholder="0"
+                                        className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
+                                          ${manualQtyKeys.has(p.qty_key)
+                                            ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                            : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                      />
+                                    </div>
                                   </td>
-                                )}
-                                <td key={`${p.level.id}-ic`}
-                                  className={`px-3 py-2 text-right text-xs ${cogsColour(p.cogs_pct)}`}
-                                  data-ai-context={p.cogs_pct != null ? JSON.stringify({ type: 'cogs_pct', value: fmtPct(p.cogs_pct), item: row.display_name, price_level: p.level.name, menu: menuName }) : undefined}
-                                >
-                                  {fmtPct(p.cogs_pct)}
-                                </td>
-                              </>
-                            ))}
-                            <td className={`px-3 py-2 text-right text-xs border-l border-gray-100 ${cogsColour(totalCogsPct)}`}>
-                              {fmtPct(totalCogsPct)}
-                            </td>
-                          </tr>
+                                  {/* Cost/ptn per level — editable (all levels share same value) */}
+                                  <td key={`${p.level.id}-icost`} className="px-1 py-1">
+                                    <div className="inline-flex items-center justify-end w-full">
+                                      <input
+                                        type="number" min="0" step="0.01"
+                                        value={costOverrides[row.cost_override_key] ?? ''}
+                                        onChange={e => {
+                                          const v = e.target.value
+                                          setCostOverrides(prev => v === '' ? (({ [row.cost_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [row.cost_override_key]: v })
+                                          markDirty()
+                                        }}
+                                        onBlur={e => { if (e.target.value) addHistoryEntry('cost_override', `Cost: ${row.display_name} → ${e.target.value}`) }}
+                                        placeholder={row.base_cost_display > 0 ? String(Math.round(row.base_cost_display * 100) / 100) : ''}
+                                        className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
+                                          ${row.is_cost_overridden
+                                            ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                            : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                      />
+                                      {row.is_cost_overridden && (
+                                        <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
+                                          onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                      )}
+                                    </div>
+                                  </td>
+                                  {/* Price — editable */}
+                                  <td key={`${p.level.id}-ip`} className="px-1 py-1">
+                                    <div className="flex justify-end items-center">
+                                      <input
+                                        type="number" min="0" step="0.01"
+                                        value={priceOverrides[p.price_override_key] ?? ''}
+                                        onChange={e => {
+                                          const v = e.target.value
+                                          setPriceOverrides(prev => v === '' ? (({ [p.price_override_key]: _, ...rest }) => rest)(prev) : { ...prev, [p.price_override_key]: v })
+                                          markDirty()
+                                        }}
+                                        onBlur={e => { if (e.target.value) addHistoryEntry('price_override', `Price: ${row.display_name} [${p.level.name}] → ${e.target.value}`) }}
+                                        placeholder={p.base_price_gross > 0 ? String(Math.round(p.base_price_gross * 100) / 100) : ''}
+                                        className={`w-20 text-right font-mono text-sm rounded px-1 py-1 focus:outline-none focus:ring-1
+                                          ${p.is_price_overridden
+                                            ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
+                                            : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
+                                      />
+                                      {p.is_price_overridden && (
+                                        <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset price"
+                                          onClick={() => { setPriceOverrides(prev => (({ [p.price_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                      )}
+                                    </div>
+                                  </td>
+                                  {!allLevelsCompact && (
+                                    <td key={`${p.level.id}-ir`} className="px-3 py-2 text-right font-mono text-xs font-semibold text-gray-400">
+                                      {p.revenue > 0 ? fmtNum(p.revenue) : <span className="text-gray-200">—</span>}
+                                    </td>
+                                  )}
+                                  <td key={`${p.level.id}-ic`}
+                                    className={`px-3 py-2 text-right text-xs ${cogsColour(p.cogs_pct)}`}
+                                    data-ai-context={p.cogs_pct != null ? JSON.stringify({ type: 'cogs_pct', value: fmtPct(p.cogs_pct), item: row.display_name, price_level: p.level.name, menu: menuName }) : undefined}
+                                  >
+                                    {fmtPct(p.cogs_pct)}
+                                  </td>
+                                </>
+                              ))}
+                              <td className={`px-3 py-2 text-right text-xs border-l border-gray-100 ${cogsColour(totalCogsPct)}`}>
+                                {fmtPct(totalCogsPct)}
+                              </td>
+                            </tr>
+
+                            {/* ── Sub-price expand rows (ME) ── */}
+                            {isExpandedME && (isLoadingSubME ? (
+                              <tr className="bg-accent-dim/20">
+                                <td colSpan={meColSpan} className="px-6 py-2 text-xs text-text-3">Loading…</td>
+                              </tr>
+                            ) : subDataME ? (
+                              <Fragment key={`${msiId}-sub-me`}>
+                                {/* Combo steps → options → modifier groups */}
+                                {subDataME.combo_steps.map(step => (
+                                  <Fragment key={`${msiId}-me-step-${step.id}`}>
+                                    <tr className="bg-surface-2 border-b border-border">
+                                      <td colSpan={meColSpan} className="px-6 py-1.5">
+                                        <span className="text-xs font-semibold text-text-2">Step: {step.name}</span>
+                                        <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
+                                      </td>
+                                    </tr>
+                                    {step.options.map(opt => (
+                                      <Fragment key={`${msiId}-me-copt-${opt.id}`}>
+                                        <SubPriceRowME msiId={msiId} kind="combo" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
+                                        {opt.modifier_groups.map(mg => (
+                                          <Fragment key={`${msiId}-me-cmg-${mg.modifier_group_id}`}>
+                                            <tr className="bg-accent-dim/10 border-b border-border">
+                                              <td colSpan={meColSpan} className="py-1" style={{ paddingLeft: '3.5rem' }}>
+                                                <span className="text-xs text-text-3 font-medium">↳ {mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                              </td>
+                                            </tr>
+                                            {mg.options.map(mopt => (
+                                              <SubPriceRowME key={`${msiId}-me-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={14} onSave={saveSubOptionPriceME} />
+                                            ))}
+                                          </Fragment>
+                                        ))}
+                                      </Fragment>
+                                    ))}
+                                  </Fragment>
+                                ))}
+                                {/* Sales item modifier groups */}
+                                {subDataME.modifier_groups.map(mg => (
+                                  <Fragment key={`${msiId}-me-mg-${mg.modifier_group_id}`}>
+                                    <tr className="bg-surface-2 border-b border-border">
+                                      <td colSpan={meColSpan} className="px-6 py-1.5">
+                                        <span className="text-xs font-semibold text-text-2">{mg.name}</span>
+                                        <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                                      </td>
+                                    </tr>
+                                    {mg.options.map(opt => (
+                                      <SubPriceRowME key={`${msiId}-me-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
+                                    ))}
+                                  </Fragment>
+                                ))}
+                              </Fragment>
+                            ) : null)}
+                          </Fragment>
                         )
                       })}
                     </>
