@@ -22,11 +22,16 @@ interface ModifierGroup {
 }
 interface ComboStepOption {
   id: number; combo_step_id: number; name: string
-  item_type: 'recipe' | 'ingredient' | 'manual'
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
   recipe_id: number | null; recipe_name?: string
-  ingredient_id: number | null; ingredient_name?: string
-  manual_cost: number | null; price_addon: number; sort_order: number
+  ingredient_id: number | null; ingredient_name?: string; ingredient_unit_abbr?: string
+  sales_item_id: number | null; sales_item_name?: string; sales_item_type?: string
+  manual_cost: number | null; price_addon: number; qty: number; sort_order: number
   modifier_groups?: { modifier_group_id: number; name: string }[]
+}
+interface ComboTemplate {
+  id: number; name: string; description: string | null
+  step_count: number; created_at: string
 }
 interface ComboStep {
   id: number; combo_id: number; name: string
@@ -60,32 +65,44 @@ const TYPE_BADGE: Record<string, string> = {
   ingredient: 'bg-green-100 text-green-700',
   manual:     'bg-purple-100 text-purple-700',
   combo:      'bg-orange-100 text-orange-700',
+  sales_item: 'bg-teal-100 text-teal-700',
 }
-const TYPE_LABEL: Record<string, string> = { recipe: 'Recipe', ingredient: 'Ingredient', manual: 'Manual', combo: 'Combo' }
+const TYPE_LABEL: Record<string, string> = { recipe: 'Recipe', ingredient: 'Ingredient', manual: 'Manual', combo: 'Combo', sales_item: 'Sales Item' }
 
 // ── ComboOptionForm ────────────────────────────────────────────────────────────
-function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, onClose }: {
+function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, salesItems, onSave, onClose }: {
   opt: ComboStepOption; modifierGroups: ModifierGroup[]; recipes: Recipe[]; ingredients: Ingredient[]
+  salesItems: SalesItem[]
   onSave(opt: ComboStepOption): void; onClose(): void
 }) {
-  const [form, setForm] = useState({ ...opt })
+  const [form, setForm] = useState({ ...opt, qty: opt.qty ?? 1, sales_item_id: opt.sales_item_id ?? null })
   const [attachedMgIds, setAttachedMgIds] = useState<number[]>((opt.modifier_groups || []).map(m => m.modifier_group_id))
-  const [recipeSearch, setRecipeSearch] = useState(() => recipes.find(r => r.id === opt.recipe_id)?.name ?? '')
-  const [recipeOpen, setRecipeOpen] = useState(false)
-  const [ingSearch, setIngSearch] = useState(() => ingredients.find(i => i.id === opt.ingredient_id)?.name ?? '')
-  const [ingOpen, setIngOpen] = useState(false)
+  const [recipeSearch,  setRecipeSearch]  = useState(() => recipes.find(r => r.id === opt.recipe_id)?.name ?? '')
+  const [recipeOpen,    setRecipeOpen]    = useState(false)
+  const [ingSearch,     setIngSearch]     = useState(() => ingredients.find(i => i.id === opt.ingredient_id)?.name ?? '')
+  const [ingOpen,       setIngOpen]       = useState(false)
+  const [siSearch,      setSiSearch]      = useState(() => salesItems.find(s => s.id === opt.sales_item_id)?.name ?? '')
+  const [siOpen,        setSiOpen]        = useState(false)
   const [saveError, setSaveError] = useState('')
-  const filteredRecipes = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 50), [recipes, recipeSearch])
-  const filteredIngs    = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 50), [ingredients, ingSearch])
+  const filteredRecipes  = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes(recipeSearch.toLowerCase())).slice(0, 50), [recipes, recipeSearch])
+  const filteredIngs     = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes(ingSearch.toLowerCase())).slice(0, 50), [ingredients, ingSearch])
+  const filteredSiItems  = useMemo(() => salesItems.filter(s => s.item_type !== 'combo' && s.name.toLowerCase().includes(siSearch.toLowerCase())).slice(0, 50), [salesItems, siSearch])
+  const selectedIngredient = useMemo(() =>
+    form.item_type === 'ingredient' && form.ingredient_id
+      ? ingredients.find(i => i.id === form.ingredient_id) ?? null
+      : null,
+    [form.item_type, form.ingredient_id, ingredients]
+  )
 
-  const handleTypeChange = (t: 'recipe' | 'ingredient' | 'manual') => {
-    setForm(f => ({ ...f, item_type: t, recipe_id: null, ingredient_id: null, manual_cost: null }))
-    setRecipeSearch(''); setIngSearch('')
+  const handleTypeChange = (t: 'recipe' | 'ingredient' | 'manual' | 'sales_item') => {
+    setForm(f => ({ ...f, item_type: t, recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null }))
+    setRecipeSearch(''); setIngSearch(''); setSiSearch('')
   }
   const handleSave = () => {
     if (!form.name.trim()) { setSaveError('Name is required'); return }
-    if (form.item_type === 'recipe' && !form.recipe_id) { setSaveError('Please select a recipe'); return }
+    if (form.item_type === 'recipe'     && !form.recipe_id)     { setSaveError('Please select a recipe'); return }
     if (form.item_type === 'ingredient' && !form.ingredient_id) { setSaveError('Please select an ingredient'); return }
+    if (form.item_type === 'sales_item' && !form.sales_item_id) { setSaveError('Please select a sales item'); return }
     setSaveError('')
     onSave({ ...form, name: form.name.trim(), modifier_groups: attachedMgIds.map(id => ({ modifier_group_id: id, name: modifierGroups.find(m => m.id === id)?.name || '' })) })
   }
@@ -97,10 +114,11 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, on
         <div className="space-y-3">
           <Field label="Name"><input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
           <Field label="Type">
-            <select className="input w-full" value={form.item_type} onChange={e => handleTypeChange(e.target.value as 'recipe' | 'ingredient' | 'manual')}>
+            <select className="input w-full" value={form.item_type} onChange={e => handleTypeChange(e.target.value as 'recipe' | 'ingredient' | 'manual' | 'sales_item')}>
               <option value="manual">Manual cost</option>
               <option value="recipe">Recipe</option>
               <option value="ingredient">Ingredient</option>
+              <option value="sales_item">Sales Item</option>
             </select>
           </Field>
           {form.item_type === 'recipe' && (
@@ -141,10 +159,43 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, onSave, on
               </div>}
             </div></Field>
           )}
+          {form.item_type === 'sales_item' && (
+            <Field label="Sales Item"><div className="relative">
+              <input className="input w-full" placeholder="Search sales items…" value={siSearch}
+                onChange={e => { setSiSearch(e.target.value); setSiOpen(true) }}
+                onFocus={() => setSiOpen(true)} onBlur={() => setTimeout(() => setSiOpen(false), 150)} autoComplete="off" />
+              {siOpen && <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-52 overflow-y-auto">
+                {filteredSiItems.length === 0
+                  ? <div className="px-3 py-2 text-sm text-gray-400 italic">No sales items match "{siSearch}"</div>
+                  : filteredSiItems.map(s => <button key={s.id} type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center gap-2 ${form.sales_item_id === s.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setForm(f => ({ ...f, sales_item_id: s.id })); setSiSearch(s.name); setSiOpen(false) }}>
+                      {form.sales_item_id === s.id && <span className="text-accent text-xs">✓</span>}
+                      <span>{s.name}</span>
+                      <span className={`ml-auto text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[s.item_type]}`}>{TYPE_LABEL[s.item_type]}</span>
+                    </button>)}
+              </div>}
+            </div></Field>
+          )}
           {form.item_type === 'manual' && (
             <Field label="Manual cost (USD)">
               <input type="number" step="0.0001" min="0" className="input w-full" value={form.manual_cost ?? ''}
                 onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />
+            </Field>
+          )}
+          {(form.item_type === 'recipe' || form.item_type === 'ingredient') && (
+            <Field label="Quantity">
+              <div className="flex items-center gap-2">
+                <input type="number" step="0.0001" min="0.0001" className="input w-32"
+                  value={form.qty}
+                  onChange={e => setForm(f => ({ ...f, qty: parseFloat(e.target.value) || 1 }))} />
+                <span className="text-sm text-gray-500 whitespace-nowrap">
+                  {form.item_type === 'recipe'
+                    ? 'portion(s)'
+                    : (selectedIngredient?.base_unit_abbr || 'units')}
+                </span>
+              </div>
             </Field>
           )}
           <Field label="Price add-on">
@@ -553,6 +604,21 @@ export default function SalesItemsPage() {
   const [savingCombo,        setSavingCombo]        = useState(false)
   const [deletingCombo,      setDeletingCombo]      = useState<Combo | null>(null)
 
+  // ── Templates panel ────────────────────────────────────────────────────────
+  const [templates,         setTemplates]         = useState<ComboTemplate[]>([])
+  const [templateSearch,    setTemplateSearch]    = useState('')
+  const [showSaveTemplate,  setShowSaveTemplate]  = useState(false)
+  const [newTemplateName,   setNewTemplateName]   = useState('')
+  const [savingTemplate,    setSavingTemplate]    = useState(false)
+  const [loadingTemplateId, setLoadingTemplateId] = useState<number | null>(null)
+
+  const filteredTemplates = useMemo(() =>
+    templateSearch.trim()
+      ? templates.filter(t => t.name.toLowerCase().includes(templateSearch.toLowerCase()))
+      : templates,
+    [templates, templateSearch]
+  )
+
   useEffect(() => {
     if (!selectedComboId) { setComboDetail(null); return }
     setComboDetailLoading(true)
@@ -634,15 +700,24 @@ export default function SalesItemsPage() {
   }
 
   const addOption = (stepId: number) => {
-    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 })
+    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: 0 })
     setEditingOptStepId(stepId)
   }
 
   const saveOption = async (opt: ComboStepOption) => {
     if (!editingOptStepId || !selectedComboId) return
     try {
-      if (opt.id === 0) await api.post(`/combos/${selectedComboId}/steps/${editingOptStepId}/options`, opt)
-      else await api.put(`/combos/${selectedComboId}/steps/${editingOptStepId}/options/${opt.id}`, opt)
+      let savedId: number
+      if (opt.id === 0) {
+        const created: any = await api.post(`/combos/${selectedComboId}/steps/${editingOptStepId}/options`, opt)
+        savedId = created.id
+      } else {
+        await api.put(`/combos/${selectedComboId}/steps/${editingOptStepId}/options/${opt.id}`, opt)
+        savedId = opt.id
+      }
+      // Persist modifier group assignments separately
+      const mgIds = (opt.modifier_groups || []).map(m => m.modifier_group_id)
+      await api.put(`/combos/${selectedComboId}/steps/${editingOptStepId}/options/${savedId}/modifier-groups`, { modifier_group_ids: mgIds })
       await reloadComboDetail(); setEditingOpt(null)
     } catch { showToast('Failed to save option') }
   }
@@ -651,6 +726,42 @@ export default function SalesItemsPage() {
     if (!window.confirm('Delete this option?') || !selectedComboId) return
     try { await api.delete(`/combos/${selectedComboId}/steps/${stepId}/options/${optId}`); await reloadComboDetail() }
     catch { showToast('Failed') }
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'combos') return
+    api.get('/combo-templates').then((d: any) => setTemplates(d || [])).catch(() => {})
+  }, [activeTab, api])
+
+  const saveAsTemplate = async () => {
+    if (!selectedComboId || !newTemplateName.trim()) return
+    setSavingTemplate(true)
+    try {
+      const created: any = await api.post('/combo-templates', { name: newTemplateName.trim(), combo_id: selectedComboId })
+      setTemplates(prev => [created, ...prev])
+      setShowSaveTemplate(false); setNewTemplateName('')
+      showToast('Template saved')
+    } catch { showToast('Failed to save template') } finally { setSavingTemplate(false) }
+  }
+
+  const loadTemplate = async (templateId: number) => {
+    if (!selectedComboId) return
+    if (!window.confirm('Replace all current steps with this template? This cannot be undone.')) return
+    setLoadingTemplateId(templateId)
+    try {
+      await api.post(`/combo-templates/${templateId}/apply`, { combo_id: selectedComboId })
+      await reloadComboDetail()
+      showToast('Template applied')
+    } catch { showToast('Failed to apply template') } finally { setLoadingTemplateId(null) }
+  }
+
+  const deleteTemplate = async (templateId: number) => {
+    if (!window.confirm('Delete this template?')) return
+    try {
+      await api.delete(`/combo-templates/${templateId}`)
+      setTemplates(prev => prev.filter(t => t.id !== templateId))
+      showToast('Template deleted')
+    } catch { showToast('Failed') }
   }
 
   // ── Modifiers tab ──────────────────────────────────────────────────────────
@@ -897,6 +1008,7 @@ export default function SalesItemsPage() {
             </div>
           </aside>
 
+          <div className="flex flex-1 min-h-0">
           <div className="flex-1 overflow-y-auto bg-gray-50 p-5">
             {!selectedComboId && <div className="flex items-center justify-center h-full text-sm text-gray-400">Select a combo to configure its steps.</div>}
             {selectedComboId && comboDetailLoading && <div className="flex items-center justify-center h-full"><Spinner /></div>}
@@ -990,8 +1102,22 @@ export default function SalesItemsPage() {
                               <div key={opt.id} className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-gray-50">
                                 <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
                                 <span className="font-medium text-gray-800">{opt.name}</span>
-                                {opt.recipe_name && <span className="text-xs text-gray-400 shrink-0">→ {opt.recipe_name}</span>}
-                                {opt.ingredient_name && <span className="text-xs text-gray-400 shrink-0">→ {opt.ingredient_name}</span>}
+                                {opt.recipe_name && (
+                                  <span className="text-xs text-gray-400 shrink-0">
+                                    → {opt.recipe_name} · <span className="text-gray-500 font-medium">{Number(opt.qty ?? 1)}</span> ptn
+                                  </span>
+                                )}
+                                {opt.ingredient_name && (
+                                  <span className="text-xs text-gray-400 shrink-0">
+                                    → {opt.ingredient_name} · <span className="text-gray-500 font-medium">{Number(opt.qty ?? 1)}</span>{opt.ingredient_unit_abbr ? ` ${opt.ingredient_unit_abbr}` : ''}
+                                  </span>
+                                )}
+                                {opt.sales_item_name && (
+                                  <span className="text-xs text-gray-400 shrink-0 flex items-center gap-1">
+                                    → {opt.sales_item_name}
+                                    {opt.sales_item_type && <span className={`text-xs px-1 py-0.5 rounded ${TYPE_BADGE[opt.sales_item_type] || ''}`}>{TYPE_LABEL[opt.sales_item_type] || opt.sales_item_type}</span>}
+                                  </span>
+                                )}
                                 {opt.item_type === 'manual' && opt.manual_cost != null && <span className="text-xs text-gray-400 shrink-0">${Number(opt.manual_cost).toFixed(4)}</span>}
                                 {/* Modifier group badges */}
                                 {(opt.modifier_groups || []).length > 0 && (
@@ -1019,6 +1145,61 @@ export default function SalesItemsPage() {
               </div>
             )}
           </div>
+
+          {/* ── Templates side panel ─────────────────────────────────────── */}
+          {selectedComboId && (
+            <aside className="w-64 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col overflow-hidden">
+              <div className="px-3 py-3 border-b border-gray-100">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Step Templates</p>
+                {showSaveTemplate ? (
+                  <div className="space-y-1.5">
+                    <input className="input input-sm w-full" placeholder="Template name…" value={newTemplateName} autoFocus
+                      onChange={e => setNewTemplateName(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && saveAsTemplate()} />
+                    <div className="flex gap-1">
+                      <button className="btn btn-xs btn-primary flex-1" disabled={!newTemplateName.trim() || savingTemplate}
+                        onClick={saveAsTemplate}>{savingTemplate ? '…' : 'Save'}</button>
+                      <button className="btn btn-xs btn-ghost" onClick={() => { setShowSaveTemplate(false); setNewTemplateName('') }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn btn-xs btn-outline w-full text-xs" onClick={() => setShowSaveTemplate(true)}>
+                    ↓ Save current steps as template
+                  </button>
+                )}
+              </div>
+              <div className="px-3 py-2 border-b border-gray-100">
+                <input className="input input-sm w-full" placeholder="Search templates…" value={templateSearch}
+                  onChange={e => setTemplateSearch(e.target.value)} />
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {filteredTemplates.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-6 px-3">
+                    {templates.length === 0 ? 'No templates yet.' : 'No templates match.'}
+                  </p>
+                )}
+                {filteredTemplates.map(t => (
+                  <div key={t.id} className="px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50">
+                    <div className="flex items-start justify-between gap-1">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-800 truncate">{t.name}</div>
+                        <div className="text-xs text-gray-400">{t.step_count} step{t.step_count !== 1 ? 's' : ''}</div>
+                      </div>
+                      <div className="flex gap-1 shrink-0 pt-0.5">
+                        <button className="btn btn-xs btn-primary" disabled={loadingTemplateId === t.id}
+                          onClick={() => loadTemplate(t.id)}>
+                          {loadingTemplateId === t.id ? '…' : 'Load'}
+                        </button>
+                        <button className="text-xs text-red-400 hover:text-red-600 px-1 leading-none py-0.5"
+                          onClick={() => deleteTemplate(t.id)}>×</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          )}
+          </div>{/* end flex flex-1 min-h-0 wrapper */}
         </div>
       )}
 
@@ -1144,7 +1325,7 @@ export default function SalesItemsPage() {
       )}
 
       {editingOpt && (
-        <ComboOptionForm opt={editingOpt} modifierGroups={modifierGroups} recipes={recipes} ingredients={ingredients}
+        <ComboOptionForm opt={editingOpt} modifierGroups={modifierGroups} recipes={recipes} ingredients={ingredients} salesItems={salesItems}
           onSave={saveOption} onClose={() => setEditingOpt(null)} />
       )}
 

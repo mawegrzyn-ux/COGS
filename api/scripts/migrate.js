@@ -935,6 +935,54 @@ const migrations = [
    EXCEPTION WHEN others THEN NULL;
    END $$`,
 
+  // ── 73. Add qty to combo_step_options (default 1 portion/unit) ───────────
+  `ALTER TABLE mcogs_combo_step_options ADD COLUMN IF NOT EXISTS qty NUMERIC(12,4) NOT NULL DEFAULT 1`,
+
+  // ── 74. Combo Templates ──────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_templates (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── 75. Combo Template Steps ─────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_template_steps (
+    id           SERIAL PRIMARY KEY,
+    template_id  INTEGER NOT NULL REFERENCES mcogs_combo_templates(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    description  TEXT,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    min_select   INTEGER NOT NULL DEFAULT 1,
+    max_select   INTEGER NOT NULL DEFAULT 1,
+    allow_repeat BOOLEAN NOT NULL DEFAULT false,
+    auto_select  BOOLEAN NOT NULL DEFAULT false
+  )`,
+
+  // ── 76. Combo Template Step Options ──────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_combo_template_step_options (
+    id               SERIAL PRIMARY KEY,
+    template_step_id INTEGER NOT NULL REFERENCES mcogs_combo_template_steps(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    item_type        TEXT NOT NULL CHECK (item_type IN ('recipe','ingredient','manual','sales_item')),
+    recipe_id        INTEGER REFERENCES mcogs_recipes(id) ON DELETE SET NULL,
+    ingredient_id    INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+    sales_item_id    INTEGER REFERENCES mcogs_sales_items(id) ON DELETE SET NULL,
+    manual_cost      NUMERIC(12,4),
+    price_addon      NUMERIC(12,4) NOT NULL DEFAULT 0,
+    qty              NUMERIC(12,4) NOT NULL DEFAULT 1,
+    sort_order       INTEGER NOT NULL DEFAULT 0
+  )`,
+
+  // ── 77. Add sales_item support to combo_step_options ─────────────────────
+  `ALTER TABLE mcogs_combo_step_options ADD COLUMN IF NOT EXISTS sales_item_id INTEGER REFERENCES mcogs_sales_items(id) ON DELETE SET NULL`,
+  `DO $$ BEGIN
+     ALTER TABLE mcogs_combo_step_options DROP CONSTRAINT IF EXISTS mcogs_combo_step_options_item_type_check;
+     ALTER TABLE mcogs_combo_step_options ADD CONSTRAINT mcogs_combo_step_options_item_type_check
+       CHECK (item_type IN ('recipe','ingredient','manual','sales_item'));
+   EXCEPTION WHEN others THEN NULL;
+   END $$`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,

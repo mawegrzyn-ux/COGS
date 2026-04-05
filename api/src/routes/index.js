@@ -64,6 +64,7 @@ router.use('/menu-item-prices',   ...can('menus', 'read'),       write('menus'),
 router.use('/shared-pages',       ...can('menus', 'read'),       write('menus'),       require('./shared-pages').router);
 
 // ── Sales Items (product catalog + menu links + modifier groups) ───────────────
+router.use('/combo-templates',    ...can('menus', 'read'),       write('menus'),       require('./combo-templates'));
 router.use('/combos',             ...can('menus', 'read'),       write('menus'),       require('./combos'));
 router.use('/sales-items',        ...can('menus', 'read'),       write('menus'),       require('./sales-items'));
 router.use('/modifier-groups',    ...can('menus', 'read'),       write('menus'),       require('./modifier-groups'));

@@ -32,11 +32,16 @@ async function fetchComboFull(id, client) {
     steps.map(async step => {
       const { rows: opts } = await db.query(
         `SELECT cso.*,
-                r.name   AS recipe_name,
-                ing.name AS ingredient_name
+                r.name             AS recipe_name,
+                ing.name           AS ingredient_name,
+                u.abbreviation     AS ingredient_unit_abbr,
+                si.name            AS sales_item_name,
+                si.item_type       AS sales_item_type
          FROM   mcogs_combo_step_options cso
          LEFT JOIN mcogs_recipes     r   ON r.id   = cso.recipe_id
          LEFT JOIN mcogs_ingredients ing ON ing.id = cso.ingredient_id
+         LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
+         LEFT JOIN mcogs_sales_items si  ON si.id  = cso.sales_item_id
          WHERE  cso.combo_step_id = $1 ORDER BY cso.sort_order`,
         [step.id]
       );
@@ -176,14 +181,15 @@ router.delete('/:id/steps/:sid', async (req, res, next) => {
 
 router.post('/:id/steps/:sid/options', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
     if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
     const { rows } = await pool.query(
       `INSERT INTO mcogs_combo_step_options
-         (combo_step_id, name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+         (combo_step_id, name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.params.sid, name.trim(), item_type,
-       recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0]
+       recipe_id || null, ingredient_id || null, sales_item_id || null,
+       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0]
     );
     res.status(201).json({ ...rows[0], modifier_groups: [] });
   } catch (err) { next(err); }
@@ -191,13 +197,14 @@ router.post('/:id/steps/:sid/options', async (req, res, next) => {
 
 router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_combo_step_options
-       SET name=$1, item_type=$2, recipe_id=$3, ingredient_id=$4, manual_cost=$5, price_addon=$6, sort_order=$7
-       WHERE id=$8 AND combo_step_id=$9 RETURNING *`,
-      [name?.trim(), item_type, recipe_id || null, ingredient_id || null,
-       manual_cost || null, price_addon || 0, sort_order || 0, req.params.oid, req.params.sid]
+       SET name=$1, item_type=$2, recipe_id=$3, ingredient_id=$4, sales_item_id=$5,
+           manual_cost=$6, price_addon=$7, qty=$8, sort_order=$9
+       WHERE id=$10 AND combo_step_id=$11 RETURNING *`,
+      [name?.trim(), item_type, recipe_id || null, ingredient_id || null, sales_item_id || null,
+       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0, req.params.oid, req.params.sid]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
     res.json(rows[0]);
