@@ -1049,6 +1049,94 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
   )
 }
 
+// ── SubPriceRowME — inline editable price row for ALL LEVELS (Menu Engineer) view
+function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, onSave }: {
+  msiId:           number
+  kind:            'combo' | 'modifier'
+  option:          { id: number; name: string; item_type: string; prices: Record<number, number> }
+  levels:          PriceLevel[]
+  sym:             string
+  allLevelsCompact: boolean
+  indent:          number
+  onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
+}) {
+  const [editingLevel, setEditingLevel] = useState<number | null>(null)
+  const [val, setVal] = useState('')
+
+  const ITEM_BADGE: Record<string, string> = {
+    recipe:     'bg-blue-50 text-blue-700',
+    ingredient: 'bg-green-50 text-green-700',
+    manual:     'bg-gray-100 text-gray-600',
+    sales_item: 'bg-purple-50 text-purple-700',
+  }
+
+  const startEdit = (levelId: number) => {
+    const existing = option.prices[levelId] != null ? option.prices[levelId] : null
+    setVal(existing != null ? existing.toFixed(2) : '')
+    setEditingLevel(levelId)
+  }
+
+  const commit = async (levelId: number) => {
+    const p = parseFloat(val)
+    if (!isNaN(p) && p >= 0) await onSave(msiId, kind, option.id, levelId, p)
+    setEditingLevel(null)
+  }
+
+  return (
+    <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
+      <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
+          <span className="text-xs text-text-2">{option.name}</span>
+        </div>
+      </td>
+      {levels.map(level => {
+        const existing  = option.prices[level.id] != null ? option.prices[level.id] : null
+        const isEditing = editingLevel === level.id
+        return (
+          <Fragment key={level.id}>
+            {/* Qty — empty */}
+            <td className="border-l border-gray-100" />
+            {/* Cost — empty */}
+            <td />
+            {/* Price — editable */}
+            <td className="px-1 py-1 text-right text-xs">
+              {isEditing ? (
+                <div className="flex items-center justify-end gap-1">
+                  <span className="text-text-3 text-xs">{sym}</span>
+                  <input
+                    type="number" min="0" step="0.01"
+                    className="input text-xs font-mono w-16 py-0.5 px-1 text-right"
+                    value={val}
+                    autoFocus
+                    onChange={e => setVal(e.target.value)}
+                    onKeyDown={async e => { if (e.key === 'Enter') await commit(level.id); else if (e.key === 'Escape') setEditingLevel(null) }}
+                    onBlur={() => commit(level.id)}
+                  />
+                </div>
+              ) : (
+                <span
+                  className={`cursor-pointer hover:text-accent ${existing != null ? 'text-text-1 font-mono' : 'text-text-3 italic'}`}
+                  onClick={() => startEdit(level.id)}
+                  title={`Click to set ${level.name} price (${sym})`}
+                >
+                  {existing != null ? `${sym}${existing.toFixed(2)}` : 'set price'}
+                </span>
+              )}
+            </td>
+            {/* Revenue — empty */}
+            {!allLevelsCompact && <td />}
+            {/* COGS% — empty */}
+            <td />
+          </Fragment>
+        )
+      })}
+      {/* Total COGS% — empty */}
+      <td />
+    </tr>
+  )
+}
+
 // ── Menu Detail panel ─────────────────────────────────────────────────────────
 
 interface MenuDetailProps {
@@ -2039,6 +2127,46 @@ function ScenarioTool({
   const [allLevelsLoading, setAllLevelsLoading] = useState(false)
   const [allLevelsCompact, setAllLevelsCompact] = useState(false) // hides Qty + Revenue columns
 
+  // ── Sub-price expand state (ME ALL LEVELS view) ────────────────────────────
+  const [expandedSubItemsME, setExpandedSubItemsME] = useState<Set<number>>(new Set())
+  const [subPriceDataME,     setSubPriceDataME]     = useState<Record<number, SubPriceData>>({})
+  const [loadingSubPricesME, setLoadingSubPricesME] = useState<Set<number>>(new Set())
+
+  const toggleSubExpandME = async (msiId: number) => {
+    setExpandedSubItemsME(prev => {
+      const next = new Set(prev)
+      if (next.has(msiId)) { next.delete(msiId); return next }
+      next.add(msiId)
+      return next
+    })
+    if (!subPriceDataME[msiId]) {
+      setLoadingSubPricesME(prev => new Set([...prev, msiId]))
+      try {
+        const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+        setSubPriceDataME(prev => ({ ...prev, [msiId]: d }))
+      } catch { /* ignore */ }
+      finally { setLoadingSubPricesME(prev => { const n = new Set(prev); n.delete(msiId); return n }) }
+    }
+  }
+
+  const saveSubOptionPriceME = async (
+    msiId: number,
+    kind: 'combo' | 'modifier',
+    optionId: number,
+    lId: number,
+    price: number
+  ) => {
+    const endpoint = kind === 'combo' ? 'combo-option-price' : 'modifier-option-price'
+    const body = kind === 'combo'
+      ? { combo_step_option_id: optionId, price_level_id: lId, sell_price: price }
+      : { modifier_option_id: optionId, price_level_id: lId, sell_price: price }
+    await api.put(`/menu-sales-items/${msiId}/${endpoint}`, body)
+    try {
+      const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+      setSubPriceDataME(prev => ({ ...prev, [msiId]: d }))
+    } catch { /* ignore */ }
+  }
+
   useEffect(() => {
     if (levelId !== 'ALL' || !menuId) { setAllLevelsData([]); return }
     setAllLevelsLoading(true)
@@ -2407,17 +2535,18 @@ function ScenarioTool({
   // ── All-levels rows (one row per item, prices/revenues per level) ─────────
 
   interface AllLevelRow {
-    menu_item_id:       number
-    nat_key:            string
-    display_name:       string
-    category:           string
-    item_type:          string
-    cost:               number   // display currency (may be overridden)
-    base_cost_display:  number   // original recipe cost in display currency
-    cost_override_key:  string   // = nat_key
-    is_cost_overridden: boolean
-    total_qty:          number   // sum of per-level qtys
-    total_cost:         number   // total_qty × cost
+    menu_item_id:         number
+    nat_key:              string
+    display_name:         string
+    category:             string
+    item_type:            string
+    modifier_group_count: number
+    cost:                 number   // display currency (may be overridden)
+    base_cost_display:    number   // original recipe cost in display currency
+    cost_override_key:    string   // = nat_key
+    is_cost_overridden:   boolean
+    total_qty:            number   // sum of per-level qtys
+    total_cost:           number   // total_qty × cost
     perLevel: {
       level:               PriceLevel
       qty:                 number
@@ -2471,7 +2600,8 @@ function ScenarioTool({
         nat_key:      natKey,
         display_name: item.display_name,
         category:     item.category || 'Uncategorised',
-        item_type:    item.item_type,
+        item_type:            item.item_type,
+        modifier_group_count: item.modifier_group_count ?? 0,
         cost, base_cost_display: baseCostDisp,
         cost_override_key: costOvKey, is_cost_overridden: isCostOv,
         total_qty, total_cost,
