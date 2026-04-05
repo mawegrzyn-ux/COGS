@@ -1027,6 +1027,24 @@ const migrations = [
         ON CONFLICT (role_id, feature) DO NOTHING;
     END LOOP;
   END $$`,
+
+  // ── Menu-level combo step option prices ──────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_menu_combo_option_prices (
+     menu_sales_item_id   INTEGER NOT NULL REFERENCES mcogs_menu_sales_items(id)  ON DELETE CASCADE,
+     combo_step_option_id INTEGER NOT NULL REFERENCES mcogs_combo_step_options(id) ON DELETE CASCADE,
+     price_level_id       INTEGER NOT NULL REFERENCES mcogs_price_levels(id)       ON DELETE CASCADE,
+     sell_price           NUMERIC(12,4) NOT NULL DEFAULT 0,
+     PRIMARY KEY (menu_sales_item_id, combo_step_option_id, price_level_id)
+  )`,
+
+  // ── Menu-level modifier option prices ────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_menu_modifier_option_prices (
+     menu_sales_item_id INTEGER NOT NULL REFERENCES mcogs_menu_sales_items(id)  ON DELETE CASCADE,
+     modifier_option_id INTEGER NOT NULL REFERENCES mcogs_modifier_options(id)  ON DELETE CASCADE,
+     price_level_id     INTEGER NOT NULL REFERENCES mcogs_price_levels(id)      ON DELETE CASCADE,
+     sell_price         NUMERIC(12,4) NOT NULL DEFAULT 0,
+     PRIMARY KEY (menu_sales_item_id, modifier_option_id, price_level_id)
+  )`,
 ];
 
 async function migrate() {

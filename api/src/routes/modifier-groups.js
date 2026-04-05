@@ -111,6 +111,21 @@ router.delete('/:id', async (req, res, next) => {
 
 // ─── Options CRUD ─────────────────────────────────────────────────────────────
 
+// GET /:id/options — list all options for a group (used by frontend on expand)
+router.get('/:id/options', async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT mo.*, r.name AS recipe_name, ing.name AS ingredient_name
+       FROM   mcogs_modifier_options mo
+       LEFT JOIN mcogs_recipes     r   ON r.id   = mo.recipe_id
+       LEFT JOIN mcogs_ingredients ing ON ing.id = mo.ingredient_id
+       WHERE  mo.modifier_group_id = $1 ORDER BY mo.sort_order, mo.id`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
 router.post('/:id/options', async (req, res, next) => {
   try {
     const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;

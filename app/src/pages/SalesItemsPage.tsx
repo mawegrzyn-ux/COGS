@@ -424,30 +424,60 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
 }
 
 // ── ModifierOptionAddForm ─────────────────────────────────────────────────────
+// Cost/price fields removed — pricing is managed per-menu in Menu Builder
 function ModifierOptionAddForm({ recipes, ingredients, onAdd }: {
   recipes: Recipe[]; ingredients: Ingredient[]
   onAdd(opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>): void
 }) {
-  const [form, setForm] = useState({ name: '', item_type: 'manual' as 'recipe' | 'ingredient' | 'manual', recipe_id: null as number | null, ingredient_id: null as number | null, manual_cost: null as number | null, price_addon: 0, sort_order: 0 })
+  const [form, setForm] = useState({
+    name: '', item_type: 'manual' as 'recipe' | 'ingredient' | 'manual',
+    recipe_id: null as number | null, ingredient_id: null as number | null,
+    manual_cost: null as number | null, price_addon: 0, sort_order: 0,
+  })
   const [show, setShow] = useState(false)
-  if (!show) return <button className="btn btn-xs btn-outline mt-1" onClick={() => setShow(true)}>+ Add Option</button>
+  if (!show) return <button className="btn btn-xs btn-outline mt-2" onClick={() => setShow(true)}>+ Add Option</button>
   return (
-    <div className="border border-dashed border-gray-200 rounded p-2 mt-1 space-y-1.5">
-      <div className="flex gap-1.5">
-        <input className="input input-sm flex-1" placeholder="Option name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-        <select className="input py-1 text-xs w-28" value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual' }))}>
-          <option value="manual">Manual</option><option value="recipe">Recipe</option><option value="ingredient">Ingredient</option>
+    <tr className="border-t border-dashed border-border bg-accent-dim/30">
+      <td className="px-2 py-1.5">
+        <input
+          className="input input-sm w-full"
+          placeholder="Option name"
+          value={form.name}
+          onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          onKeyDown={e => { if (e.key === 'Enter' && form.name.trim()) { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) } if (e.key === 'Escape') setShow(false) }}
+        />
+      </td>
+      <td className="px-2 py-1.5">
+        <select className="input py-0.5 text-xs w-28" value={form.item_type}
+          onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual', recipe_id: null, ingredient_id: null }))}>
+          <option value="manual">Manual</option>
+          <option value="recipe">Recipe</option>
+          <option value="ingredient">Ingredient</option>
         </select>
-      </div>
-      {form.item_type === 'manual' && <input type="number" step="0.0001" className="input input-sm w-full" placeholder="Cost (USD)" value={form.manual_cost ?? ''} onChange={e => setForm(f => ({ ...f, manual_cost: parseFloat(e.target.value) || null }))} />}
-      {form.item_type === 'recipe' && <select className="input py-1 text-xs w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}><option value="">— Select recipe —</option>{recipes.slice(0, 100).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>}
-      {form.item_type === 'ingredient' && <select className="input py-1 text-xs w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}><option value="">— Select ingredient —</option>{ingredients.slice(0, 100).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select>}
-      <div className="flex gap-1.5">
-        <input type="number" step="0.01" className="input input-sm w-28" placeholder="Price add-on" value={form.price_addon} onChange={e => setForm(f => ({ ...f, price_addon: parseFloat(e.target.value) || 0 }))} />
-        <button className="btn btn-xs btn-primary" disabled={!form.name.trim()} onClick={() => { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) }}>Add</button>
-        <button className="btn btn-xs btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-      </div>
-    </div>
+      </td>
+      <td className="px-2 py-1.5">
+        {form.item_type === 'recipe' && (
+          <select className="input py-0.5 text-xs w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}>
+            <option value="">— Select recipe —</option>
+            {recipes.slice(0, 200).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+        {form.item_type === 'ingredient' && (
+          <select className="input py-0.5 text-xs w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}>
+            <option value="">— Select ingredient —</option>
+            {ingredients.slice(0, 200).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        )}
+        {form.item_type === 'manual' && <span className="text-xs text-text-3 italic">No link</span>}
+      </td>
+      <td className="px-2 py-1.5">
+        <div className="flex gap-1">
+          <button className="btn btn-xs btn-primary" disabled={!form.name.trim()}
+            onClick={() => { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) }}>Add</button>
+          <button className="btn btn-xs btn-ghost" onClick={() => setShow(false)}>✕</button>
+        </div>
+      </td>
+    </tr>
   )
 }
 
@@ -728,6 +758,10 @@ export default function SalesItemsPage() {
   const [editMg,          setEditMg]          = useState<ModifierGroup | null>(null)
   const [newMgForm,       setNewMgForm]       = useState({ name: '', min_select: 0, max_select: 1 })
   const [mgSaving,        setMgSaving]        = useState(false)
+  const [editingOption,   setEditingOption]   = useState<{
+    groupId: number; optId: number
+    form: { name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null }
+  } | null>(null)
 
   const toggleMg = async (id: number) => {
     if (expandedMgId === id) { setExpandedMgId(null); return }
@@ -774,6 +808,19 @@ export default function SalesItemsPage() {
       setExpandedOptions(prev => ({ ...prev, [groupId]: (prev[groupId] || []).filter(o => o.id !== optId) }))
       setModifierGroups(prev => prev.map(g => g.id === groupId ? { ...g, option_count: Math.max(0, (g.option_count || 1) - 1) } : g))
     } catch { showToast('Failed') }
+  }
+
+  const saveOptEdit = async () => {
+    if (!editingOption) return
+    const { groupId, optId, form } = editingOption
+    try {
+      const updated = await api.put(`/modifier-groups/${groupId}/options/${optId}`, { ...form, price_addon: 0, sort_order: 0 })
+      setExpandedOptions(prev => ({
+        ...prev,
+        [groupId]: (prev[groupId] || []).map(o => o.id === optId ? { ...o, ...updated } : o),
+      }))
+      setEditingOption(null)
+    } catch { showToast('Failed to save') }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1160,19 +1207,96 @@ export default function SalesItemsPage() {
                   )}
                 </div>
                 {expandedMgId === g.id && (
-                  <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
-                    <div className="space-y-1 mb-2">
-                      {(expandedOptions[g.id] || []).length === 0 && <p className="text-xs text-gray-400">No options yet.</p>}
-                      {(expandedOptions[g.id] || []).map(opt => (
-                        <div key={opt.id} className="flex items-center gap-2 text-sm py-0.5">
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
-                          <span className="flex-1">{opt.name}</span>
-                          {opt.price_addon > 0 && <span className="text-xs text-gray-500">+${Number(opt.price_addon).toFixed(2)}</span>}
-                          <button className="text-xs text-red-400 hover:text-red-600" onClick={() => deleteMgOption(g.id, opt.id)}>×</button>
-                        </div>
-                      ))}
-                    </div>
-                    <ModifierOptionAddForm recipes={recipes} ingredients={ingredients} onAdd={opt => addMgOption(g.id, opt)} />
+                  <div className="border-t border-border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-surface-2 border-b border-border text-xs text-text-3 uppercase tracking-wide">
+                          <th className="px-3 py-2 text-left font-semibold">Name</th>
+                          <th className="px-3 py-2 text-left font-semibold">Type</th>
+                          <th className="px-3 py-2 text-left font-semibold">Linked Item</th>
+                          <th className="px-3 py-2 w-16"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(expandedOptions[g.id] || []).length === 0 && editingOption?.groupId !== g.id && (
+                          <tr><td colSpan={4} className="px-3 py-3 text-xs text-text-3 text-center italic">No options yet — add one below.</td></tr>
+                        )}
+                        {(expandedOptions[g.id] || []).map(opt => {
+                          const isEditingThis = editingOption?.groupId === g.id && editingOption?.optId === opt.id
+                          if (isEditingThis) {
+                            const ef = editingOption!.form
+                            return (
+                              <tr key={opt.id} className="border-b border-border bg-accent-dim/20">
+                                <td className="px-2 py-1.5">
+                                  <input className="input input-sm w-full" value={ef.name}
+                                    onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, name: e.target.value } } : eo)} />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <select className="input py-0.5 text-xs w-28" value={ef.item_type}
+                                    onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual', recipe_id: null, ingredient_id: null } } : eo)}>
+                                    <option value="manual">Manual</option>
+                                    <option value="recipe">Recipe</option>
+                                    <option value="ingredient">Ingredient</option>
+                                  </select>
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {ef.item_type === 'recipe' && (
+                                    <select className="input py-0.5 text-xs w-full" value={ef.recipe_id ?? ''}
+                                      onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, recipe_id: Number(e.target.value) || null } } : eo)}>
+                                      <option value="">— Select —</option>
+                                      {recipes.slice(0, 200).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                    </select>
+                                  )}
+                                  {ef.item_type === 'ingredient' && (
+                                    <select className="input py-0.5 text-xs w-full" value={ef.ingredient_id ?? ''}
+                                      onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, ingredient_id: Number(e.target.value) || null } } : eo)}>
+                                      <option value="">— Select —</option>
+                                      {ingredients.slice(0, 200).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                    </select>
+                                  )}
+                                  {ef.item_type === 'manual' && <span className="text-xs text-text-3">—</span>}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <div className="flex gap-1">
+                                    <button className="btn btn-xs btn-primary" onClick={saveOptEdit}>✓</button>
+                                    <button className="btn btn-xs btn-ghost" onClick={() => setEditingOption(null)}>✕</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          }
+                          const linked = opt.item_type === 'recipe'
+                            ? (recipes.find(r => r.id === opt.recipe_id)?.name ?? `#${opt.recipe_id}`)
+                            : opt.item_type === 'ingredient'
+                            ? (ingredients.find(i => i.id === opt.ingredient_id)?.name ?? `#${opt.ingredient_id}`)
+                            : '—'
+                          return (
+                            <tr key={opt.id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
+                              <td className="px-3 py-2 font-medium text-text-1">{opt.name}</td>
+                              <td className="px-3 py-2">
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
+                              </td>
+                              <td className="px-3 py-2 text-xs text-text-2">{linked}</td>
+                              <td className="px-3 py-1.5">
+                                <div className="flex gap-1 justify-end">
+                                  <button
+                                    className="w-6 h-6 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors text-xs"
+                                    title="Edit"
+                                    onClick={() => setEditingOption({ groupId: g.id, optId: opt.id, form: { name: opt.name, item_type: opt.item_type, recipe_id: opt.recipe_id, ingredient_id: opt.ingredient_id } })}
+                                  >✎</button>
+                                  <button
+                                    className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors text-xs"
+                                    title="Delete"
+                                    onClick={() => deleteMgOption(g.id, opt.id)}
+                                  >×</button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                        <ModifierOptionAddForm recipes={recipes} ingredients={ingredients} onAdd={opt => addMgOption(g.id, opt)} />
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>

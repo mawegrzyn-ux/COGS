@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import ImageUpload from '../components/ImageUpload'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
@@ -24,31 +24,40 @@ interface Menu {
 
 
 interface CogsItem {
-  menu_item_id:       number   // alias for menu_sales_item_id
-  menu_sales_item_id: number
-  sales_item_id:      number
-  item_type:          'recipe' | 'ingredient' | 'manual' | 'combo'
-  recipe_id:          number | null
-  ingredient_id:      number | null
-  display_name:       string
-  image_url:          string | null
-  recipe_name:        string
-  category:           string
-  qty:                number
-  base_unit_abbr:     string
-  cost_per_portion:   number
-  sell_price_gross:   number
-  sell_price_net:     number
-  tax_rate:           number
-  tax_rate_pct:       number
-  tax_name:           string
-  tax_rate_id:        number | null
-  gp_net:             number
-  gp_gross:           number
-  cogs_pct_net:       number
-  cogs_pct_gross:     number
+  menu_item_id:         number   // alias for menu_sales_item_id
+  menu_sales_item_id:   number
+  sales_item_id:        number
+  item_type:            'recipe' | 'ingredient' | 'manual' | 'combo'
+  recipe_id:            number | null
+  ingredient_id:        number | null
+  display_name:         string
+  image_url:            string | null
+  recipe_name:          string
+  category:             string
+  qty:                  number
+  base_unit_abbr:       string
+  cost_per_portion:     number
+  sell_price_gross:     number
+  sell_price_net:       number
+  tax_rate:             number
+  tax_rate_pct:         number
+  tax_name:             string
+  tax_rate_id:          number | null
+  gp_net:               number
+  gp_gross:             number
+  cogs_pct_net:         number
+  cogs_pct_gross:       number
   is_price_overridden?: boolean
+  modifier_group_count?: number
 }
+
+// Sub-price structures for combo step options + modifier options (menu-level pricing)
+interface SubOptPrices { [price_level_id: number]: number }
+interface SubModOption { id: number; name: string; item_type: string; prices: SubOptPrices }
+interface SubModGroup  { modifier_group_id: number; name: string; min_select: number; max_select: number; options: SubModOption[] }
+interface SubComboOpt  { id: number; name: string; item_type: string; prices: SubOptPrices; modifier_groups: SubModGroup[] }
+interface SubComboStep { id: number; name: string; min_select: number; max_select: number; options: SubComboOpt[] }
+interface SubPriceData { item_type: string; combo_steps: SubComboStep[]; modifier_groups: SubModGroup[] }
 
 interface CogsSummary {
   total_cost: number
@@ -971,6 +980,75 @@ export default function MenusPage() {
 //  SUB-COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ── SubPriceRow — inline editable price row for combo options / modifier options
+function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSave }: {
+  msiId: number
+  kind: 'combo' | 'modifier'
+  option: { id: number; name: string; item_type: string; prices: Record<number, number> }
+  levelId: number | null
+  sym: string
+  colCount: number
+  indent: number
+  onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
+}) {
+  const existing = levelId && option.prices[levelId] != null ? option.prices[levelId] : null
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+
+  const startEdit = () => {
+    if (!levelId) return
+    setVal(existing != null ? existing.toFixed(2) : '')
+    setEditing(true)
+  }
+  const commit = async () => {
+    const p = parseFloat(val)
+    if (!isNaN(p) && p >= 0 && levelId) await onSave(msiId, kind, option.id, levelId, p)
+    setEditing(false)
+  }
+
+  const ITEM_BADGE: Record<string, string> = { recipe: 'bg-blue-50 text-blue-700', ingredient: 'bg-green-50 text-green-700', manual: 'bg-gray-100 text-gray-600', sales_item: 'bg-purple-50 text-purple-700' }
+
+  return (
+    <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
+      <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
+          <span className="text-xs text-text-2">{option.name}</span>
+        </div>
+      </td>
+      {/* empty cells for category, type, qty, cost cols */}
+      {Array.from({ length: colCount - 6 }).map((_, i) => <td key={i} />)}
+      {/* price cell */}
+      <td className="px-3 py-1.5 text-right text-xs" colSpan={1}>
+        {editing ? (
+          <div className="flex items-center justify-end gap-1">
+            <span className="text-text-3 text-xs">{sym}</span>
+            <input
+              type="number" min="0" step="0.01"
+              className="input text-xs font-mono w-20 py-0.5 px-1 text-right"
+              value={val}
+              autoFocus
+              onChange={e => setVal(e.target.value)}
+              onKeyDown={async e => { if (e.key === 'Enter') await commit(); else if (e.key === 'Escape') setEditing(false) }}
+              onBlur={commit}
+            />
+          </div>
+        ) : (
+          <span
+            className={`${levelId ? 'cursor-pointer hover:text-accent' : ''} ${existing != null ? 'text-text-1' : 'text-text-3 italic'}`}
+            onClick={startEdit}
+            title={levelId ? `Click to set price (${sym})` : 'Select a price level first'}
+          >
+            {existing != null ? `${sym}${existing.toFixed(2)}` : levelId ? 'set price' : '—'}
+          </span>
+        )}
+      </td>
+      {/* remaining cells */}
+      <td colSpan={5} />
+    </tr>
+  )
+}
+
 // ── Menu Detail panel ─────────────────────────────────────────────────────────
 
 interface MenuDetailProps {
@@ -997,6 +1075,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   onEdit, onDelete, onDeleteItem,
   onAddSalesItem }: MenuDetailProps) {
 
+  const api      = useApi()
   const hasLevel = !!activeMenuLevel
   const items = cogsData.items
   const cogsVals  = items.filter(i => i.sell_price_gross > 0).map(i => i.cogs_pct_net)
@@ -1010,6 +1089,47 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   const [groupByCategory, setGroupByCategory] = useState(false)
   const [inlineEdit, setInlineEdit] = useState<{ menuItemId: number; value: string } | null>(null)
   const [savingPrice, setSavingPrice] = useState(false)
+
+  // ── Sub-price expand state (combo steps + modifier options) ──────────────
+  const [expandedSubItems, setExpandedSubItems] = useState<Set<number>>(new Set())
+  const [subPriceData, setSubPriceData] = useState<Record<number, SubPriceData>>({})
+  const [loadingSubPrices, setLoadingSubPrices] = useState<Set<number>>(new Set())
+
+  const toggleSubExpand = async (msiId: number) => {
+    setExpandedSubItems(prev => {
+      const next = new Set(prev)
+      if (next.has(msiId)) { next.delete(msiId); return next }
+      next.add(msiId); return next
+    })
+    if (!subPriceData[msiId]) {
+      setLoadingSubPrices(prev => new Set(prev).add(msiId))
+      try {
+        const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+        setSubPriceData(prev => ({ ...prev, [msiId]: d }))
+      } catch { /* ignore */ } finally {
+        setLoadingSubPrices(prev => { const s = new Set(prev); s.delete(msiId); return s })
+      }
+    }
+  }
+
+  const saveSubOptionPrice = async (
+    msiId: number,
+    kind: 'combo' | 'modifier',
+    optionId: number,
+    levelId: number,
+    price: number,
+  ) => {
+    const endpoint = kind === 'combo' ? 'combo-option-price' : 'modifier-option-price'
+    const body = kind === 'combo'
+      ? { combo_step_option_id: optionId, price_level_id: levelId, sell_price: Math.round(price * 10000) / 10000 }
+      : { modifier_option_id: optionId, price_level_id: levelId, sell_price: Math.round(price * 10000) / 10000 }
+    await api.put(`/menu-sales-items/${msiId}/${endpoint}`, body)
+    // Refresh cached sub-price data
+    try {
+      const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+      setSubPriceData(prev => ({ ...prev, [msiId]: d }))
+    } catch { /* ignore */ }
+  }
 
   async function commitInlinePrice(menuItemId: number) {
     if (!inlineEdit || inlineEdit.menuItemId !== menuItemId) return
@@ -1036,81 +1156,152 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
     const qty = item.qty % 1 === 0 ? String(item.qty) : item.qty.toFixed(2)
     const qtyLabel = `${qty} ${item.item_type === 'ingredient' ? item.base_unit_abbr : 'ptn'}`
     const isEditing = inlineEdit?.menuItemId === item.menu_item_id
+    const msiId = item.menu_sales_item_id
+    const hasSubItems = item.item_type === 'combo' || (item.modifier_group_count ?? 0) > 0
+    const isExpanded = expandedSubItems.has(msiId)
+    const subData = subPriceData[msiId]
+    const isLoadingSub = loadingSubPrices.has(msiId)
+    const levelId = typeof activeMenuLevel === 'number' ? activeMenuLevel : null
+
     return (
-      <tr key={item.menu_item_id} className={`border-b border-border last:border-0 hover:bg-surface-2/50 ${inGroup ? 'bg-surface' : ''}`}>
-        <td className="px-3 py-2.5 font-medium text-text-1">{item.display_name}</td>
-        {!groupByCategory && (
-          <td className="px-3 py-2.5 text-xs text-text-3">{item.category || dash}</td>
-        )}
-        <td className="px-3 py-2.5">
-          <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded capitalize">
-            {item.item_type === 'ingredient' ? 'Ingredient' : item.item_type === 'manual' ? 'Manual' : item.item_type === 'combo' ? 'Combo' : 'Recipe'}
-          </span>
-        </td>
-        <td className="px-3 py-2.5 text-right font-mono text-xs whitespace-nowrap text-text-2">{qtyLabel}</td>
-        <td className="px-3 py-2.5 text-right font-mono text-xs text-text-2">{sym}{fmt2(item.cost_per_portion)}</td>
-        {/* Gross Price — inline editable */}
-        <td className="px-3 py-2.5 text-right font-mono text-xs">
-          {isEditing ? (
-            <div className="flex items-center justify-end gap-1">
-              <span className="text-text-3 text-xs">{sym}</span>
-              <input
-                type="number" min="0" step="0.01"
-                className="input text-xs font-mono w-20 py-0.5 px-1 text-right"
-                value={inlineEdit!.value}
-                disabled={savingPrice}
-                autoFocus
-                onChange={e => setInlineEdit(ie => ie ? { ...ie, value: e.target.value } : ie)}
-                onKeyDown={async e => {
-                  if (e.key === 'Enter') await commitInlinePrice(item.menu_item_id)
-                  else if (e.key === 'Escape') setInlineEdit(null)
-                }}
-                onBlur={() => commitInlinePrice(item.menu_item_id)}
-              />
+      <Fragment key={item.menu_item_id}>
+        <tr className={`border-b border-border last:border-0 hover:bg-surface-2/50 ${inGroup ? 'bg-surface' : ''}`}>
+          <td className="px-3 py-2.5 font-medium text-text-1">
+            <div className="flex items-center gap-1.5">
+              {hasSubItems && (
+                <button
+                  className={`w-5 h-5 flex items-center justify-center rounded border text-[10px] transition-colors flex-shrink-0 ${isExpanded ? 'border-accent text-accent bg-accent-dim' : 'border-border text-text-3 hover:border-accent hover:text-accent'}`}
+                  onClick={() => toggleSubExpand(msiId)}
+                  title={isExpanded ? 'Collapse options/modifiers' : 'Expand to price options/modifiers'}
+                >{isExpanded ? '▼' : '▶'}</button>
+              )}
+              {item.display_name}
             </div>
-          ) : (
-            <span
-              className={`${hasLevel ? 'cursor-pointer hover:text-accent transition-colors' : ''} ${hasPrice ? 'text-text-1' : 'text-text-3'}`}
-              title={hasLevel ? `Click to edit gross price (${sym})` : 'Select a price level to edit prices'}
-              onClick={() => {
-                if (!hasLevel) return
-                setInlineEdit({ menuItemId: item.menu_item_id, value: hasPrice ? fmt2(item.sell_price_gross) : '' })
-              }}
-            >
-              {hasPrice ? `${sym}${fmt2(item.sell_price_gross)}` : <span className="text-text-3 text-xs italic">{hasLevel ? 'set price' : '—'}</span>}
-            </span>
+          </td>
+          {!groupByCategory && (
+            <td className="px-3 py-2.5 text-xs text-text-3">{item.category || dash}</td>
           )}
-        </td>
-        <td className="px-3 py-2.5 text-center text-xs">
-          {hasPrice
-            ? <span className="bg-surface-2 text-text-2 border border-border px-1.5 py-0.5 rounded">{item.tax_rate_pct}%</span>
-            : dash}
-        </td>
-        <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-text-1">{hasPrice ? `${sym}${fmt2(item.sell_price_net)}` : dash}</td>
-        <td className={`px-3 py-2.5 text-right font-mono text-xs ${hasPrice ? (item.gp_net >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
-          {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
-        </td>
-        <td
-          className={`px-3 py-2.5 text-right text-xs font-semibold ${hasPrice ? cogsColourClass(item.cogs_pct_net, cogsThresholds) : ''}`}
-          data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
-        >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
-        <td className="px-3 py-2.5">
-          {hasPrice ? (
-            <span className={`text-xs font-semibold ${cls === 'green' ? 'text-emerald-600' : cls === 'yellow' ? 'text-amber-500' : 'text-red-500'}`}>
-              {cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
+          <td className="px-3 py-2.5">
+            <span className="text-xs bg-surface-2 text-text-3 border border-border px-1.5 py-0.5 rounded capitalize">
+              {item.item_type === 'ingredient' ? 'Ingredient' : item.item_type === 'manual' ? 'Manual' : item.item_type === 'combo' ? 'Combo' : 'Recipe'}
             </span>
-          ) : dash}
-        </td>
-        <td className="px-3 py-1.5">
-          <button
-            className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
-            onClick={() => onDeleteItem(item.menu_item_id)}
-            title="Remove from menu"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
-          </button>
-        </td>
-      </tr>
+          </td>
+          <td className="px-3 py-2.5 text-right font-mono text-xs whitespace-nowrap text-text-2">{qtyLabel}</td>
+          <td className="px-3 py-2.5 text-right font-mono text-xs text-text-2">{sym}{fmt2(item.cost_per_portion)}</td>
+          {/* Gross Price — inline editable */}
+          <td className="px-3 py-2.5 text-right font-mono text-xs">
+            {isEditing ? (
+              <div className="flex items-center justify-end gap-1">
+                <span className="text-text-3 text-xs">{sym}</span>
+                <input
+                  type="number" min="0" step="0.01"
+                  className="input text-xs font-mono w-20 py-0.5 px-1 text-right"
+                  value={inlineEdit!.value}
+                  disabled={savingPrice}
+                  autoFocus
+                  onChange={e => setInlineEdit(ie => ie ? { ...ie, value: e.target.value } : ie)}
+                  onKeyDown={async e => {
+                    if (e.key === 'Enter') await commitInlinePrice(item.menu_item_id)
+                    else if (e.key === 'Escape') setInlineEdit(null)
+                  }}
+                  onBlur={() => commitInlinePrice(item.menu_item_id)}
+                />
+              </div>
+            ) : (
+              <span
+                className={`${hasLevel ? 'cursor-pointer hover:text-accent transition-colors' : ''} ${hasPrice ? 'text-text-1' : 'text-text-3'}`}
+                title={hasLevel ? `Click to edit gross price (${sym})` : 'Select a price level to edit prices'}
+                onClick={() => {
+                  if (!hasLevel) return
+                  setInlineEdit({ menuItemId: item.menu_item_id, value: hasPrice ? fmt2(item.sell_price_gross) : '' })
+                }}
+              >
+                {hasPrice ? `${sym}${fmt2(item.sell_price_gross)}` : <span className="text-text-3 text-xs italic">{hasLevel ? 'set price' : '—'}</span>}
+              </span>
+            )}
+          </td>
+          <td className="px-3 py-2.5 text-center text-xs">
+            {hasPrice
+              ? <span className="bg-surface-2 text-text-2 border border-border px-1.5 py-0.5 rounded">{item.tax_rate_pct}%</span>
+              : dash}
+          </td>
+          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold text-text-1">{hasPrice ? `${sym}${fmt2(item.sell_price_net)}` : dash}</td>
+          <td className={`px-3 py-2.5 text-right font-mono text-xs ${hasPrice ? (item.gp_net >= 0 ? 'text-emerald-600' : 'text-red-500') : ''}`}>
+            {hasPrice ? `${sym}${fmt2(item.gp_net)}` : dash}
+          </td>
+          <td
+            className={`px-3 py-2.5 text-right text-xs font-semibold ${hasPrice ? cogsColourClass(item.cogs_pct_net, cogsThresholds) : ''}`}
+            data-ai-context={hasPrice ? JSON.stringify({ type: 'cogs_pct', value: `${item.cogs_pct_net.toFixed(1)}%`, item: item.display_name, menu: menu.name }) : undefined}
+          >{hasPrice ? `${item.cogs_pct_net.toFixed(1)}%` : dash}</td>
+          <td className="px-3 py-2.5">
+            {hasPrice ? (
+              <span className={`text-xs font-semibold ${cls === 'green' ? 'text-emerald-600' : cls === 'yellow' ? 'text-amber-500' : 'text-red-500'}`}>
+                {cls === 'green' ? '✓ Excellent' : cls === 'yellow' ? '~ Acceptable' : '! Review'}
+              </span>
+            ) : dash}
+          </td>
+          <td className="px-3 py-1.5">
+            <button
+              className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors"
+              onClick={() => onDeleteItem(item.menu_item_id)}
+              title="Remove from menu"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+            </button>
+          </td>
+        </tr>
+        {/* ── Sub-price expand rows ── */}
+        {isExpanded && (isLoadingSub ? (
+          <tr className="bg-accent-dim/20">
+            <td colSpan={colCount + 1} className="px-6 py-2 text-xs text-text-3">Loading…</td>
+          </tr>
+        ) : subData ? (
+          <Fragment key={`${msiId}-sub`}>
+            {/* Combo: steps → options */}
+            {subData.combo_steps.map(step => (
+              <Fragment key={`${msiId}-step-${step.id}`}>
+                <tr className="bg-surface-2 border-b border-border">
+                  <td colSpan={colCount + 1} className="px-6 py-1.5">
+                    <span className="text-xs font-semibold text-text-2">Step: {step.name}</span>
+                    <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
+                  </td>
+                </tr>
+                {step.options.map(opt => (
+                  <Fragment key={`${msiId}-copt-${opt.id}`}>
+                    <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
+                    {opt.modifier_groups.map(mg => (
+                      <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
+                        <tr className="bg-accent-dim/10 border-b border-border">
+                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3.5rem' }}>
+                            <span className="text-xs text-text-3 font-medium">↳ {mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                          </td>
+                        </tr>
+                        {mg.options.map(mopt => (
+                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={14} onSave={saveSubOptionPrice} />
+                        ))}
+                      </Fragment>
+                    ))}
+                  </Fragment>
+                ))}
+              </Fragment>
+            ))}
+            {/* Sales item modifiers */}
+            {subData.modifier_groups.map(mg => (
+              <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
+                <tr className="bg-surface-2 border-b border-border">
+                  <td colSpan={colCount + 1} className="px-6 py-1.5">
+                    <span className="text-xs font-semibold text-text-2">{mg.name}</span>
+                    <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                  </td>
+                </tr>
+                {mg.options.map(opt => (
+                  <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
+                ))}
+              </Fragment>
+            ))}
+          </Fragment>
+        ) : null)}
+      </Fragment>
     )
   }
 

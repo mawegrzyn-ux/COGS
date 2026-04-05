@@ -243,4 +243,210 @@ router.get('/:id/price-diff', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Helpers: load sub-price structure ────────────────────────────────────────
+
+async function loadModifierGroupsForItem(salesItemId, msiId) {
+  const { rows: mgRows } = await pool.query(
+    `SELECT mg.id AS modifier_group_id, mg.name, mg.min_select, mg.max_select
+     FROM   mcogs_sales_item_modifier_groups simgj
+     JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
+     WHERE  simgj.sales_item_id = $1
+     ORDER  BY simgj.sort_order, mg.name`,
+    [salesItemId]
+  );
+  if (!mgRows.length) return [];
+
+  const mgIds = mgRows.map(r => r.modifier_group_id);
+  const { rows: optRows } = await pool.query(
+    `SELECT mo.id, mo.modifier_group_id, mo.name, mo.item_type
+     FROM   mcogs_modifier_options mo
+     WHERE  mo.modifier_group_id = ANY($1)
+     ORDER  BY mo.sort_order, mo.id`,
+    [mgIds]
+  );
+
+  const optIds = optRows.map(o => o.id);
+  const priceMap = {};
+  if (optIds.length) {
+    const { rows: pr } = await pool.query(
+      `SELECT modifier_option_id, price_level_id, sell_price
+       FROM   mcogs_menu_modifier_option_prices
+       WHERE  menu_sales_item_id = $1 AND modifier_option_id = ANY($2)`,
+      [msiId, optIds]
+    );
+    for (const p of pr) {
+      if (!priceMap[p.modifier_option_id]) priceMap[p.modifier_option_id] = {};
+      priceMap[p.modifier_option_id][p.price_level_id] = Number(p.sell_price);
+    }
+  }
+
+  const optByMg = {};
+  for (const o of optRows) {
+    if (!optByMg[o.modifier_group_id]) optByMg[o.modifier_group_id] = [];
+    optByMg[o.modifier_group_id].push({ id: o.id, name: o.name, item_type: o.item_type, prices: priceMap[o.id] || {} });
+  }
+  return mgRows.map(mg => ({
+    modifier_group_id: mg.modifier_group_id,
+    name: mg.name,
+    min_select: mg.min_select,
+    max_select: mg.max_select,
+    options: optByMg[mg.modifier_group_id] || [],
+  }));
+}
+
+async function loadComboStructure(comboId, msiId) {
+  const { rows: steps } = await pool.query(
+    `SELECT id, name, sort_order, min_select, max_select
+     FROM   mcogs_combo_steps WHERE combo_id = $1 ORDER BY sort_order`, [comboId]
+  );
+  if (!steps.length) return [];
+
+  const stepIds = steps.map(s => s.id);
+  const { rows: opts } = await pool.query(
+    `SELECT cso.id, cso.combo_step_id, cso.name, cso.item_type
+     FROM   mcogs_combo_step_options cso
+     WHERE  cso.combo_step_id = ANY($1) ORDER BY cso.sort_order`, [stepIds]
+  );
+
+  const optIds = opts.map(o => o.id);
+  const priceMap = {};
+  if (optIds.length) {
+    const { rows: pr } = await pool.query(
+      `SELECT combo_step_option_id, price_level_id, sell_price
+       FROM   mcogs_menu_combo_option_prices
+       WHERE  menu_sales_item_id = $1 AND combo_step_option_id = ANY($2)`,
+      [msiId, optIds]
+    );
+    for (const p of pr) {
+      if (!priceMap[p.combo_step_option_id]) priceMap[p.combo_step_option_id] = {};
+      priceMap[p.combo_step_option_id][p.price_level_id] = Number(p.sell_price);
+    }
+  }
+
+  // Load modifier groups for each combo step option
+  const optModMap = {};
+  if (optIds.length) {
+    const { rows: csomgRows } = await pool.query(
+      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.min_select, mg.max_select
+       FROM   mcogs_combo_step_option_modifier_groups csomg
+       JOIN   mcogs_modifier_groups mg ON mg.id = csomg.modifier_group_id
+       WHERE  csomg.combo_step_option_id = ANY($1) ORDER BY csomg.sort_order, mg.name`, [optIds]
+    );
+    const optMgIds = [...new Set(csomgRows.map(r => r.modifier_group_id))];
+    if (optMgIds.length) {
+      const { rows: modOptRows } = await pool.query(
+        `SELECT mo.id, mo.modifier_group_id, mo.name, mo.item_type
+         FROM   mcogs_modifier_options mo
+         WHERE  mo.modifier_group_id = ANY($1) ORDER BY mo.sort_order`, [optMgIds]
+      );
+      const modOptIds = modOptRows.map(o => o.id);
+      const modPriceMap = {};
+      if (modOptIds.length) {
+        const { rows: mpr } = await pool.query(
+          `SELECT modifier_option_id, price_level_id, sell_price
+           FROM   mcogs_menu_modifier_option_prices
+           WHERE  menu_sales_item_id = $1 AND modifier_option_id = ANY($2)`,
+          [msiId, modOptIds]
+        );
+        for (const p of mpr) {
+          if (!modPriceMap[p.modifier_option_id]) modPriceMap[p.modifier_option_id] = {};
+          modPriceMap[p.modifier_option_id][p.price_level_id] = Number(p.sell_price);
+        }
+      }
+      const modOptByMg = {};
+      for (const o of modOptRows) {
+        if (!modOptByMg[o.modifier_group_id]) modOptByMg[o.modifier_group_id] = [];
+        modOptByMg[o.modifier_group_id].push({ id: o.id, name: o.name, item_type: o.item_type, prices: modPriceMap[o.id] || {} });
+      }
+      for (const r of csomgRows) {
+        if (!optModMap[r.combo_step_option_id]) optModMap[r.combo_step_option_id] = [];
+        optModMap[r.combo_step_option_id].push({
+          modifier_group_id: r.modifier_group_id, name: r.name,
+          min_select: r.min_select, max_select: r.max_select,
+          options: modOptByMg[r.modifier_group_id] || [],
+        });
+      }
+    }
+  }
+
+  const optByStep = {};
+  for (const o of opts) {
+    if (!optByStep[o.combo_step_id]) optByStep[o.combo_step_id] = [];
+    optByStep[o.combo_step_id].push({
+      id: o.id, name: o.name, item_type: o.item_type,
+      prices: priceMap[o.id] || {},
+      modifier_groups: optModMap[o.id] || [],
+    });
+  }
+  return steps.map(s => ({
+    id: s.id, name: s.name, sort_order: s.sort_order,
+    min_select: s.min_select, max_select: s.max_select,
+    options: optByStep[s.id] || [],
+  }));
+}
+
+// ─── GET /menu-sales-items/:id/sub-prices ─────────────────────────────────────
+// Returns combo steps/options structure + modifier groups/options with menu-level prices
+router.get('/:id/sub-prices', async (req, res, next) => {
+  try {
+    const msiId = Number(req.params.id);
+    const { rows: msiRows } = await pool.query(
+      `SELECT msi.id, msi.sales_item_id, si.item_type, si.combo_id,
+              (SELECT COUNT(*) FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
+       FROM   mcogs_menu_sales_items msi
+       JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+       WHERE  msi.id = $1`, [msiId]
+    );
+    if (!msiRows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    const msi = msiRows[0];
+
+    const [modifierGroups, comboSteps] = await Promise.all([
+      Number(msi.modifier_group_count) > 0
+        ? loadModifierGroupsForItem(msi.sales_item_id, msiId)
+        : Promise.resolve([]),
+      msi.item_type === 'combo' && msi.combo_id
+        ? loadComboStructure(msi.combo_id, msiId)
+        : Promise.resolve([]),
+    ]);
+
+    res.json({ item_type: msi.item_type, combo_steps: comboSteps, modifier_groups: modifierGroups });
+  } catch (err) { next(err); }
+});
+
+// ─── PUT /menu-sales-items/:id/combo-option-price ─────────────────────────────
+router.put('/:id/combo-option-price', async (req, res, next) => {
+  try {
+    const { combo_step_option_id, price_level_id, sell_price } = req.body;
+    if (!combo_step_option_id || !price_level_id) {
+      return res.status(400).json({ error: { message: 'combo_step_option_id and price_level_id are required' } });
+    }
+    await pool.query(
+      `INSERT INTO mcogs_menu_combo_option_prices (menu_sales_item_id, combo_step_option_id, price_level_id, sell_price)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (menu_sales_item_id, combo_step_option_id, price_level_id)
+       DO UPDATE SET sell_price = $4`,
+      [req.params.id, combo_step_option_id, price_level_id, sell_price ?? 0]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─── PUT /menu-sales-items/:id/modifier-option-price ─────────────────────────
+router.put('/:id/modifier-option-price', async (req, res, next) => {
+  try {
+    const { modifier_option_id, price_level_id, sell_price } = req.body;
+    if (!modifier_option_id || !price_level_id) {
+      return res.status(400).json({ error: { message: 'modifier_option_id and price_level_id are required' } });
+    }
+    await pool.query(
+      `INSERT INTO mcogs_menu_modifier_option_prices (menu_sales_item_id, modifier_option_id, price_level_id, sell_price)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (menu_sales_item_id, modifier_option_id, price_level_id)
+       DO UPDATE SET sell_price = $4`,
+      [req.params.id, modifier_option_id, price_level_id, sell_price ?? 0]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

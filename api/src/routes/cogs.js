@@ -953,7 +953,8 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
              r.yield_qty,
              r.name        AS recipe_name,
              ing.name      AS ingredient_name,
-             u.abbreviation AS base_unit_abbr
+             u.abbreviation AS base_unit_abbr,
+             (SELECT COUNT(*)::int FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
       FROM   mcogs_menu_sales_items msi
       JOIN   mcogs_sales_items       si        ON si.id        = msi.sales_item_id
       LEFT JOIN mcogs_categories     cat       ON cat.id       = si.category_id
