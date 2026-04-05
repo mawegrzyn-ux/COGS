@@ -48,7 +48,7 @@ interface Combo {
 interface SalesItem {
   id: number
   item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
-  name: string
+  name: string; display_name?: string | null
   category_id: number | null; category_name: string | null
   description: string | null
   recipe_id: number | null; recipe_name?: string
@@ -577,7 +577,7 @@ export default function SalesItemsPage() {
 
   // ── Panel edit form ─────────────────────────────────────────────────────────
   type PanelForm = {
-    name: string; category_id: string; description: string
+    name: string; display_name: string | null; category_id: string; description: string
     item_type: SalesItem['item_type']
     recipe_id: number | null; ingredient_id: number | null
     combo_id: number | null; manual_cost: number | null
@@ -585,6 +585,7 @@ export default function SalesItemsPage() {
   }
   const blankPanelForm = (si: SalesItem): PanelForm => ({
     name:          si.name,
+    display_name:  si.display_name  ?? null,
     category_id:   si.category_id ? String(si.category_id) : '',
     description:   si.description ?? '',
     item_type:     si.item_type,
@@ -602,6 +603,8 @@ export default function SalesItemsPage() {
   const [panelIngOpen,       setPanelIngOpen]       = useState(false)
   const [panelComboSearch,   setPanelComboSearch]   = useState('')
   const [panelComboOpen,     setPanelComboOpen]     = useState(false)
+  const [panelMarkets,     setPanelMarkets]     = useState<number[]>([])
+  const [panelMktSaving,   setPanelMktSaving]   = useState(false)
 
   // Populate form when selection changes
   useEffect(() => {
@@ -610,11 +613,28 @@ export default function SalesItemsPage() {
     if (!si) return
     const f = blankPanelForm(si)
     setPanelForm(f)
+    setPanelMarkets((si.markets || []).filter(m => m.is_active).map(m => m.country_id))
     setPanelRecipeSearch(si.recipe_name     ?? '')
     setPanelIngSearch(si.ingredient_name    ?? '')
     setPanelComboSearch(si.combo_name       ?? '')
     setPanelRecipeOpen(false); setPanelIngOpen(false); setPanelComboOpen(false)
   }, [selectedSiId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const togglePanelMarket = async (countryId: number) => {
+    if (!selectedSiId || panelMktSaving) return
+    const newIds = panelMarkets.includes(countryId)
+      ? panelMarkets.filter(id => id !== countryId)
+      : [...panelMarkets, countryId]
+    setPanelMarkets(newIds)
+    setPanelMktSaving(true)
+    try {
+      await api.put(`/sales-items/${selectedSiId}/markets`, { country_ids: newIds })
+      setSalesItems(prev => prev.map(s => s.id === selectedSiId
+        ? { ...s, markets: (s.markets || []).map(m => ({ ...m, is_active: newIds.includes(m.country_id) })) }
+        : s
+      ))
+    } catch { showToast('Failed to update markets') } finally { setPanelMktSaving(false) }
+  }
 
   const savePanelItem = async () => {
     if (!selectedSiId || !panelForm || !panelForm.name.trim()) return
@@ -623,6 +643,7 @@ export default function SalesItemsPage() {
       const payload = {
         ...panelForm,
         name:          panelForm.name.trim(),
+        display_name:  panelForm.display_name?.trim() || null,
         category_id:   Number(panelForm.category_id) || null,
         description:   panelForm.description.trim() || null,
         recipe_id:     panelForm.item_type === 'recipe'      ? panelForm.recipe_id     : null,
@@ -1047,11 +1068,14 @@ export default function SalesItemsPage() {
                           </td>
                           <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span></td>
                           <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center gap-1.5">
-                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button className="text-red-400 hover:text-red-600 px-1 text-base leading-none" title="Delete" onClick={() => setDeleting(si)}>⊘</button>
-                              </div>
-                            </div>
+                            <button
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-red-300 hover:text-red-600 hover:bg-red-50"
+                              title="Delete"
+                              onClick={() => setDeleting(si)}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                              </svg>
+                            </button>
                           </td>
                         </tr>
                       )
@@ -1067,7 +1091,6 @@ export default function SalesItemsPage() {
             if (!si) return null
             const panelMgGroups    = siMgData[selectedSiId] ?? []
             const panelMgIsLoading = siMgLoading.has(selectedSiId)
-            const mkt = marketsDisplay(si)
             const unassignedMgs = modifierGroups.filter(mg => !panelMgGroups.some(a => a.modifier_group_id === mg.id))
             return (
               <div className="w-80 flex-shrink-0 border-l border-border bg-white flex flex-col">
@@ -1086,6 +1109,14 @@ export default function SalesItemsPage() {
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
                       <input className="input w-full text-sm" value={panelForm.name}
                         onChange={e => setPanelForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+
+                    {/* Display Name */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name <span className="font-normal normal-case text-text-3">(customer-facing)</span></label>
+                      <input className="input w-full text-sm" placeholder="Leave blank to use name"
+                        value={panelForm.display_name ?? ''}
+                        onChange={e => setPanelForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
                     </div>
 
                     {/* Item Type */}
@@ -1196,19 +1227,25 @@ export default function SalesItemsPage() {
                     </div>
 
                     {/* Image */}
-                    <div>
-                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Image URL</label>
-                      <input className="input w-full text-sm" placeholder="https://…" value={panelForm.image_url ?? ''}
-                        onChange={e => setPanelForm(f => f ? { ...f, image_url: e.target.value || null } : f)} />
-                      {panelForm.image_url && (
-                        <img src={panelForm.image_url} alt="" className="mt-2 w-full h-24 object-cover rounded border border-border" onError={e => (e.currentTarget.style.display = 'none')} />
-                      )}
-                    </div>
+                    <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} />
 
-                    {/* Markets badge (read-only — manage via market settings) */}
+                    {/* Markets — per-country toggles */}
                     <div>
-                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Markets</label>
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">
+                        Markets {panelMktSaving && <span className="font-normal text-text-3 normal-case">saving…</span>}
+                      </label>
+                      {countries.length === 0 && <p className="text-xs text-text-3 italic">No markets configured</p>}
+                      <div className="space-y-1">
+                        {countries.map(country => (
+                          <label key={country.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                            <input type="checkbox"
+                              checked={panelMarkets.includes(country.id)}
+                              onChange={() => togglePanelMarket(country.id)}
+                              disabled={panelMktSaving} />
+                            <span className="text-text-2">{country.name}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Modifier groups (unchanged) */}
@@ -1265,16 +1302,20 @@ export default function SalesItemsPage() {
                   </div>
                 )}
 
-                {/* Panel footer — Save + Delete */}
-                <div className="px-4 py-3 border-t border-border flex gap-2">
+                {/* Panel footer — Save + Delete icon */}
+                <div className="px-4 py-3 border-t border-border flex gap-2 items-center">
                   <button className="btn btn-sm btn-primary flex-1"
                     disabled={panelSaving || !panelForm?.name.trim()}
                     onClick={savePanelItem}>
                     {panelSaving ? 'Saving…' : 'Save'}
                   </button>
-                  <button className="btn btn-sm btn-danger"
+                  <button
+                    className="p-2 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    title="Delete this sales item"
                     onClick={() => { setDeleting(si as SalesItem); setSelectedSiId(null) }}>
-                    Delete
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                    </svg>
                   </button>
                 </div>
               </div>

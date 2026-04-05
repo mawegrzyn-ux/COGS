@@ -989,6 +989,9 @@ const migrations = [
   `ALTER TABLE mcogs_combo_steps         ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
   `ALTER TABLE mcogs_combo_step_options  ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
 
+  // ── 79. Add display_name to sales items ──────────────────────────────────
+  `ALTER TABLE mcogs_sales_items ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,

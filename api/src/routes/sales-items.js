@@ -137,16 +137,16 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /sales-items ────────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { item_type, name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
+    const { item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
     if (!item_type || !name) return res.status(400).json({ error: { message: 'item_type and name are required' } });
     if (!['recipe','ingredient','manual','combo'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, manual, or combo' } });
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_sales_items (item_type, name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [item_type, name.trim(), category_id || null, description || null,
+      `INSERT INTO mcogs_sales_items (item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [item_type, name.trim(), display_name?.trim() || null, category_id || null, description || null,
        recipe_id || null, ingredient_id || null, combo_id || null,
        manual_cost || null, image_url || null, sort_order || 0]
     );
@@ -158,13 +158,13 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /sales-items/:id ─────────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
+    const { name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_sales_items
-       SET name=$1, category_id=$2, description=$3, recipe_id=$4, ingredient_id=$5, combo_id=$6,
-           manual_cost=$7, image_url=$8, sort_order=$9, updated_at=NOW()
-       WHERE id=$10 RETURNING *`,
-      [name?.trim(), category_id || null, description || null,
+       SET name=$1, display_name=$2, category_id=$3, description=$4, recipe_id=$5, ingredient_id=$6, combo_id=$7,
+           manual_cost=$8, image_url=$9, sort_order=$10, updated_at=NOW()
+       WHERE id=$11 RETURNING *`,
+      [name?.trim(), display_name?.trim() || null, category_id || null, description || null,
        recipe_id || null, ingredient_id || null, combo_id || null,
        manual_cost || null, image_url || null, sort_order || 0, req.params.id]
     );
