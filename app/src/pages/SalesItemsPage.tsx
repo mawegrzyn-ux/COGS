@@ -549,6 +549,7 @@ export default function SalesItemsPage() {
   const [cpOptRecipeOpen,    setCpOptRecipeOpen]    = useState(false)
   const [cpOptIngOpen,       setCpOptIngOpen]       = useState(false)
   const [cpOptSiOpen,        setCpOptSiOpen]        = useState(false)
+  const [cpOptMgOpen,        setCpOptMgOpen]        = useState(false)
   const [savingCombo,        setSavingCombo]        = useState(false)
   const [deletingCombo,      setDeletingCombo]      = useState<Combo | null>(null)
 
@@ -627,7 +628,7 @@ export default function SalesItemsPage() {
       setCpOptRecipeSearch(o.recipe_name ?? '')
       setCpOptIngSearch(o.ingredient_name ?? '')
       setCpOptSiSearch(o.sales_item_name ?? '')
-      setCpOptRecipeOpen(false); setCpOptIngOpen(false); setCpOptSiOpen(false)
+      setCpOptRecipeOpen(false); setCpOptIngOpen(false); setCpOptSiOpen(false); setCpOptMgOpen(false)
       setCpComboForm(null); setCpStepForm(null)
     }
   }, [comboEditTarget]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1512,14 +1513,47 @@ export default function SalesItemsPage() {
                       {modifierGroups.length > 0 && (
                         <div>
                           <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Modifier Groups</label>
-                          <div className="space-y-1 max-h-40 overflow-y-auto">
-                            {modifierGroups.map(mg => (
-                              <label key={mg.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                                <input type="checkbox" checked={cpOptMgIds.includes(mg.id)}
-                                  onChange={e => setCpOptMgIds(ids => e.target.checked ? [...ids, mg.id] : ids.filter(id => id !== mg.id))} />
-                                <span>{mg.name}</span>
-                              </label>
-                            ))}
+                          <div className="relative">
+                            {/* Dropdown trigger — styled like other inputs */}
+                            <button
+                              type="button"
+                              className="w-full flex items-center justify-between px-3 py-2 text-sm border border-border rounded-lg bg-white hover:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 transition-colors"
+                              onClick={() => setCpOptMgOpen(o => !o)}
+                            >
+                              <span className={cpOptMgIds.length === 0 ? 'text-text-3' : 'text-text-1'}>
+                                {cpOptMgIds.length === 0
+                                  ? 'None selected'
+                                  : cpOptMgIds.length === 1
+                                    ? modifierGroups.find(mg => mg.id === cpOptMgIds[0])?.name ?? '1 selected'
+                                    : `${cpOptMgIds.length} selected`}
+                              </span>
+                              <svg className={`shrink-0 transition-transform ${cpOptMgOpen ? 'rotate-180' : ''}`}
+                                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M6 9l6 6 6-6"/>
+                              </svg>
+                            </button>
+                            {/* Dropdown panel */}
+                            {cpOptMgOpen && (
+                              <>
+                                <div className="fixed inset-0 z-40" onClick={() => setCpOptMgOpen(false)} />
+                                <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-border rounded-lg shadow-lg overflow-hidden">
+                                  <div className="max-h-44 overflow-y-auto py-1">
+                                    {modifierGroups.map(mg => (
+                                      <label key={mg.id} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer hover:bg-accent-dim select-none">
+                                        <input type="checkbox"
+                                          className="accent-accent"
+                                          checked={cpOptMgIds.includes(mg.id)}
+                                          onChange={e => setCpOptMgIds(ids => e.target.checked ? [...ids, mg.id] : ids.filter(id => id !== mg.id))} />
+                                        <span className="text-text-1">{mg.name}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                  <div className="border-t border-border px-3 py-1.5 flex justify-end">
+                                    <button className="text-xs text-accent hover:underline" onClick={() => setCpOptMgOpen(false)}>Done</button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </div>
                       )}

@@ -148,37 +148,49 @@ router.get('/recipe/:id', async (req, res) => {
 
 // ── GET /allergens/menu/:id — allergen matrix for a whole menu ─────────────────
 // Returns: { allergens: [...], items: [{ menu_item_id, display_name, allergens: { [code]: status|null } }] }
+// Supports menus using mcogs_menu_sales_items (new) with fallback to mcogs_menu_items (legacy).
 router.get('/menu/:id', async (req, res) => {
   try {
+    const menuId = Number(req.params.id);
+
     const { rows: allAllergens } = await pool.query(
       `SELECT * FROM mcogs_allergens ORDER BY sort_order ASC`
     );
 
-    // All items on this menu
+    // ── Load menu items from mcogs_menu_sales_items (new) ─────────────────────
     const { rows: menuItems } = await pool.query(`
-      SELECT mi.id, mi.display_name, mi.item_type, mi.recipe_id, mi.ingredient_id,
-             mi.allergen_notes,
-             r.name AS recipe_name, rcat.name AS recipe_category,
-             ing.name AS ingredient_name, icat.name AS ingredient_category
-      FROM   mcogs_menu_items mi
-      LEFT JOIN mcogs_recipes     r    ON r.id   = mi.recipe_id
-      LEFT JOIN mcogs_categories  rcat ON rcat.id = r.category_id
-      LEFT JOIN mcogs_ingredients ing  ON ing.id  = mi.ingredient_id
-      LEFT JOIN mcogs_categories  icat ON icat.id = ing.category_id
-      WHERE  mi.menu_id = $1
-      ORDER BY mi.sort_order ASC
-    `, [req.params.id]);
+      SELECT msi.id,
+             COALESCE(msi.display_name, si.display_name, si.name) AS display_name,
+             si.item_type,
+             si.recipe_id,
+             si.ingredient_id,
+             si.combo_id,
+             msi.allergen_notes,
+             r.name    AS recipe_name,
+             rcat.name AS recipe_category,
+             ing.name  AS ingredient_name,
+             icat.name AS ingredient_category
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items      si   ON si.id   = msi.sales_item_id
+      LEFT JOIN mcogs_recipes       r    ON r.id    = si.recipe_id
+      LEFT JOIN mcogs_categories    rcat ON rcat.id = r.category_id
+      LEFT JOIN mcogs_ingredients   ing  ON ing.id  = si.ingredient_id
+      LEFT JOIN mcogs_categories    icat ON icat.id = ing.category_id
+      WHERE  msi.menu_id = $1
+      ORDER  BY msi.sort_order, msi.id
+    `, [menuId]);
 
     if (!menuItems.length) {
       return res.json({ allergens: allAllergens, items: [] });
     }
 
-    // Collect all ingredient IDs (direct + via recipes)
-    const recipeIds     = [...new Set(menuItems.filter(i => i.recipe_id).map(i => i.recipe_id))];
-    const directIngIds  = menuItems.filter(i => i.ingredient_id).map(i => i.ingredient_id);
+    // ── Collect recipe IDs and combo IDs ──────────────────────────────────────
+    const recipeIds   = [...new Set(menuItems.filter(i => i.recipe_id).map(i => i.recipe_id))];
+    const directIngIds = menuItems.filter(i => i.item_type === 'ingredient' && i.ingredient_id).map(i => i.ingredient_id);
+    const comboIds    = [...new Set(menuItems.filter(i => i.combo_id).map(i => i.combo_id))];
 
-    // Recipe → ingredient ids
-    let recipeIngMap = {};
+    // Recipe → ingredient IDs
+    const recipeIngMap = {};
     if (recipeIds.length) {
       const { rows: riRows } = await pool.query(`
         SELECT recipe_id, ingredient_id
@@ -191,14 +203,60 @@ router.get('/menu/:id', async (req, res) => {
       }
     }
 
-    // All ingredient IDs in scope
+    // Combo → ingredient IDs (via combo step options → recipe or ingredient)
+    const comboIngMap = {};
+    if (comboIds.length) {
+      // Step options that are direct ingredients
+      const { rows: ciIngRows } = await pool.query(`
+        SELECT cs.combo_id, cso.ingredient_id
+        FROM   mcogs_combo_steps       cs
+        JOIN   mcogs_combo_step_options cso ON cso.combo_step_id = cs.id
+        WHERE  cs.combo_id = ANY($1::int[])
+          AND  cso.item_type = 'ingredient'
+          AND  cso.ingredient_id IS NOT NULL
+      `, [comboIds]);
+      for (const row of ciIngRows) {
+        if (!comboIngMap[row.combo_id]) comboIngMap[row.combo_id] = [];
+        comboIngMap[row.combo_id].push(row.ingredient_id);
+      }
+
+      // Step options that are recipes → resolve to ingredient IDs
+      const { rows: ciRecRows } = await pool.query(`
+        SELECT cs.combo_id, cso.recipe_id
+        FROM   mcogs_combo_steps       cs
+        JOIN   mcogs_combo_step_options cso ON cso.combo_step_id = cs.id
+        WHERE  cs.combo_id = ANY($1::int[])
+          AND  cso.item_type = 'recipe'
+          AND  cso.recipe_id IS NOT NULL
+      `, [comboIds]);
+      if (ciRecRows.length) {
+        const comboRecipeIds = [...new Set(ciRecRows.map(r => r.recipe_id))];
+        const { rows: riRows } = await pool.query(`
+          SELECT recipe_id, ingredient_id
+          FROM   mcogs_recipe_items
+          WHERE  recipe_id = ANY($1::int[]) AND item_type = 'ingredient'
+        `, [comboRecipeIds]);
+        const crIngMap = {};
+        for (const ri of riRows) {
+          if (!crIngMap[ri.recipe_id]) crIngMap[ri.recipe_id] = [];
+          crIngMap[ri.recipe_id].push(ri.ingredient_id);
+        }
+        for (const row of ciRecRows) {
+          if (!comboIngMap[row.combo_id]) comboIngMap[row.combo_id] = [];
+          comboIngMap[row.combo_id].push(...(crIngMap[row.recipe_id] || []));
+        }
+      }
+    }
+
+    // All ingredient IDs across all sources
     const allIngIds = [...new Set([
       ...directIngIds,
       ...Object.values(recipeIngMap).flat(),
+      ...Object.values(comboIngMap).flat(),
     ])];
 
-    // Load all allergen data for these ingredients
-    let ingAllergenMap = {};
+    // Load allergen data for all ingredients
+    const ingAllergenMap = {};
     if (allIngIds.length) {
       const { rows: iaRows } = await pool.query(`
         SELECT ia.ingredient_id, ia.allergen_id, ia.status, a.code
@@ -229,16 +287,19 @@ router.get('/menu/:id', async (req, res) => {
 
     const items = menuItems.map(mi => {
       const display = mi.display_name?.trim() || mi.recipe_name || mi.ingredient_name || '—';
+
       let ingIds = [];
       if (mi.item_type === 'ingredient' && mi.ingredient_id) {
         ingIds = [mi.ingredient_id];
-      } else if (mi.recipe_id) {
+      } else if (mi.item_type === 'recipe' && mi.recipe_id) {
         ingIds = recipeIngMap[mi.recipe_id] || [];
+      } else if (mi.item_type === 'combo' && mi.combo_id) {
+        ingIds = [...new Set(comboIngMap[mi.combo_id] || [])];
       }
+      // manual items have no ingredient link — ingIds stays []
 
       const agg = aggregateAllergens(ingIds);
 
-      // Build allergen map keyed by allergen code
       const allergenStatus = {};
       for (const a of allAllergens) {
         const found = Object.values(agg).find(v => v.code === a.code);
@@ -249,7 +310,14 @@ router.get('/menu/:id', async (req, res) => {
         ? (mi.ingredient_category || null)
         : (mi.recipe_category || null);
 
-      return { menu_item_id: mi.id, display_name: display, item_type: mi.item_type, category, allergens: allergenStatus, allergen_notes: mi.allergen_notes ?? null };
+      return {
+        menu_item_id:   mi.id,
+        display_name:   display,
+        item_type:      mi.item_type,
+        category,
+        allergens:      allergenStatus,
+        allergen_notes: mi.allergen_notes ?? null,
+      };
     });
 
     res.json({ allergens: allAllergens, items });
@@ -259,12 +327,12 @@ router.get('/menu/:id', async (req, res) => {
   }
 });
 
-// ── PATCH /allergens/menu-item/:id/notes — save allergen notes on a menu item
+// ── PATCH /allergens/menu-item/:id/notes — save allergen notes on a menu sales item
 router.patch('/menu-item/:id/notes', async (req, res) => {
   const { allergen_notes = null } = req.body;
   try {
     await pool.query(
-      `UPDATE mcogs_menu_items SET allergen_notes = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE mcogs_menu_sales_items SET allergen_notes = $1 WHERE id = $2`,
       [allergen_notes || null, Number(req.params.id)]
     );
     res.json({ ok: true });
