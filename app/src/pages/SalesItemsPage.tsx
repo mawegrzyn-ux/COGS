@@ -60,6 +60,13 @@ interface SalesItem {
   modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
 }
 
+// ── Combo panel edit target ────────────────────────────────────────────────────
+type ComboEditTarget =
+  | { type: 'combo';  combo: Combo }
+  | { type: 'step';   step: ComboStep }
+  | { type: 'option'; stepId: number; opt: ComboStepOption }
+  | null
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const TYPE_BADGE: Record<string, string> = {
   recipe:     'bg-blue-100 text-blue-700',
@@ -664,12 +671,21 @@ export default function SalesItemsPage() {
   const [comboDetail,        setComboDetail]        = useState<Combo | null>(null)
   const [comboDetailLoading, setComboDetailLoading] = useState(false)
   const [expandedStep,       setExpandedStep]       = useState<number | null>(null)
-  const [editingStep,        setEditingStep]        = useState<number | null>(null)
-  const [editStepForm,       setEditStepForm]       = useState<{ display_name: string | null; min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean } | null>(null)
-  const [savingStep,         setSavingStep]         = useState(false)
-  const [editingOpt,         setEditingOpt]         = useState<ComboStepOption | null>(null)
-  const [editingOptStepId,   setEditingOptStepId]   = useState<number | null>(null)
-  const [comboModal,         setComboModal]         = useState<'new' | Combo | null>(null)
+  const [comboModal,         setComboModal]         = useState<'new' | null>(null)
+  // ── Combo side panel ─────────────────────────────────────────────────────
+  const [comboPanelWidth,    setComboPanelWidth]    = useState(360)
+  const [comboEditTarget,    setComboEditTarget]    = useState<ComboEditTarget>(null)
+  const [comboPanelSaving,   setComboPanelSaving]   = useState(false)
+  const [cpComboForm,        setCpComboForm]        = useState<{ name: string; description: string; category_id: string; image_url: string | null } | null>(null)
+  const [cpStepForm,         setCpStepForm]         = useState<{ name: string; display_name: string | null; min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean } | null>(null)
+  const [cpOptForm,          setCpOptForm]          = useState<ComboStepOption | null>(null)
+  const [cpOptMgIds,         setCpOptMgIds]         = useState<number[]>([])
+  const [cpOptRecipeSearch,  setCpOptRecipeSearch]  = useState('')
+  const [cpOptIngSearch,     setCpOptIngSearch]     = useState('')
+  const [cpOptSiSearch,      setCpOptSiSearch]      = useState('')
+  const [cpOptRecipeOpen,    setCpOptRecipeOpen]    = useState(false)
+  const [cpOptIngOpen,       setCpOptIngOpen]       = useState(false)
+  const [cpOptSiOpen,        setCpOptSiOpen]        = useState(false)
   const [savingCombo,        setSavingCombo]        = useState(false)
   const [deletingCombo,      setDeletingCombo]      = useState<Combo | null>(null)
 
@@ -694,17 +710,10 @@ export default function SalesItemsPage() {
   const saveCombo = async (payload: Partial<Combo>) => {
     setSavingCombo(true)
     try {
-      if (comboModal === 'new') {
-        const created: Combo = await api.post('/combos', payload)
-        setCombos(prev => [...prev, { ...created, step_count: 0 }].sort((a, b) => a.name.localeCompare(b.name)))
-        setSelectedComboId(created.id)
-        showToast('Combo created')
-      } else if (comboModal && typeof comboModal !== 'string') {
-        const updated: Combo = await api.put(`/combos/${comboModal.id}`, payload)
-        setCombos(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c))
-        if (selectedComboId === comboModal.id) setComboDetail(d => d ? { ...d, ...updated } : d)
-        showToast('Combo saved')
-      }
+      const created: Combo = await api.post('/combos', payload)
+      setCombos(prev => [...prev, { ...created, step_count: 0 }].sort((a, b) => a.name.localeCompare(b.name)))
+      setSelectedComboId(created.id)
+      showToast('Combo created')
       setComboModal(null)
     } catch { showToast('Save failed') } finally { setSavingCombo(false) }
   }
@@ -731,52 +740,79 @@ export default function SalesItemsPage() {
     } catch { showToast('Failed to add step') }
   }
 
-  const startEditStep = (step: ComboStep) => {
-    setEditingStep(step.id)
-    setEditStepForm({ display_name: step.display_name ?? null, min_select: step.min_select ?? 1, max_select: step.max_select ?? 1, allow_repeat: step.allow_repeat ?? false, auto_select: step.auto_select ?? false })
-  }
-
-  const saveStepSettings = async (stepId: number) => {
-    if (!editStepForm || !selectedComboId) return
-    setSavingStep(true)
-    try {
-      const step = (comboDetail?.steps || []).find(s => s.id === stepId)
-      await api.put(`/combos/${selectedComboId}/steps/${stepId}`, {
-        name: step?.name, description: step?.description, sort_order: step?.sort_order ?? 0, ...editStepForm,
-      })
-      await reloadComboDetail()
-      setEditingStep(null); setEditStepForm(null)
-    } catch { showToast('Failed to save step') } finally { setSavingStep(false) }
-  }
-
   const deleteComboStep = async (stepId: number) => {
     if (!window.confirm('Delete this step and all its options?') || !selectedComboId) return
     try { await api.delete(`/combos/${selectedComboId}/steps/${stepId}`); await reloadComboDetail() }
     catch { showToast('Failed') }
   }
 
-  const addOption = (stepId: number) => {
-    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: 0 })
-    setEditingOptStepId(stepId)
+  // Populate panel forms when the edit target changes
+  useEffect(() => {
+    if (!comboEditTarget) { setCpComboForm(null); setCpStepForm(null); setCpOptForm(null); return }
+    if (comboEditTarget.type === 'combo') {
+      const c = comboEditTarget.combo
+      setCpComboForm({ name: c.name, description: c.description ?? '', category_id: c.category_id ? String(c.category_id) : '', image_url: c.image_url ?? null })
+      setCpStepForm(null); setCpOptForm(null)
+    } else if (comboEditTarget.type === 'step') {
+      const s = comboEditTarget.step
+      setCpStepForm({ name: s.name, display_name: s.display_name ?? null, min_select: s.min_select ?? 1, max_select: s.max_select ?? 1, allow_repeat: s.allow_repeat ?? false, auto_select: s.auto_select ?? false })
+      setCpComboForm(null); setCpOptForm(null)
+    } else if (comboEditTarget.type === 'option') {
+      const o = comboEditTarget.opt
+      setCpOptForm({ ...o })
+      setCpOptMgIds((o.modifier_groups || []).map(m => m.modifier_group_id))
+      setCpOptRecipeSearch(o.recipe_name ?? '')
+      setCpOptIngSearch(o.ingredient_name ?? '')
+      setCpOptSiSearch(o.sales_item_name ?? '')
+      setCpOptRecipeOpen(false); setCpOptIngOpen(false); setCpOptSiOpen(false)
+      setCpComboForm(null); setCpStepForm(null)
+    }
+  }, [comboEditTarget]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveComboPanelItem = async () => {
+    if (!comboEditTarget || comboPanelSaving) return
+    setComboPanelSaving(true)
+    try {
+      if (comboEditTarget.type === 'combo' && cpComboForm) {
+        const payload = { ...cpComboForm, category_id: Number(cpComboForm.category_id) || null, description: cpComboForm.description.trim() || null }
+        const updated: Combo = await api.put(`/combos/${comboEditTarget.combo.id}`, payload)
+        setCombos(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c))
+        setComboDetail(d => d ? { ...d, ...updated } : d)
+        showToast('Combo saved')
+      } else if (comboEditTarget.type === 'step' && cpStepForm && selectedComboId) {
+        const step = comboEditTarget.step
+        await api.put(`/combos/${selectedComboId}/steps/${step.id}`, { name: cpStepForm.name, description: step.description, sort_order: step.sort_order ?? 0, display_name: cpStepForm.display_name, min_select: cpStepForm.min_select, max_select: cpStepForm.max_select, allow_repeat: cpStepForm.allow_repeat, auto_select: cpStepForm.auto_select })
+        await reloadComboDetail()
+        setComboEditTarget(null)
+        showToast('Step saved')
+      } else if (comboEditTarget.type === 'option' && cpOptForm && selectedComboId) {
+        const { stepId, opt } = comboEditTarget
+        const payload = { ...cpOptForm }
+        let savedId: number
+        if (opt.id === 0) {
+          const created: any = await api.post(`/combos/${selectedComboId}/steps/${stepId}/options`, payload)
+          savedId = created.id
+        } else {
+          await api.put(`/combos/${selectedComboId}/steps/${stepId}/options/${opt.id}`, payload)
+          savedId = opt.id
+        }
+        await api.put(`/combos/${selectedComboId}/steps/${stepId}/options/${savedId}/modifier-groups`, { modifier_group_ids: cpOptMgIds })
+        await reloadComboDetail()
+        setComboEditTarget(null)
+        showToast('Option saved')
+      }
+    } catch { showToast('Save failed') } finally { setComboPanelSaving(false) }
   }
 
-  const saveOption = async (opt: ComboStepOption) => {
-    if (!editingOptStepId || !selectedComboId) return
-    try {
-      let savedId: number
-      if (opt.id === 0) {
-        const created: any = await api.post(`/combos/${selectedComboId}/steps/${editingOptStepId}/options`, opt)
-        savedId = created.id
-      } else {
-        await api.put(`/combos/${selectedComboId}/steps/${editingOptStepId}/options/${opt.id}`, opt)
-        savedId = opt.id
-      }
-      // Persist modifier group assignments separately
-      const mgIds = (opt.modifier_groups || []).map(m => m.modifier_group_id)
-      await api.put(`/combos/${selectedComboId}/steps/${editingOptStepId}/options/${savedId}/modifier-groups`, { modifier_group_ids: mgIds })
-      await reloadComboDetail(); setEditingOpt(null)
-    } catch { showToast('Failed to save option') }
-  }
+  const startComboPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = comboPanelWidth
+    const onMove = (ev: MouseEvent) => setComboPanelWidth(Math.max(280, Math.min(600, startW - (ev.clientX - startX))))
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [comboPanelWidth])
 
   const deleteOption = async (stepId: number, optId: number) => {
     if (!window.confirm('Delete this option?') || !selectedComboId) return
@@ -1267,6 +1303,7 @@ export default function SalesItemsPage() {
           </aside>
 
           <div className="flex flex-1 min-h-0">
+          {/* ── Main scroll area ─────────────────────────────────────────────── */}
           <div className="flex-1 overflow-y-auto bg-gray-50 p-5">
             {!selectedComboId && <div className="flex items-center justify-center h-full text-sm text-gray-400">Select a combo to configure its steps.</div>}
             {selectedComboId && comboDetailLoading && <div className="flex items-center justify-center h-full"><Spinner /></div>}
@@ -1279,7 +1316,7 @@ export default function SalesItemsPage() {
                     {comboDetail.description && <p className="text-sm text-gray-400 mt-0.5">{comboDetail.description}</p>}
                   </div>
                   <div className="flex gap-2">
-                    <button className="btn btn-sm btn-outline" onClick={() => setComboModal(comboDetail)}>Edit</button>
+                    <button className="btn btn-sm btn-outline" onClick={() => setComboEditTarget({ type: 'combo', combo: comboDetail })}>Edit</button>
                     <button className="btn btn-sm btn-outline text-xs" disabled={duplicatingCombo} onClick={duplicateCombo}
                       title="Duplicate this combo with all its steps and options">
                       {duplicatingCombo ? '…' : 'Duplicate'}
@@ -1297,79 +1334,41 @@ export default function SalesItemsPage() {
                   {(comboDetail.steps || []).length === 0 && <p className="text-sm text-gray-400">No steps yet.</p>}
                   <div className="space-y-2">
                     {(comboDetail.steps || []).map(step => (
-                      <div key={step.id} className="border border-gray-200 rounded">
+                      <div key={step.id} className={`border rounded transition-colors ${comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id ? 'border-accent' : 'border-gray-200'}`}>
                         {/* Step header row */}
-                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100"
+                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t"
                           onClick={() => setExpandedStep(expandedStep === step.id ? null : step.id)}>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs text-gray-400">{expandedStep === step.id ? '▼' : '▶'}</span>
                             <span className="text-sm font-medium text-gray-800">{step.name}</span>
+                            {step.display_name && <span className="text-xs text-gray-400 italic">"{step.display_name}"</span>}
                             <span className="text-xs text-gray-400">({(step.options || []).length} option{(step.options || []).length !== 1 ? 's' : ''})</span>
-                            {/* Min/max/repeat summary badges */}
                             <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded" title="Min choices">min {step.min_select ?? 1}</span>
                             <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded" title="Max choices">max {step.max_select ?? 1}</span>
                             {step.allow_repeat && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded" title="Same option can be chosen multiple times">repeat ✓</span>}
                             {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                           </div>
                           <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                            <button className="btn btn-xs btn-outline" title="Step settings"
-                              onClick={() => { startEditStep(step); setExpandedStep(step.id) }}>⚙</button>
-                            <button className="btn btn-xs btn-primary" onClick={() => { addOption(step.id); setExpandedStep(step.id) }}>+ Option</button>
+                            <button className="btn btn-xs btn-outline" title="Edit step settings"
+                              onClick={() => { setComboEditTarget({ type: 'step', step }); setExpandedStep(step.id) }}>⚙</button>
+                            <button className="btn btn-xs btn-primary" onClick={() => {
+                              setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } })
+                              setExpandedStep(step.id)
+                            }}>+ Option</button>
                             <button className="btn btn-xs btn-danger" onClick={() => deleteComboStep(step.id)}>×</button>
                           </div>
                         </div>
-
-                        {/* Step settings inline editor */}
-                        {editingStep === step.id && editStepForm && (
-                          <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex flex-wrap items-center gap-4"
-                            onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center gap-1.5">
-                              <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Display name</label>
-                              <input className="input py-0.5 text-sm w-40" placeholder="Customer-facing name…"
-                                value={editStepForm.display_name ?? ''}
-                                onChange={e => setEditStepForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Min choices</label>
-                              <input type="number" min="0" className="input py-0.5 w-16 text-sm"
-                                value={editStepForm.min_select}
-                                onChange={e => setEditStepForm(f => f ? { ...f, min_select: Math.max(0, Number(e.target.value)) } : f)} />
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Max choices</label>
-                              <input type="number" min="1" className="input py-0.5 w-16 text-sm"
-                                value={editStepForm.max_select}
-                                onChange={e => setEditStepForm(f => f ? { ...f, max_select: Math.max(1, Number(e.target.value)) } : f)} />
-                            </div>
-                            <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 cursor-pointer select-none">
-                              <input type="checkbox" checked={editStepForm.allow_repeat}
-                                onChange={e => setEditStepForm(f => f ? { ...f, allow_repeat: e.target.checked } : f)} />
-                              Allow same option multiple times
-                            </label>
-                            {(step.options || []).length === 1 && (
-                              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 cursor-pointer select-none">
-                                <input type="checkbox" checked={editStepForm.auto_select}
-                                  onChange={e => setEditStepForm(f => f ? { ...f, auto_select: e.target.checked } : f)} />
-                                Auto-select this option
-                              </label>
-                            )}
-                            <div className="flex gap-1.5 ml-auto">
-                              <button className="btn btn-xs btn-primary" disabled={savingStep} onClick={() => saveStepSettings(step.id)}>
-                                {savingStep ? '…' : 'Save'}
-                              </button>
-                              <button className="btn btn-xs btn-ghost" onClick={() => { setEditingStep(null); setEditStepForm(null) }}>Cancel</button>
-                            </div>
-                          </div>
-                        )}
 
                         {/* Options list */}
                         {expandedStep === step.id && (
                           <div className="p-2 space-y-1">
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet.</p>}
                             {(step.options || []).map(opt => (
-                              <div key={opt.id} className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-gray-50">
+                              <div key={opt.id} className={`flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
+                                onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
                                 <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
                                 <span className="font-medium text-gray-800">{opt.name}</span>
+                                {opt.display_name && <span className="text-xs text-gray-400 italic shrink-0">"{opt.display_name}"</span>}
                                 {opt.recipe_name && (
                                   <span className="text-xs text-gray-400 shrink-0">
                                     → {opt.recipe_name} · <span className="text-gray-500 font-medium">{Number(opt.qty ?? 1)}</span> ptn
@@ -1387,18 +1386,14 @@ export default function SalesItemsPage() {
                                   </span>
                                 )}
                                 {opt.item_type === 'manual' && opt.manual_cost != null && <span className="text-xs text-gray-400 shrink-0">${Number(opt.manual_cost).toFixed(4)}</span>}
-                                {/* Modifier group badges */}
                                 {(opt.modifier_groups || []).length > 0 && (
                                   <div className="flex flex-wrap gap-1 ml-1">
                                     {(opt.modifier_groups || []).map(mg => (
-                                      <span key={mg.modifier_group_id} className="text-xs bg-purple-50 text-purple-600 border border-purple-200 px-1.5 py-0.5 rounded" title="Modifier group">
-                                        {mg.name}
-                                      </span>
+                                      <span key={mg.modifier_group_id} className="text-xs bg-purple-50 text-purple-600 border border-purple-200 px-1.5 py-0.5 rounded">{mg.name}</span>
                                     ))}
                                   </div>
                                 )}
-                                <div className="flex gap-1 shrink-0">
-                                  <button className="btn btn-xs btn-outline" onClick={() => { setEditingOpt(opt); setEditingOptStepId(step.id) }}>✎</button>
+                                <div className="flex gap-1 shrink-0 ml-auto" onClick={e => e.stopPropagation()}>
                                   <button className="text-xs text-red-400 hover:text-red-600 px-1" onClick={() => deleteOption(step.id, opt.id)}>×</button>
                                 </div>
                               </div>
@@ -1412,6 +1407,253 @@ export default function SalesItemsPage() {
               </div>
             )}
           </div>
+
+          {/* ── Drag handle ───────────────────────────────────────────────────── */}
+          {comboEditTarget && (
+            <div onMouseDown={startComboPanelResize}
+              className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize flex-shrink-0 transition-all" />
+          )}
+
+          {/* ── Right edit panel ──────────────────────────────────────────────── */}
+          {comboEditTarget && (
+            <div className="flex-shrink-0 border-l border-border bg-white flex flex-col overflow-hidden" style={{ width: comboPanelWidth }}>
+              {/* Panel header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+                <span className="font-semibold text-text-1 text-sm">
+                  {comboEditTarget.type === 'combo'  && 'Edit Combo'}
+                  {comboEditTarget.type === 'step'   && `Edit Step: ${(comboEditTarget as { type: 'step'; step: ComboStep }).step.name}`}
+                  {comboEditTarget.type === 'option' && ((comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === 0 ? 'Add Option' : `Edit Option: ${(comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.name}`)}
+                </span>
+                <button className="text-text-3 hover:text-text-1 flex-shrink-0 ml-2" onClick={() => setComboEditTarget(null)} title="Close">✕</button>
+              </div>
+
+              {/* Panel body */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+
+                {/* ── COMBO FORM ─────────────────────────────────────────────── */}
+                {comboEditTarget.type === 'combo' && cpComboForm && (
+                  <>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
+                      <input className="input w-full text-sm" value={cpComboForm.name}
+                        onChange={e => setCpComboForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
+                      <select className="input w-full text-sm" value={cpComboForm.category_id}
+                        onChange={e => setCpComboForm(f => f ? { ...f, category_id: e.target.value } : f)}>
+                        <option value="">No category…</option>
+                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Description</label>
+                      <textarea className="input w-full text-sm" rows={3} value={cpComboForm.description}
+                        onChange={e => setCpComboForm(f => f ? { ...f, description: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Image URL</label>
+                      <input className="input w-full text-sm" placeholder="https://…" value={cpComboForm.image_url ?? ''}
+                        onChange={e => setCpComboForm(f => f ? { ...f, image_url: e.target.value || null } : f)} />
+                      {cpComboForm.image_url && (
+                        <img src={cpComboForm.image_url} alt="" className="mt-2 w-full max-h-32 object-contain rounded border border-border" onError={e => (e.currentTarget.style.display = 'none')} />
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* ── STEP FORM ──────────────────────────────────────────────── */}
+                {comboEditTarget.type === 'step' && cpStepForm && (
+                  <>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Step Name *</label>
+                      <input className="input w-full text-sm" value={cpStepForm.name}
+                        onChange={e => setCpStepForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name <span className="font-normal normal-case">(customer-facing)</span></label>
+                      <input className="input w-full text-sm" placeholder="Leave blank to use step name"
+                        value={cpStepForm.display_name ?? ''}
+                        onChange={e => setCpStepForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Min Choices</label>
+                        <input type="number" min="0" className="input w-full text-sm" value={cpStepForm.min_select}
+                          onChange={e => setCpStepForm(f => f ? { ...f, min_select: Math.max(0, Number(e.target.value)) } : f)} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Max Choices</label>
+                        <input type="number" min="1" className="input w-full text-sm" value={cpStepForm.max_select}
+                          onChange={e => setCpStepForm(f => f ? { ...f, max_select: Math.max(1, Number(e.target.value)) } : f)} />
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input type="checkbox" checked={cpStepForm.allow_repeat}
+                        onChange={e => setCpStepForm(f => f ? { ...f, allow_repeat: e.target.checked } : f)} />
+                      <span className="text-text-2">Allow same option multiple times</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input type="checkbox" checked={cpStepForm.auto_select}
+                        onChange={e => setCpStepForm(f => f ? { ...f, auto_select: e.target.checked } : f)} />
+                      <span className="text-text-2">Auto-select (single-option step)</span>
+                    </label>
+                  </>
+                )}
+
+                {/* ── OPTION FORM ────────────────────────────────────────────── */}
+                {comboEditTarget.type === 'option' && cpOptForm && (() => {
+                  const filteredRecs = recipes.filter(r => r.name.toLowerCase().includes(cpOptRecipeSearch.toLowerCase())).slice(0, 50)
+                  const filteredIngs = ingredients.filter(i => i.name.toLowerCase().includes(cpOptIngSearch.toLowerCase())).slice(0, 50)
+                  const filteredSis  = salesItems.filter(s => s.item_type !== 'combo' && s.name.toLowerCase().includes(cpOptSiSearch.toLowerCase())).slice(0, 50)
+                  return (
+                    <>
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
+                        <input className="input w-full text-sm" value={cpOptForm.name}
+                          onChange={e => setCpOptForm(f => f ? { ...f, name: e.target.value } : f)} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name <span className="font-normal normal-case">(customer-facing)</span></label>
+                        <input className="input w-full text-sm" placeholder="Leave blank to use name"
+                          value={cpOptForm.display_name ?? ''}
+                          onChange={e => setCpOptForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Type</label>
+                        <select className="input w-full text-sm" value={cpOptForm.item_type}
+                          onChange={e => {
+                            setCpOptForm(f => f ? { ...f, item_type: e.target.value as ComboStepOption['item_type'], recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null } : f)
+                            setCpOptRecipeSearch(''); setCpOptIngSearch(''); setCpOptSiSearch('')
+                          }}>
+                          <option value="manual">Manual cost</option>
+                          <option value="recipe">Recipe</option>
+                          <option value="ingredient">Ingredient</option>
+                          <option value="sales_item">Sales Item</option>
+                        </select>
+                      </div>
+
+                      {cpOptForm.item_type === 'recipe' && (
+                        <div className="relative">
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Recipe</label>
+                          <input className="input w-full text-sm" placeholder="Search recipes…" value={cpOptRecipeSearch}
+                            onChange={e => { setCpOptRecipeSearch(e.target.value); setCpOptRecipeOpen(true) }}
+                            onFocus={() => setCpOptRecipeOpen(true)}
+                            onBlur={() => setTimeout(() => setCpOptRecipeOpen(false), 150)} autoComplete="off" />
+                          {cpOptRecipeOpen && (
+                            <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                              {filteredRecs.length === 0 ? <div className="px-3 py-2 text-sm text-gray-400 italic">No matches</div>
+                                : filteredRecs.map(r => (
+                                  <button key={r.id} type="button" onMouseDown={e => e.preventDefault()}
+                                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${cpOptForm.recipe_id === r.id ? 'bg-accent-dim font-medium text-accent' : ''}`}
+                                    onClick={() => { setCpOptForm(f => f ? { ...f, recipe_id: r.id } : f); setCpOptRecipeSearch(r.name); setCpOptRecipeOpen(false) }}>
+                                    {cpOptForm.recipe_id === r.id && <span className="text-accent text-xs">✓</span>}
+                                    <span>{r.name}</span>
+                                    {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {cpOptForm.item_type === 'ingredient' && (
+                        <div className="relative">
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Ingredient</label>
+                          <input className="input w-full text-sm" placeholder="Search ingredients…" value={cpOptIngSearch}
+                            onChange={e => { setCpOptIngSearch(e.target.value); setCpOptIngOpen(true) }}
+                            onFocus={() => setCpOptIngOpen(true)}
+                            onBlur={() => setTimeout(() => setCpOptIngOpen(false), 150)} autoComplete="off" />
+                          {cpOptIngOpen && (
+                            <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                              {filteredIngs.length === 0 ? <div className="px-3 py-2 text-sm text-gray-400 italic">No matches</div>
+                                : filteredIngs.map(i => (
+                                  <button key={i.id} type="button" onMouseDown={e => e.preventDefault()}
+                                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${cpOptForm.ingredient_id === i.id ? 'bg-accent-dim font-medium text-accent' : ''}`}
+                                    onClick={() => { setCpOptForm(f => f ? { ...f, ingredient_id: i.id } : f); setCpOptIngSearch(i.name); setCpOptIngOpen(false) }}>
+                                    {cpOptForm.ingredient_id === i.id && <span className="text-accent text-xs">✓</span>}
+                                    <span>{i.name}</span>
+                                    {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {cpOptForm.item_type === 'sales_item' && (
+                        <div className="relative">
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Sales Item</label>
+                          <input className="input w-full text-sm" placeholder="Search sales items…" value={cpOptSiSearch}
+                            onChange={e => { setCpOptSiSearch(e.target.value); setCpOptSiOpen(true) }}
+                            onFocus={() => setCpOptSiOpen(true)}
+                            onBlur={() => setTimeout(() => setCpOptSiOpen(false), 150)} autoComplete="off" />
+                          {cpOptSiOpen && (
+                            <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                              {filteredSis.length === 0 ? <div className="px-3 py-2 text-sm text-gray-400 italic">No matches</div>
+                                : filteredSis.map(s => (
+                                  <button key={s.id} type="button" onMouseDown={e => e.preventDefault()}
+                                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${cpOptForm.sales_item_id === s.id ? 'bg-accent-dim font-medium text-accent' : ''}`}
+                                    onClick={() => { setCpOptForm(f => f ? { ...f, sales_item_id: s.id } : f); setCpOptSiSearch(s.name); setCpOptSiOpen(false) }}>
+                                    {cpOptForm.sales_item_id === s.id && <span className="text-accent text-xs">✓</span>}
+                                    <span>{s.name}</span>
+                                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[s.item_type]}`}>{TYPE_LABEL[s.item_type]}</span>
+                                  </button>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {cpOptForm.item_type === 'manual' && (
+                        <div>
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Manual Cost (USD)</label>
+                          <input type="number" step="0.0001" min="0" className="input w-full text-sm"
+                            value={cpOptForm.manual_cost ?? ''}
+                            onChange={e => setCpOptForm(f => f ? { ...f, manual_cost: parseFloat(e.target.value) || null } : f)} />
+                        </div>
+                      )}
+
+                      {(cpOptForm.item_type === 'recipe' || cpOptForm.item_type === 'ingredient') && (
+                        <div>
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Quantity</label>
+                          <div className="flex items-center gap-2">
+                            <input type="number" step="0.0001" min="0.0001" className="input w-28 text-sm"
+                              value={cpOptForm.qty ?? 1}
+                              onChange={e => setCpOptForm(f => f ? { ...f, qty: parseFloat(e.target.value) || 1 } : f)} />
+                            <span className="text-sm text-gray-500">{cpOptForm.item_type === 'recipe' ? 'portion(s)' : 'units'}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {modifierGroups.length > 0 && (
+                        <div>
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Modifier Groups</label>
+                          <div className="space-y-1 max-h-40 overflow-y-auto">
+                            {modifierGroups.map(mg => (
+                              <label key={mg.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                <input type="checkbox" checked={cpOptMgIds.includes(mg.id)}
+                                  onChange={e => setCpOptMgIds(ids => e.target.checked ? [...ids, mg.id] : ids.filter(id => id !== mg.id))} />
+                                <span>{mg.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* Panel footer */}
+              <div className="flex-shrink-0 border-t border-border px-4 py-3 flex gap-2">
+                <button className="btn btn-primary flex-1 text-sm" disabled={comboPanelSaving} onClick={saveComboPanelItem}>
+                  {comboPanelSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button className="btn btn-ghost text-sm" onClick={() => setComboEditTarget(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
 
           </div>{/* end flex flex-1 min-h-0 wrapper */}
         </div>
@@ -1616,11 +1858,11 @@ export default function SalesItemsPage() {
         </div>
       )}
 
-      {/* Combo create/edit modal */}
-      {comboModal !== null && (
+      {/* Combo create modal (edit handled by side panel) */}
+      {comboModal === 'new' && (
         <ComboFormModal
-          mode={comboModal === 'new' ? 'new' : 'edit'}
-          initial={comboModal === 'new' ? null : comboModal as Combo}
+          mode="new"
+          initial={null}
           onSave={saveCombo} saving={savingCombo}
           onClose={() => setComboModal(null)}
         />
@@ -1638,11 +1880,6 @@ export default function SalesItemsPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {editingOpt && (
-        <ComboOptionForm opt={editingOpt} modifierGroups={modifierGroups} recipes={recipes} ingredients={ingredients} salesItems={salesItems}
-          onSave={saveOption} onClose={() => setEditingOpt(null)} />
       )}
 
       {toast && <Toast message={toast.msg} onClose={() => setToast(null)} />}
