@@ -735,19 +735,12 @@ export default function SalesItemsPage() {
   }
 
   // ── Sales Item — modifier group assignment ────────────────────────────────
-  const [expandedSiMg,  setExpandedSiMg]  = useState<Set<number>>(new Set())
   const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number }[]>>({})
   const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
   const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
   const [siMgAddPos,    setSiMgAddPos]    = useState<{ top: number; left: number } | null>(null)
 
   const toggleSiMg = async (siId: number) => {
-    setExpandedSiMg(prev => {
-      const next = new Set(prev)
-      if (next.has(siId)) { next.delete(siId); setSiMgAddOpen(null); return next }
-      next.add(siId)
-      return next
-    })
     if (!(siId in siMgData)) {
       setSiMgLoading(prev => new Set([...prev, siId]))
       try {
