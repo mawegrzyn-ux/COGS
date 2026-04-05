@@ -1620,40 +1620,50 @@ export default function SharedMenuPage() {
                 </>
               )}
               {!breakdown.loading && breakdown.data && breakdown.data.item_type === 'combo' && (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {(breakdown.data.combo_steps ?? []).map((step, si) => (
-                    <details key={si} open className="border border-gray-100 rounded-lg overflow-hidden">
-                      <summary className="flex items-center justify-between px-3 py-2.5 bg-gray-50 cursor-pointer select-none hover:bg-gray-100 transition-colors">
-                        <span className="font-semibold text-gray-800 text-sm">{step.step_name}</span>
+                    <details key={si} className="border border-gray-100 rounded-lg overflow-hidden group/step">
+                      <summary className="flex items-center justify-between px-3 py-2.5 bg-gray-50 cursor-pointer select-none hover:bg-gray-100 transition-colors list-none">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-400 text-[10px] transition-transform duration-150 group-open/step:rotate-90">▶</span>
+                          <span className="font-semibold text-gray-800 text-sm">{step.step_name}</span>
+                          <span className="text-[10px] text-gray-400">{step.options.length} option{step.options.length !== 1 ? 's' : ''}</span>
+                        </div>
                         <span className="text-xs font-mono text-emerald-700 ml-2 flex-shrink-0">
                           avg {sym}{fmt2(step.step_cost_local)}
                         </span>
                       </summary>
-                      <div className="divide-y divide-gray-50">
+                      <div className="divide-y divide-gray-100">
                         {step.options.map((opt, oi) => (
-                          <div key={oi} className="px-3 py-2">
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm font-medium text-gray-700">{opt.option_name}</span>
+                          <details key={oi} className="group/opt">
+                            <summary className="flex items-center justify-between px-4 py-2 cursor-pointer select-none hover:bg-gray-50 transition-colors list-none">
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-300 text-[10px] transition-transform duration-150 group-open/opt:rotate-90">▶</span>
+                                <span className="text-sm font-medium text-gray-700">{opt.option_name}</span>
+                                {opt.lines.length > 0 && (
+                                  <span className="text-[10px] text-gray-400">{opt.lines.length} line{opt.lines.length !== 1 ? 's' : ''}</span>
+                                )}
+                              </div>
                               <span className="text-xs font-mono text-gray-600 ml-2 flex-shrink-0">
                                 {sym}{fmt2(opt.option_cost_local)}
                               </span>
-                            </div>
+                            </summary>
                             {opt.lines.length > 0 && (
-                              <table className="w-full text-xs mt-1">
+                              <table className="w-full text-xs px-2 pb-2 bg-white">
                                 <tbody>
                                   {opt.lines.map((line, li) => (
-                                    <tr key={li} className="text-gray-500">
-                                      <td className="py-0.5 pr-2">
+                                    <tr key={li} className="text-gray-500 border-b border-gray-50 last:border-0">
+                                      <td className="py-1 pl-8 pr-2">
                                         {line.is_sub_recipe && <span className="mr-1 text-gray-400">📋</span>}
                                         {line.name}
                                       </td>
-                                      <td className="py-0.5 text-right pr-2 tabular-nums whitespace-nowrap">
+                                      <td className="py-1 text-right pr-2 tabular-nums whitespace-nowrap">
                                         {fmt2(line.qty)}{line.unit ? ` ${line.unit}` : ''}
                                       </td>
                                       {line.waste_pct > 0 && (
-                                        <td className="py-0.5 text-right pr-2 tabular-nums text-gray-400">+{line.waste_pct}%</td>
+                                        <td className="py-1 text-right pr-2 tabular-nums text-gray-400">+{line.waste_pct}%</td>
                                       )}
-                                      <td className="py-0.5 text-right tabular-nums font-mono">
+                                      <td className="py-1 text-right tabular-nums font-mono pr-4">
                                         {sym}{fmt2(line.cost_local)}
                                       </td>
                                     </tr>
@@ -1661,7 +1671,7 @@ export default function SharedMenuPage() {
                                 </tbody>
                               </table>
                             )}
-                          </div>
+                          </details>
                         ))}
                       </div>
                     </details>

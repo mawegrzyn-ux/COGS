@@ -27,11 +27,16 @@ router.get('/:id', async (req, res, next) => {
 
     const { rows: options } = await pool.query(
       `SELECT mo.*,
-              r.name   AS recipe_name,
-              ing.name AS ingredient_name
+              r.name           AS recipe_name,
+              r.yield_qty      AS recipe_yield_qty,
+              u_r.abbreviation AS recipe_yield_unit_abbr,
+              ing.name         AS ingredient_name,
+              u_i.abbreviation AS ingredient_unit_abbr
        FROM   mcogs_modifier_options mo
        LEFT JOIN mcogs_recipes     r   ON r.id   = mo.recipe_id
+       LEFT JOIN mcogs_units       u_r ON u_r.id = r.yield_unit_id
        LEFT JOIN mcogs_ingredients ing ON ing.id = mo.ingredient_id
+       LEFT JOIN mcogs_units       u_i ON u_i.id = ing.base_unit_id
        WHERE  mo.modifier_group_id=$1 ORDER BY mo.sort_order, mo.id`,
       [req.params.id]
     );
@@ -109,16 +114,63 @@ router.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── POST /modifier-groups/:id/duplicate ──────────────────────────────────────
+router.post('/:id/duplicate', async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Clone the group header
+    const { rows: src } = await client.query(
+      'SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]
+    );
+    if (!src.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Modifier group not found' } }); }
+
+    const { rows: newGroup } = await client.query(
+      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [`${src[0].name} (copy)`, src[0].description, src[0].min_select, src[0].max_select]
+    );
+    const newId = newGroup[0].id;
+
+    // Clone all options
+    const { rows: opts } = await client.query(
+      'SELECT * FROM mcogs_modifier_options WHERE modifier_group_id=$1 ORDER BY sort_order, id',
+      [req.params.id]
+    );
+    for (const opt of opts) {
+      await client.query(
+        `INSERT INTO mcogs_modifier_options
+           (modifier_group_id, name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [newId, opt.name, opt.item_type, opt.recipe_id, opt.ingredient_id,
+         opt.manual_cost, opt.price_addon, opt.sort_order]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ ...newGroup[0], option_count: opts.length });
+  } catch (err) { await client.query('ROLLBACK'); next(err); }
+  finally { client.release(); }
+});
+
 // ─── Options CRUD ─────────────────────────────────────────────────────────────
 
 // GET /:id/options — list all options for a group (used by frontend on expand)
 router.get('/:id/options', async (req, res, next) => {
   try {
     const { rows } = await pool.query(
-      `SELECT mo.*, r.name AS recipe_name, ing.name AS ingredient_name
+      `SELECT mo.*,
+              r.name           AS recipe_name,
+              r.yield_qty      AS recipe_yield_qty,
+              u_r.abbreviation AS recipe_yield_unit_abbr,
+              ing.name         AS ingredient_name,
+              u_i.abbreviation AS ingredient_unit_abbr
        FROM   mcogs_modifier_options mo
        LEFT JOIN mcogs_recipes     r   ON r.id   = mo.recipe_id
+       LEFT JOIN mcogs_units       u_r ON u_r.id = r.yield_unit_id
        LEFT JOIN mcogs_ingredients ing ON ing.id = mo.ingredient_id
+       LEFT JOIN mcogs_units       u_i ON u_i.id = ing.base_unit_id
        WHERE  mo.modifier_group_id = $1 ORDER BY mo.sort_order, mo.id`,
       [req.params.id]
     );

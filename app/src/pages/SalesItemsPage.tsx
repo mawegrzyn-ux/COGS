@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
@@ -12,8 +12,11 @@ interface SalesItemMarket { country_id: number; country_name: string; is_active:
 interface ModifierOption {
   id: number; modifier_group_id: number; name: string
   item_type: 'recipe' | 'ingredient' | 'manual'
-  recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null
-  price_addon: number; sort_order: number
+  recipe_id: number | null; recipe_name?: string
+  recipe_yield_qty?: number | null; recipe_yield_unit_abbr?: string | null
+  ingredient_id: number | null; ingredient_name?: string
+  ingredient_unit_abbr?: string | null
+  manual_cost: number | null; price_addon: number; sort_order: number
 }
 interface ModifierGroup {
   id: number; name: string; description: string | null
@@ -51,6 +54,7 @@ interface SalesItem {
   ingredient_id: number | null; ingredient_name?: string
   combo_id: number | null; combo_name?: string
   manual_cost: number | null; image_url: string | null; sort_order: number
+  modifier_group_count?: number
   markets?: SalesItemMarket[]
   modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
 }
@@ -752,6 +756,49 @@ export default function SalesItemsPage() {
     } catch { showToast('Failed to duplicate combo') } finally { setDuplicatingCombo(false) }
   }
 
+  // ── Sales Item — modifier group assignment ────────────────────────────────
+  const [expandedSiMg,  setExpandedSiMg]  = useState<Set<number>>(new Set())
+  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number }[]>>({})
+  const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
+  const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
+
+  const toggleSiMg = async (siId: number) => {
+    setExpandedSiMg(prev => {
+      const next = new Set(prev)
+      if (next.has(siId)) { next.delete(siId); setSiMgAddOpen(null); return next }
+      next.add(siId)
+      return next
+    })
+    if (!(siId in siMgData)) {
+      setSiMgLoading(prev => new Set([...prev, siId]))
+      try {
+        const full: SalesItem = await api.get(`/sales-items/${siId}`)
+        setSiMgData(prev => ({ ...prev, [siId]: full.modifier_groups || [] }))
+      } catch { /* ignore */ }
+      finally { setSiMgLoading(prev => { const n = new Set(prev); n.delete(siId); return n }) }
+    }
+  }
+
+  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number }[]) => {
+    try {
+      await api.put(`/sales-items/${siId}/modifier-groups`, { modifier_group_ids: groups.map(g => g.modifier_group_id) })
+      setSiMgData(prev => ({ ...prev, [siId]: groups }))
+      setSalesItems(prev => prev.map(s => s.id === siId ? { ...s, modifier_group_count: groups.length } : s))
+    } catch { showToast('Failed to save modifiers') }
+  }
+
+  const removeSiModifier = (siId: number, mgId: number) => {
+    const current = siMgData[siId] || []
+    saveSiModifiers(siId, current.filter(g => g.modifier_group_id !== mgId))
+  }
+
+  const addSiModifier = (siId: number, mg: ModifierGroup) => {
+    const current = siMgData[siId] || []
+    if (current.some(g => g.modifier_group_id === mg.id)) return
+    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length }])
+    setSiMgAddOpen(null)
+  }
+
   // ── Modifiers tab ──────────────────────────────────────────────────────────
   const [expandedMgId,    setExpandedMgId]    = useState<number | null>(null)
   const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
@@ -794,10 +841,20 @@ export default function SalesItemsPage() {
     catch { showToast('Failed') }
   }
 
+  const duplicateMg = async (mg: ModifierGroup) => {
+    try {
+      const created = await api.post(`/modifier-groups/${mg.id}/duplicate`, {})
+      setModifierGroups(prev => [...prev, created])
+      showToast(`"${created.name}" created`)
+    } catch { showToast('Failed to duplicate') }
+  }
+
   const addMgOption = async (groupId: number, opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>) => {
     try {
-      const created = await api.post(`/modifier-groups/${groupId}/options`, opt)
-      setExpandedOptions(prev => ({ ...prev, [groupId]: [...(prev[groupId] || []), created] }))
+      await api.post(`/modifier-groups/${groupId}/options`, opt)
+      // Re-fetch to get joined data (yield qty/unit for recipes, base unit for ingredients)
+      const opts = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
+      if (opts) setExpandedOptions(prev => ({ ...prev, [groupId]: opts }))
       setModifierGroups(prev => prev.map(g => g.id === groupId ? { ...g, option_count: (g.option_count || 0) + 1 } : g))
     } catch { showToast('Failed') }
   }
@@ -814,11 +871,10 @@ export default function SalesItemsPage() {
     if (!editingOption) return
     const { groupId, optId, form } = editingOption
     try {
-      const updated = await api.put(`/modifier-groups/${groupId}/options/${optId}`, { ...form, price_addon: 0, sort_order: 0 })
-      setExpandedOptions(prev => ({
-        ...prev,
-        [groupId]: (prev[groupId] || []).map(o => o.id === optId ? { ...o, ...updated } : o),
-      }))
+      await api.put(`/modifier-groups/${groupId}/options/${optId}`, { ...form, price_addon: 0, sort_order: 0 })
+      // Re-fetch options to get fresh joined data (recipe_yield_qty, unit abbrs, etc.)
+      const opts = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
+      if (opts) setExpandedOptions(prev => ({ ...prev, [groupId]: opts }))
       setEditingOption(null)
     } catch { showToast('Failed to save') }
   }
@@ -889,7 +945,8 @@ export default function SalesItemsPage() {
                     const isEditing = editingId === si.id && editForm
                     if (isEditing) {
                       return (
-                        <tr key={si.id} className="border-b border-gray-100 bg-accent-dim/40">
+                        <Fragment key={si.id}>
+                        <tr className="border-b border-gray-100 bg-accent-dim/40">
                           <td className="px-3 py-2">
                             <input className="input input-sm w-full" value={editForm.name} autoFocus
                               onChange={e => setEditForm(f => f ? { ...f, name: e.target.value } : f)}
@@ -963,28 +1020,108 @@ export default function SalesItemsPage() {
                             </div>
                           </td>
                         </tr>
+                        </Fragment>
                       )
                     }
                     const mkt = marketsDisplay(si)
+                    const siMgExpanded  = expandedSiMg.has(si.id)
+                    const siMgGroups    = siMgData[si.id] ?? []
+                    const siMgIsLoading = siMgLoading.has(si.id)
+                    const mgCount       = si.modifier_group_count ?? 0
+                    const unassignedMgs = modifierGroups.filter(mg => !siMgGroups.some(a => a.modifier_group_id === mg.id))
                     return (
-                      <tr key={si.id} className="border-b border-gray-100 hover:bg-gray-50 group">
-                        <td className="px-4 py-2.5 font-medium text-gray-900">{si.name}</td>
-                        <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span></td>
-                        <td className="px-4 py-2.5 text-gray-500">{si.category_name || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-4 py-2.5 text-gray-500 text-xs">
-                          {si.item_type === 'recipe'     && (si.recipe_name     || <span className="text-gray-300">—</span>)}
-                          {si.item_type === 'ingredient' && (si.ingredient_name || <span className="text-gray-300">—</span>)}
-                          {si.item_type === 'combo'      && (si.combo_name      || <span className="text-gray-300">—</span>)}
-                          {si.item_type === 'manual'     && (si.manual_cost != null ? `$${Number(si.manual_cost).toFixed(4)}` : <span className="text-gray-300">—</span>)}
-                        </td>
-                        <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span></td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button className="btn btn-xs btn-outline" title="Edit inline" onClick={() => startEdit(si)}>✎</button>
-                            <button className="text-red-400 hover:text-red-600 px-1 text-base leading-none" title="Delete" onClick={() => setDeleting(si)}>⊘</button>
-                          </div>
-                        </td>
-                      </tr>
+                      <Fragment key={si.id}>
+                        <tr className="border-b border-gray-100 hover:bg-gray-50 group">
+                          <td className="px-4 py-2.5 font-medium text-gray-900">{si.name}</td>
+                          <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span></td>
+                          <td className="px-4 py-2.5 text-gray-500">{si.category_name || <span className="text-gray-300">—</span>}</td>
+                          <td className="px-4 py-2.5 text-gray-500 text-xs">
+                            {si.item_type === 'recipe'     && (si.recipe_name     || <span className="text-gray-300">—</span>)}
+                            {si.item_type === 'ingredient' && (si.ingredient_name || <span className="text-gray-300">—</span>)}
+                            {si.item_type === 'combo'      && (si.combo_name      || <span className="text-gray-300">—</span>)}
+                            {si.item_type === 'manual'     && (si.manual_cost != null ? `$${Number(si.manual_cost).toFixed(4)}` : <span className="text-gray-300">—</span>)}
+                          </td>
+                          <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span></td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-1.5">
+                              {/* Modifier groups toggle button — always visible */}
+                              <button
+                                className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                                  siMgExpanded
+                                    ? 'border-accent text-accent bg-accent-dim font-medium'
+                                    : mgCount > 0
+                                      ? 'border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100'
+                                      : 'border-border text-text-3 hover:border-accent hover:text-accent'
+                                }`}
+                                onClick={() => toggleSiMg(si.id)}
+                                title={siMgExpanded ? 'Hide modifier groups' : 'Manage modifier groups'}
+                              >
+                                <span>⊕</span>
+                                <span>{mgCount > 0 ? mgCount : 'Mods'}</span>
+                              </button>
+                              {/* Edit / delete — hover reveal */}
+                              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button className="btn btn-xs btn-outline" title="Edit inline" onClick={() => startEdit(si)}>✎</button>
+                                <button className="text-red-400 hover:text-red-600 px-1 text-base leading-none" title="Delete" onClick={() => setDeleting(si)}>⊘</button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* ── Modifier groups expand row ── */}
+                        {siMgExpanded && (
+                          <tr className="border-b border-border bg-blue-50/40">
+                            <td colSpan={6} className="px-5 py-3">
+                              {siMgIsLoading ? (
+                                <span className="text-xs text-text-3">Loading…</span>
+                              ) : (
+                                <div className="flex items-start gap-2 flex-wrap">
+                                  <span className="text-xs font-semibold text-text-2 pt-0.5 shrink-0">Modifiers:</span>
+                                  {siMgGroups.length === 0 && (
+                                    <span className="text-xs text-text-3 italic pt-0.5">None assigned yet</span>
+                                  )}
+                                  {siMgGroups.map(mg => (
+                                    <span key={mg.modifier_group_id}
+                                      className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
+                                      {mg.name}
+                                      <button
+                                        className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none"
+                                        title={`Remove ${mg.name}`}
+                                        onClick={() => removeSiModifier(si.id, mg.modifier_group_id)}
+                                      >×</button>
+                                    </span>
+                                  ))}
+                                  {/* Add modifier group */}
+                                  <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSiMgAddOpen(null) }}>
+                                    {siMgAddOpen === si.id ? (
+                                      <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-border rounded shadow-lg max-h-52 overflow-y-auto min-w-[220px]">
+                                        {unassignedMgs.length === 0 ? (
+                                          <p className="px-3 py-2 text-xs text-text-3">All modifier groups already assigned.</p>
+                                        ) : (
+                                          unassignedMgs.map(mg => (
+                                            <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
+                                              onClick={() => addSiModifier(si.id, mg)}>
+                                              <span className="font-medium">{mg.name}</span>
+                                              <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
+                                            </button>
+                                          ))
+                                        )}
+                                        <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
+                                          onClick={() => setSiMgAddOpen(null)}>Cancel</button>
+                                      </div>
+                                    ) : (
+                                      <button className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
+                                        onClick={() => setSiMgAddOpen(si.id)}>
+                                        + Add modifier group
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     )
                   })}
                 </tbody>
@@ -1202,6 +1339,7 @@ export default function SalesItemsPage() {
                   {editMg?.id !== g.id && (
                     <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                       <button className="btn btn-xs btn-outline" onClick={() => setEditMg(g)}>Edit</button>
+                      <button className="btn btn-xs btn-outline" title="Duplicate this modifier group and all its options" onClick={() => duplicateMg(g)}>⧉ Duplicate</button>
                       <button className="btn btn-xs btn-danger" onClick={() => deleteMg(g)}>Delete</button>
                     </div>
                   )}
@@ -1265,18 +1403,39 @@ export default function SalesItemsPage() {
                               </tr>
                             )
                           }
-                          const linked = opt.item_type === 'recipe'
-                            ? (recipes.find(r => r.id === opt.recipe_id)?.name ?? `#${opt.recipe_id}`)
-                            : opt.item_type === 'ingredient'
-                            ? (ingredients.find(i => i.id === opt.ingredient_id)?.name ?? `#${opt.ingredient_id}`)
-                            : '—'
+                          const recipeName     = opt.recipe_name     ?? recipes.find(r => r.id === opt.recipe_id)?.name
+                          const ingredientName = opt.ingredient_name ?? ingredients.find(i => i.id === opt.ingredient_id)?.name
                           return (
                             <tr key={opt.id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
                               <td className="px-3 py-2 font-medium text-text-1">{opt.name}</td>
                               <td className="px-3 py-2">
                                 <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
                               </td>
-                              <td className="px-3 py-2 text-xs text-text-2">{linked}</td>
+                              <td className="px-3 py-2 text-xs text-text-2">
+                                {opt.item_type === 'recipe' && (
+                                  recipeName
+                                    ? <span className="flex items-center gap-1.5">
+                                        <span>{recipeName}</span>
+                                        {opt.recipe_yield_qty != null && (
+                                          <span className="text-text-3 font-mono">
+                                            · {Number(opt.recipe_yield_qty)}{opt.recipe_yield_unit_abbr ? ` ${opt.recipe_yield_unit_abbr}` : ' ptn'}
+                                          </span>
+                                        )}
+                                      </span>
+                                    : <span className="text-text-3">#{opt.recipe_id}</span>
+                                )}
+                                {opt.item_type === 'ingredient' && (
+                                  ingredientName
+                                    ? <span className="flex items-center gap-1.5">
+                                        <span>{ingredientName}</span>
+                                        {opt.ingredient_unit_abbr && (
+                                          <span className="text-text-3 font-mono">· {opt.ingredient_unit_abbr}</span>
+                                        )}
+                                      </span>
+                                    : <span className="text-text-3">#{opt.ingredient_id}</span>
+                                )}
+                                {opt.item_type === 'manual' && <span className="text-text-3">—</span>}
+                              </td>
                               <td className="px-3 py-1.5">
                                 <div className="flex gap-1 justify-end">
                                   <button

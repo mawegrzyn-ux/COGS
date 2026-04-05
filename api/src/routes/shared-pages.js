@@ -550,18 +550,29 @@ publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (re
       const uniqueIngIds    = [...new Set(ingIdsFromOpts)];
 
       const quoteLookup = await loadQuoteLookup();
-      const [recipeItemsMap, variationMap, ingRows, subRecipeRows] = await Promise.all([
+      const [recipeItemsMap, variationMap, ingRows] = await Promise.all([
         uniqueRecipeIds.length ? loadAllRecipeItemsDeep(uniqueRecipeIds) : Promise.resolve({}),
         uniqueRecipeIds.length ? loadVariationItemsMap(uniqueRecipeIds) : Promise.resolve({}),
         uniqueIngIds.length
           ? pool.query(`SELECT i.id, i.name, u.abbreviation AS unit_abbr FROM mcogs_ingredients i LEFT JOIN mcogs_units u ON u.id = i.base_unit_id WHERE i.id = ANY($1::int[])`, [uniqueIngIds])
               .then(r => Object.fromEntries(r.rows.map(x => [x.id, x])))
           : Promise.resolve({}),
-        uniqueRecipeIds.length
-          ? pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [uniqueRecipeIds])
-              .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
-          : Promise.resolve({}),
       ]);
+
+      // Collect ALL recipe IDs that need name lookups: top-level + any nested sub-recipe IDs
+      // discovered by loadAllRecipeItemsDeep (which recursively follows recipe_item_id links).
+      const allRecipeIdsForNames = new Set(uniqueRecipeIds);
+      for (const items of Object.values(recipeItemsMap)) {
+        for (const ri of items) {
+          if (ri.item_type === 'recipe' && ri.recipe_item_id) {
+            allRecipeIdsForNames.add(Number(ri.recipe_item_id));
+          }
+        }
+      }
+      const subRecipeRows = allRecipeIdsForNames.size
+        ? await pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [[...allRecipeIdsForNames]])
+            .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
+        : {};
 
       // Collect recipe ingredient IDs for name lookup
       const recipeIngIds = [];
@@ -684,15 +695,22 @@ publicRouter.get('/:slug/breakdown/:menu_item_id', requirePublicToken, async (re
     // Get ingredient names for all items in this recipe (top level only)
     const topItems = recipeItemsMap[recipeId] || [];
     const ingIds   = [...new Set(topItems.filter(i => i.ingredient_id).map(i => Number(i.ingredient_id)))];
-    const subIds   = [...new Set(topItems.filter(i => i.recipe_item_id).map(i => Number(i.recipe_item_id)))];
+
+    // Collect sub-recipe IDs from ALL levels (loadAllRecipeItemsDeep follows nesting recursively)
+    const allSubIds = new Set();
+    for (const items of Object.values(recipeItemsMap)) {
+      for (const ri of items) {
+        if (ri.item_type === 'recipe' && ri.recipe_item_id) allSubIds.add(Number(ri.recipe_item_id));
+      }
+    }
 
     const [ingNames, subNames] = await Promise.all([
       ingIds.length
         ? pool.query(`SELECT id, name FROM mcogs_ingredients WHERE id = ANY($1::int[])`, [ingIds])
             .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
         : Promise.resolve({}),
-      subIds.length
-        ? pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [subIds])
+      allSubIds.size
+        ? pool.query(`SELECT id, name FROM mcogs_recipes WHERE id = ANY($1::int[])`, [[...allSubIds]])
             .then(r => Object.fromEntries(r.rows.map(x => [x.id, x.name])))
         : Promise.resolve({}),
     ]);
