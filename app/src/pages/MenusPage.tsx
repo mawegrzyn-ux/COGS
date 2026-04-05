@@ -5,8 +5,6 @@ import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds, type CogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
-import { ColumnHeader } from '../components/ColumnHeader'
-import { useSortFilter } from '../hooks/useSortFilter'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1319,74 +1317,6 @@ function MenuFormModal({ menu, countries, onSave, onClose }: {
   )
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SHARED GRID HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function cogsBadge(pct: number | null, thr: CogsThresholds) {
-  if (pct === null) return null
-  if (pct <= thr.excellent)  return { cls: 'bg-green-100 text-green-700',  label: `${pct.toFixed(1)}%` }
-  if (pct <= thr.acceptable) return { cls: 'bg-yellow-100 text-yellow-700', label: `${pct.toFixed(1)}%` }
-  return                            { cls: 'bg-red-100 text-red-700',       label: `${pct.toFixed(1)}%` }
-}
-
-// Inline editable price cell — shared by both tools
-function InlinePriceCell({
-  value, sym, saving, saved, onCommit,
-}: {
-  value: number | null
-  sym: string
-  saving?: boolean
-  saved?: boolean
-  onCommit(v: number | null): void
-}) {
-  const fmt = (n: number | null) => n !== null && n > 0 ? n.toFixed(2) : ''
-  const [editing, setEditing] = useState(false)
-  const [draft,   setDraft]   = useState(fmt(value))
-  const ref = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!editing) setDraft(fmt(value))
-  }, [value, editing])
-
-  function commit() {
-    setEditing(false)
-    const n = draft.trim() === '' ? null : parseFloat(draft)
-    if (n === null || (!isNaN(n) && n >= 0)) onCommit(n !== null && isNaN(n) ? null : n)
-    else setDraft(fmt(value))
-  }
-
-  return (
-    <div
-      className={`flex items-center rounded px-1.5 py-1 min-w-[90px] border transition-all cursor-text
-        ${saved  ? 'bg-green-50 border-green-300' : ''}
-        ${saving ? 'opacity-50 pointer-events-none border-gray-200' : ''}
-        ${!saving && !saved ? 'border-transparent hover:border-gray-300 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-200' : ''}
-      `}
-      onClick={() => { setEditing(true); setTimeout(() => ref.current?.select(), 10) }}
-    >
-      <span className="text-gray-400 text-xs mr-0.5 select-none">{sym}</span>
-      <input
-        ref={ref}
-        type="number"
-        min="0"
-        step="0.01"
-        value={draft}
-        placeholder="—"
-        className="w-20 bg-transparent outline-none text-xs font-mono"
-        onChange={e => setDraft(e.target.value)}
-        onFocus={() => setEditing(true)}
-        onBlur={commit}
-        onKeyDown={e => {
-          if (e.key === 'Enter')  { e.currentTarget.blur() }
-          if (e.key === 'Escape') { setDraft(fmt(value)); setEditing(false); e.currentTarget.blur() }
-        }}
-      />
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Sales Mix Generator Modal ─────────────────────────────────────────────────
 
