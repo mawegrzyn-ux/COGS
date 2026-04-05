@@ -53,11 +53,12 @@ async function fetchFull(id, client) {
 }
 
 // ─── GET /sales-items ────────────────────────────────────────────────────────
-// ?country_id=X  — filter to items active in that country
+// ?country_id=X       — filter to items active in that country
 // ?include_inactive=true — return all regardless of market
+// ?recipe_id=X        — filter to items whose recipe_id matches
 router.get('/', async (req, res, next) => {
   try {
-    const { country_id, include_inactive } = req.query;
+    const { country_id, include_inactive, recipe_id } = req.query;
 
     let sql = `
       SELECT si.*,
@@ -76,21 +77,24 @@ router.get('/', async (req, res, next) => {
       LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
     `;
     const params = [];
+    const conditions = [];
+
+    if (recipe_id) {
+      params.push(recipe_id);
+      conditions.push(`si.recipe_id = $${params.length}`);
+    }
 
     if (country_id && include_inactive !== 'true') {
-      // Only return items with no market rows OR active row for this country
-      sql += `
-        WHERE NOT EXISTS (
-          SELECT 1 FROM mcogs_sales_item_markets sim
-          WHERE sim.sales_item_id = si.id
-        ) OR EXISTS (
-          SELECT 1 FROM mcogs_sales_item_markets sim
-          WHERE sim.sales_item_id = si.id
-            AND sim.country_id = $1
-            AND sim.is_active = TRUE
-        )
-      `;
       params.push(country_id);
+      const p = params.length;
+      conditions.push(
+        `(NOT EXISTS (SELECT 1 FROM mcogs_sales_item_markets sim WHERE sim.sales_item_id = si.id)` +
+        ` OR EXISTS (SELECT 1 FROM mcogs_sales_item_markets sim WHERE sim.sales_item_id = si.id AND sim.country_id = $${p} AND sim.is_active = TRUE))`
+      );
+    }
+
+    if (conditions.length) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     sql += ' ORDER BY si.sort_order, si.name';

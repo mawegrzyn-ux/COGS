@@ -115,6 +115,13 @@ interface MenuAssignment {
   tax_name: string
 }
 
+interface LinkedSalesItem {
+  id: number
+  name: string
+  item_type: string
+  category_name: string | null
+}
+
 interface SimpleMenu {
   id: number
   name: string
@@ -168,14 +175,11 @@ export default function RecipesPage() {
   const [loadingMenuAssign,   setLoadingMenuAssign]    = useState(false)
   const [priceLevels,         setPriceLevels]         = useState<PriceLevel[]>([])
   const [selectedPriceLevelId,setSelectedPriceLevelId]= useState<number | null>(null)
-  const [addToMenuModal,      setAddToMenuModal]      = useState(false)
-  const [addToMenuTargetId,   setAddToMenuTargetId]   = useState<number | null>(null)
-  const [addToMenuDisplayName,setAddToMenuDisplayName]= useState('')
-  const [addToMenuPrices,     setAddToMenuPrices]     = useState<Record<number, string>>({})
-  const [addToMenuSaving,     setAddToMenuSaving]     = useState(false)
   const [menuAssignVersion,   setMenuAssignVersion]   = useState(0)
-  const [editingMenuPrice,    setEditingMenuPrice]    = useState<{ menu_item_id: number; level_id: number; value: string } | null>(null)
   const [editingTilePrice,    setEditingTilePrice]    = useState<string | null>(null)
+
+  const [linkedSalesItems,    setLinkedSalesItems]    = useState<LinkedSalesItem[]>([])
+  const [loadingLinkedSI,     setLoadingLinkedSI]     = useState(false)
 
   // search/filter
   const [search,     setSearch]     = useState('')
@@ -298,6 +302,16 @@ export default function RecipesPage() {
       setSelectedMenuId(found.length > 0 ? found[0].menu_id : null)
     }).finally(() => setLoadingMenuAssign(false))
   }, [selected?.id, selectedPriceLevelId, menus, countries, api, menuAssignVersion])
+
+  // Fetch sales items that reference this recipe
+  useEffect(() => {
+    if (!selected) { setLinkedSalesItems([]); return }
+    setLoadingLinkedSI(true)
+    api.get(`/sales-items?recipe_id=${selected.id}`)
+      .then((d: LinkedSalesItem[]) => setLinkedSalesItems(d || []))
+      .catch(() => setLinkedSalesItems([]))
+      .finally(() => setLoadingLinkedSI(false))
+  }, [selected?.id, api])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -977,6 +991,17 @@ export default function RecipesPage() {
           ) : (
             <div className="p-6 max-w-4xl mx-auto">
 
+              {/* Recipe image banner */}
+              {selected.image_url && (
+                <div className="-mx-6 -mt-6 mb-5">
+                  <img
+                    src={selected.image_url}
+                    alt={selected.name}
+                    className="w-full max-h-56 object-cover"
+                  />
+                </div>
+              )}
+
               {/* Detail header */}
               <div className="flex items-start justify-between gap-4 mb-6">
                 <div>
@@ -1613,111 +1638,46 @@ export default function RecipesPage() {
                 )}
               </div>
 
-              {/* ── Menus section ── */}
+              {/* ── Linked Sales Items section ── */}
               {selected && (
                 <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                    <span className="font-semibold text-sm text-text-1">Menus</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-text-3">
-                        {loadingMenuAssign ? 'Loading…' : menuAssignments.length === 0 ? 'Not on any menu' : `${menuAssignments.length} menu${menuAssignments.length !== 1 ? 's' : ''}`}
-                      </span>
-                      {menus.length > 0 && (
-                        <button
-                          onClick={() => {
-                            setAddToMenuTargetId(menus[0]?.id ?? null)
-                            setAddToMenuDisplayName(selected?.name ?? '')
-                            setAddToMenuModal(true)
-                          }}
-                          className="px-2.5 py-1 text-xs btn-outline rounded-lg"
-                        >+ Add to Menu</button>
-                      )}
-                    </div>
+                    <span className="font-semibold text-sm text-text-1">Linked Sales Items</span>
+                    <span className="text-xs text-text-3">
+                      {loadingLinkedSI ? 'Loading…' : linkedSalesItems.length === 0 ? 'None' : `${linkedSalesItems.length} item${linkedSalesItems.length !== 1 ? 's' : ''}`}
+                    </span>
                   </div>
-                  {loadingMenuAssign ? (
+                  {loadingLinkedSI ? (
                     <div className="p-4 text-center"><Spinner /></div>
-                  ) : menuAssignments.length === 0 ? (
+                  ) : linkedSalesItems.length === 0 ? (
                     <div className="px-4 py-6 text-center text-text-3 text-sm">
-                      This recipe hasn't been added to any menu yet.
+                      No sales items are linked to this recipe.
                     </div>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-gray-200 border-b border-gray-300 text-xs text-text-2 uppercase tracking-wide">
-                          <th className="px-4 py-2.5 text-left font-semibold">Market</th>
-                          <th className="px-4 py-2.5 text-left font-semibold">Menu</th>
-                          <th className="px-4 py-2.5 text-left font-semibold">Display Name</th>
-                          <th className="px-4 py-2.5 text-right font-semibold">Price (gross)</th>
-                          <th className="px-4 py-2.5 text-right font-semibold">Price (net)</th>
-                          <th className="px-4 py-2.5 text-right font-semibold">COGS%</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Name</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Type</th>
+                          <th className="px-4 py-2.5 text-left font-semibold">Category</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {menuAssignments.map(m => {
-                          const isEditing = editingMenuPrice?.menu_item_id === m.menu_item_id && editingMenuPrice?.level_id === (selectedPriceLevelId ?? 0)
-                          // Prices displayed in each menu's own market currency
-                          const sym = m.currency_symbol
-                          return (
-                            <tr key={m.menu_id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
-                              <td className="px-4 py-2.5 text-text-3 text-xs">{m.country_name}</td>
-                              <td className="px-4 py-2.5 font-medium">
-                                <button
-                                  className="text-accent hover:underline text-left"
-                                  onClick={() => navigate(`/menus?menu=${m.menu_id}`)}
-                                  title="Open in Menu Builder"
-                                >{m.menu_name}</button>
-                              </td>
-                              <td className="px-4 py-2.5 text-text-2">{m.display_name}</td>
-                              <td className="px-4 py-2.5 text-right font-mono text-text-2">
-                                {isEditing ? (
-                                  <div className="flex items-center justify-end gap-1">
-                                    <span className="text-text-3">{sym}</span>
-                                    <input
-                                      type="number" min="0" step="0.01"
-                                      className="input text-sm font-mono w-24 py-0.5 px-1 text-right"
-                                      value={editingMenuPrice!.value}
-                                      onChange={e => setEditingMenuPrice(p => p ? { ...p, value: e.target.value } : p)}
-                                      onKeyDown={async e => {
-                                        if (e.key === 'Enter') {
-                                          const gross = parseFloat(editingMenuPrice!.value)
-                                          if (!isNaN(gross) && gross >= 0 && selectedPriceLevelId) {
-                                            // price stored in market's local currency (base USD * exchRate)
-                                            await api.post('/menu-item-prices', { menu_item_id: m.menu_item_id, price_level_id: selectedPriceLevelId, sell_price: Math.round(gross * 10000) / 10000 })
-                                            setMenuAssignVersion(v => v + 1)
-                                            showToast('Price updated')
-                                          }
-                                          setEditingMenuPrice(null)
-                                        } else if (e.key === 'Escape') {
-                                          setEditingMenuPrice(null)
-                                        }
-                                      }}
-                                      onBlur={() => setEditingMenuPrice(null)}
-                                      autoFocus
-                                    />
-                                  </div>
-                                ) : (
-                                  <span
-                                    className="cursor-pointer hover:text-accent transition-colors"
-                                    title={selectedPriceLevelId ? 'Click to edit gross price' : 'Select a price level to edit'}
-                                    onClick={() => {
-                                      if (!selectedPriceLevelId) return
-                                      const grossDisplay = m.sell_price_gross > 0 ? fmtCost(m.sell_price_gross) : ''
-                                      setEditingMenuPrice({ menu_item_id: m.menu_item_id, level_id: selectedPriceLevelId, value: grossDisplay })
-                                    }}
-                                  >
-                                    {m.sell_price_gross > 0 ? `${sym}${fmtCost(m.sell_price_gross)}` : '—'}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-4 py-2.5 text-right font-mono font-semibold text-text-1">
-                                {m.sell_price_net > 0 ? `${sym}${fmtCost(m.sell_price_net)}` : '—'}
-                              </td>
-                              <td className={`px-4 py-2.5 text-right font-semibold ${recipeCogsColour(m.cogs_pct_net)}`}>
-                                {m.cogs_pct_net != null ? `${m.cogs_pct_net.toFixed(1)}%` : '—'}
-                              </td>
-                            </tr>
-                          )
-                        })}
+                        {linkedSalesItems.map(si => (
+                          <tr key={si.id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
+                            <td className="px-4 py-2.5 font-medium">
+                              <button
+                                className="text-accent hover:underline text-left"
+                                onClick={() => navigate('/sales-items')}
+                                title="Open in Sales Items"
+                              >{si.name}</button>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span className="badge-neutral capitalize">{si.item_type}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-text-3">{si.category_name ?? '—'}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   )}
@@ -1851,94 +1811,6 @@ export default function RecipesPage() {
           }}
           onCancel={() => setConfirmDelete(null)}
         />
-      )}
-
-      {addToMenuModal && selected && (
-        <Modal title="Add to Menu" onClose={() => { setAddToMenuModal(false); setAddToMenuPrices({}) }}>
-          <div className="space-y-4 min-w-[320px]">
-            <Field label="Menu">
-              <select
-                className="input w-full"
-                value={addToMenuTargetId ?? ''}
-                onChange={e => setAddToMenuTargetId(Number(e.target.value))}
-              >
-                {menus.filter(m => m.country_id === selectedCountryId).map(m => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Display Name">
-              <input
-                className="input w-full"
-                value={addToMenuDisplayName}
-                onChange={e => setAddToMenuDisplayName(e.target.value)}
-                placeholder={selected.name}
-              />
-            </Field>
-            {priceLevels.length > 0 && (
-              <div>
-                <div className="text-xs font-semibold text-text-3 mb-2">
-                  Prices ({displayCurrency.code}) — optional
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {priceLevels.map(l => (
-                    <Field key={l.id} label={l.name + (l.is_default ? ' ★' : '')}>
-                      <input
-                        className="input w-full"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="0.00"
-                        value={addToMenuPrices[l.id] ?? ''}
-                        onChange={e => setAddToMenuPrices(p => ({ ...p, [l.id]: e.target.value }))}
-                      />
-                    </Field>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <button className="btn-outline px-4 py-2 text-sm" onClick={() => { setAddToMenuModal(false); setAddToMenuPrices({}) }}>Cancel</button>
-              <button
-                className="btn-primary px-4 py-2 text-sm"
-                disabled={!addToMenuTargetId || addToMenuSaving}
-                onClick={async () => {
-                  if (!addToMenuTargetId) return
-                  setAddToMenuSaving(true)
-                  try {
-                    const newItem = await api.post('/menu-items', {
-                      menu_id:      addToMenuTargetId,
-                      item_type:    'recipe',
-                      recipe_id:    selected.id,
-                      display_name: addToMenuDisplayName.trim() || selected.name,
-                      qty:          1,
-                    })
-                    const exchRate = activeCogs?.exchange_rate ?? 1
-                    for (const [levelIdStr, priceStr] of Object.entries(addToMenuPrices)) {
-                      const gross = parseFloat(priceStr)
-                      if (!isNaN(gross) && gross > 0) {
-                        const localGross = gross * exchRate / displayCurrency.rate
-                        await api.post('/menu-item-prices', {
-                          menu_item_id: newItem.id,
-                          price_level_id: Number(levelIdStr),
-                          sell_price: Math.round(localGross * 10000) / 10000,
-                        })
-                      }
-                    }
-                    setMenuAssignVersion(v => v + 1)
-                    setAddToMenuModal(false)
-                    setAddToMenuPrices({})
-                    setToast({ msg: 'Recipe added to menu' })
-                  } catch {
-                    setToast({ msg: 'Failed to add to menu', type: 'error' })
-                  } finally {
-                    setAddToMenuSaving(false)
-                  }
-                }}
-              >{addToMenuSaving ? 'Saving…' : 'Add to Menu'}</button>
-            </div>
-          </div>
-        </Modal>
       )}
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}

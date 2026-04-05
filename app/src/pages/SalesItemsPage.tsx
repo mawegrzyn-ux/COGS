@@ -29,10 +29,6 @@ interface ComboStepOption {
   manual_cost: number | null; price_addon: number; qty: number; sort_order: number
   modifier_groups?: { modifier_group_id: number; name: string }[]
 }
-interface ComboTemplate {
-  id: number; name: string; description: string | null
-  step_count: number; created_at: string
-}
 interface ComboStep {
   id: number; combo_id: number; name: string
   description: string | null; sort_order: number
@@ -604,20 +600,7 @@ export default function SalesItemsPage() {
   const [savingCombo,        setSavingCombo]        = useState(false)
   const [deletingCombo,      setDeletingCombo]      = useState<Combo | null>(null)
 
-  // ── Templates panel ────────────────────────────────────────────────────────
-  const [templates,         setTemplates]         = useState<ComboTemplate[]>([])
-  const [templateSearch,    setTemplateSearch]    = useState('')
-  const [showSaveTemplate,  setShowSaveTemplate]  = useState(false)
-  const [newTemplateName,   setNewTemplateName]   = useState('')
-  const [savingTemplate,    setSavingTemplate]    = useState(false)
-  const [loadingTemplateId, setLoadingTemplateId] = useState<number | null>(null)
-
-  const filteredTemplates = useMemo(() =>
-    templateSearch.trim()
-      ? templates.filter(t => t.name.toLowerCase().includes(templateSearch.toLowerCase()))
-      : templates,
-    [templates, templateSearch]
-  )
+  const [duplicatingCombo, setDuplicatingCombo] = useState(false)
 
   useEffect(() => {
     if (!selectedComboId) { setComboDetail(null); return }
@@ -728,40 +711,15 @@ export default function SalesItemsPage() {
     catch { showToast('Failed') }
   }
 
-  useEffect(() => {
-    if (activeTab !== 'combos') return
-    api.get('/combo-templates').then((d: any) => setTemplates(d || [])).catch(() => {})
-  }, [activeTab, api])
-
-  const saveAsTemplate = async () => {
-    if (!selectedComboId || !newTemplateName.trim()) return
-    setSavingTemplate(true)
+  const duplicateCombo = async () => {
+    if (!selectedComboId || duplicatingCombo) return
+    setDuplicatingCombo(true)
     try {
-      const created: any = await api.post('/combo-templates', { name: newTemplateName.trim(), combo_id: selectedComboId })
-      setTemplates(prev => [created, ...prev])
-      setShowSaveTemplate(false); setNewTemplateName('')
-      showToast('Template saved')
-    } catch { showToast('Failed to save template') } finally { setSavingTemplate(false) }
-  }
-
-  const loadTemplate = async (templateId: number) => {
-    if (!selectedComboId) return
-    if (!window.confirm('Replace all current steps with this template? This cannot be undone.')) return
-    setLoadingTemplateId(templateId)
-    try {
-      await api.post(`/combo-templates/${templateId}/apply`, { combo_id: selectedComboId })
-      await reloadComboDetail()
-      showToast('Template applied')
-    } catch { showToast('Failed to apply template') } finally { setLoadingTemplateId(null) }
-  }
-
-  const deleteTemplate = async (templateId: number) => {
-    if (!window.confirm('Delete this template?')) return
-    try {
-      await api.delete(`/combo-templates/${templateId}`)
-      setTemplates(prev => prev.filter(t => t.id !== templateId))
-      showToast('Template deleted')
-    } catch { showToast('Failed') }
+      const created: any = await api.post(`/combos/${selectedComboId}/duplicate`, {})
+      setCombos(prev => [...prev, created])
+      setSelectedComboId(created.id)
+      showToast('Combo duplicated')
+    } catch { showToast('Failed to duplicate combo') } finally { setDuplicatingCombo(false) }
   }
 
   // ── Modifiers tab ──────────────────────────────────────────────────────────
@@ -1022,6 +980,10 @@ export default function SalesItemsPage() {
                   </div>
                   <div className="flex gap-2">
                     <button className="btn btn-sm btn-outline" onClick={() => setComboModal(comboDetail)}>Edit</button>
+                    <button className="btn btn-sm btn-outline text-xs" disabled={duplicatingCombo} onClick={duplicateCombo}
+                      title="Duplicate this combo with all its steps and options">
+                      {duplicatingCombo ? '…' : 'Duplicate'}
+                    </button>
                     <button className="btn btn-sm btn-danger text-xs" onClick={() => setDeletingCombo(comboDetail)}>Delete</button>
                   </div>
                 </div>
@@ -1146,59 +1108,6 @@ export default function SalesItemsPage() {
             )}
           </div>
 
-          {/* ── Templates side panel ─────────────────────────────────────── */}
-          {selectedComboId && (
-            <aside className="w-64 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col overflow-hidden">
-              <div className="px-3 py-3 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Step Templates</p>
-                {showSaveTemplate ? (
-                  <div className="space-y-1.5">
-                    <input className="input input-sm w-full" placeholder="Template name…" value={newTemplateName} autoFocus
-                      onChange={e => setNewTemplateName(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && saveAsTemplate()} />
-                    <div className="flex gap-1">
-                      <button className="btn btn-xs btn-primary flex-1" disabled={!newTemplateName.trim() || savingTemplate}
-                        onClick={saveAsTemplate}>{savingTemplate ? '…' : 'Save'}</button>
-                      <button className="btn btn-xs btn-ghost" onClick={() => { setShowSaveTemplate(false); setNewTemplateName('') }}>Cancel</button>
-                    </div>
-                  </div>
-                ) : (
-                  <button className="btn btn-xs btn-outline w-full text-xs" onClick={() => setShowSaveTemplate(true)}>
-                    ↓ Save current steps as template
-                  </button>
-                )}
-              </div>
-              <div className="px-3 py-2 border-b border-gray-100">
-                <input className="input input-sm w-full" placeholder="Search templates…" value={templateSearch}
-                  onChange={e => setTemplateSearch(e.target.value)} />
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                {filteredTemplates.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-6 px-3">
-                    {templates.length === 0 ? 'No templates yet.' : 'No templates match.'}
-                  </p>
-                )}
-                {filteredTemplates.map(t => (
-                  <div key={t.id} className="px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50">
-                    <div className="flex items-start justify-between gap-1">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-800 truncate">{t.name}</div>
-                        <div className="text-xs text-gray-400">{t.step_count} step{t.step_count !== 1 ? 's' : ''}</div>
-                      </div>
-                      <div className="flex gap-1 shrink-0 pt-0.5">
-                        <button className="btn btn-xs btn-primary" disabled={loadingTemplateId === t.id}
-                          onClick={() => loadTemplate(t.id)}>
-                          {loadingTemplateId === t.id ? '…' : 'Load'}
-                        </button>
-                        <button className="text-xs text-red-400 hover:text-red-600 px-1 leading-none py-0.5"
-                          onClick={() => deleteTemplate(t.id)}>×</button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </aside>
-          )}
           </div>{/* end flex flex-1 min-h-0 wrapper */}
         </div>
       )}

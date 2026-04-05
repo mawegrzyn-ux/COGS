@@ -134,6 +134,69 @@ router.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── POST /combos/:id/duplicate ──────────────────────────────────────────────
+
+router.post('/:id/duplicate', async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const src = await fetchComboFull(req.params.id);
+    if (!src) return res.status(404).json({ error: { message: 'Combo not found' } });
+
+    await client.query('BEGIN');
+
+    // Create new combo
+    const { rows: [newCombo] } = await client.query(
+      `INSERT INTO mcogs_combos (name, description, category_id, image_url, sort_order)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [`${src.name} (Copy)`, src.description || null, src.category_id || null,
+       src.image_url || null, src.sort_order || 0]
+    );
+
+    // Duplicate each step + its options
+    for (const step of src.steps || []) {
+      const { rows: [newStep] } = await client.query(
+        `INSERT INTO mcogs_combo_steps
+           (combo_id, name, description, sort_order, min_select, max_select, allow_repeat, auto_select)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [newCombo.id, step.name, step.description || null, step.sort_order || 0,
+         step.min_select ?? 1, step.max_select ?? 1,
+         step.allow_repeat ?? false, step.auto_select ?? false]
+      );
+
+      for (const opt of step.options || []) {
+        const { rows: [newOpt] } = await client.query(
+          `INSERT INTO mcogs_combo_step_options
+             (combo_step_id, name, item_type, recipe_id, ingredient_id, sales_item_id,
+              manual_cost, price_addon, qty, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          [newStep.id, opt.name, opt.item_type,
+           opt.recipe_id || null, opt.ingredient_id || null, opt.sales_item_id || null,
+           opt.manual_cost || null, opt.price_addon || 0, opt.qty ?? 1, opt.sort_order || 0]
+        );
+
+        // Copy modifier group assignments
+        for (const mg of opt.modifier_groups || []) {
+          await client.query(
+            `INSERT INTO mcogs_combo_step_option_modifier_groups
+               (combo_step_option_id, modifier_group_id, sort_order)
+             VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+            [newOpt.id, mg.modifier_group_id, mg.sort_order || 0]
+          );
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+    const full = await fetchComboFull(newCombo.id);
+    res.status(201).json(full);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 // ─── Combo steps ──────────────────────────────────────────────────────────────
 
 router.post('/:id/steps', async (req, res, next) => {
