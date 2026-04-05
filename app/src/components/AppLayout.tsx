@@ -166,10 +166,11 @@ function PepperContextMenu({
 // ── AppLayout ──────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
-  const [ctxMenu,    setCtxMenu]    = useState<ContextMenuState | null>(null)
-  const [pepperMode, setPepperMode] = useState<PepperMode>(() =>
+  const [ctxMenu,         setCtxMenu]         = useState<ContextMenuState | null>(null)
+  const [pepperMode,      setPepperMode]      = useState<PepperMode>(() =>
     (localStorage.getItem('pepper-mode') as PepperMode) || 'float'
   )
+  const [pepperFloatOpen, setPepperFloatOpen] = useState(false)
   const [panelWidth, setPanelWidth] = useState<number>(() =>
     parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || String(DEFAULT_PANEL_W), 10)
   )
@@ -277,7 +278,11 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen overflow-hidden bg-surface-2">
       <div className="print:hidden flex flex-col self-stretch">
-        <Sidebar />
+        <Sidebar
+          pepperMode={pepperMode}
+          pepperOpen={pepperMode !== 'float' || pepperFloatOpen}
+          onPepperToggle={() => setPepperFloatOpen(o => !o)}
+        />
       </div>
 
       {/* Main content — explicit order so AiChat wrapper can slot in before or after */}
@@ -306,7 +311,12 @@ export default function AppLayout() {
           borderColor: 'var(--border)',
         }}
       >
-        <AiChat mode={pepperMode} onModeChange={handleModeChange} />
+        <AiChat
+          mode={pepperMode}
+          onModeChange={handleModeChange}
+          floatOpen={pepperMode === 'float' ? pepperFloatOpen : undefined}
+          onFloatToggle={pepperMode === 'float' ? () => setPepperFloatOpen(o => !o) : undefined}
+        />
 
         {/* Resize handle — right edge (docked-left) */}
         {pepperMode === 'docked-left' && (

@@ -494,7 +494,11 @@ function ChatPanel({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AiChat({ mode = 'float', onModeChange }: { mode?: PepperMode; onModeChange?: (m: PepperMode) => void }) {
+export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloatToggle }: {
+  mode?: PepperMode; onModeChange?: (m: PepperMode) => void
+  /** When provided, AppLayout/Sidebar controls the float open state externally */
+  floatOpen?: boolean; onFloatToggle?: () => void
+}) {
   const { user, getAccessTokenSilently } = useAuth0()
 
   // Returns { Authorization: 'Bearer <token>' } for every authenticated fetch
@@ -509,6 +513,9 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
   const location   = useLocation()
 
   const [open,               setOpen]               = useState(false)
+  // When externally controlled (sidebar button), defer to floatOpen prop
+  const isOpen     = floatOpen !== undefined ? floatOpen : open
+  const toggleOpen = onFloatToggle ?? (() => setOpen(o => !o))
   const [view,               setView]               = useState<PanelView>('chat')
   const [messages,           setMessages]           = useState<Message[]>([])
   const [input,              setInput]              = useState('')
@@ -1031,16 +1038,18 @@ export default function AiChat({ mode = 'float', onModeChange }: { mode?: Pepper
     )
   }
 
-  // Float mode — FAB + fixed popup
+  // Float mode — FAB (only when not sidebar-controlled) + fixed popup
   return (
     <>
-      <button onClick={() => setOpen(o => !o)}
-        className="pepper-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
-        style={{ background: 'var(--accent)', color: '#fff' }}
-        title="Pepper" aria-label="Toggle AI chat">
-        {open ? <span className="text-lg font-bold">✕</span> : <CogIcon size={30} color="#fff" />}
-      </button>
-      {open && (
+      {floatOpen === undefined && (
+        <button onClick={toggleOpen}
+          className="pepper-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
+          style={{ background: 'var(--accent)', color: '#fff' }}
+          title="Pepper" aria-label="Toggle AI chat">
+          {isOpen ? <span className="text-lg font-bold">✕</span> : <CogIcon size={30} color="#fff" />}
+        </button>
+      )}
+      {isOpen && (
         <div className="pepper-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
           style={{ width: floatSize.w, height: floatSize.h, background: 'var(--surface)', border: '1px solid var(--border)' }}>
           {/* Resize handle — top-left corner (panel is bottom-right anchored) */}

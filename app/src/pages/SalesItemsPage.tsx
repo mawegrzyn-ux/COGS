@@ -499,6 +499,7 @@ export default function SalesItemsPage() {
   const [countries,      setCountries]      = useState<Country[]>([])
   const [recipes,        setRecipes]        = useState<Recipe[]>([])
   const [ingredients,    setIngredients]    = useState<Ingredient[]>([])
+  const [siCategories,   setSiCategories]   = useState<{id: number; name: string}[]>([])
   const [loading,        setLoading]        = useState(true)
   const [toast,          setToast]          = useState<{msg: string} | null>(null)
   const showToast = (msg: string) => setToast({ msg })
@@ -524,9 +525,14 @@ export default function SalesItemsPage() {
   }, [api])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    api.get('/categories?for_sales_items=true')
+      .then((d: any[]) => setSiCategories((d || []).map((c: any) => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name))))
+      .catch(() => {})
+  }, [api])
 
   // ── Create / edit / delete ─────────────────────────────────────────────────
-  const [siModal,       setSiModal]       = useState<'new' | SalesItem | null>(null)
+  const [siModal,       setSiModal]       = useState<'new' | null>(null)
   const [newComboMode,  setNewComboMode]  = useState(false)
   const [saving,        setSaving]        = useState(false)
   const [deleting,      setDeleting]      = useState<SalesItem | null>(null)
@@ -534,20 +540,14 @@ export default function SalesItemsPage() {
   const saveSalesItem = async (payload: Partial<SalesItem>) => {
     setSaving(true)
     try {
-      if (siModal === 'new') {
-        const created: SalesItem = await api.post('/sales-items', payload)
-        // Default to all markets (global visibility)
-        if (countries.length > 0) {
-          await api.put(`/sales-items/${created.id}/markets`, { country_ids: countries.map(c => c.id) })
-        }
-        const full: SalesItem = await api.get(`/sales-items/${created.id}`)
-        setSalesItems(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)))
-        showToast('Sales Item created')
-      } else if (siModal && typeof siModal !== 'string') {
-        const updated: SalesItem = await api.put(`/sales-items/${siModal.id}`, payload)
-        setSalesItems(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s))
-        showToast('Sales Item saved')
+      const created: SalesItem = await api.post('/sales-items', payload)
+      // Default to all markets (global visibility)
+      if (countries.length > 0) {
+        await api.put(`/sales-items/${created.id}/markets`, { country_ids: countries.map(c => c.id) })
       }
+      const full: SalesItem = await api.get(`/sales-items/${created.id}`)
+      setSalesItems(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)))
+      showToast('Sales Item created')
       setSiModal(null); setNewComboMode(false)
     } catch { showToast('Save failed') } finally { setSaving(false) }
   }
@@ -567,6 +567,67 @@ export default function SalesItemsPage() {
   const [selectedSiId,  setSelectedSiId]  = useState<number | null>(null)
   const [siSortField,   setSiSortField]   = useState<string>('name')
   const [siSortDir,     setSiSortDir]     = useState<'asc' | 'desc'>('asc')
+
+  // ── Panel edit form ─────────────────────────────────────────────────────────
+  type PanelForm = {
+    name: string; category_id: string; description: string
+    item_type: SalesItem['item_type']
+    recipe_id: number | null; ingredient_id: number | null
+    combo_id: number | null; manual_cost: number | null
+    image_url: string | null
+  }
+  const blankPanelForm = (si: SalesItem): PanelForm => ({
+    name:          si.name,
+    category_id:   si.category_id ? String(si.category_id) : '',
+    description:   si.description ?? '',
+    item_type:     si.item_type,
+    recipe_id:     si.recipe_id     ?? null,
+    ingredient_id: si.ingredient_id ?? null,
+    combo_id:      si.combo_id      ?? null,
+    manual_cost:   si.manual_cost   ?? null,
+    image_url:     si.image_url     ?? null,
+  })
+  const [panelForm,        setPanelForm]        = useState<PanelForm | null>(null)
+  const [panelSaving,      setPanelSaving]      = useState(false)
+  const [panelRecipeSearch,  setPanelRecipeSearch]  = useState('')
+  const [panelRecipeOpen,    setPanelRecipeOpen]    = useState(false)
+  const [panelIngSearch,     setPanelIngSearch]     = useState('')
+  const [panelIngOpen,       setPanelIngOpen]       = useState(false)
+  const [panelComboSearch,   setPanelComboSearch]   = useState('')
+  const [panelComboOpen,     setPanelComboOpen]     = useState(false)
+
+  // Populate form when selection changes
+  useEffect(() => {
+    if (!selectedSiId) { setPanelForm(null); return }
+    const si = salesItems.find(s => s.id === selectedSiId)
+    if (!si) return
+    const f = blankPanelForm(si)
+    setPanelForm(f)
+    setPanelRecipeSearch(si.recipe_name     ?? '')
+    setPanelIngSearch(si.ingredient_name    ?? '')
+    setPanelComboSearch(si.combo_name       ?? '')
+    setPanelRecipeOpen(false); setPanelIngOpen(false); setPanelComboOpen(false)
+  }, [selectedSiId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const savePanelItem = async () => {
+    if (!selectedSiId || !panelForm || !panelForm.name.trim()) return
+    setPanelSaving(true)
+    try {
+      const payload = {
+        ...panelForm,
+        name:          panelForm.name.trim(),
+        category_id:   Number(panelForm.category_id) || null,
+        description:   panelForm.description.trim() || null,
+        recipe_id:     panelForm.item_type === 'recipe'      ? panelForm.recipe_id     : null,
+        ingredient_id: panelForm.item_type === 'ingredient'  ? panelForm.ingredient_id : null,
+        combo_id:      panelForm.item_type === 'combo'       ? panelForm.combo_id      : null,
+        manual_cost:   panelForm.item_type === 'manual'      ? panelForm.manual_cost   : null,
+      }
+      const updated: SalesItem = await api.put(`/sales-items/${selectedSiId}`, payload)
+      setSalesItems(prev => prev.map(s => s.id === selectedSiId ? { ...s, ...updated } : s))
+      showToast('Sales Item saved')
+    } catch { showToast('Save failed') } finally { setPanelSaving(false) }
+  }
 
   const toggleSort = (field: string) => {
     if (siSortField === field) {
@@ -979,100 +1040,201 @@ export default function SalesItemsPage() {
                   <span className="font-semibold text-text-1 text-sm truncate flex-1 min-w-0">{si.name}</span>
                   <button className="ml-2 text-text-3 hover:text-text-1 flex-shrink-0" onClick={() => setSelectedSiId(null)} title="Close">✕</button>
                 </div>
-                {/* Panel body */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {/* Type + category */}
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span>
-                    {si.category_name && <span className="text-xs text-text-2 bg-gray-100 px-2 py-0.5 rounded">{si.category_name}</span>}
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span>
-                  </div>
 
-                  {/* Linked item */}
-                  {si.item_type === 'recipe' && si.recipe_name && (
-                    <div>
-                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Recipe</p>
-                      <p className="text-sm text-text-1">{si.recipe_name}</p>
-                    </div>
-                  )}
-                  {si.item_type === 'ingredient' && si.ingredient_name && (
-                    <div>
-                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Ingredient</p>
-                      <p className="text-sm text-text-1">{si.ingredient_name}</p>
-                    </div>
-                  )}
-                  {si.item_type === 'combo' && si.combo_name && (
-                    <div>
-                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Combo</p>
-                      <p className="text-sm text-text-1">{si.combo_name}</p>
-                    </div>
-                  )}
-                  {si.item_type === 'manual' && si.manual_cost != null && (
-                    <div>
-                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Cost (USD)</p>
-                      <p className="text-sm font-mono text-text-1">${Number(si.manual_cost).toFixed(4)}</p>
-                    </div>
-                  )}
+                {/* Panel body — inline edit form */}
+                {panelForm && (
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
 
-                  {/* Modifier groups */}
-                  <div>
-                    <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-2">Modifier Groups</p>
-                    {!siMgData[selectedSiId] && !panelMgIsLoading && (
-                      <button className="text-xs text-accent hover:underline" onClick={() => toggleSiMg(selectedSiId)}>Load modifier groups</button>
-                    )}
-                    {panelMgIsLoading && <span className="text-xs text-text-3">Loading…</span>}
-                    {siMgData[selectedSiId] && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {panelMgGroups.length === 0 && <span className="text-xs text-text-3 italic">None assigned</span>}
-                        {panelMgGroups.map(mg => (
-                          <span key={mg.modifier_group_id}
-                            className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
-                            {mg.name}
-                            <button className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none" title={`Remove ${mg.name}`}
-                              onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>×</button>
-                          </span>
+                    {/* Name */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
+                      <input className="input w-full text-sm" value={panelForm.name}
+                        onChange={e => setPanelForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+
+                    {/* Item Type */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Type</label>
+                      <div className="flex gap-1 flex-wrap">
+                        {(['recipe', 'ingredient', 'manual', 'combo'] as const).map(t => (
+                          <button key={t}
+                            className={`text-xs px-2.5 py-1 rounded font-medium border transition-colors ${panelForm.item_type === t ? 'bg-accent text-white border-accent' : 'border-border text-text-2 hover:border-accent hover:text-accent'}`}
+                            onClick={() => setPanelForm(f => f ? { ...f, item_type: t, recipe_id: null, ingredient_id: null, combo_id: null } : f)}>
+                            {t.charAt(0).toUpperCase() + t.slice(1)}
+                          </button>
                         ))}
-                        {/* Add modifier dropdown */}
-                        {unassignedMgs.length > 0 && (
-                          <div className="relative inline-block">
-                            <button
-                              className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
-                              onClick={e => {
-                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                                setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
-                                setSiMgAddOpen(siMgAddOpen === selectedSiId ? null : selectedSiId)
-                              }}
-                            >+ Add</button>
-                            {siMgAddOpen === selectedSiId && siMgAddPos && createPortal(
-                              <>
-                                <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
-                                <div className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
-                                  style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}>
-                                  {unassignedMgs.map(mg => (
-                                    <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
-                                      onClick={() => { addSiModifier(selectedSiId, mg); setSiMgAddOpen(null) }}>
-                                      <span className="font-medium">{mg.name}</span>
-                                      <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
-                                    </button>
-                                  ))}
-                                  <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
-                                    onClick={() => setSiMgAddOpen(null)}>Cancel</button>
-                                </div>
-                              </>,
-                              document.body
-                            )}
+                      </div>
+                    </div>
+
+                    {/* Linked item */}
+                    {panelForm.item_type === 'recipe' && (
+                      <div className="relative">
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Recipe</label>
+                        <input className="input w-full text-sm" placeholder="Search recipes…" value={panelRecipeSearch}
+                          onChange={e => { setPanelRecipeSearch(e.target.value); setPanelRecipeOpen(true) }}
+                          onFocus={() => setPanelRecipeOpen(true)}
+                          onBlur={() => setTimeout(() => setPanelRecipeOpen(false), 150)} autoComplete="off" />
+                        {panelRecipeOpen && (
+                          <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                            {recipes.filter(r => r.name.toLowerCase().includes(panelRecipeSearch.toLowerCase())).slice(0, 40).map(r => (
+                              <button key={r.id} type="button" onMouseDown={e => e.preventDefault()}
+                                className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${panelForm.recipe_id === r.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                                onClick={() => { setPanelForm(f => f ? { ...f, recipe_id: r.id } : f); setPanelRecipeSearch(r.name); setPanelRecipeOpen(false) }}>
+                                {panelForm.recipe_id === r.id && <span className="text-accent text-xs">✓</span>}
+                                <span>{r.name}</span>
+                                {r.category_name && <span className="ml-auto text-xs text-gray-400 shrink-0">{r.category_name}</span>}
+                              </button>
+                            ))}
                           </div>
                         )}
                       </div>
                     )}
-                  </div>
-                </div>
+                    {panelForm.item_type === 'ingredient' && (
+                      <div className="relative">
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Ingredient</label>
+                        <input className="input w-full text-sm" placeholder="Search ingredients…" value={panelIngSearch}
+                          onChange={e => { setPanelIngSearch(e.target.value); setPanelIngOpen(true) }}
+                          onFocus={() => setPanelIngOpen(true)}
+                          onBlur={() => setTimeout(() => setPanelIngOpen(false), 150)} autoComplete="off" />
+                        {panelIngOpen && (
+                          <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                            {ingredients.filter(i => i.name.toLowerCase().includes(panelIngSearch.toLowerCase())).slice(0, 40).map(i => (
+                              <button key={i.id} type="button" onMouseDown={e => e.preventDefault()}
+                                className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${panelForm.ingredient_id === i.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                                onClick={() => { setPanelForm(f => f ? { ...f, ingredient_id: i.id } : f); setPanelIngSearch(i.name); setPanelIngOpen(false) }}>
+                                {panelForm.ingredient_id === i.id && <span className="text-accent text-xs">✓</span>}
+                                <span>{i.name}</span>
+                                {i.base_unit_abbr && <span className="ml-auto text-xs text-gray-400 shrink-0">{i.base_unit_abbr}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {panelForm.item_type === 'combo' && (
+                      <div className="relative">
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Combo</label>
+                        <input className="input w-full text-sm" placeholder="Search combos…" value={panelComboSearch}
+                          onChange={e => { setPanelComboSearch(e.target.value); setPanelComboOpen(true) }}
+                          onFocus={() => setPanelComboOpen(true)}
+                          onBlur={() => setTimeout(() => setPanelComboOpen(false), 150)} autoComplete="off" />
+                        {panelComboOpen && (
+                          <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                            {combos.filter(c => c.name.toLowerCase().includes(panelComboSearch.toLowerCase())).slice(0, 40).map(c => (
+                              <button key={c.id} type="button" onMouseDown={e => e.preventDefault()}
+                                className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent-dim flex items-center gap-2 ${panelForm.combo_id === c.id ? 'bg-accent-dim font-medium text-accent' : 'text-gray-800'}`}
+                                onClick={() => { setPanelForm(f => f ? { ...f, combo_id: c.id } : f); setPanelComboSearch(c.name); setPanelComboOpen(false) }}>
+                                {panelForm.combo_id === c.id && <span className="text-accent text-xs">✓</span>}
+                                <span>{c.name}</span>
+                                {c.step_count !== undefined && <span className="ml-auto text-xs text-gray-400 shrink-0">{c.step_count} step{c.step_count !== 1 ? 's' : ''}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {panelForm.item_type === 'manual' && (
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Cost (USD per portion)</label>
+                        <input type="number" step="0.0001" min="0" className="input w-full text-sm font-mono"
+                          value={panelForm.manual_cost ?? ''}
+                          onChange={e => setPanelForm(f => f ? { ...f, manual_cost: parseFloat(e.target.value) || null } : f)} />
+                      </div>
+                    )}
 
-                {/* Panel footer actions */}
+                    {/* Category */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
+                      <select className="input w-full text-sm" value={panelForm.category_id}
+                        onChange={e => setPanelForm(f => f ? { ...f, category_id: e.target.value } : f)}>
+                        <option value="">No category…</option>
+                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Description</label>
+                      <textarea className="input w-full text-sm" rows={2} value={panelForm.description}
+                        onChange={e => setPanelForm(f => f ? { ...f, description: e.target.value } : f)} />
+                    </div>
+
+                    {/* Image */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Image URL</label>
+                      <input className="input w-full text-sm" placeholder="https://…" value={panelForm.image_url ?? ''}
+                        onChange={e => setPanelForm(f => f ? { ...f, image_url: e.target.value || null } : f)} />
+                      {panelForm.image_url && (
+                        <img src={panelForm.image_url} alt="" className="mt-2 w-full h-24 object-cover rounded border border-border" onError={e => (e.currentTarget.style.display = 'none')} />
+                      )}
+                    </div>
+
+                    {/* Markets badge (read-only — manage via market settings) */}
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Markets</label>
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span>
+                    </div>
+
+                    {/* Modifier groups (unchanged) */}
+                    <div>
+                      <p className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Modifier Groups</p>
+                      {!siMgData[selectedSiId] && !panelMgIsLoading && (
+                        <button className="text-xs text-accent hover:underline" onClick={() => toggleSiMg(selectedSiId)}>Load modifier groups</button>
+                      )}
+                      {panelMgIsLoading && <span className="text-xs text-text-3">Loading…</span>}
+                      {siMgData[selectedSiId] && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {panelMgGroups.length === 0 && <span className="text-xs text-text-3 italic">None assigned</span>}
+                          {panelMgGroups.map(mg => (
+                            <span key={mg.modifier_group_id}
+                              className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
+                              {mg.name}
+                              <button className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none" title={`Remove ${mg.name}`}
+                                onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>×</button>
+                            </span>
+                          ))}
+                          {unassignedMgs.length > 0 && (
+                            <div className="relative inline-block">
+                              <button
+                                className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
+                                onClick={e => {
+                                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                  setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
+                                  setSiMgAddOpen(siMgAddOpen === selectedSiId ? null : selectedSiId)
+                                }}
+                              >+ Add</button>
+                              {siMgAddOpen === selectedSiId && siMgAddPos && createPortal(
+                                <>
+                                  <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
+                                  <div className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
+                                    style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}>
+                                    {unassignedMgs.map(mg => (
+                                      <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
+                                        onClick={() => { addSiModifier(selectedSiId, mg); setSiMgAddOpen(null) }}>
+                                        <span className="font-medium">{mg.name}</span>
+                                        <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
+                                      </button>
+                                    ))}
+                                    <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
+                                      onClick={() => setSiMgAddOpen(null)}>Cancel</button>
+                                  </div>
+                                </>,
+                                document.body
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Panel footer — Save + Delete */}
                 <div className="px-4 py-3 border-t border-border flex gap-2">
                   <button className="btn btn-sm btn-primary flex-1"
-                    onClick={() => { setSiModal(si as SalesItem); setNewComboMode(false) }}>
-                    Edit
+                    disabled={panelSaving || !panelForm?.name.trim()}
+                    onClick={savePanelItem}>
+                    {panelSaving ? 'Saving…' : 'Save'}
                   </button>
                   <button className="btn btn-sm btn-danger"
                     onClick={() => { setDeleting(si as SalesItem); setSelectedSiId(null) }}>
@@ -1428,11 +1590,11 @@ export default function SalesItemsPage() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────────── */}
 
-      {/* Sales Item create/edit */}
-      {siModal !== null && (
+      {/* Sales Item create (New only — edit is handled inline by the right panel) */}
+      {siModal === 'new' && (
         <SalesItemModal
-          mode={siModal === 'new' ? 'new' : 'edit'}
-          initial={siModal === 'new' ? null : siModal as SalesItem}
+          mode="new"
+          initial={null}
           defaultType={newComboMode ? 'combo' : undefined}
           recipes={recipes} ingredients={ingredients} combos={combos}
           onSave={saveSalesItem} saving={saving}
