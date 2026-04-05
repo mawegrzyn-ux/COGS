@@ -237,8 +237,9 @@ const migrations = [
   )`,
 
   // ── Indexes ───────────────────────────────────────────────────────────────
-  `CREATE INDEX IF NOT EXISTS idx_price_quotes_ingredient  ON mcogs_price_quotes(ingredient_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_price_quotes_vendor      ON mcogs_price_quotes(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_price_quotes_ingredient     ON mcogs_price_quotes(ingredient_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_price_quotes_ingredient_act ON mcogs_price_quotes(ingredient_id, is_active)`,
+  `CREATE INDEX IF NOT EXISTS idx_price_quotes_vendor         ON mcogs_price_quotes(vendor_id)`,
   `CREATE INDEX IF NOT EXISTS idx_recipe_items_recipe      ON mcogs_recipe_items(recipe_id)`,
   `CREATE INDEX IF NOT EXISTS idx_menu_items_menu          ON mcogs_menu_items(menu_id)`,
   `CREATE INDEX IF NOT EXISTS idx_vendors_country          ON mcogs_vendors(country_id)`,

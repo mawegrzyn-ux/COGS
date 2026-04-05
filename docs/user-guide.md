@@ -28,9 +28,9 @@ Follow this sequence on a fresh instance. Skipping steps causes missing dropdown
 8. **Inventory → Price Quotes** — add vendor pricing for each ingredient
 9. **Inventory → Price Quotes → Preferred Vendors** — assign the best quote per ingredient per market
 10. **Recipes** — build your dishes
-11. **Menus → Menu Builder** — create menus and add items
-12. **Menus → Compare Markets** — set sell prices per price level across markets
-13. **Menus → Market Price Tool** — review COGS% performance per market and price level
+11. **Sales Items** — build your sales item catalog (link recipes/ingredients, create combos, configure modifiers)
+12. **Menus → Menu Builder** — create menus and add sales items with sell prices per price level
+13. **Menu Engineer** — model sales mix and review COGS% performance
 
 ---
 
@@ -114,7 +114,7 @@ Full CRUD: create, edit, and delete units. You cannot delete a unit that is in u
 
 ### Price Levels Tab
 
-Price Levels represent channels or contexts in which a menu item is sold: for example, Eat-in, Takeout, and Delivery. Every sell price in the Compare Markets tab is tied to a price level.
+Price Levels represent channels or contexts in which a menu item is sold: for example, Eat-in, Takeout, and Delivery. Every sell price on a menu item is tied to a price level.
 
 One price level is marked as the default. This default is used when a new country is created without specifying a price level. Changing the default is atomic — only one level can be default at a time.
 
@@ -135,7 +135,7 @@ You can also edit rates manually per market on the Markets page.
 
 ### COGS Thresholds Tab
 
-Configure the target COGS% bands used for colour coding throughout the app, particularly in the Market Price Tool tab.
+Configure the target COGS% bands used for colour coding throughout the app, particularly in the Menu Engineer.
 
 | Band | Colour | When applied |
 |---|---|---|
@@ -193,7 +193,7 @@ Tax rates map to price levels via Country-Level Tax configuration. For example:
 - UK Cold Takeaway → Zero 0%
 - UK Hot Takeaway → Standard 20%
 
-This mapping means the Market Price Tool and Compare Markets tabs correctly apply the right tax rate per channel when calculating net sell prices and COGS%.
+This mapping ensures the Menu Engineer correctly applies the right tax rate per channel when calculating net sell prices and COGS%.
 
 Full CRUD for tax rates. Set the default tax rate flag per market.
 
@@ -211,19 +211,23 @@ Locations scope all HACCP records — every temperature log and CCP log is tied 
 
 ## Categories
 
-Categories at `/categories` organise your ingredients and recipes into logical groups. Each category has three fields:
+Categories at `/categories` organise your ingredients, recipes, and sales items into logical groups.
 
 | Field | Description |
 |---|---|
 | Name | Category name, e.g. Dairy, Proteins, Mains |
-| Group Name | A flat label grouping related categories, e.g. "Produce", "Proteins" |
-| Type | ingredient or recipe — determines which picker the category appears in |
+| Group | Assigns the category to a Category Group (e.g. "Produce", "Proteins") — select from the group dropdown |
+| For Ingredients | Tick if this category should appear in the ingredient category picker |
+| For Recipes | Tick if this category should appear in the recipe category picker |
+| For Sales Items | Tick if this category should appear in the sales item category picker |
+
+A category can have any combination of the three scope flags enabled — e.g. "Mains" might apply to both recipes and sales items. Category Groups are managed from within the category form and stored in the `mcogs_category_groups` table.
 
 Suggested ingredient categories: Dairy, Proteins, Produce, Dry Goods, Beverages, Sauces, Packaging.
 
-Suggested recipe categories: Mains, Sides, Desserts, Drinks, Sauces.
+Suggested recipe/sales item categories: Mains, Sides, Desserts, Drinks, Sauces.
 
-Full CRUD. You cannot delete a category that is currently assigned to an ingredient or recipe.
+Full CRUD. You cannot delete a category that is currently assigned to an ingredient, recipe, or sales item.
 
 ---
 
@@ -370,13 +374,63 @@ A **Price Level Recipe** (internally called a PL variation) is an alternate set 
 
 ---
 
+## Sales Items
+
+The Sales Items page at `/sales-items` is the catalog of items available to add to menus. Before building menus you should create your sales items here.
+
+Each sales item has one of four types:
+
+| Type | Description | COGS source |
+|---|---|---|
+| Recipe | Links to a recipe in the system | Calculated from recipe ingredients and vendor pricing |
+| Ingredient | Links directly to an ingredient | Calculated from vendor pricing |
+| Manual | No recipe/ingredient link — cost entered directly | Fixed cost you specify |
+| Combo | Structured bundle with selectable steps | Sum of step option costs |
+
+### Sales Item Fields
+
+| Field | Description |
+|---|---|
+| Name | Display name for the item |
+| Type | recipe / ingredient / manual / combo |
+| Category | Sales item category (scope flag `for_sales_items = true`) |
+| Description | Optional description |
+| Image | Optional image URL |
+| Sort Order | Default display order |
+| Market Visibility | Enable/disable the item per market |
+| Default Prices | Default sell price per price level (can be overridden per menu) |
+| Modifier Groups | Attach reusable add-on option groups |
+
+### Combos
+
+A Combo sales item is built from **Steps** — each step represents a customer choice (e.g. "Choose your burger", "Choose your side"). Each step has one or more **Options** that link to a recipe, ingredient, or manual cost.
+
+- Steps have **min/max selection** rules (e.g. exactly 1 item, or up to 3 extras)
+- Options can carry a **price add-on** (e.g. +£1.50 for a premium choice)
+- Options can have **Modifier Groups** attached
+
+Combo COGS is calculated as the sum of all step costs, using the average cost across options where a step allows multiple choices.
+
+### Modifier Groups
+
+Modifier Groups are reusable add-on lists (e.g. "Sauce choice", "Extra toppings"). They are defined once and can be attached to any number of sales items or combo step options.
+
+| Field | Description |
+|---|---|
+| Name | Group name shown to staff/customers |
+| Min Select | Minimum number of options the customer must choose |
+| Max Select | Maximum number of options allowed |
+| Options | List of add-on items — each links to a recipe, ingredient, or manual cost with an optional `price_addon` |
+
+---
+
 ## Menus
 
-The Menus page at `/menus` is where you build and cost your menu offerings. It has four tabs.
+The Menus page at `/menus` is where you build and cost your menu offerings. It has three tabs.
 
 ### Menu Builder Tab
 
-Create menus and populate them with items.
+Create menus and populate them with Sales Items.
 
 Each menu is linked to a market (country). You can have multiple menus per market (e.g. Dine-in Menu, Delivery Menu).
 
@@ -384,12 +438,13 @@ Each menu item record contains:
 
 | Field | Description |
 |---|---|
-| Recipe or Ingredient | What is being sold — link to a recipe or a raw ingredient |
+| Sales Item | The sales item being added to this menu |
 | Display Name | The name shown to customers on the menu |
 | Sort Order | Integer controlling the display order within the menu |
 | Allergen Notes | Free text shown alongside allergen matrix data for this item |
+| Sell Prices | Set a sell price per price level (gross, tax-inclusive) |
 
-Items are grouped by their recipe or ingredient category within the menu view.
+Items are grouped by their sales item category within the menu view.
 
 ### Menu Engineer Tab
 
@@ -427,7 +482,7 @@ A scenario saves a named snapshot of the quantities, any price overrides you hav
 - **Save scenario** — click the save button to name and save the current state. The name and notes are stored alongside the qty_data and price_overrides in `mcogs_menu_scenarios`.
 - **Load scenario** — click any saved scenario in the scenario list to restore its quantities and price overrides.
 - **Delete scenario** — remove a saved scenario permanently.
-- **Price overrides** — in the ME table you can type a new sell price directly into any Price cell. This overrides the live menu price for the purposes of this scenario only. The override is stored as part of the scenario; the actual menu price in Compare Markets is not changed unless you use **Push Prices**.
+- **Price overrides** — in the ME table you can type a new sell price directly into any Price cell. This overrides the live menu price for the purposes of this scenario only. The override is stored as part of the scenario; the actual menu price is not changed unless you use **Push Prices**.
 - **Push Prices** — replaces the live sell prices in the menu (across all markets) with the price overrides from the current scenario. This is a permanent write; confirm carefully.
 - **What If tool** — apply a percentage uplift or reduction to all prices or all costs in one operation. Useful for modelling "what if food costs rise by 5%?" or "what if we raise all prices by 10%?".
 
@@ -468,37 +523,6 @@ Each shared link has:
 **Shared page (public view):** Recipients open the link at `/share/<slug>`, enter the password, and see the menu pricing grid. In edit mode they can type new prices directly in the grid; each save is logged as a price change event visible in the ME History tab.
 
 **Copying a link:** Click the copy icon next to any shared link to copy the full URL to the clipboard. The icon briefly confirms the copy.
-
-### Compare Markets Tab
-
-The Compare Markets tab lets you set and manage sell prices for every menu item across every price level.
-
-Prices are edited inline — click a cell to edit it, type the price in local currency, and the system converts and stores it in USD.
-
-**Currency conversion:**
-
-- Display: `displayed price = stored_USD × dispRate` where `dispRate = market.exchange_rate / baseCurrency.exchange_rate`
-- Save-back: `stored_USD = displayed price / dispRate`
-
-The tab shows both gross (inclusive of tax) and net (exclusive of tax) prices. The tax rate applied to each price level is configured in Markets → Tax Rates.
-
-If prices are displaying incorrectly, check that the market's exchange rate is set correctly in Markets, and use Settings → Exchange Rates → Sync to refresh live rates.
-
-### Market Price Tool Tab
-
-The Market Price Tool shows the COGS% for every menu item across every price level in a colour-coded grid.
-
-COGS% = recipe cost per portion ÷ net sell price × 100
-
-| Colour | Meaning | When applied |
-|---|---|---|
-| Green | Excellent | COGS% at or below target |
-| Amber | Acceptable | COGS% between target and target + 10% |
-| Red | Alert | COGS% above acceptable ceiling |
-
-The target is configured in Settings → COGS Thresholds.
-
-The Market Price Tool always displays prices in the local currency of the selected market (`dispRate = 1` for the local view).
 
 ---
 
@@ -986,7 +1010,7 @@ dispRate = market.exchange_rate / baseCurrency.exchange_rate
 displayed_price = stored_USD × dispRate
 ```
 
-When saving a price entered in local currency (e.g. in the Compare Markets tab):
+When saving a price entered in local currency:
 
 ```
 stored_USD = displayed_price / dispRate
@@ -1016,7 +1040,7 @@ Typical targets: QSR 28–32%, casual dining 30–35%, fine dining 35–40%. Del
 
 No preferred vendor (or no active quote) exists for one or more ingredients in the selected market. Go to Inventory → Price Quotes, verify that an active quote exists for the ingredient, and assign a preferred vendor for the market.
 
-**Compare Markets price is displaying incorrectly after editing**
+**Menu sell prices are displaying incorrectly**
 
 Check that the market's exchange rate is set correctly in Markets. Use Settings → Exchange Rates → Sync to fetch current live rates. Also confirm the base currency is USD and that the target market's currency code matches the ISO 4217 code in the exchange rate table.
 

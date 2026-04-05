@@ -1,27 +1,52 @@
 const router = require('express').Router()
 const pool   = require('../db/pool')
 
+// GET /ingredients/stats — lightweight counts for header badges (no auth needed beyond the route guard)
+router.get('/stats', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM mcogs_ingredients)                              AS ingredient_count,
+        (SELECT COUNT(*)::int FROM mcogs_price_quotes WHERE is_active = true)      AS active_quote_count,
+        (SELECT COUNT(*)::int FROM mcogs_vendors)                                  AS vendor_count,
+        (SELECT COUNT(DISTINCT country_id)::int FROM mcogs_vendors)                AS country_count
+    `)
+    res.json(rows[0])
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to fetch inventory stats' } })
+  }
+})
+
 // GET /ingredients?category_id=
 router.get('/', async (req, res) => {
   try {
     const { category_id } = req.query
+    // Use a LATERAL subquery instead of LEFT JOIN + GROUP BY to count quotes.
+    // The LATERAL runs one tiny indexed scan per ingredient (idx_price_quotes_ingredient)
+    // rather than joining all price_quote rows then collapsing with a hash aggregate.
     let query = `
       SELECT i.*,
-             u.name          AS base_unit_name,
-             u.abbreviation  AS base_unit_abbr,
-             c.name          AS category_name,
-             g.name          AS category_group_name,
-             COUNT(DISTINCT pq.id)                              AS quote_count,
-             COUNT(DISTINCT CASE WHEN pq.is_active THEN pq.id END) AS active_quote_count
+             u.name        AS base_unit_name,
+             u.abbreviation AS base_unit_abbr,
+             c.name        AS category_name,
+             g.name        AS category_group_name,
+             pq_stats.quote_count,
+             pq_stats.active_quote_count
       FROM mcogs_ingredients i
-      LEFT JOIN mcogs_units             u  ON u.id = i.base_unit_id
-      LEFT JOIN mcogs_categories        c  ON c.id = i.category_id
-      LEFT JOIN mcogs_category_groups   g  ON g.id = c.group_id
-      LEFT JOIN mcogs_price_quotes      pq ON pq.ingredient_id = i.id
+      LEFT JOIN mcogs_units           u  ON u.id  = i.base_unit_id
+      LEFT JOIN mcogs_categories      c  ON c.id  = i.category_id
+      LEFT JOIN mcogs_category_groups g  ON g.id  = c.group_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int                                    AS quote_count,
+               COUNT(*) FILTER (WHERE is_active = true)::int   AS active_quote_count
+        FROM   mcogs_price_quotes
+        WHERE  ingredient_id = i.id
+      ) pq_stats ON true
     `
     const vals = []
     if (category_id) { query += ` WHERE i.category_id = $1`; vals.push(category_id) }
-    query += ` GROUP BY i.id, u.name, u.abbreviation, c.name, g.name ORDER BY i.name ASC`
+    query += ` ORDER BY i.name ASC`
     const { rows } = await pool.query(query, vals)
     res.json(rows)
   } catch (err) {

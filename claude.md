@@ -107,7 +107,7 @@ COGS/
 │           ├── CategoriesPage.tsx  # Ingredient/recipe categories
 │           ├── InventoryPage.tsx   # Ingredients, vendors, price quotes
 │           ├── RecipesPage.tsx     # Recipe builder with COGS calculation
-│           ├── MenusPage.tsx       # Menu builder (Menus/Menu Engineer/Compare Markets/Market Price Tool tabs)
+│           ├── MenusPage.tsx       # Menu builder (Menus/Menu Engineer/Shared Links tabs)
 │           ├── ImportPage.tsx      # AI-powered data import wizard
 │           ├── AllergenMatrixPage.tsx  # Allergen matrix (EU/UK FIC 14)
 │           ├── HACCPPage.tsx       # HACCP temp logs & CCP logs
@@ -351,7 +351,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 3 | `mcogs_countries` | Countries with currency codes, symbols, exchange rates, default price level |
 | 4 | `mcogs_country_tax_rates` | Tax rates per country (e.g. UK VAT 20%) |
 | 5 | `mcogs_country_level_tax` | Junction: which tax rate applies to which price level per country |
-| 6 | `mcogs_categories` | Ingredient/recipe categories with group_name (flat string) and scope flags (`for_ingredients`, `for_recipes`, `for_sales_items`) |
+| 6 | `mcogs_categories` | Ingredient/recipe/sales-item categories with `group_id` FK → `mcogs_category_groups` and scope flags (`for_ingredients`, `for_recipes`, `for_sales_items`) |
 | 7 | `mcogs_vendors` | Suppliers/vendors, linked to a country |
 | 8 | `mcogs_ingredients` | Ingredient master list with base unit, waste %, prep conversion |
 | 9 | `mcogs_price_quotes` | Vendor pricing per ingredient: purchase price, qty, unit, active flag |
@@ -413,13 +413,21 @@ item_type: 'ingredient' | 'recipe'   -- supports sub-recipes
 
 **`mcogs_categories`**
 ```sql
-id, name VARCHAR(100), group_name VARCHAR(100),   -- group_name is flat string (e.g. 'Dairy')
-group_id INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,
-for_ingredients BOOLEAN DEFAULT true,             -- scope flags (replace old 'type' column)
-for_recipes     BOOLEAN DEFAULT true,
+id, name VARCHAR(100),
+group_id INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,  -- FK to group table
+group_name VARCHAR(100),                          -- legacy compat; group_id is canonical
+for_ingredients BOOLEAN DEFAULT false,            -- scope flags (replace old 'type' column)
+for_recipes     BOOLEAN DEFAULT false,
 for_sales_items BOOLEAN DEFAULT false
--- group_id FK is the modern way to assign groups; group_name kept for legacy compat
 -- Filter by scope: WHERE for_ingredients=true / WHERE for_recipes=true / WHERE for_sales_items=true
+-- A category can have multiple scope flags set (e.g. for_recipes=true AND for_sales_items=true)
+```
+
+**`mcogs_category_groups`**
+```sql
+id, name VARCHAR(100) NOT NULL UNIQUE, sort_order INTEGER DEFAULT 0
+-- Live table — groups are the canonical grouping mechanism for categories
+-- The old group_name VARCHAR on mcogs_categories is kept for legacy compat but group_id FK is preferred
 ```
 
 **`mcogs_recipes`**
@@ -433,8 +441,9 @@ yield_qty, yield_unit_id
 ### Indexes
 
 ```sql
-idx_price_quotes_ingredient   ON mcogs_price_quotes(ingredient_id)
-idx_price_quotes_vendor        ON mcogs_price_quotes(vendor_id)
+idx_price_quotes_ingredient     ON mcogs_price_quotes(ingredient_id)
+idx_price_quotes_ingredient_act ON mcogs_price_quotes(ingredient_id, is_active)  -- covers LATERAL count
+idx_price_quotes_vendor         ON mcogs_price_quotes(vendor_id)
 idx_recipe_items_recipe        ON mcogs_recipe_items(recipe_id)
 idx_menu_items_menu            ON mcogs_menu_items(menu_id)
 idx_vendors_country            ON mcogs_vendors(country_id)
@@ -468,7 +477,8 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/country-level-tax` | `country-level-tax.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/categories` | `categories.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/vendors` | `vendors.js` | ✅ Active |
-| `GET/POST/PUT/DELETE /api/ingredients` | `ingredients.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/ingredients` | `ingredients.js` | ✅ Active — GET uses LATERAL subquery for quote counts (avoids GROUP BY on full join) |
+| `GET /api/ingredients/stats` | `ingredients.js` | ✅ Active — lightweight counts for Inventory header badges; returns `{ingredient_count, active_quote_count, vendor_count, country_count}` |
 | `GET/POST/PUT/DELETE /api/price-quotes` | `price-quotes.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/preferred-vendors` | `preferred-vendors.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/recipes` | `recipes.js` | ✅ Active |
@@ -714,20 +724,18 @@ Three tabs:
 
 ### ✅ Menus Page (`/menus`)
 
-Five tabs:
+Three tabs:
 
-1. **Menus (Menu Builder)** — create menus per country, add recipe/ingredient items with display name + sort order
+1. **Menus (Menu Builder)** — create menus per country, add Sales Items with display name + sort order + sell prices per price level
 2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and scenario planning per menu item
-3. **Compare Markets** — grid of sell prices per menu item per price level; inline editing with currency conversion (internally called PLT/price-report)
-4. **Market Price Tool** — COGS% grid showing gross/net margins per item per price level (internally called MPT/level-report)
-5. **Shared Links** — manage password-protected public links for external reviewer access
+3. **Shared Links** — manage password-protected public links for external reviewer access
 
 **Menu Engineer details:**
 - Cross-tab sync: selecting a menu in Menu Builder also selects it in Menu Engineer and vice versa
 - Mix Manager modal pre-populates with existing quantities when qty fields are already filled
 - Currency symbol shown in column headers (e.g. `Cost/ptn (£)`)
 - Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header
-- **Price overrides** — type a new price into any Price cell to override the live price for this scenario only; does not affect Compare Markets until "Push Prices" is used
+- **Price overrides** — type a new price into any Price cell to override the live price for this scenario only; does not affect the live menu price until "Push Prices" is used
 - **Push Prices** — permanently writes scenario price overrides back to the live menu
 - **What If tool** — apply a % change to all prices or all costs in one step
 - **Scenarios** — save/load/delete named snapshots of qty_data + price_overrides + notes, stored in `mcogs_menu_scenarios`
@@ -746,12 +754,50 @@ Five tabs:
 - Comments posted via shared links appear in ME Comments tab, merged and sorted by timestamp
 - Reply from ME routes to the correct originating shared view via `shared_page_id` tagging
 
-**Currency conversion in Compare Markets / Market Price Tool:**
+**Currency conversion:**
 
 - All prices stored in USD base
 - Display rate: `dispRate = country.rate / targetCurrency.rate`
 - Save-back: `localPrice = displayValue / dispRate`
-- Market Price Tool always shows local currency (`dispRate = 1`)
+
+**Menu item structure:**
+
+All menu items are now stored in `mcogs_menu_sales_items` (FK → `mcogs_sales_items`). The legacy `mcogs_menu_items` table still exists but is no longer used for new menus. COGS is calculated via `/cogs/menu-sales/:id`. The `menu_item_id` alias in COGS responses maps to `menu_sales_item_id` for backwards compatibility with ScenarioTool price override keys.
+
+### ✅ Sales Items Page (`/sales-items`)
+
+The Sales Items page manages the catalog of items available to place on menus. Four item types:
+
+| Type | Description | COGS source |
+|---|---|---|
+| `recipe` | Links to a recipe | `calcRecipeCost()` via preferred vendor quotes |
+| `ingredient` | Links directly to an ingredient | Vendor pricing × prep qty |
+| `manual` | No recipe/ingredient link; fixed cost entered manually | `manual_cost` field |
+| `combo` | Structured bundle: steps → options | Sum of step costs |
+
+**Sales Item features:**
+- **Market visibility** — each item can be enabled/disabled per market via `mcogs_sales_item_markets`
+- **Default sell prices** — per price level via `mcogs_sales_item_prices` (market-independent defaults; menu-specific overrides in `mcogs_menu_sales_item_prices`)
+- **Modifier Groups** — reusable add-on lists attached to a sales item (or combo step option) via `mcogs_sales_item_modifier_groups`. Each group has `min_select`/`max_select` and a list of options (recipe/ingredient/manual + `price_addon`)
+- **Combo structure**: `mcogs_combo_steps` → `mcogs_combo_step_options` → optional `mcogs_combo_step_option_modifier_groups`
+- **Category** — assigned via `category_id` FK referencing `mcogs_categories` (scope flag `for_sales_items = true`)
+- **Image** — `image_url` stored on the sales item
+
+**Database tables:**
+
+| Table | Purpose |
+|---|---|
+| `mcogs_sales_items` | Item catalog (item_type, name, recipe_id/ingredient_id/manual_cost/combo_id, category_id) |
+| `mcogs_sales_item_markets` | Per-item market visibility + `is_active` flag |
+| `mcogs_sales_item_prices` | Default sell prices per item × price level |
+| `mcogs_modifier_groups` | Reusable modifier group definitions (name, min/max_select) |
+| `mcogs_modifier_options` | Options within a modifier group (item_type, recipe/ingredient/manual, price_addon) |
+| `mcogs_sales_item_modifier_groups` | Junction: sales_items ↔ modifier_groups |
+| `mcogs_combo_steps` | Steps within a combo (linked via `sales_item_id` on `mcogs_sales_items`) |
+| `mcogs_combo_step_options` | Options per combo step (item_type, recipe/ingredient/manual, price_addon) |
+| `mcogs_combo_step_option_modifier_groups` | Junction: combo step options ↔ modifier_groups |
+| `mcogs_menu_sales_items` | Menu ↔ sales_items link (sort_order, allergen_notes, qty) |
+| `mcogs_menu_sales_item_prices` | Per-menu price overrides per sales item × price level |
 
 ### ✅ Dashboard Page (`/dashboard`)
 
@@ -1091,27 +1137,7 @@ app.set('trust proxy', 1)
 
 ---
 
-### Fix 4 — Currency Conversion (PLT Save-Back)
-
-**Symptom:** Editing a price in PLT always converted incorrectly unless the base currency was USD. For example, Italy (EUR) with EUR target: entering €15 saved as ~€17.41.
-
-**Root Cause:** The save-back formula used only `c.rate` instead of the display rate (`c.rate / targetRate`):
-
-```typescript
-// WRONG
-const localPrice = grossDisplay / c.rate
-
-// CORRECT
-const localPrice = grossDisplay / dispRate  // where dispRate = c.rate / targetRate
-```
-
-**Fix:** Pass `dispRate` through to `onSavePrice`, store as `disp_rate` on `PltGridRow`, use in save-back.
-
-**File:** `app/src/pages/MenusPage.tsx`
-
----
-
-### Fix 5 — ColumnHeader Dropdown Clipping
+### Fix 4 — ColumnHeader Dropdown Clipping
 
 **Symptom:** Filter/sort dropdown in column headers clipped inside `overflow-x-auto` table wrapper.
 
@@ -1121,7 +1147,7 @@ const localPrice = grossDisplay / dispRate  // where dispRate = c.rate / targetR
 
 ---
 
-### Fix 6 — TypeScript Build Failure (ImportPage)
+### Fix 5 — TypeScript Build Failure (ImportPage)
 
 **Symptom:** GitHub Actions CI/CD failed at the Vite build step with two TypeScript errors in `ImportPage.tsx`.
 
@@ -1142,7 +1168,7 @@ children: React.ReactNode  →  children?: React.ReactNode
 
 ---
 
-### Fix 7 — import.js Router Export Shape
+### Fix 6 — import.js Router Export Shape
 
 **Symptom:** After extracting `stageFileContent` from `import.js`, the route registration broke — Express threw "Router.use() requires a middleware function" at startup.
 
@@ -1158,7 +1184,7 @@ router.use('/import', require('./import').router);
 
 ---
 
-### Fix 8 — Recipe Import Silently Failing (Wrong Column Names)
+### Fix 7 — Recipe Import Silently Failing (Wrong Column Names)
 
 **Symptom:** Recipes never appeared in the database after running the import wizard, even when using the built-in template file. No visible error — the wizard reported success.
 
@@ -1183,7 +1209,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 9 — Shared View Comment Count Mismatch
+### Fix 8 — Shared View Comment Count Mismatch
 
 **Symptom:** The Comments badge in the ME Notes/History panel showed 9 but only 3 comments were visible.
 
@@ -1193,7 +1219,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 10 — Shared View Reply Posted to Wrong Shared Page
+### Fix 9 — Shared View Reply Posted to Wrong Shared Page
 
 **Symptom:** When replying to a comment in Menu Engineer that came from shared view B, the reply was always posted to shared view A (active[0]).
 
@@ -1209,7 +1235,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 11 — Pepper Conversation Lost on Panel Mode Switch
+### Fix 10 — Pepper Conversation Lost on Panel Mode Switch
 
 **Symptom:** Switching Pepper between float, docked-left, and docked-right modes cleared the conversation history.
 
@@ -1221,7 +1247,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 12 — AI Chat Focus Loss on Every Keystroke
+### Fix 11 — AI Chat Focus Loss on Every Keystroke
 
 **Symptom:** Typing in the Pepper chat textarea loses focus after each character, requiring a click to re-focus. Also, focus was not restored to the textarea after an AI response finished streaming.
 
@@ -1235,7 +1261,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 13 — Sidebar Does Not Span Full Viewport Height
+### Fix 12 — Sidebar Does Not Span Full Viewport Height
 
 **Symptom:** The sidebar's green border stopped short of the bottom of the screen, leaving a gap.
 
@@ -1247,7 +1273,7 @@ Both invalid column names caused PostgreSQL to throw inside the transaction, whi
 
 ---
 
-### Fix 14 — Anthropic 400 Error (`input_str` Extra Field) in Multi-Turn Tool Conversations
+### Fix 13 — Anthropic 400 Error (`input_str` Extra Field) in Multi-Turn Tool Conversations
 
 **Symptom:** `messages.N.content.0.text.input_str: Extra inputs are not permitted` — 400 error from the Anthropic API on the 9th+ message in conversations involving multiple tool calls.
 
@@ -1263,7 +1289,7 @@ assistantContent.push(cleanBlock);
 
 ---
 
-### Fix 15 — `category-groups.js` PM2 Crash (Wrong `require` Path)
+### Fix 14 — `category-groups.js` PM2 Crash (Wrong `require` Path)
 
 **Symptom:** PM2 crashed on startup with `Cannot find module '../db'` from `api/src/routes/category-groups.js`.
 
@@ -1281,7 +1307,7 @@ const pool = require('../db/pool')
 
 ---
 
-### Fix 16 — Migration Crash: `CREATE INDEX` on Already-Dropped `category` Column
+### Fix 15 — Migration Crash: `CREATE INDEX` on Already-Dropped `category` Column
 
 **Symptom:** Running `npm run migrate` on production failed with `column "category" does not exist` at the early `CREATE INDEX IF NOT EXISTS idx_ingredients_category ON mcogs_ingredients(category)` statement. The server API would not start.
 
@@ -1305,7 +1331,7 @@ END $
 
 ---
 
-### Fix 17 — Combo Step Option Modal Missing Recipe/Ingredient Selector
+### Fix 16 — Combo Step Option Modal Missing Recipe/Ingredient Selector
 
 **Symptom:** The "Add Option" / "Edit Option" modal for combo step options showed Type selector (Manual/Recipe/Ingredient) but had no recipe or ingredient search field — selecting "Recipe" or "Ingredient" showed a blank form with no way to link the option to an item.
 
@@ -1472,6 +1498,47 @@ When `border-collapse` is set on a table, `position: sticky` on `<th>` and `<td>
 
 This project deploys via GitHub Actions to Lightsail. There is no local dev server workflow. Claude Code hooks that require a running local server (e.g., the Claude Preview plugin Stop hook) are suppressed via `"disableAllHooks": true` in `.claude/settings.local.json`.
 
+### Query Performance — Use LATERAL Instead of JOIN + GROUP BY for Aggregates
+
+When a list endpoint needs per-row aggregate counts (e.g. quote_count per ingredient), **never** use a `LEFT JOIN` on the child table followed by `GROUP BY` + `COUNT(DISTINCT ...)`. This forces PostgreSQL to build and collapse a large join before aggregating.
+
+**Use a `LEFT JOIN LATERAL` subquery instead:**
+
+```sql
+-- BAD: O(n × m) hash aggregate — gets exponentially worse as quotes grow
+SELECT i.*, COUNT(DISTINCT pq.id) AS quote_count
+FROM mcogs_ingredients i
+LEFT JOIN mcogs_price_quotes pq ON pq.ingredient_id = i.id
+GROUP BY i.id, ...
+
+-- GOOD: O(n) LATERAL — one tiny indexed scan per ingredient
+SELECT i.*, pq_stats.quote_count, pq_stats.active_quote_count
+FROM mcogs_ingredients i
+LEFT JOIN LATERAL (
+  SELECT COUNT(*)::int                                  AS quote_count,
+         COUNT(*) FILTER (WHERE is_active = true)::int AS active_quote_count
+  FROM   mcogs_price_quotes
+  WHERE  ingredient_id = i.id           -- uses idx_price_quotes_ingredient_act
+) pq_stats ON true
+```
+
+The LATERAL approach uses `idx_price_quotes_ingredient_act ON (ingredient_id, is_active)` for a near-instant index-only scan per row. The bad approach scales O(n×m) — catastrophic at 2,000+ ingredients with 5+ quotes each.
+
+**Also applies to:** recipe items per recipe, menu items per menu, etc. Whenever you need a count of child rows on a parent list endpoint, use LATERAL.
+
+### Lightweight Badge/Stats Endpoints
+
+When the UI needs counts for header badges or KPI tiles, **never** fetch the full dataset just to `.length` it or `.filter().length` it. Add a dedicated `GET .../stats` endpoint with simple `SELECT COUNT(*)` subqueries:
+
+```sql
+SELECT
+  (SELECT COUNT(*)::int FROM mcogs_ingredients)                         AS ingredient_count,
+  (SELECT COUNT(*)::int FROM mcogs_price_quotes WHERE is_active = true) AS active_quote_count,
+  ...
+```
+
+This pattern is used by `GET /ingredients/stats` for the Inventory page header badges. One round-trip, milliseconds, no joins.
+
 ### Git / Deploy Workflow — Claude Does Not Run Git Commands
 
 The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
@@ -1480,26 +1547,13 @@ The user commits and pushes all changes themselves from their local machine. **C
 
 ## 18. Backlog
 
-### Category Groups — Partially Migrated
+### Category Groups — Migrated (cleanup pending)
 
-**Current state:** `mcogs_category_groups` table exists and `mcogs_categories.group_id` FK is live. The old `group_name VARCHAR(100)` column is still present for backwards compatibility but is no longer the primary way to assign groups.
+**Current state:** `mcogs_category_groups` table is live. `mcogs_categories.group_id` FK is the canonical way to assign groups. The old `group_name VARCHAR(100)` column is still present for backwards compatibility.
 
-`mcogs_category_groups` schema:
-```sql
-CREATE TABLE mcogs_category_groups (
-  id        SERIAL PRIMARY KEY,
-  name      VARCHAR(100) NOT NULL,
-  parent_id INTEGER REFERENCES mcogs_category_groups(id) ON DELETE SET NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0
-)
-```
-
-**Remaining work:**
-- Drop `group_name` from `mcogs_categories` once all consumers use `group_id`
-- Add `type` scope to `mcogs_category_groups` (e.g. `for_ingredients` / `for_recipes`) if needed for group-level filtering
-- Categories page inline editing already uses the `group_id` FK dropdown
-
-**Benefits:** Nested group support, better analytics reporting, proper foreign key integrity.
+**Remaining cleanup:**
+- Drop `group_name` from `mcogs_categories` once all consumers are confirmed to use `group_id`
+- The actual `mcogs_category_groups` table has `name` and `sort_order` (no `parent_id` — the original spec had parent-child nesting but the live table is flat)
 
 ### Missing Price Quotes Report
 
@@ -1532,7 +1586,7 @@ Three interconnected features that extend the menu builder towards a full POS ba
 
 **7 new DB tables:** `mcogs_modifier_groups`, `mcogs_modifier_options`, `mcogs_menu_item_modifier_groups`, `mcogs_combo_steps`, `mcogs_combo_step_options`, `mcogs_combo_step_option_modifier_groups` + 2 column changes on `mcogs_menu_items`.
 
-**~11 days total** across 5 phases. See full doc for data model, API routes, COGS pseudocode, PLT two-column modifier pricing, allergen matrix changes, Pepper tools, user stories and scenarios.
+**Note:** The data model, DB tables, API routes, and frontend components for Sales Items, Combos, Modifier Groups, and Combo Step Options are already built. The POS_MENU_FEATURES.md doc describes the full original specification. The remaining work is deeper POS-workflow features (kitchen display, order flows, etc.).
 
 ### Lightsail Upgrade
 

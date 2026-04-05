@@ -124,12 +124,14 @@ export default function InventoryPage() {
   const [countryCount,    setCountryCount]    = useState<number>(0)
   const [initialQuoteIngId, setInitialQuoteIngId] = useState<number | undefined>(undefined)
 
+  // Single lightweight stats call for header badges — avoids full-table fetches just for counts
   useEffect(() => {
-    api.get('/ingredients').then((d: any[]) => setIngredientCount(d?.length || 0)).catch(() => {})
-    api.get('/price-quotes').then((d: any[]) => setQuoteCount(d?.filter((q: any) => q.is_active).length || 0)).catch(() => {})
-    api.get('/vendors').then((d: any[]) => {
-      setVendorCount(d?.length || 0)
-      setCountryCount(new Set(d?.map((v: any) => v.country_id)).size || 0)
+    api.get('/ingredients/stats').then((s: any) => {
+      if (!s) return
+      setIngredientCount(s.ingredient_count  ?? 0)
+      setQuoteCount(     s.active_quote_count ?? 0)
+      setVendorCount(    s.vendor_count       ?? 0)
+      setCountryCount(   s.country_count      ?? 0)
     }).catch(() => {})
   }, [api])
 

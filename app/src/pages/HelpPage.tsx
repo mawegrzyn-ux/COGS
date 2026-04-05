@@ -207,7 +207,7 @@ export default function HelpPage() {
           { label: 'Preferred Vendors', sub: 'Best source per market' },
           { label: 'Recipes', sub: 'Build dishes' },
           { label: 'Menus', sub: 'Assemble menus' },
-          { label: 'Compare Markets / Market Price Tool', sub: 'Set prices, review COGS' },
+          { label: 'Menu Engineer', sub: 'Model sales mix, review COGS' },
         ]} />
         <InfoBox type="tip">
           You must create at least one <strong>Market</strong>, one <strong>Price Level</strong>, and one{' '}
@@ -306,19 +306,24 @@ export default function HelpPage() {
 
         {/* ═══════════════════════════════════ (Categories — now under Configuration) */}
         <H3 id="categories">Categories</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Categories organise your ingredients and recipes into logical groups. There are two category{' '}
-          <strong>types</strong>: <em>ingredient</em> and <em>recipe</em>. Each category also has a{' '}
-          <strong>Group Name</strong> (e.g. "Dairy", "Produce") to cluster similar categories together.
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Categories organise your ingredients, recipes, and sales items into logical groups. Each category
+          has three <strong>scope flags</strong> that control where it appears:
+        </p>
+        <div className="flex gap-2 my-3 flex-wrap">
+          <span className="bg-[#E8F5ED] border border-[#146A34]/20 text-[#146A34] text-xs font-semibold px-3 py-1 rounded">for_ingredients</span>
+          <span className="bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1 rounded">for_recipes</span>
+          <span className="bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold px-3 py-1 rounded">for_sales_items</span>
+        </div>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A category can have any combination of flags — e.g. "Mains" might apply to both recipes and
+          sales items. Each category also belongs to a <strong>Category Group</strong> (e.g. "Dairy",
+          "Proteins") from the <Mono>mcogs_category_groups</Mono> table.
         </p>
         <InfoBox type="tip">
           Suggested ingredient groups: <strong>Dairy · Proteins · Produce · Dry Goods · Beverages ·
-          Sauces & Condiments · Packaging · Cleaning</strong>. Suggested recipe categories:
+          Sauces &amp; Condiments · Packaging · Cleaning</strong>. Suggested recipe/sales item categories:
           <strong> Mains · Sides · Desserts · Drinks · Sauces</strong>.
-        </InfoBox>
-        <InfoBox type="info">
-          Category Group Names are currently stored as flat strings. A future migration will introduce a
-          proper hierarchical <Mono>mcogs_category_groups</Mono> table with parent-child nesting.
         </InfoBox>
 
         {/* ═══════════════════════════════════ INVENTORY */}
@@ -466,14 +471,25 @@ export default function HelpPage() {
         <H2 id="menus" icon="📋" title="Menus" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           Menus are the top-level sales unit. Each menu belongs to a <strong>market/country</strong> and
-          contains menu items (recipes or individual ingredients). The Menus page has four tabs.
+          contains <strong>Sales Items</strong> — configurable items that can link to a recipe, an ingredient,
+          a manual cost entry, or a combo. The Menus page has three tabs.
         </p>
 
         <H3 id="menu-builder">Tab 1 — Menu Builder</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Create menus and add <strong>Sales Items</strong> to them. Each Sales Item carries a display name,
+          an item type, and a sort order.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Recipe</strong> — links to a recipe; cost calculated from ingredient prices and yield.</li>
+          <li><strong>Ingredient</strong> — links directly to an ingredient; cost calculated from vendor pricing.</li>
+          <li><strong>Manual</strong> — no recipe/ingredient link; you enter the cost directly. Useful for items with no recipe in the system.</li>
+          <li><strong>Combo</strong> — a structured bundle of steps, each with selectable options (e.g. "Choose your burger + Choose your side"). Cost is the sum of its step costs.</li>
+        </ul>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Create menus and add items to them. Each item carries a <strong>display name</strong> (what
-          appears to the customer), a link to a recipe or ingredient, and a <strong>sort order</strong> for
-          consistent menu sequencing.
+          Sales Items are managed in the <strong>Sales Items</strong> page (where you create the catalog of items,
+          define combo steps, attach modifier groups, and configure market availability). From the Menu Builder
+          you add existing Sales Items to a menu and set sell prices per price level.
         </p>
 
         <H3 id="menu-engineer">Tab 2 — Menu Engineer</H3>
@@ -483,7 +499,7 @@ export default function HelpPage() {
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
           <li><strong>Qty Sold</strong> — enter quantities per item to model your sales mix. Revenue, COGS%, and grand totals update in real time.</li>
           <li><strong>Mix Manager</strong> — opens a modal to set quantities or enter a revenue target for auto-distribution. Pre-populates with any quantities already entered.</li>
-          <li><strong>Price overrides</strong> — type a new price directly into any Price cell to override the live menu price for this scenario only. The live menu price in Compare Markets is unchanged until you use Push Prices.</li>
+          <li><strong>Price overrides</strong> — type a new price directly into any Price cell to override the live menu price for this scenario only. The live menu price is unchanged until you use Push Prices.</li>
           <li><strong>Push Prices</strong> — permanently writes the scenario's price overrides back to the live menu. Confirm carefully — this replaces live prices.</li>
           <li><strong>What If tool</strong> — apply a % uplift or reduction across all prices or all costs simultaneously. Models "what if food costs rise 5%?" or "what if we raise all prices 10%?".</li>
           <li><strong>Scenarios</strong> — save named snapshots of the current quantities, price overrides, and notes. Reload any scenario to restore the full state. Delete scenarios you no longer need.</li>
@@ -512,6 +528,46 @@ export default function HelpPage() {
           <li><strong>Copy link</strong> — click the copy icon to copy the full URL to the clipboard.</li>
         </ul>
 
+        <H3 id="sales-items">Sales Items &amp; Combos</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The <strong>Sales Items</strong> page is the catalog for everything that appears on a menu.
+          Each item has one of four types:
+        </p>
+        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
+          <thead><tr><Th>Type</Th><Th>When to use</Th><Th>COGS source</Th></tr></thead>
+          <tbody>
+            <tr><Td><span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded">Recipe</span></Td><Td>Item is a built recipe in the system</Td><Td>Recipe cost per portion from ingredient pricing</Td></tr>
+            <tr><Td><span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded">Ingredient</span></Td><Td>Item sold directly without a recipe (e.g. a drink)</Td><Td>Ingredient cost from vendor pricing</Td></tr>
+            <tr><Td><span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded">Manual</span></Td><Td>Cost entered manually — no recipe in system</Td><Td>Manually entered fixed cost</Td></tr>
+            <tr><Td><span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded">Combo</span></Td><Td>Bundled meal deal with customer-selectable components</Td><Td>Sum of step costs (average across options)</Td></tr>
+          </tbody>
+        </table>
+
+        <H3 id="combos">Combos</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A <strong>Combo</strong> is a structured sales item made up of <strong>steps</strong> (e.g.
+          "Choose your burger", "Choose your side", "Choose your drink"), each with one or more{' '}
+          <strong>options</strong>. Each option links to a recipe, ingredient, or a manual cost.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Steps have <strong>min/max selection</strong> rules — e.g. exactly 1 burger (min=max=1) or up to 2 extras (min=0, max=2).</li>
+          <li>Step options can have a <strong>price add-on</strong> (e.g. +£1.00 for a premium burger).</li>
+          <li>Combo COGS is calculated as the sum of all step costs, using the average cost across options when a step allows multiple choices.</li>
+          <li>Step options can also have <strong>Modifier Groups</strong> attached (see below).</li>
+        </ul>
+
+        <H3 id="modifiers">Modifier Groups</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          <strong>Modifier Groups</strong> are reusable add-on lists (e.g. "Sauce choice", "Extra toppings",
+          "Bone-in flavours"). They can be attached to standalone Sales Items <em>or</em> to individual
+          Combo step options.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Each group has <strong>min/max select</strong> — e.g. "choose exactly 1 sauce" or "up to 3 toppings".</li>
+          <li>Each modifier option links to a recipe, ingredient, or manual cost, and can carry a <strong>price add-on</strong>.</li>
+          <li>Groups are global and reusable — attach the same "Sauce choice" group to multiple items without redefining the options.</li>
+        </ul>
+
         <H3 id="pl-recipes">Price Level Recipes (PL Variations)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           A <strong>Price Level Recipe</strong> is an alternate ingredient list for a recipe that activates only when that recipe is sold under a specific price level. Useful when the same dish uses different ingredients depending on the sales channel (e.g. premium bun for Eat-in, standard bun for Delivery).
@@ -524,41 +580,6 @@ export default function HelpPage() {
           <li>Use <strong>Copy to Global</strong> to promote a PL variation's ingredients to become the global recipe.</li>
           <li>Use <strong>Delete PL Variation</strong> to revert that price level back to the global recipe.</li>
         </ul>
-
-        <H3 id="plt">Tab 3 — Compare Markets</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Set <strong>sell prices</strong> for each menu item × price level (e.g. Classic Burger —
-          Eat-in: £12.50 · Takeout: £11.50 · Delivery: £13.00). Prices are entered in <em>display currency</em>
-          and stored in USD.
-        </p>
-        <InfoBox type="info" title="Currency conversion in Compare Markets">
-          <p>Entered value → stored USD: <Mono>stored = displayValue / dispRate</Mono></p>
-          <p className="mt-1">Display USD → local: <Mono>display = storedUSD × dispRate</Mono></p>
-          <p className="mt-1">where <Mono>dispRate = market.exchange_rate / baseCurrency.exchange_rate</Mono></p>
-        </InfoBox>
-
-        <H3 id="mpt">Tab 4 — Market Price Tool</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Shows <strong>COGS%</strong> for each menu item × price level, colour-coded against your target:
-        </p>
-        <div className="flex gap-4 my-3 flex-wrap text-xs">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-sm bg-green-600"></div>
-            <span className="text-[#2D4A38]">≤ Target COGS% — Good</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-sm bg-amber-500"></div>
-            <span className="text-[#2D4A38]">Target → Target+10% — Acceptable</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-sm bg-red-600"></div>
-            <span className="text-[#2D4A38]">&gt; Target+10% — Alert</span>
-          </div>
-        </div>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          <strong>COGS%</strong> = (Recipe Cost ÷ Sell Price excl. tax) × 100. Both gross (incl. tax) and
-          net (excl. tax) sell prices are shown. Set thresholds in <strong>Settings → COGS Thresholds</strong>.
-        </p>
 
         {/* ═══════════════════════════════════ ALLERGEN MATRIX */}
         <H2 id="allergen-matrix" icon="⚠️" title="Allergen Matrix" />
@@ -651,7 +672,7 @@ export default function HelpPage() {
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           Create and manage price levels (Eat-in, Takeout, Delivery, etc.). One level is marked as{' '}
           <strong>default</strong> — changing the default is an atomic transaction to avoid conflicts.
-          Price levels drive the Compare Markets and Market Price Tool columns in Menus.
+          Price levels drive the Menu Engineer columns and sell price entry in the Menu Builder.
         </p>
 
         <H3 id="exchange-rates-tab">Exchange Rates</H3>
@@ -664,7 +685,7 @@ export default function HelpPage() {
 
         <H3 id="cogs-thresholds-tab">COGS Thresholds</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Set the target COGS% for colour-coding in the Market Price Tool. Three bands:
+          Set the target COGS% for colour-coding in the Menu Engineer. Three bands:
           <span className="text-green-700 font-semibold"> Excellent</span> (green ≤ target),{' '}
           <span className="text-amber-600 font-semibold">Acceptable</span> (amber, target+10%),{' '}
           <span className="text-red-600 font-semibold">Alert</span> (red, above acceptable). A typical
@@ -1014,7 +1035,7 @@ export default function HelpPage() {
             { q: '"What\'s our total ingredient coverage across all markets?"',                layer: 'Tools' },
             { q: '"How do I set a preferred vendor for an ingredient?"',                       layer: 'RAG' },
             { q: '"What does waste % do to the COGS calculation?"',                           layer: 'RAG' },
-            { q: '"Submit a bug report: Compare Markets isn\'t saving prices for the France menu"',   layer: 'Tools' },
+            { q: '"Submit a bug report: Menu Engineer isn\'t loading COGS data for the France menu"',   layer: 'Tools' },
             { q: '"What is the recommended setup order for a new instance?"',                 layer: 'RAG' },
             { q: '"Create a vendor called Fresh Farms in the UK market"',                     layer: 'Tools' },
             { q: '"Set the preferred vendor for Chicken Breast in the UK to Fresh Farms"',   layer: 'Tools' },
