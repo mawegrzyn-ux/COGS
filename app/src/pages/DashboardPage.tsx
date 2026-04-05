@@ -411,7 +411,7 @@ export default function DashboardPage() {
       menuList.map(async menu => {
         const levelResults = await Promise.all(
           priceLevelList.map(level =>
-            api.get(`/cogs/menu/${menu.id}?market_id=${menu.country_id}&price_level_id=${level.id}`)
+            api.get(`/cogs/menu-sales/${menu.id}?price_level_id=${level.id}`)
               .then((res: any) => ({
                 level_id:   level.id,
                 cogs_pct:   res?.summary?.avg_cogs_pct_net ?? null,
