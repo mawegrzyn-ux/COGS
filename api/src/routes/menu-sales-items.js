@@ -247,7 +247,7 @@ router.get('/:id/price-diff', async (req, res, next) => {
 
 async function loadModifierGroupsForItem(salesItemId, msiId) {
   const { rows: mgRows } = await pool.query(
-    `SELECT mg.id AS modifier_group_id, mg.name, mg.min_select, mg.max_select
+    `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select
      FROM   mcogs_sales_item_modifier_groups simgj
      JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
      WHERE  simgj.sales_item_id = $1
@@ -258,7 +258,7 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
 
   const mgIds = mgRows.map(r => r.modifier_group_id);
   const { rows: optRows } = await pool.query(
-    `SELECT mo.id, mo.modifier_group_id, mo.name, mo.item_type
+    `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type
      FROM   mcogs_modifier_options mo
      WHERE  mo.modifier_group_id = ANY($1)
      ORDER  BY mo.sort_order, mo.id`,
@@ -283,11 +283,12 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
   const optByMg = {};
   for (const o of optRows) {
     if (!optByMg[o.modifier_group_id]) optByMg[o.modifier_group_id] = [];
-    optByMg[o.modifier_group_id].push({ id: o.id, name: o.name, item_type: o.item_type, prices: priceMap[o.id] || {} });
+    optByMg[o.modifier_group_id].push({ id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type, prices: priceMap[o.id] || {} });
   }
   return mgRows.map(mg => ({
     modifier_group_id: mg.modifier_group_id,
     name: mg.name,
+    display_name: mg.display_name || null,
     min_select: mg.min_select,
     max_select: mg.max_select,
     options: optByMg[mg.modifier_group_id] || [],
@@ -296,14 +297,14 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
 
 async function loadComboStructure(comboId, msiId) {
   const { rows: steps } = await pool.query(
-    `SELECT id, name, sort_order, min_select, max_select
+    `SELECT id, name, sort_order, min_select, max_select, auto_select
      FROM   mcogs_combo_steps WHERE combo_id = $1 ORDER BY sort_order`, [comboId]
   );
   if (!steps.length) return [];
 
   const stepIds = steps.map(s => s.id);
   const { rows: opts } = await pool.query(
-    `SELECT cso.id, cso.combo_step_id, cso.name, cso.item_type
+    `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type
      FROM   mcogs_combo_step_options cso
      WHERE  cso.combo_step_id = ANY($1) ORDER BY cso.sort_order`, [stepIds]
   );
@@ -327,7 +328,7 @@ async function loadComboStructure(comboId, msiId) {
   const optModMap = {};
   if (optIds.length) {
     const { rows: csomgRows } = await pool.query(
-      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.min_select, mg.max_select
+      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select
        FROM   mcogs_combo_step_option_modifier_groups csomg
        JOIN   mcogs_modifier_groups mg ON mg.id = csomg.modifier_group_id
        WHERE  csomg.combo_step_option_id = ANY($1) ORDER BY csomg.sort_order, mg.name`, [optIds]
@@ -335,7 +336,7 @@ async function loadComboStructure(comboId, msiId) {
     const optMgIds = [...new Set(csomgRows.map(r => r.modifier_group_id))];
     if (optMgIds.length) {
       const { rows: modOptRows } = await pool.query(
-        `SELECT mo.id, mo.modifier_group_id, mo.name, mo.item_type
+        `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type
          FROM   mcogs_modifier_options mo
          WHERE  mo.modifier_group_id = ANY($1) ORDER BY mo.sort_order`, [optMgIds]
       );
@@ -356,12 +357,12 @@ async function loadComboStructure(comboId, msiId) {
       const modOptByMg = {};
       for (const o of modOptRows) {
         if (!modOptByMg[o.modifier_group_id]) modOptByMg[o.modifier_group_id] = [];
-        modOptByMg[o.modifier_group_id].push({ id: o.id, name: o.name, item_type: o.item_type, prices: modPriceMap[o.id] || {} });
+        modOptByMg[o.modifier_group_id].push({ id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type, prices: modPriceMap[o.id] || {} });
       }
       for (const r of csomgRows) {
         if (!optModMap[r.combo_step_option_id]) optModMap[r.combo_step_option_id] = [];
         optModMap[r.combo_step_option_id].push({
-          modifier_group_id: r.modifier_group_id, name: r.name,
+          modifier_group_id: r.modifier_group_id, name: r.name, display_name: r.display_name || null,
           min_select: r.min_select, max_select: r.max_select,
           options: modOptByMg[r.modifier_group_id] || [],
         });
@@ -373,14 +374,14 @@ async function loadComboStructure(comboId, msiId) {
   for (const o of opts) {
     if (!optByStep[o.combo_step_id]) optByStep[o.combo_step_id] = [];
     optByStep[o.combo_step_id].push({
-      id: o.id, name: o.name, item_type: o.item_type,
+      id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type,
       prices: priceMap[o.id] || {},
       modifier_groups: optModMap[o.id] || [],
     });
   }
   return steps.map(s => ({
     id: s.id, name: s.name, sort_order: s.sort_order,
-    min_select: s.min_select, max_select: s.max_select,
+    min_select: s.min_select, max_select: s.max_select, auto_select: s.auto_select ?? false,
     options: optByStep[s.id] || [],
   }));
 }

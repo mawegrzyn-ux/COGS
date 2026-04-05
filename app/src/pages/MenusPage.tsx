@@ -53,10 +53,10 @@ interface CogsItem {
 
 // Sub-price structures for combo step options + modifier options (menu-level pricing)
 interface SubOptPrices { [price_level_id: number]: number }
-interface SubModOption { id: number; name: string; item_type: string; prices: SubOptPrices }
-interface SubModGroup  { modifier_group_id: number; name: string; min_select: number; max_select: number; options: SubModOption[] }
-interface SubComboOpt  { id: number; name: string; item_type: string; prices: SubOptPrices; modifier_groups: SubModGroup[] }
-interface SubComboStep { id: number; name: string; min_select: number; max_select: number; options: SubComboOpt[] }
+interface SubModOption { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices }
+interface SubModGroup  { modifier_group_id: number; name: string; display_name?: string | null; min_select: number; max_select: number; options: SubModOption[] }
+interface SubComboOpt  { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices; modifier_groups: SubModGroup[] }
+interface SubComboStep { id: number; name: string; display_name?: string | null; min_select: number; max_select: number; auto_select?: boolean; options: SubComboOpt[] }
 interface SubPriceData { item_type: string; combo_steps: SubComboStep[]; modifier_groups: SubModGroup[] }
 
 interface CogsSummary {
@@ -984,7 +984,7 @@ export default function MenusPage() {
 function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSave }: {
   msiId: number
   kind: 'combo' | 'modifier'
-  option: { id: number; name: string; item_type: string; prices: Record<number, number> }
+  option: { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
   levelId: number | null
   sym: string
   colCount: number
@@ -1013,7 +1013,7 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
         <div className="flex items-center gap-1.5">
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
-          <span className="text-xs text-text-2">{option.name}</span>
+          <span className="text-xs text-text-2">{option.display_name || option.name}</span>
         </div>
       </td>
       {/* empty cells for category, type, qty, cost cols */}
@@ -1053,7 +1053,7 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
 function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, onSave }: {
   msiId:           number
   kind:            'combo' | 'modifier'
-  option:          { id: number; name: string; item_type: string; prices: Record<number, number> }
+  option:          { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
   levels:          PriceLevel[]
   sym:             string
   allLevelsCompact: boolean
@@ -1087,7 +1087,7 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
         <div className="flex items-center gap-1.5">
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
-          <span className="text-xs text-text-2">{option.name}</span>
+          <span className="text-xs text-text-2">{option.display_name || option.name}</span>
         </div>
       </td>
       {levels.map(level => {
@@ -1361,8 +1361,9 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
               <Fragment key={`${msiId}-step-${step.id}`}>
                 <tr className="bg-surface-2 border-b border-border">
                   <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">Step: {step.name}</span>
+                    <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                     <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
+                    {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
                   </td>
                 </tr>
                 {step.options.map(opt => (
@@ -1372,7 +1373,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                       <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
                         <tr className="bg-accent-dim/10 border-b border-border">
                           <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3.5rem' }}>
-                            <span className="text-xs text-text-3 font-medium">↳ {mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                            <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
                           </td>
                         </tr>
                         {mg.options.map(mopt => (
@@ -1389,7 +1390,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
               <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
                 <tr className="bg-surface-2 border-b border-border">
                   <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">{mg.name}</span>
+                    <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                     <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
                   </td>
                 </tr>
@@ -3437,8 +3438,9 @@ ${tableHtml}
                                   <Fragment key={`${msiId}-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
-                                        <span className="text-xs font-semibold text-text-2">Step: {step.name}</span>
+                                        <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
+                                        {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
@@ -3448,7 +3450,7 @@ ${tableHtml}
                                           <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={10} className="py-1" style={{ paddingLeft: '3.5rem' }}>
-                                                <span className="text-xs text-text-3 font-medium">↳ {mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
@@ -3464,7 +3466,7 @@ ${tableHtml}
                                   <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
-                                        <span className="text-xs font-semibold text-text-2">{mg.name}</span>
+                                        <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
                                       </td>
                                     </tr>
@@ -3745,8 +3747,9 @@ ${tableHtml}
                                   <Fragment key={`${msiId}-me-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
-                                        <span className="text-xs font-semibold text-text-2">Step: {step.name}</span>
+                                        <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
+                                        {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
@@ -3756,7 +3759,7 @@ ${tableHtml}
                                           <Fragment key={`${msiId}-me-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={meColSpan} className="py-1" style={{ paddingLeft: '3.5rem' }}>
-                                                <span className="text-xs text-text-3 font-medium">↳ {mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
@@ -3773,7 +3776,7 @@ ${tableHtml}
                                   <Fragment key={`${msiId}-me-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
-                                        <span className="text-xs font-semibold text-text-2">{mg.name}</span>
+                                        <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
                                       </td>
                                     </tr>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast } from '../components/ui'
@@ -20,12 +20,12 @@ interface ModifierOption {
   manual_cost: number | null; price_addon: number; sort_order: number
 }
 interface ModifierGroup {
-  id: number; name: string; description: string | null
+  id: number; name: string; display_name?: string | null; description: string | null
   min_select: number; max_select: number; option_count?: number
   options?: ModifierOption[]
 }
 interface ComboStepOption {
-  id: number; combo_step_id: number; name: string
+  id: number; combo_step_id: number; name: string; display_name?: string | null
   item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
   recipe_id: number | null; recipe_name?: string
   ingredient_id: number | null; ingredient_name?: string; ingredient_unit_abbr?: string
@@ -34,7 +34,7 @@ interface ComboStepOption {
   modifier_groups?: { modifier_group_id: number; name: string }[]
 }
 interface ComboStep {
-  id: number; combo_id: number; name: string
+  id: number; combo_id: number; name: string; display_name?: string | null
   description: string | null; sort_order: number
   min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean
   options?: ComboStepOption[]
@@ -76,7 +76,7 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, salesItems
   salesItems: SalesItem[]
   onSave(opt: ComboStepOption): void; onClose(): void
 }) {
-  const [form, setForm] = useState({ ...opt, qty: opt.qty ?? 1, sales_item_id: opt.sales_item_id ?? null })
+  const [form, setForm] = useState({ ...opt, qty: opt.qty ?? 1, sales_item_id: opt.sales_item_id ?? null, display_name: opt.display_name ?? null })
   const [attachedMgIds, setAttachedMgIds] = useState<number[]>((opt.modifier_groups || []).map(m => m.modifier_group_id))
   const [recipeSearch,  setRecipeSearch]  = useState(() => recipes.find(r => r.id === opt.recipe_id)?.name ?? '')
   const [recipeOpen,    setRecipeOpen]    = useState(false)
@@ -114,6 +114,11 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, salesItems
         <h3 className="text-base font-semibold mb-4">{opt.id === 0 ? 'Add Option' : 'Edit Option'}</h3>
         <div className="space-y-3">
           <Field label="Name"><input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
+          <Field label="Display name (optional)">
+            <input className="input w-full" placeholder="Customer-facing name (leave blank to use internal name)"
+              value={form.display_name ?? ''}
+              onChange={e => setForm(f => ({ ...f, display_name: e.target.value || null }))} />
+          </Field>
           <Field label="Type">
             <select className="input w-full" value={form.item_type} onChange={e => handleTypeChange(e.target.value as 'recipe' | 'ingredient' | 'manual' | 'sales_item')}>
               <option value="manual">Manual cost</option>
@@ -199,10 +204,6 @@ function ComboOptionForm({ opt, modifierGroups, recipes, ingredients, salesItems
               </div>
             </Field>
           )}
-          <Field label="Price add-on">
-            <input type="number" step="0.01" min="0" className="input w-full" value={form.price_addon}
-              onChange={e => setForm(f => ({ ...f, price_addon: parseFloat(e.target.value) || 0 }))} />
-          </Field>
           {modifierGroups.length > 0 && (
             <Field label="Modifier Groups">
               <div className="space-y-1">
@@ -563,57 +564,33 @@ export default function SalesItemsPage() {
   // ── Items tab ──────────────────────────────────────────────────────────────
   const [itemSearch,    setItemSearch]    = useState('')
   const [typeFilter,    setTypeFilter]    = useState<'recipe' | 'ingredient' | 'manual' | 'combo' | ''>('')
-  const [editingId,     setEditingId]     = useState<number | null>(null)
-  const [editForm,      setEditForm]      = useState<{
-    name: string; item_type: 'recipe'|'ingredient'|'manual'; category_id: string
-    recipe_id: number|null; ingredient_id: number|null; manual_cost: string
-    recipeSearch: string; recipeOpen: boolean; ingSearch: string; ingOpen: boolean
-  } | null>(null)
-  const [siCategories,  setSiCategories]  = useState<{id: number; name: string}[]>([])
-  const [inlineSaving,  setInlineSaving]  = useState(false)
+  const [selectedSiId,  setSelectedSiId]  = useState<number | null>(null)
+  const [siSortField,   setSiSortField]   = useState<string>('name')
+  const [siSortDir,     setSiSortDir]     = useState<'asc' | 'desc'>('asc')
 
-  useEffect(() => {
-    api.get('/categories?for_sales_items=true')
-      .then((d: any[]) => setSiCategories((d || []).map((c: any) => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name))))
-      .catch(() => {})
-  }, [api])
+  const toggleSort = (field: string) => {
+    if (siSortField === field) {
+      setSiSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSiSortField(field)
+      setSiSortDir('asc')
+    }
+  }
 
-  const startEdit = (si: SalesItem) => {
-    setEditingId(si.id)
-    setEditForm({
-      name: si.name, item_type: si.item_type as 'recipe'|'ingredient'|'manual',
-      category_id: si.category_id ? String(si.category_id) : '',
-      recipe_id: si.recipe_id ?? null, ingredient_id: si.ingredient_id ?? null,
-      manual_cost: si.manual_cost != null ? String(si.manual_cost) : '',
-      recipeSearch: si.recipe_name ?? '', recipeOpen: false,
-      ingSearch: si.ingredient_name ?? '', ingOpen: false,
+  const nonComboItems = useMemo(() => {
+    const filtered = salesItems.filter(si => {
+      if (typeFilter && si.item_type !== typeFilter) return false
+      if (itemSearch && !si.name.toLowerCase().includes(itemSearch.toLowerCase()) && !(si.category_name || '').toLowerCase().includes(itemSearch.toLowerCase())) return false
+      return true
     })
-  }
-
-  const saveInlineEdit = async (id: number) => {
-    if (!editForm) return
-    setInlineSaving(true)
-    try {
-      const updated: SalesItem = await api.put(`/sales-items/${id}`, {
-        name: editForm.name.trim(), item_type: editForm.item_type,
-        category_id: Number(editForm.category_id) || null,
-        recipe_id:     editForm.item_type === 'recipe'     ? editForm.recipe_id     : null,
-        ingredient_id: editForm.item_type === 'ingredient' ? editForm.ingredient_id : null,
-        manual_cost:   editForm.item_type === 'manual'     ? (parseFloat(editForm.manual_cost) || null) : null,
-      })
-      setSalesItems(prev => prev.map(s => s.id === id ? { ...s, ...updated } : s))
-      setEditingId(null); setEditForm(null)
-    } catch { showToast('Save failed') } finally { setInlineSaving(false) }
-  }
-
-  const nonComboItems = useMemo(() => salesItems.filter(si => {
-    if (typeFilter && si.item_type !== typeFilter) return false
-    if (itemSearch && !si.name.toLowerCase().includes(itemSearch.toLowerCase()) && !(si.category_name || '').toLowerCase().includes(itemSearch.toLowerCase())) return false
-    return true
-  }), [salesItems, typeFilter, itemSearch])
-
-  const filteredRecipesInline = useMemo(() => recipes.filter(r => r.name.toLowerCase().includes((editForm?.recipeSearch || '').toLowerCase())).slice(0, 50), [recipes, editForm?.recipeSearch])
-  const filteredIngsInline    = useMemo(() => ingredients.filter(i => i.name.toLowerCase().includes((editForm?.ingSearch || '').toLowerCase())).slice(0, 50), [ingredients, editForm?.ingSearch])
+    return [...filtered].sort((a, b) => {
+      let cmp = 0
+      if (siSortField === 'name')          cmp = a.name.localeCompare(b.name)
+      else if (siSortField === 'item_type') cmp = (TYPE_LABEL[a.item_type] || '').localeCompare(TYPE_LABEL[b.item_type] || '')
+      else if (siSortField === 'category_name') cmp = (a.category_name || '').localeCompare(b.category_name || '')
+      return siSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [salesItems, typeFilter, itemSearch, siSortField, siSortDir])
 
   const marketsDisplay = (item: SalesItem) => {
     const active = (item.markets || []).filter(m => m.is_active)
@@ -627,7 +604,7 @@ export default function SalesItemsPage() {
   const [comboDetailLoading, setComboDetailLoading] = useState(false)
   const [expandedStep,       setExpandedStep]       = useState<number | null>(null)
   const [editingStep,        setEditingStep]        = useState<number | null>(null)
-  const [editStepForm,       setEditStepForm]       = useState<{ min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean } | null>(null)
+  const [editStepForm,       setEditStepForm]       = useState<{ display_name: string | null; min_select: number; max_select: number; allow_repeat: boolean; auto_select: boolean } | null>(null)
   const [savingStep,         setSavingStep]         = useState(false)
   const [editingOpt,         setEditingOpt]         = useState<ComboStepOption | null>(null)
   const [editingOptStepId,   setEditingOptStepId]   = useState<number | null>(null)
@@ -695,7 +672,7 @@ export default function SalesItemsPage() {
 
   const startEditStep = (step: ComboStep) => {
     setEditingStep(step.id)
-    setEditStepForm({ min_select: step.min_select ?? 1, max_select: step.max_select ?? 1, allow_repeat: step.allow_repeat ?? false, auto_select: step.auto_select ?? false })
+    setEditStepForm({ display_name: step.display_name ?? null, min_select: step.min_select ?? 1, max_select: step.max_select ?? 1, allow_repeat: step.allow_repeat ?? false, auto_select: step.auto_select ?? false })
   }
 
   const saveStepSettings = async (stepId: number) => {
@@ -718,7 +695,7 @@ export default function SalesItemsPage() {
   }
 
   const addOption = (stepId: number) => {
-    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: 0 })
+    setEditingOpt({ id: 0, combo_step_id: stepId, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: 0 })
     setEditingOptStepId(stepId)
   }
 
@@ -801,11 +778,18 @@ export default function SalesItemsPage() {
     setSiMgAddOpen(null)
   }
 
+  // Auto-load modifier groups when a sales item is selected in the panel
+  useEffect(() => {
+    if (selectedSiId && !siMgData[selectedSiId] && !siMgLoading.has(selectedSiId)) {
+      toggleSiMg(selectedSiId)
+    }
+  }, [selectedSiId])
+
   // ── Modifiers tab ──────────────────────────────────────────────────────────
   const [expandedMgId,    setExpandedMgId]    = useState<number | null>(null)
   const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
   const [editMg,          setEditMg]          = useState<ModifierGroup | null>(null)
-  const [newMgForm,       setNewMgForm]       = useState({ name: '', min_select: 0, max_select: 1 })
+  const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1 })
   const [mgSaving,        setMgSaving]        = useState(false)
   const [editingOption,   setEditingOption]   = useState<{
     groupId: number; optId: number
@@ -825,9 +809,9 @@ export default function SalesItemsPage() {
     if (!newMgForm.name.trim()) return
     setMgSaving(true)
     try {
-      const created = await api.post('/modifier-groups', newMgForm)
+      const created = await api.post('/modifier-groups', { ...newMgForm, display_name: newMgForm.display_name || null })
       setModifierGroups(prev => [...prev, { ...created, option_count: 0 }])
-      setNewMgForm({ name: '', min_select: 0, max_select: 1 })
+      setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 })
     } catch { showToast('Failed') } finally { setMgSaving(false) }
   }
 
@@ -914,126 +898,54 @@ export default function SalesItemsPage() {
 
       {/* ── ITEMS TAB ─────────────────────────────────────────────────────────── */}
       {activeTab === 'items' && (
-        <div className="flex-1 overflow-auto p-5">
-          <div className="flex gap-2 mb-4">
-            <input className="input input-sm w-64" placeholder="Search by name or category…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} />
-            <select className="input py-1 text-xs" value={typeFilter} onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}>
-              <option value="">All Types</option>
-              <option value="recipe">Recipe</option>
-              <option value="ingredient">Ingredient</option>
-              <option value="combo">Combo</option>
-              <option value="manual">Manual</option>
-            </select>
-            <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
-          </div>
+        <div className="flex flex-1 min-h-0">
+          <div className="flex-1 overflow-auto p-5">
+            <div className="flex gap-2 mb-4">
+              <input className="input input-sm w-64" placeholder="Search by name or category…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} />
+              <select className="input py-1 text-xs" value={typeFilter} onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}>
+                <option value="">All Types</option>
+                <option value="recipe">Recipe</option>
+                <option value="ingredient">Ingredient</option>
+                <option value="combo">Combo</option>
+                <option value="manual">Manual</option>
+              </select>
+              <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
+            </div>
 
-          {nonComboItems.length === 0 ? (
-            <div className="py-16 text-center text-sm text-gray-400">No sales items yet. Click "+ New Sales Item" to create one.</div>
-          ) : (
-            <div className="card overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[28%]">Name</th>
-                    <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[12%]">Type</th>
-                    <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[18%]">Category</th>
-                    <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[25%]">Linked To</th>
-                    <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[10%]">Markets</th>
-                    <th className="px-4 py-2.5 w-[7%]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {nonComboItems.map(si => {
-                    const isEditing = editingId === si.id && editForm
-                    if (isEditing) {
+            {nonComboItems.length === 0 ? (
+              <div className="py-16 text-center text-sm text-gray-400">No sales items yet. Click "+ New Sales Item" to create one.</div>
+            ) : (
+              <div className="card overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[28%]">
+                        <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('name')}>
+                          Name {siSortField === 'name' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
+                        </button>
+                      </th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[12%]">
+                        <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('item_type')}>
+                          Type {siSortField === 'item_type' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
+                        </button>
+                      </th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[18%]">
+                        <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('category_name')}>
+                          Category {siSortField === 'category_name' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
+                        </button>
+                      </th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[25%]">Linked To</th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[10%]">Markets</th>
+                      <th className="px-4 py-2.5 w-[7%]" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nonComboItems.map(si => {
+                      const mkt = marketsDisplay(si)
                       return (
-                        <Fragment key={si.id}>
-                        <tr className="border-b border-gray-100 bg-accent-dim/40">
-                          <td className="px-3 py-2">
-                            <input className="input input-sm w-full" value={editForm.name} autoFocus
-                              onChange={e => setEditForm(f => f ? { ...f, name: e.target.value } : f)}
-                              onKeyDown={e => { if (e.key === 'Escape') { setEditingId(null); setEditForm(null) } else if (e.key === 'Enter') saveInlineEdit(si.id) }} />
-                          </td>
-                          <td className="px-3 py-2">
-                            <select className="input py-1 text-xs" value={editForm.item_type}
-                              onChange={e => setEditForm(f => f ? { ...f, item_type: e.target.value as 'recipe'|'ingredient'|'manual', recipe_id: null, ingredient_id: null, recipeSearch: '', ingSearch: '' } : f)}>
-                              <option value="recipe">Recipe</option>
-                              <option value="ingredient">Ingredient</option>
-                              <option value="manual">Manual</option>
-                            </select>
-                          </td>
-                          <td className="px-3 py-2">
-                            <select className="input py-1 text-xs w-full" value={editForm.category_id}
-                              onChange={e => setEditForm(f => f ? { ...f, category_id: e.target.value } : f)}>
-                              <option value="">No category</option>
-                              {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-3 py-2 relative">
-                            {editForm.item_type === 'recipe' && (
-                              <div className="relative">
-                                <input className="input input-sm w-full" placeholder="Search recipes…" value={editForm.recipeSearch}
-                                  onChange={e => setEditForm(f => f ? { ...f, recipeSearch: e.target.value, recipeOpen: true } : f)}
-                                  onFocus={() => setEditForm(f => f ? { ...f, recipeOpen: true } : f)}
-                                  onBlur={() => setTimeout(() => setEditForm(f => f ? { ...f, recipeOpen: false } : f), 150)} autoComplete="off" />
-                                {editForm.recipeOpen && (
-                                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded shadow-lg max-h-40 overflow-y-auto">
-                                    {filteredRecipesInline.map(r => (
-                                      <button key={r.id} type="button" className={`w-full text-left px-3 py-1.5 text-xs hover:bg-accent-dim ${editForm.recipe_id === r.id ? 'bg-accent-dim text-accent font-medium' : ''}`}
-                                        onMouseDown={e => e.preventDefault()}
-                                        onClick={() => setEditForm(f => f ? { ...f, recipe_id: r.id, recipeSearch: r.name, recipeOpen: false } : f)}>
-                                        {r.name}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            {editForm.item_type === 'ingredient' && (
-                              <div className="relative">
-                                <input className="input input-sm w-full" placeholder="Search ingredients…" value={editForm.ingSearch}
-                                  onChange={e => setEditForm(f => f ? { ...f, ingSearch: e.target.value, ingOpen: true } : f)}
-                                  onFocus={() => setEditForm(f => f ? { ...f, ingOpen: true } : f)}
-                                  onBlur={() => setTimeout(() => setEditForm(f => f ? { ...f, ingOpen: false } : f), 150)} autoComplete="off" />
-                                {editForm.ingOpen && (
-                                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded shadow-lg max-h-40 overflow-y-auto">
-                                    {filteredIngsInline.map(i => (
-                                      <button key={i.id} type="button" className={`w-full text-left px-3 py-1.5 text-xs hover:bg-accent-dim ${editForm.ingredient_id === i.id ? 'bg-accent-dim text-accent font-medium' : ''}`}
-                                        onMouseDown={e => e.preventDefault()}
-                                        onClick={() => setEditForm(f => f ? { ...f, ingredient_id: i.id, ingSearch: i.name, ingOpen: false } : f)}>
-                                        {i.name}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            {editForm.item_type === 'manual' && (
-                              <input type="number" step="0.0001" className="input input-sm w-36" placeholder="Cost USD"
-                                value={editForm.manual_cost}
-                                onChange={e => setEditForm(f => f ? { ...f, manual_cost: e.target.value } : f)} />
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-xs text-gray-400">{marketsDisplay(si).label}</td>
-                          <td className="px-3 py-2">
-                            <div className="flex gap-1">
-                              <button className="btn btn-xs btn-primary" disabled={inlineSaving} onClick={() => saveInlineEdit(si.id)}>✓</button>
-                              <button className="btn btn-xs btn-ghost" onClick={() => { setEditingId(null); setEditForm(null) }}>✗</button>
-                            </div>
-                          </td>
-                        </tr>
-                        </Fragment>
-                      )
-                    }
-                    const mkt = marketsDisplay(si)
-                    const siMgExpanded  = expandedSiMg.has(si.id)
-                    const siMgGroups    = siMgData[si.id] ?? []
-                    const siMgIsLoading = siMgLoading.has(si.id)
-                    const mgCount       = si.modifier_group_count ?? 0
-                    const unassignedMgs = modifierGroups.filter(mg => !siMgGroups.some(a => a.modifier_group_id === mg.id))
-                    return (
-                      <Fragment key={si.id}>
-                        <tr className="border-b border-gray-100 hover:bg-gray-50 group">
+                        <tr key={si.id}
+                          className={`border-b border-gray-100 hover:bg-gray-50 group cursor-pointer ${selectedSiId === si.id ? 'bg-accent-dim/20' : ''}`}
+                          onClick={() => setSelectedSiId(si.id)}>
                           <td className="px-4 py-2.5 font-medium text-gray-900">{si.name}</td>
                           <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span></td>
                           <td className="px-4 py-2.5 text-gray-500">{si.category_name || <span className="text-gray-300">—</span>}</td>
@@ -1044,105 +956,139 @@ export default function SalesItemsPage() {
                             {si.item_type === 'manual'     && (si.manual_cost != null ? `$${Number(si.manual_cost).toFixed(4)}` : <span className="text-gray-300">—</span>)}
                           </td>
                           <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span></td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center gap-1.5">
-                              {/* Modifier groups toggle button — always visible */}
-                              <button
-                                className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                                  siMgExpanded
-                                    ? 'border-accent text-accent bg-accent-dim font-medium'
-                                    : mgCount > 0
-                                      ? 'border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100'
-                                      : 'border-border text-text-3 hover:border-accent hover:text-accent'
-                                }`}
-                                onClick={() => toggleSiMg(si.id)}
-                                title={siMgExpanded ? 'Hide modifier groups' : 'Manage modifier groups'}
-                              >
-                                <span>⊕</span>
-                                <span>{mgCount > 0 ? mgCount : 'Mods'}</span>
-                              </button>
-                              {/* Edit / delete — hover reveal */}
                               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button className="btn btn-xs btn-outline" title="Edit inline" onClick={() => startEdit(si)}>✎</button>
                                 <button className="text-red-400 hover:text-red-600 px-1 text-base leading-none" title="Delete" onClick={() => setDeleting(si)}>⊘</button>
                               </div>
                             </div>
                           </td>
                         </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>{/* end left scroll area */}
 
-                        {/* ── Modifier groups expand row ── */}
-                        {siMgExpanded && (
-                          <tr className="border-b border-border bg-blue-50/40">
-                            <td colSpan={6} className="px-5 py-3">
-                              {siMgIsLoading ? (
-                                <span className="text-xs text-text-3">Loading…</span>
-                              ) : (
-                                <div className="flex items-start gap-2 flex-wrap">
-                                  <span className="text-xs font-semibold text-text-2 pt-0.5 shrink-0">Modifiers:</span>
-                                  {siMgGroups.length === 0 && (
-                                    <span className="text-xs text-text-3 italic pt-0.5">None assigned yet</span>
-                                  )}
-                                  {siMgGroups.map(mg => (
-                                    <span key={mg.modifier_group_id}
-                                      className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
-                                      {mg.name}
-                                      <button
-                                        className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none"
-                                        title={`Remove ${mg.name}`}
-                                        onClick={() => removeSiModifier(si.id, mg.modifier_group_id)}
-                                      >×</button>
-                                    </span>
-                                  ))}
-                                  {/* Add modifier group */}
-                                  <div>
-                                    <button
-                                      className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
-                                      onClick={e => {
-                                        const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                                        setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
-                                        setSiMgAddOpen(siMgAddOpen === si.id ? null : si.id)
-                                      }}
-                                    >
-                                      + Add modifier group
+          {selectedSiId !== null && (() => {
+            const si = salesItems.find(s => s.id === selectedSiId)
+            if (!si) return null
+            const panelMgGroups    = siMgData[selectedSiId] ?? []
+            const panelMgIsLoading = siMgLoading.has(selectedSiId)
+            const mkt = marketsDisplay(si)
+            const unassignedMgs = modifierGroups.filter(mg => !panelMgGroups.some(a => a.modifier_group_id === mg.id))
+            return (
+              <div className="w-80 flex-shrink-0 border-l border-border bg-white flex flex-col">
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                  <span className="font-semibold text-text-1 text-sm truncate flex-1 min-w-0">{si.name}</span>
+                  <button className="ml-2 text-text-3 hover:text-text-1 flex-shrink-0" onClick={() => setSelectedSiId(null)} title="Close">✕</button>
+                </div>
+                {/* Panel body */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {/* Type + category */}
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span>
+                    {si.category_name && <span className="text-xs text-text-2 bg-gray-100 px-2 py-0.5 rounded">{si.category_name}</span>}
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${mkt.color}`}>{mkt.label}</span>
+                  </div>
+
+                  {/* Linked item */}
+                  {si.item_type === 'recipe' && si.recipe_name && (
+                    <div>
+                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Recipe</p>
+                      <p className="text-sm text-text-1">{si.recipe_name}</p>
+                    </div>
+                  )}
+                  {si.item_type === 'ingredient' && si.ingredient_name && (
+                    <div>
+                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Ingredient</p>
+                      <p className="text-sm text-text-1">{si.ingredient_name}</p>
+                    </div>
+                  )}
+                  {si.item_type === 'combo' && si.combo_name && (
+                    <div>
+                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Combo</p>
+                      <p className="text-sm text-text-1">{si.combo_name}</p>
+                    </div>
+                  )}
+                  {si.item_type === 'manual' && si.manual_cost != null && (
+                    <div>
+                      <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-1">Cost (USD)</p>
+                      <p className="text-sm font-mono text-text-1">${Number(si.manual_cost).toFixed(4)}</p>
+                    </div>
+                  )}
+
+                  {/* Modifier groups */}
+                  <div>
+                    <p className="text-xs font-medium text-text-3 uppercase tracking-wide mb-2">Modifier Groups</p>
+                    {!siMgData[selectedSiId] && !panelMgIsLoading && (
+                      <button className="text-xs text-accent hover:underline" onClick={() => toggleSiMg(selectedSiId)}>Load modifier groups</button>
+                    )}
+                    {panelMgIsLoading && <span className="text-xs text-text-3">Loading…</span>}
+                    {siMgData[selectedSiId] && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {panelMgGroups.length === 0 && <span className="text-xs text-text-3 italic">None assigned</span>}
+                        {panelMgGroups.map(mg => (
+                          <span key={mg.modifier_group_id}
+                            className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
+                            {mg.name}
+                            <button className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none" title={`Remove ${mg.name}`}
+                              onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>×</button>
+                          </span>
+                        ))}
+                        {/* Add modifier dropdown */}
+                        {unassignedMgs.length > 0 && (
+                          <div className="relative inline-block">
+                            <button
+                              className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
+                              onClick={e => {
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
+                                setSiMgAddOpen(siMgAddOpen === selectedSiId ? null : selectedSiId)
+                              }}
+                            >+ Add</button>
+                            {siMgAddOpen === selectedSiId && siMgAddPos && createPortal(
+                              <>
+                                <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
+                                <div className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
+                                  style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}>
+                                  {unassignedMgs.map(mg => (
+                                    <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
+                                      onClick={() => { addSiModifier(selectedSiId, mg); setSiMgAddOpen(null) }}>
+                                      <span className="font-medium">{mg.name}</span>
+                                      <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
                                     </button>
-                                    {siMgAddOpen === si.id && siMgAddPos && createPortal(
-                                      <>
-                                        {/* Click-away backdrop */}
-                                        <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
-                                        <div
-                                          className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
-                                          style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}
-                                        >
-                                          {unassignedMgs.length === 0 ? (
-                                            <p className="px-3 py-2 text-xs text-text-3">All modifier groups already assigned.</p>
-                                          ) : (
-                                            unassignedMgs.map(mg => (
-                                              <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
-                                                onClick={() => { addSiModifier(si.id, mg); setSiMgAddOpen(null) }}>
-                                                <span className="font-medium">{mg.name}</span>
-                                                <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
-                                              </button>
-                                            ))
-                                          )}
-                                          <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
-                                            onClick={() => setSiMgAddOpen(null)}>Cancel</button>
-                                        </div>
-                                      </>,
-                                      document.body
-                                    )}
-                                  </div>
+                                  ))}
+                                  <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
+                                    onClick={() => setSiMgAddOpen(null)}>Cancel</button>
                                 </div>
-                              )}
-                            </td>
-                          </tr>
+                              </>,
+                              document.body
+                            )}
+                          </div>
                         )}
-                      </Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Panel footer actions */}
+                <div className="px-4 py-3 border-t border-border flex gap-2">
+                  <button className="btn btn-sm btn-primary flex-1"
+                    onClick={() => { setSiModal(si as SalesItem); setNewComboMode(false) }}>
+                    Edit
+                  </button>
+                  <button className="btn btn-sm btn-danger"
+                    onClick={() => { setDeleting(si as SalesItem); setSelectedSiId(null) }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -1223,6 +1169,12 @@ export default function SalesItemsPage() {
                           <div className="px-4 py-3 bg-blue-50 border-b border-blue-100 flex flex-wrap items-center gap-4"
                             onClick={e => e.stopPropagation()}>
                             <div className="flex items-center gap-1.5">
+                              <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Display name</label>
+                              <input className="input py-0.5 text-sm w-40" placeholder="Customer-facing name…"
+                                value={editStepForm.display_name ?? ''}
+                                onChange={e => setEditStepForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
+                            </div>
+                            <div className="flex items-center gap-1.5">
                               <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Min choices</label>
                               <input type="number" min="0" className="input py-0.5 w-16 text-sm"
                                 value={editStepForm.min_select}
@@ -1290,7 +1242,6 @@ export default function SalesItemsPage() {
                                     ))}
                                   </div>
                                 )}
-                                {opt.price_addon > 0 && <span className="text-xs text-gray-400 shrink-0 ml-auto">+${Number(opt.price_addon).toFixed(2)}</span>}
                                 <div className="flex gap-1 shrink-0">
                                   <button className="btn btn-xs btn-outline" onClick={() => { setEditingOpt(opt); setEditingOptStepId(step.id) }}>✎</button>
                                   <button className="text-xs text-red-400 hover:text-red-600 px-1" onClick={() => deleteOption(step.id, opt.id)}>×</button>
@@ -1320,6 +1271,8 @@ export default function SalesItemsPage() {
               <input className="input flex-1" placeholder="Group name" value={newMgForm.name}
                 onChange={e => setNewMgForm(f => ({ ...f, name: e.target.value }))}
                 onKeyDown={e => e.key === 'Enter' && createMg()} />
+              <input className="input flex-1" placeholder="Display name (optional)" value={newMgForm.display_name}
+                onChange={e => setNewMgForm(f => ({ ...f, display_name: e.target.value }))} />
               <input type="number" className="input w-20" placeholder="Min" title="Min select"
                 value={newMgForm.min_select} onChange={e => setNewMgForm(f => ({ ...f, min_select: Number(e.target.value) }))} />
               <input type="number" className="input w-20" placeholder="Max" title="Max select"
@@ -1338,6 +1291,7 @@ export default function SalesItemsPage() {
                     {editMg?.id === g.id ? (
                       <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                         <input className="input input-sm w-48" value={editMg.name} onChange={e => setEditMg(m => m ? { ...m, name: e.target.value } : m)} />
+                        <input className="input input-sm w-40" placeholder="Display name (optional)" value={editMg.display_name ?? ''} onChange={e => setEditMg(m => m ? { ...m, display_name: e.target.value || null } : m)} />
                         <input type="number" className="input input-sm w-16" value={editMg.min_select} title="Min" onChange={e => setEditMg(m => m ? { ...m, min_select: Number(e.target.value) } : m)} />
                         <input type="number" className="input input-sm w-16" value={editMg.max_select} title="Max" onChange={e => setEditMg(m => m ? { ...m, max_select: Number(e.target.value) } : m)} />
                         <button className="btn btn-xs btn-primary" onClick={() => saveMg(editMg)}>✓</button>

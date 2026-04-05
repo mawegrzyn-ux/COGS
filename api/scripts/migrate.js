@@ -983,6 +983,12 @@ const migrations = [
    EXCEPTION WHEN others THEN NULL;
    END $$`,
 
+  // ── 78. Add display_name to modifier groups, options, combo steps + options
+  `ALTER TABLE mcogs_modifier_groups     ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+  `ALTER TABLE mcogs_modifier_options    ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+  `ALTER TABLE mcogs_combo_steps         ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+  `ALTER TABLE mcogs_combo_step_options  ADD COLUMN IF NOT EXISTS display_name VARCHAR(255)`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,

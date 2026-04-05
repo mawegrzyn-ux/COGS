@@ -201,12 +201,12 @@ router.post('/:id/duplicate', async (req, res, next) => {
 
 router.post('/:id/steps', async (req, res, next) => {
   try {
-    const { name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
+    const { name, display_name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
     if (!name) return res.status(400).json({ error: { message: 'name is required' } });
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_combo_steps (combo_id, name, description, sort_order, min_select, max_select, allow_repeat, auto_select)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.params.id, name.trim(), description || null, sort_order || 0,
+      `INSERT INTO mcogs_combo_steps (combo_id, name, display_name, description, sort_order, min_select, max_select, allow_repeat, auto_select)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [req.params.id, name.trim(), display_name || null, description || null, sort_order || 0,
        min_select ?? 1, max_select ?? 1, allow_repeat ?? false, auto_select ?? false]
     );
     res.status(201).json({ ...rows[0], options: [] });
@@ -215,12 +215,12 @@ router.post('/:id/steps', async (req, res, next) => {
 
 router.put('/:id/steps/:sid', async (req, res, next) => {
   try {
-    const { name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
+    const { name, display_name, description, sort_order, min_select, max_select, allow_repeat, auto_select } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_combo_steps
-       SET name=$1, description=$2, sort_order=$3, min_select=$4, max_select=$5, allow_repeat=$6, auto_select=$7
-       WHERE id=$8 AND combo_id=$9 RETURNING *`,
-      [name?.trim(), description || null, sort_order ?? 0,
+       SET name=$1, display_name=$2, description=$3, sort_order=$4, min_select=$5, max_select=$6, allow_repeat=$7, auto_select=$8
+       WHERE id=$9 AND combo_id=$10 RETURNING *`,
+      [name?.trim(), display_name || null, description || null, sort_order ?? 0,
        min_select ?? 1, max_select ?? 1, allow_repeat ?? false, auto_select ?? false,
        req.params.sid, req.params.id]
     );
@@ -244,13 +244,13 @@ router.delete('/:id/steps/:sid', async (req, res, next) => {
 
 router.post('/:id/steps/:sid/options', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
     if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
     const { rows } = await pool.query(
       `INSERT INTO mcogs_combo_step_options
-         (combo_step_id, name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [req.params.sid, name.trim(), item_type,
+         (combo_step_id, name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [req.params.sid, name.trim(), display_name || null, item_type,
        recipe_id || null, ingredient_id || null, sales_item_id || null,
        manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0]
     );
@@ -260,13 +260,13 @@ router.post('/:id/steps/:sid/options', async (req, res, next) => {
 
 router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_combo_step_options
-       SET name=$1, item_type=$2, recipe_id=$3, ingredient_id=$4, sales_item_id=$5,
-           manual_cost=$6, price_addon=$7, qty=$8, sort_order=$9
-       WHERE id=$10 AND combo_step_id=$11 RETURNING *`,
-      [name?.trim(), item_type, recipe_id || null, ingredient_id || null, sales_item_id || null,
+       SET name=$1, display_name=$2, item_type=$3, recipe_id=$4, ingredient_id=$5, sales_item_id=$6,
+           manual_cost=$7, price_addon=$8, qty=$9, sort_order=$10
+       WHERE id=$11 AND combo_step_id=$12 RETURNING *`,
+      [name?.trim(), display_name || null, item_type, recipe_id || null, ingredient_id || null, sales_item_id || null,
        manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0, req.params.oid, req.params.sid]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });

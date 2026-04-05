@@ -47,12 +47,12 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /modifier-groups ────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { name, description, min_select, max_select } = req.body;
+    const { name, display_name, description, min_select, max_select } = req.body;
     if (!name) return res.status(400).json({ error: { message: 'name is required' } });
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [name.trim(), description || null, min_select ?? 0, max_select ?? 1]
+      `INSERT INTO mcogs_modifier_groups (name, display_name, description, min_select, max_select)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1]
     );
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
@@ -61,11 +61,11 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /modifier-groups/:id ─────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, description, min_select, max_select } = req.body;
+    const { name, display_name, description, min_select, max_select } = req.body;
     const { rows } = await pool.query(
-      `UPDATE mcogs_modifier_groups SET name=$1, description=$2, min_select=$3, max_select=$4
-       WHERE id=$5 RETURNING *`,
-      [name?.trim(), description || null, min_select ?? 0, max_select ?? 1, req.params.id]
+      `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5
+       WHERE id=$6 RETURNING *`,
+      [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
     res.json(rows[0]);
@@ -180,16 +180,16 @@ router.get('/:id/options', async (req, res, next) => {
 
 router.post('/:id/options', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
     if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
     if (!['recipe','ingredient','manual'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, or manual' } });
     }
     const { rows } = await pool.query(
       `INSERT INTO mcogs_modifier_options
-         (modifier_group_id, name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.params.id, name.trim(), item_type,
+         (modifier_group_id, name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [req.params.id, name.trim(), display_name || null, item_type,
        recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0]
     );
     res.status(201).json(rows[0]);
@@ -198,12 +198,12 @@ router.post('/:id/options', async (req, res, next) => {
 
 router.put('/:id/options/:oid', async (req, res, next) => {
   try {
-    const { name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_modifier_options
-       SET name=$1, item_type=$2, recipe_id=$3, ingredient_id=$4, manual_cost=$5, price_addon=$6, sort_order=$7
-       WHERE id=$8 AND modifier_group_id=$9 RETURNING *`,
-      [name?.trim(), item_type, recipe_id || null, ingredient_id || null,
+       SET name=$1, display_name=$2, item_type=$3, recipe_id=$4, ingredient_id=$5, manual_cost=$6, price_addon=$7, sort_order=$8
+       WHERE id=$9 AND modifier_group_id=$10 RETURNING *`,
+      [name?.trim(), display_name || null, item_type, recipe_id || null, ingredient_id || null,
        manual_cost || null, price_addon || 0, sort_order || 0, req.params.oid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
