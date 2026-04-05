@@ -1175,9 +1175,10 @@ export default function SharedMenuPage() {
                           >
                             {/* Item name */}
                             <button
-                              className={`text-sm font-semibold text-gray-800 text-left leading-tight ${item.item_type === 'recipe' ? 'hover:text-emerald-600 transition-colors cursor-pointer' : 'cursor-default'}`}
-                              onClick={() => item.item_type === 'recipe' && openBreakdown(item.menu_item_id)}
-                              disabled={item.item_type !== 'recipe'}
+                              className={`text-sm font-semibold text-gray-800 text-left leading-tight ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 transition-colors cursor-pointer' : 'cursor-default'}`}
+                              onClick={() => (item.item_type === 'recipe' || item.item_type === 'combo') && openBreakdown(item.menu_item_id)}
+                              title={item.item_type === 'combo' ? 'Click for combo cost breakdown' : item.item_type === 'recipe' ? 'Click for ingredient breakdown' : undefined}
+                              disabled={item.item_type !== 'recipe' && item.item_type !== 'combo'}
                             >
                               {item.display_name}
                             </button>
