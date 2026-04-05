@@ -1200,6 +1200,17 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
     }
   }
 
+  const retrySubLoad = async (msiId: number) => {
+    setSubPriceData(prev => { const n = { ...prev }; delete n[msiId]; return n })
+    setLoadingSubPrices(prev => new Set([...prev, msiId]))
+    try {
+      const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+      setSubPriceData(prev => ({ ...prev, [msiId]: d }))
+    } catch { /* ignore */ } finally {
+      setLoadingSubPrices(prev => { const s = new Set(prev); s.delete(msiId); return s })
+    }
+  }
+
   const saveSubOptionPrice = async (
     msiId: number,
     kind: 'combo' | 'modifier',
@@ -1387,8 +1398,24 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                 ))}
               </Fragment>
             ))}
+          {/* Empty state — no steps/modifiers configured */}
+          {subData.combo_steps.length === 0 && subData.modifier_groups.length === 0 && (
+            <tr className="bg-surface-2/50 border-b border-border">
+              <td colSpan={colCount + 1} className="px-6 py-2 text-xs text-text-3 italic">
+                No sub-options configured for this item.
+              </td>
+            </tr>
+          )}
           </Fragment>
-        ) : null)}
+        ) : (
+          /* API failed or loading finished but no data */
+          <tr className="bg-surface-2/50 border-b border-border">
+            <td colSpan={colCount + 1} className="px-6 py-2 text-xs text-text-3">
+              Could not load sub-options.{' '}
+              <button className="underline hover:text-accent" onClick={() => retrySubLoad(msiId)}>Retry</button>
+            </td>
+          </tr>
+        ))}
       </Fragment>
     )
   }
@@ -1629,8 +1656,8 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
     const catCount: Record<string, number> = {}
     for (const item of data.items) {
       const cat    = item.category || 'Uncategorised'
-      const natKey = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
-      // Sum per-level keys (e.g. "r_1__l2") falling back to shared key for single-level view
+      const natKey = `si_${item.sales_item_id}`
+      // Sum per-level keys (e.g. "si_1__l2") falling back to shared key for single-level view
       const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
       const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
       catQty[cat]   = (catQty[cat]   || 0) + q
@@ -1646,7 +1673,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
   const existingRevenue = useMemo(() => {
     let total = 0
     for (const item of data.items) {
-      const natKey = item.item_type === 'recipe' ? `r_${item.recipe_id}` : `i_${item.ingredient_id}`
+      const natKey = `si_${item.sales_item_id}`
       const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
       const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
       total += q * (item.sell_price_gross || 0)
@@ -1701,7 +1728,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
 
       if (activeLevels.length > 0) {
         await Promise.all(activeLevels.map(async level => {
-          const d: CogsData = await api.get(`/cogs/menu/${menuId}?price_level_id=${level.id}`)
+          const d: CogsData = await api.get(`/cogs/menu-sales/${menuId}?price_level_id=${level.id}`)
           const m = new Map<number, number>()
           for (const item of d.items) m.set(item.menu_item_id, item.sell_price_gross)
           levelPriceMap[level.id] = m
@@ -1752,9 +1779,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         for (const item of pricedItems) {
           const price   = effectivePrice[item.menu_item_id]
           const totalQty = Math.max(1, Math.round(itemRevShare / price))
-          const natKey  = item.item_type === 'recipe'
-            ? `r_${item.recipe_id}`
-            : `i_${item.ingredient_id}`
+          const natKey  = `si_${item.sales_item_id}`
 
           if (activeLevels.length === 1 && activeLevels[0].id === 0) {
             // No price levels configured — use shared key
@@ -3663,8 +3688,32 @@ ${tableHtml}
                                     ))}
                                   </Fragment>
                                 ))}
+                              {/* Empty state — no steps/modifiers */}
+                              {subDataME.combo_steps.length === 0 && subDataME.modifier_groups.length === 0 && (
+                                <tr className="bg-surface-2/50 border-b border-border">
+                                  <td colSpan={meColSpan} className="px-6 py-2 text-xs text-text-3 italic">
+                                    No sub-options configured for this item.
+                                  </td>
+                                </tr>
+                              )}
                               </Fragment>
-                            ) : null)}
+                            ) : (
+                              <tr className="bg-surface-2/50 border-b border-border">
+                                <td colSpan={meColSpan} className="px-6 py-2 text-xs text-text-3">
+                                  Could not load sub-options.{' '}
+                                  <button className="underline hover:text-accent" onClick={async () => {
+                                    setSubPriceDataME(prev => { const n = { ...prev }; delete n[msiId]; return n })
+                                    setLoadingSubPricesME(prev => new Set([...prev, msiId]))
+                                    try {
+                                      const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
+                                      setSubPriceDataME(prev => ({ ...prev, [msiId]: d }))
+                                    } catch { /* ignore */ } finally {
+                                      setLoadingSubPricesME(prev => { const s = new Set(prev); s.delete(msiId); return s })
+                                    }
+                                  }}>Retry</button>
+                                </td>
+                              </tr>
+                            ))}
                           </Fragment>
                         )
                       })}

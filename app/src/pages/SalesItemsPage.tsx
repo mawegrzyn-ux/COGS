@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
@@ -761,6 +762,7 @@ export default function SalesItemsPage() {
   const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number }[]>>({})
   const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
   const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
+  const [siMgAddPos,    setSiMgAddPos]    = useState<{ top: number; left: number } | null>(null)
 
   const toggleSiMg = async (siId: number) => {
     setExpandedSiMg(prev => {
@@ -1092,28 +1094,41 @@ export default function SalesItemsPage() {
                                     </span>
                                   ))}
                                   {/* Add modifier group */}
-                                  <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSiMgAddOpen(null) }}>
-                                    {siMgAddOpen === si.id ? (
-                                      <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-border rounded shadow-lg max-h-52 overflow-y-auto min-w-[220px]">
-                                        {unassignedMgs.length === 0 ? (
-                                          <p className="px-3 py-2 text-xs text-text-3">All modifier groups already assigned.</p>
-                                        ) : (
-                                          unassignedMgs.map(mg => (
-                                            <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
-                                              onClick={() => addSiModifier(si.id, mg)}>
-                                              <span className="font-medium">{mg.name}</span>
-                                              <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
-                                            </button>
-                                          ))
-                                        )}
-                                        <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
-                                          onClick={() => setSiMgAddOpen(null)}>Cancel</button>
-                                      </div>
-                                    ) : (
-                                      <button className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
-                                        onClick={() => setSiMgAddOpen(si.id)}>
-                                        + Add modifier group
-                                      </button>
+                                  <div>
+                                    <button
+                                      className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
+                                      onClick={e => {
+                                        const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                        setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
+                                        setSiMgAddOpen(siMgAddOpen === si.id ? null : si.id)
+                                      }}
+                                    >
+                                      + Add modifier group
+                                    </button>
+                                    {siMgAddOpen === si.id && siMgAddPos && createPortal(
+                                      <>
+                                        {/* Click-away backdrop */}
+                                        <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
+                                        <div
+                                          className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
+                                          style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}
+                                        >
+                                          {unassignedMgs.length === 0 ? (
+                                            <p className="px-3 py-2 text-xs text-text-3">All modifier groups already assigned.</p>
+                                          ) : (
+                                            unassignedMgs.map(mg => (
+                                              <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
+                                                onClick={() => { addSiModifier(si.id, mg); setSiMgAddOpen(null) }}>
+                                                <span className="font-medium">{mg.name}</span>
+                                                <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
+                                              </button>
+                                            ))
+                                          )}
+                                          <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
+                                            onClick={() => setSiMgAddOpen(null)}>Cancel</button>
+                                        </div>
+                                      </>,
+                                      document.body
                                     )}
                                   </div>
                                 </div>
