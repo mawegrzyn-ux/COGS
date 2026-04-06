@@ -38,6 +38,39 @@ router.get('/', async (req, res) => {
   }
 });
 
+// POST /internal/feedback — create a ticket
+router.post('/', async (req, res) => {
+  const { type = 'general', title, description, page, status = 'open' } = req.body;
+  if (!title?.trim()) return res.status(400).json({ error: { message: 'title is required' } });
+  const validTypes    = ['bug', 'feature', 'general'];
+  const validStatuses = ['open', 'in_progress', 'resolved'];
+  if (!validTypes.includes(type))       return res.status(400).json({ error: { message: `type must be one of: ${validTypes.join(', ')}` } });
+  if (!validStatuses.includes(status))  return res.status(400).json({ error: { message: `status must be one of: ${validStatuses.join(', ')}` } });
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO mcogs_feedback (type, title, description, page, status)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [type, title.trim(), description?.trim() || null, page?.trim() || null, status]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to create ticket' } });
+  }
+});
+
+// DELETE /internal/feedback/:id — delete a ticket
+router.delete('/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`DELETE FROM mcogs_feedback WHERE id=$1 RETURNING id`, [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    res.json({ deleted: rows[0].id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to delete ticket' } });
+  }
+});
+
 // PATCH /internal/feedback/:id — update status
 router.patch('/:id', async (req, res) => {
   const { status } = req.body;
