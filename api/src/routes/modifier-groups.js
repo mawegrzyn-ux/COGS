@@ -180,17 +180,17 @@ router.get('/:id/options', async (req, res, next) => {
 
 router.post('/:id/options', async (req, res, next) => {
   try {
-    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order, qty } = req.body;
     if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
     if (!['recipe','ingredient','manual'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, or manual' } });
     }
     const { rows } = await pool.query(
       `INSERT INTO mcogs_modifier_options
-         (modifier_group_id, name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+         (modifier_group_id, name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order, qty)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [req.params.id, name.trim(), display_name || null, item_type,
-       recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0]
+       recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1]
     );
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
@@ -198,13 +198,13 @@ router.post('/:id/options', async (req, res, next) => {
 
 router.put('/:id/options/:oid', async (req, res, next) => {
   try {
-    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, manual_cost, price_addon, sort_order, qty } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_modifier_options
-       SET name=$1, display_name=$2, item_type=$3, recipe_id=$4, ingredient_id=$5, manual_cost=$6, price_addon=$7, sort_order=$8
-       WHERE id=$9 AND modifier_group_id=$10 RETURNING *`,
+       SET name=$1, display_name=$2, item_type=$3, recipe_id=$4, ingredient_id=$5, manual_cost=$6, price_addon=$7, sort_order=$8, qty=$9
+       WHERE id=$10 AND modifier_group_id=$11 RETURNING *`,
       [name?.trim(), display_name || null, item_type, recipe_id || null, ingredient_id || null,
-       manual_cost || null, price_addon || 0, sort_order || 0, req.params.oid, req.params.id]
+       manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1, req.params.oid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
     res.json(rows[0]);

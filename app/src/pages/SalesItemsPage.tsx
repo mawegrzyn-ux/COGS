@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast } from '../components/ui'
@@ -11,13 +11,13 @@ interface Ingredient { id: number; name: string; base_unit_abbr: string | null }
 interface SalesItemMarket { country_id: number; country_name: string; is_active: boolean }
 
 interface ModifierOption {
-  id: number; modifier_group_id: number; name: string
+  id: number; modifier_group_id: number; name: string; display_name?: string | null
   item_type: 'recipe' | 'ingredient' | 'manual'
   recipe_id: number | null; recipe_name?: string
   recipe_yield_qty?: number | null; recipe_yield_unit_abbr?: string | null
   ingredient_id: number | null; ingredient_name?: string
   ingredient_unit_abbr?: string | null
-  manual_cost: number | null; price_addon: number; sort_order: number
+  manual_cost: number | null; price_addon: number; sort_order: number; qty: number
 }
 interface ModifierGroup {
   id: number; name: string; display_name?: string | null; description: string | null
@@ -65,6 +65,12 @@ type ComboEditTarget =
   | { type: 'combo';  combo: Combo }
   | { type: 'step';   step: ComboStep }
   | { type: 'option'; stepId: number; opt: ComboStepOption }
+  | null
+
+// ── Modifier group panel edit target ──────────────────────────────────────────
+type MgEditTarget =
+  | { type: 'group';  group: ModifierGroup }
+  | { type: 'option'; groupId: number; opt: ModifierOption | null }
   | null
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -278,64 +284,6 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
   )
 }
 
-// ── ModifierOptionAddForm ─────────────────────────────────────────────────────
-// Cost/price fields removed — pricing is managed per-menu in Menu Builder
-function ModifierOptionAddForm({ recipes, ingredients, onAdd }: {
-  recipes: Recipe[]; ingredients: Ingredient[]
-  onAdd(opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>): void
-}) {
-  const [form, setForm] = useState({
-    name: '', item_type: 'manual' as 'recipe' | 'ingredient' | 'manual',
-    recipe_id: null as number | null, ingredient_id: null as number | null,
-    manual_cost: null as number | null, price_addon: 0, sort_order: 0,
-  })
-  const [show, setShow] = useState(false)
-  if (!show) return <button className="btn btn-xs btn-outline mt-2" onClick={() => setShow(true)}>+ Add Option</button>
-  return (
-    <tr className="border-t border-dashed border-border bg-accent-dim/30">
-      <td className="px-2 py-1.5">
-        <input
-          className="input input-sm w-full"
-          placeholder="Option name"
-          value={form.name}
-          onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          onKeyDown={e => { if (e.key === 'Enter' && form.name.trim()) { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) } if (e.key === 'Escape') setShow(false) }}
-        />
-      </td>
-      <td className="px-2 py-1.5">
-        <select className="input py-0.5 text-xs w-28" value={form.item_type}
-          onChange={e => setForm(f => ({ ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual', recipe_id: null, ingredient_id: null }))}>
-          <option value="manual">Manual</option>
-          <option value="recipe">Recipe</option>
-          <option value="ingredient">Ingredient</option>
-        </select>
-      </td>
-      <td className="px-2 py-1.5">
-        {form.item_type === 'recipe' && (
-          <select className="input py-0.5 text-xs w-full" value={form.recipe_id ?? ''} onChange={e => setForm(f => ({ ...f, recipe_id: Number(e.target.value) || null }))}>
-            <option value="">— Select recipe —</option>
-            {recipes.slice(0, 200).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select>
-        )}
-        {form.item_type === 'ingredient' && (
-          <select className="input py-0.5 text-xs w-full" value={form.ingredient_id ?? ''} onChange={e => setForm(f => ({ ...f, ingredient_id: Number(e.target.value) || null }))}>
-            <option value="">— Select ingredient —</option>
-            {ingredients.slice(0, 200).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
-        )}
-        {form.item_type === 'manual' && <span className="text-xs text-text-3 italic">No link</span>}
-      </td>
-      <td className="px-2 py-1.5">
-        <div className="flex gap-1">
-          <button className="btn btn-xs btn-primary" disabled={!form.name.trim()}
-            onClick={() => { onAdd(form); setForm({ name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, price_addon: 0, sort_order: 0 }); setShow(false) }}>Add</button>
-          <button className="btn btn-xs btn-ghost" onClick={() => setShow(false)}>✕</button>
-        </div>
-      </td>
-    </tr>
-  )
-}
-
 // ── Main SalesItemsPage ────────────────────────────────────────────────────────
 export default function SalesItemsPage() {
   const api = useApi()
@@ -447,6 +395,7 @@ export default function SalesItemsPage() {
   const [panelComboOpen,     setPanelComboOpen]     = useState(false)
   const [panelMarkets,     setPanelMarkets]     = useState<number[]>([])
   const [panelMktSaving,   setPanelMktSaving]   = useState(false)
+  const [panelTab,         setPanelTab]         = useState<'details' | 'markets' | 'modifiers'>('details')
 
   // Populate form when selection changes
   useEffect(() => {
@@ -460,6 +409,7 @@ export default function SalesItemsPage() {
     setPanelIngSearch(si.ingredient_name    ?? '')
     setPanelComboSearch(si.combo_name       ?? '')
     setPanelRecipeOpen(false); setPanelIngOpen(false); setPanelComboOpen(false)
+    setPanelTab('details')
   }, [selectedSiId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const togglePanelMarket = async (countryId: number) => {
@@ -742,13 +692,18 @@ export default function SalesItemsPage() {
   // ── Modifiers tab ──────────────────────────────────────────────────────────
   const [expandedMgId,    setExpandedMgId]    = useState<number | null>(null)
   const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
-  const [editMg,          setEditMg]          = useState<ModifierGroup | null>(null)
   const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1 })
   const [mgSaving,        setMgSaving]        = useState(false)
-  const [editingOption,   setEditingOption]   = useState<{
-    groupId: number; optId: number
-    form: { name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null }
-  } | null>(null)
+  const [showNewMgModal,  setShowNewMgModal]  = useState(false)
+  const [mgEditTarget,    setMgEditTarget]    = useState<MgEditTarget>(null)
+  const [mgPanelWidth,    setMgPanelWidth]    = useState(360)
+  const [mgPanelSaving,   setMgPanelSaving]   = useState(false)
+  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number } | null>(null)
+  const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number } | null>(null)
+  const [mpOptRecipeSearch, setMpOptRecipeSearch] = useState('')
+  const [mpOptIngSearch,    setMpOptIngSearch]    = useState('')
+  const [mpOptRecipeOpen,   setMpOptRecipeOpen]   = useState(false)
+  const [mpOptIngOpen,      setMpOptIngOpen]      = useState(false)
 
   const toggleMg = async (id: number) => {
     if (expandedMgId === id) { setExpandedMgId(null); return }
@@ -771,7 +726,7 @@ export default function SalesItemsPage() {
 
   const saveMg = async (mg: ModifierGroup) => {
     setMgSaving(true)
-    try { await api.put(`/modifier-groups/${mg.id}`, mg); setModifierGroups(prev => prev.map(g => g.id === mg.id ? { ...g, ...mg } : g)); setEditMg(null) }
+    try { await api.put(`/modifier-groups/${mg.id}`, mg); setModifierGroups(prev => prev.map(g => g.id === mg.id ? { ...g, ...mg } : g)) }
     catch { showToast('Failed') } finally { setMgSaving(false) }
   }
 
@@ -789,15 +744,6 @@ export default function SalesItemsPage() {
     } catch { showToast('Failed to duplicate') }
   }
 
-  const addMgOption = async (groupId: number, opt: Omit<ModifierOption, 'id' | 'modifier_group_id'>) => {
-    try {
-      await api.post(`/modifier-groups/${groupId}/options`, opt)
-      // Re-fetch to get joined data (yield qty/unit for recipes, base unit for ingredients)
-      const opts = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
-      if (opts) setExpandedOptions(prev => ({ ...prev, [groupId]: opts }))
-      setModifierGroups(prev => prev.map(g => g.id === groupId ? { ...g, option_count: (g.option_count || 0) + 1 } : g))
-    } catch { showToast('Failed') }
-  }
 
   const deleteMgOption = async (groupId: number, optId: number) => {
     try {
@@ -807,16 +753,98 @@ export default function SalesItemsPage() {
     } catch { showToast('Failed') }
   }
 
-  const saveOptEdit = async () => {
-    if (!editingOption) return
-    const { groupId, optId, form } = editingOption
+  const mgPanelWidthRef = useRef(mgPanelWidth)
+  useEffect(() => { mgPanelWidthRef.current = mgPanelWidth }, [mgPanelWidth])
+
+  useEffect(() => {
+    if (!mgEditTarget) { setMpGroupForm(null); setMpOptForm(null); return }
+    if (mgEditTarget.type === 'group') {
+      const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
+      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select })
+      setMpOptForm(null)
+    } else {
+      const { opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
+      setMpGroupForm(null)
+      if (opt) {
+        setMpOptForm({ name: opt.name, display_name: opt.display_name ?? '', item_type: opt.item_type, recipe_id: opt.recipe_id, ingredient_id: opt.ingredient_id, manual_cost: opt.manual_cost, qty: opt.qty ?? 1, sort_order: opt.sort_order })
+        setMpOptRecipeSearch(opt.recipe_name ?? '')
+        setMpOptIngSearch(opt.ingredient_name ?? '')
+      } else {
+        setMpOptForm({ name: '', display_name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, qty: 1, sort_order: 0 })
+        setMpOptRecipeSearch('')
+        setMpOptIngSearch('')
+      }
+      setMpOptRecipeOpen(false); setMpOptIngOpen(false)
+    }
+  }, [mgEditTarget])
+
+  const startMgPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = mgPanelWidthRef.current
+    function onMove(ev: MouseEvent) {
+      const dx = startX - ev.clientX
+      const newW = Math.max(280, Math.min(600, startW + dx))
+      mgPanelWidthRef.current = newW
+      setMgPanelWidth(newW)
+    }
+    function onUp() {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
+  const saveMgPanelItem = async () => {
+    if (!mgEditTarget) return
+    setMgPanelSaving(true)
     try {
-      await api.put(`/modifier-groups/${groupId}/options/${optId}`, { ...form, price_addon: 0, sort_order: 0 })
-      // Re-fetch options to get fresh joined data (recipe_yield_qty, unit abbrs, etc.)
-      const opts = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
-      if (opts) setExpandedOptions(prev => ({ ...prev, [groupId]: opts }))
-      setEditingOption(null)
+      if (mgEditTarget.type === 'group' && mpGroupForm) {
+        const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
+        await api.put(`/modifier-groups/${g.id}`, { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null })
+        setModifierGroups(prev => prev.map(mg => mg.id === g.id ? { ...mg, ...mpGroupForm, display_name: mpGroupForm.display_name || null } : mg))
+        setMgEditTarget({ type: 'group', group: { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null } })
+        showToast('Group saved')
+      } else if (mgEditTarget.type === 'option' && mpOptForm) {
+        const { groupId, opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
+        const payload = { ...mpOptForm, display_name: mpOptForm.display_name || null, price_addon: 0 }
+        if (opt && opt.id) {
+          await api.put(`/modifier-groups/${groupId}/options/${opt.id}`, payload)
+        } else {
+          await api.post(`/modifier-groups/${groupId}/options`, payload)
+          setModifierGroups(prev => prev.map(g => g.id === groupId ? { ...g, option_count: (g.option_count || 0) + 1 } : g))
+        }
+        const opts = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
+        if (opts) setExpandedOptions(prev => ({ ...prev, [groupId]: opts }))
+        setMgEditTarget(null)
+        showToast(opt?.id ? 'Option saved' : 'Option added')
+      }
     } catch { showToast('Failed to save') }
+    finally { setMgPanelSaving(false) }
+  }
+
+  const reorderMgOption = async (groupId: number, optIdx: number, direction: 'up' | 'down') => {
+    const opts = [...(expandedOptions[groupId] || [])]
+    const targetIdx = direction === 'up' ? optIdx - 1 : optIdx + 1
+    if (targetIdx < 0 || targetIdx >= opts.length) return
+    ;[opts[optIdx], opts[targetIdx]] = [opts[targetIdx], opts[optIdx]]
+    const updated = opts.map((o, i) => ({ ...o, sort_order: i }))
+    setExpandedOptions(prev => ({ ...prev, [groupId]: updated }))
+    try {
+      await Promise.all([
+        api.put(`/modifier-groups/${groupId}/options/${updated[optIdx].id}`, { ...updated[optIdx], price_addon: updated[optIdx].price_addon || 0 }),
+        api.put(`/modifier-groups/${groupId}/options/${updated[targetIdx].id}`, { ...updated[targetIdx], price_addon: updated[targetIdx].price_addon || 0 }),
+      ])
+    } catch {
+      showToast('Failed to reorder')
+      const orig = await api.get(`/modifier-groups/${groupId}/options`).catch(() => null)
+      if (orig) setExpandedOptions(prev => ({ ...prev, [groupId]: orig }))
+    }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -836,6 +864,9 @@ export default function SalesItemsPage() {
           )}
           {activeTab === 'combos' && (
             <button className="btn btn-primary" onClick={() => setComboModal('new')}>+ New Combo</button>
+          )}
+          {activeTab === 'modifiers' && (
+            <button className="btn btn-primary" onClick={() => setShowNewMgModal(true)}>+ New Modifier Group</button>
           )}
         </div>
         <div className="flex gap-1">
@@ -943,9 +974,23 @@ export default function SalesItemsPage() {
                   <button className="ml-2 text-text-3 hover:text-text-1 flex-shrink-0" onClick={() => setSelectedSiId(null)} title="Close">✕</button>
                 </div>
 
-                {/* Panel body — inline edit form */}
+                {/* Panel tab bar */}
+                <div className="flex border-b border-border bg-white shrink-0">
+                  {(['details', 'markets', 'modifiers'] as const).map(t => (
+                    <button key={t} onClick={() => setPanelTab(t)}
+                      className={`flex-1 py-2 text-xs font-medium transition-colors border-b-2 ${panelTab === t ? 'border-accent text-accent' : 'border-transparent text-text-3 hover:text-text-1'}`}>
+                      {t === 'details' ? 'Details' : t === 'markets' ? 'Markets' : 'Modifiers'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Panel body */}
                 {panelForm && (
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  <div className="flex-1 overflow-y-auto">
+
+                  {/* ── DETAILS TAB ── */}
+                  {panelTab === 'details' && (
+                  <div className="p-4 space-y-3">
 
                     {/* Name */}
                     <div>
@@ -1071,87 +1116,110 @@ export default function SalesItemsPage() {
 
                     {/* Image */}
                     <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} />
+                  </div>
+                  )}{/* end details tab */}
 
-                    {/* Markets — per-country toggles */}
-                    <div>
-                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">
-                        Markets {panelMktSaving && <span className="font-normal text-text-3 normal-case">saving…</span>}
-                      </label>
-                      {countries.length === 0 && <p className="text-xs text-text-3 italic">No markets configured</p>}
-                      <div className="space-y-1">
-                        {countries.map(country => (
-                          <label key={country.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                            <input type="checkbox"
-                              checked={panelMarkets.includes(country.id)}
-                              onChange={() => togglePanelMarket(country.id)}
-                              disabled={panelMktSaving} />
-                            <span className="text-text-2">{country.name}</span>
-                          </label>
-                        ))}
-                      </div>
+                  {/* ── MARKETS TAB ── */}
+                  {panelTab === 'markets' && (
+                  <div className="p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <p className="text-xs font-semibold text-text-3 uppercase tracking-wide">Market Availability</p>
+                      {panelMktSaving && <span className="text-xs text-text-3">saving…</span>}
                     </div>
+                    {countries.length === 0 && <p className="text-xs text-text-3 italic">No markets configured</p>}
+                    <div className="space-y-2">
+                      {countries.map(country => (
+                        <label key={country.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                          <input type="checkbox"
+                            checked={panelMarkets.includes(country.id)}
+                            onChange={() => togglePanelMarket(country.id)}
+                            disabled={panelMktSaving} />
+                          <span className="text-text-2">{country.name}</span>
+                          {panelMarkets.includes(country.id) && <span className="ml-auto text-xs text-green-600 font-medium">Active</span>}
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-text-3 mt-4 italic">Changes are saved automatically.</p>
+                  </div>
+                  )}{/* end markets tab */}
 
-                    {/* Modifier groups (unchanged) */}
-                    <div>
-                      <p className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Modifier Groups</p>
-                      {!siMgData[selectedSiId] && !panelMgIsLoading && (
-                        <button className="text-xs text-accent hover:underline" onClick={() => toggleSiMg(selectedSiId)}>Load modifier groups</button>
-                      )}
-                      {panelMgIsLoading && <span className="text-xs text-text-3">Loading…</span>}
-                      {siMgData[selectedSiId] && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {panelMgGroups.length === 0 && <span className="text-xs text-text-3 italic">None assigned</span>}
+                  {/* ── MODIFIERS TAB ── */}
+                  {panelTab === 'modifiers' && (
+                  <div className="p-4">
+                    {!siMgData[selectedSiId] && !panelMgIsLoading && (
+                      <button className="text-xs text-accent hover:underline" onClick={() => toggleSiMg(selectedSiId)}>Load modifier groups</button>
+                    )}
+                    {panelMgIsLoading && <span className="text-xs text-text-3">Loading…</span>}
+                    {siMgData[selectedSiId] && (
+                      <>
+                        {panelMgGroups.length === 0 && (
+                          <p className="text-xs text-text-3 italic mb-3">No modifier groups assigned.</p>
+                        )}
+                        <div className="space-y-1.5 mb-3">
                           {panelMgGroups.map(mg => (
-                            <span key={mg.modifier_group_id}
-                              className="inline-flex items-center gap-1 text-xs bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.5 rounded-full">
-                              {mg.name}
-                              <button className="ml-0.5 text-blue-400 hover:text-blue-700 font-bold leading-none" title={`Remove ${mg.name}`}
-                                onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>×</button>
-                            </span>
-                          ))}
-                          {unassignedMgs.length > 0 && (
-                            <div className="relative inline-block">
-                              <button
-                                className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
-                                onClick={e => {
-                                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                                  setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
-                                  setSiMgAddOpen(siMgAddOpen === selectedSiId ? null : selectedSiId)
-                                }}
-                              >+ Add</button>
-                              {siMgAddOpen === selectedSiId && siMgAddPos && createPortal(
-                                <>
-                                  <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
-                                  <div className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
-                                    style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}>
-                                    {unassignedMgs.map(mg => (
-                                      <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
-                                        onClick={() => { addSiModifier(selectedSiId, mg); setSiMgAddOpen(null) }}>
-                                        <span className="font-medium">{mg.name}</span>
-                                        <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
-                                      </button>
-                                    ))}
-                                    <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
-                                      onClick={() => setSiMgAddOpen(null)}>Cancel</button>
-                                  </div>
-                                </>,
-                                document.body
-                              )}
+                            <div key={mg.modifier_group_id}
+                              className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-blue-50 border border-blue-100 rounded text-xs">
+                              <span className="font-medium text-blue-800">{mg.name}</span>
+                              <button className="text-blue-300 hover:text-red-500 transition-colors" title={`Remove ${mg.name}`}
+                                onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                </svg>
+                              </button>
                             </div>
-                          )}
+                          ))}
                         </div>
-                      )}
-                    </div>
+                        {unassignedMgs.length > 0 && (
+                          <div className="relative inline-block">
+                            <button
+                              className="text-xs px-2 py-0.5 rounded-full border border-dashed border-accent text-accent hover:bg-accent-dim transition-colors"
+                              onClick={e => {
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                setSiMgAddPos({ top: rect.bottom + 4, left: rect.left })
+                                setSiMgAddOpen(siMgAddOpen === selectedSiId ? null : selectedSiId)
+                              }}
+                            >+ Add Modifier Group</button>
+                            {siMgAddOpen === selectedSiId && siMgAddPos && createPortal(
+                              <>
+                                <div className="fixed inset-0 z-[99998]" onClick={() => setSiMgAddOpen(null)} />
+                                <div className="bg-white border border-border rounded shadow-xl max-h-52 overflow-y-auto min-w-[240px]"
+                                  style={{ position: 'fixed', top: siMgAddPos.top, left: siMgAddPos.left, zIndex: 99999 }}>
+                                  {unassignedMgs.map(mg => (
+                                    <button key={mg.id} className="w-full text-left px-3 py-2 text-xs hover:bg-accent-dim flex items-center justify-between gap-2"
+                                      onClick={() => { addSiModifier(selectedSiId, mg); setSiMgAddOpen(null) }}>
+                                      <span className="font-medium">{mg.name}</span>
+                                      <span className="text-text-3 shrink-0">{mg.option_count ?? 0} opts · {mg.min_select}–{mg.max_select}</span>
+                                    </button>
+                                  ))}
+                                  <button className="w-full text-left px-3 py-2 text-xs text-text-3 border-t border-border hover:bg-gray-50"
+                                    onClick={() => setSiMgAddOpen(null)}>Cancel</button>
+                                </div>
+                              </>,
+                              document.body
+                            )}
+                          </div>
+                        )}
+                        <p className="text-xs text-text-3 mt-4 italic">Changes are saved automatically.</p>
+                      </>
+                    )}
+                  </div>
+                  )}{/* end modifiers tab */}
+
                   </div>
                 )}
 
-                {/* Panel footer — Save + Delete icon */}
+                {/* Panel footer */}
                 <div className="px-4 py-3 border-t border-border flex gap-2 items-center">
-                  <button className="btn btn-sm btn-primary flex-1"
-                    disabled={panelSaving || !panelForm?.name.trim()}
-                    onClick={savePanelItem}>
-                    {panelSaving ? 'Saving…' : 'Save'}
-                  </button>
+                  {panelTab === 'details' && (
+                    <button className="btn btn-sm btn-primary flex-1"
+                      disabled={panelSaving || !panelForm?.name.trim()}
+                      onClick={savePanelItem}>
+                      {panelSaving ? 'Saving…' : 'Save'}
+                    </button>
+                  )}
+                  {panelTab !== 'details' && (
+                    <span className="flex-1 text-xs text-text-3 italic">Changes saved automatically</span>
+                  )}
                   <button
                     className="p-2 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                     title="Delete this sales item"
@@ -1219,9 +1287,19 @@ export default function SalesItemsPage() {
                   <div className="space-y-2">
                     {(comboDetail.steps || []).map(step => (
                       <div key={step.id} className={`border rounded transition-colors ${comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id ? 'border-accent' : 'border-gray-200'}`}>
-                        {/* Step header row */}
+                        {/* Step header row — click to expand + open step in side panel */}
                         <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t"
-                          onClick={() => setExpandedStep(expandedStep === step.id ? null : step.id)}>
+                          onClick={() => {
+                            if (expandedStep === step.id) {
+                              setExpandedStep(null)
+                              if (comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id) {
+                                setComboEditTarget(null)
+                              }
+                            } else {
+                              setExpandedStep(step.id)
+                              setComboEditTarget({ type: 'step', step })
+                            }
+                          }}>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs text-gray-400">{expandedStep === step.id ? '▼' : '▶'}</span>
                             <span className="text-sm font-medium text-gray-800">{step.name}</span>
@@ -1233,13 +1311,16 @@ export default function SalesItemsPage() {
                             {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                           </div>
                           <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                            <button className="btn btn-xs btn-outline" title="Edit step settings"
-                              onClick={() => { setComboEditTarget({ type: 'step', step }); setExpandedStep(step.id) }}>⚙</button>
                             <button className="btn btn-xs btn-primary" onClick={() => {
                               setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } })
                               setExpandedStep(step.id)
                             }}>+ Option</button>
-                            <button className="btn btn-xs btn-danger" onClick={() => deleteComboStep(step.id)}>×</button>
+                            <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete step"
+                              onClick={() => deleteComboStep(step.id)}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                              </svg>
+                            </button>
                           </div>
                         </div>
 
@@ -1248,7 +1329,7 @@ export default function SalesItemsPage() {
                           <div className="p-2 space-y-1">
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet.</p>}
                             {(step.options || []).map(opt => (
-                              <div key={opt.id} className={`flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
+                              <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
                                 onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
                                 <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
                                 <span className="font-medium text-gray-800">{opt.name}</span>
@@ -1278,7 +1359,12 @@ export default function SalesItemsPage() {
                                   </div>
                                 )}
                                 <div className="flex gap-1 shrink-0 ml-auto" onClick={e => e.stopPropagation()}>
-                                  <button className="text-xs text-red-400 hover:text-red-600 px-1" onClick={() => deleteOption(step.id, opt.id)}>×</button>
+                                  <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                                    title="Delete option" onClick={() => deleteOption(step.id, opt.id)}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                    </svg>
+                                  </button>
                                 </div>
                               </div>
                             ))}
@@ -1578,176 +1664,339 @@ export default function SalesItemsPage() {
 
       {/* ── MODIFIERS TAB ─────────────────────────────────────────────────────── */}
       {activeTab === 'modifiers' && (
-        <div className="flex-1 overflow-auto p-5 max-w-3xl">
-          <div className="card p-4 mb-5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">New Modifier Group</h3>
-            <div className="flex gap-2">
-              <input className="input flex-1" placeholder="Group name" value={newMgForm.name}
-                onChange={e => setNewMgForm(f => ({ ...f, name: e.target.value }))}
-                onKeyDown={e => e.key === 'Enter' && createMg()} />
-              <input className="input flex-1" placeholder="Display name (optional)" value={newMgForm.display_name}
-                onChange={e => setNewMgForm(f => ({ ...f, display_name: e.target.value }))} />
-              <input type="number" className="input w-20" placeholder="Min" title="Min select"
-                value={newMgForm.min_select} onChange={e => setNewMgForm(f => ({ ...f, min_select: Number(e.target.value) }))} />
-              <input type="number" className="input w-20" placeholder="Max" title="Max select"
-                value={newMgForm.max_select} onChange={e => setNewMgForm(f => ({ ...f, max_select: Number(e.target.value) }))} />
-              <button className="btn btn-primary" disabled={!newMgForm.name.trim() || mgSaving} onClick={createMg}>+ Create</button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {modifierGroups.length === 0 && <p className="text-sm text-center text-gray-400 py-8">No modifier groups yet.</p>}
-            {modifierGroups.map(g => (
-              <div key={g.id} className="card overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50"
-                  onClick={() => toggleMg(g.id)}>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-gray-400">{expandedMgId === g.id ? '▼' : '▶'}</span>
-                    {editMg?.id === g.id ? (
-                      <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                        <input className="input input-sm w-48" value={editMg.name} onChange={e => setEditMg(m => m ? { ...m, name: e.target.value } : m)} />
-                        <input className="input input-sm w-40" placeholder="Display name (optional)" value={editMg.display_name ?? ''} onChange={e => setEditMg(m => m ? { ...m, display_name: e.target.value || null } : m)} />
-                        <input type="number" className="input input-sm w-16" value={editMg.min_select} title="Min" onChange={e => setEditMg(m => m ? { ...m, min_select: Number(e.target.value) } : m)} />
-                        <input type="number" className="input input-sm w-16" value={editMg.max_select} title="Max" onChange={e => setEditMg(m => m ? { ...m, max_select: Number(e.target.value) } : m)} />
-                        <button className="btn btn-xs btn-primary" onClick={() => saveMg(editMg)}>✓</button>
-                        <button className="btn btn-xs btn-ghost" onClick={() => setEditMg(null)}>✗</button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="font-medium text-gray-900">{g.name}</span>
-                        <span className="text-xs text-gray-400">min {g.min_select} · max {g.max_select}</span>
-                        {g.option_count !== undefined && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{g.option_count} opt{g.option_count !== 1 ? 's' : ''}</span>}
-                      </>
-                    )}
-                  </div>
-                  {editMg?.id !== g.id && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* Main group list */}
+          <div className="flex-1 overflow-auto p-5">
+            {modifierGroups.length === 0 && (
+              <p className="text-sm text-center text-gray-400 py-12">No modifier groups yet. Click "+ New Modifier Group" to create one.</p>
+            )}
+            <div className="space-y-2 max-w-3xl">
+              {modifierGroups.map(g => (
+                <div key={g.id} className={`card overflow-hidden transition-colors ${mgEditTarget?.type === 'group' && (mgEditTarget as { type: 'group'; group: ModifierGroup }).group.id === g.id ? 'ring-1 ring-accent' : ''}`}>
+                  {/* Group header */}
+                  <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50"
+                    onClick={() => {
+                      if (expandedMgId === g.id && mgEditTarget?.type === 'group' && (mgEditTarget as any).group.id === g.id) {
+                        setExpandedMgId(null); setMgEditTarget(null)
+                      } else {
+                        toggleMg(g.id)
+                        setMgEditTarget({ type: 'group', group: g })
+                      }
+                    }}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400">{expandedMgId === g.id ? '▼' : '▶'}</span>
+                      <span className="font-medium text-gray-900">{g.name}</span>
+                      {g.display_name && <span className="text-xs text-gray-400 italic">"{g.display_name}"</span>}
+                      <span className="text-xs text-gray-400">min {g.min_select} · max {g.max_select}</span>
+                      {g.option_count !== undefined && (
+                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                          {g.option_count} opt{g.option_count !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                      <button className="btn btn-xs btn-outline" onClick={() => setEditMg(g)}>Edit</button>
-                      <button className="btn btn-xs btn-outline" title="Duplicate this modifier group and all its options" onClick={() => duplicateMg(g)}>⧉ Duplicate</button>
+                      <button className="btn btn-xs btn-outline" title="Duplicate this modifier group and all its options"
+                        onClick={() => duplicateMg(g)}>⧉ Duplicate</button>
                       <button className="btn btn-xs btn-danger" onClick={() => deleteMg(g)}>Delete</button>
                     </div>
-                  )}
-                </div>
-                {expandedMgId === g.id && (
-                  <div className="border-t border-border">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-surface-2 border-b border-border text-xs text-text-3 uppercase tracking-wide">
-                          <th className="px-3 py-2 text-left font-semibold">Name</th>
-                          <th className="px-3 py-2 text-left font-semibold">Type</th>
-                          <th className="px-3 py-2 text-left font-semibold">Linked Item</th>
-                          <th className="px-3 py-2 w-16"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(expandedOptions[g.id] || []).length === 0 && editingOption?.groupId !== g.id && (
-                          <tr><td colSpan={4} className="px-3 py-3 text-xs text-text-3 text-center italic">No options yet — add one below.</td></tr>
-                        )}
-                        {(expandedOptions[g.id] || []).map(opt => {
-                          const isEditingThis = editingOption?.groupId === g.id && editingOption?.optId === opt.id
-                          if (isEditingThis) {
-                            const ef = editingOption!.form
+                  </div>
+
+                  {/* Options table */}
+                  {expandedMgId === g.id && (
+                    <div className="border-t border-border">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-surface-2 border-b border-border text-xs text-text-3 uppercase tracking-wide">
+                            <th className="px-1 py-2 w-6"></th>
+                            <th className="px-3 py-2 text-left font-semibold">Name</th>
+                            <th className="px-3 py-2 text-left font-semibold">Type</th>
+                            <th className="px-3 py-2 text-left font-semibold">Linked Item</th>
+                            <th className="px-2 py-2 w-8"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(expandedOptions[g.id] || []).length === 0 && (
+                            <tr><td colSpan={5} className="px-3 py-3 text-xs text-text-3 text-center italic">No options yet.</td></tr>
+                          )}
+                          {(expandedOptions[g.id] || []).map((opt, optIdx) => {
+                            const opts = expandedOptions[g.id] || []
+                            const isActive = mgEditTarget?.type === 'option' && (mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }).groupId === g.id && (mgEditTarget as any).opt?.id === opt.id
                             return (
-                              <tr key={opt.id} className="border-b border-border bg-accent-dim/20">
-                                <td className="px-2 py-1.5">
-                                  <input className="input input-sm w-full" value={ef.name}
-                                    onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, name: e.target.value } } : eo)} />
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  <select className="input py-0.5 text-xs w-28" value={ef.item_type}
-                                    onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual', recipe_id: null, ingredient_id: null } } : eo)}>
-                                    <option value="manual">Manual</option>
-                                    <option value="recipe">Recipe</option>
-                                    <option value="ingredient">Ingredient</option>
-                                  </select>
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  {ef.item_type === 'recipe' && (
-                                    <select className="input py-0.5 text-xs w-full" value={ef.recipe_id ?? ''}
-                                      onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, recipe_id: Number(e.target.value) || null } } : eo)}>
-                                      <option value="">— Select —</option>
-                                      {recipes.slice(0, 200).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                                    </select>
-                                  )}
-                                  {ef.item_type === 'ingredient' && (
-                                    <select className="input py-0.5 text-xs w-full" value={ef.ingredient_id ?? ''}
-                                      onChange={e => setEditingOption(eo => eo ? { ...eo, form: { ...eo.form, ingredient_id: Number(e.target.value) || null } } : eo)}>
-                                      <option value="">— Select —</option>
-                                      {ingredients.slice(0, 200).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                                    </select>
-                                  )}
-                                  {ef.item_type === 'manual' && <span className="text-xs text-text-3">—</span>}
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  <div className="flex gap-1">
-                                    <button className="btn btn-xs btn-primary" onClick={saveOptEdit}>✓</button>
-                                    <button className="btn btn-xs btn-ghost" onClick={() => setEditingOption(null)}>✕</button>
+                              <tr key={opt.id}
+                                className={`border-b border-border last:border-0 cursor-pointer transition-colors ${isActive ? 'bg-accent-dim/40' : 'hover:bg-surface-2/50'}`}
+                                onClick={() => setMgEditTarget({ type: 'option', groupId: g.id, opt })}>
+                                {/* Sort arrows */}
+                                <td className="px-1 py-2" onClick={e => e.stopPropagation()}>
+                                  <div className="flex flex-col">
+                                    <button className="p-0.5 text-text-3 hover:text-text-1 disabled:opacity-20" disabled={optIdx === 0}
+                                      onClick={() => reorderMgOption(g.id, optIdx, 'up')} title="Move up">
+                                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+                                    </button>
+                                    <button className="p-0.5 text-text-3 hover:text-text-1 disabled:opacity-20" disabled={optIdx === opts.length - 1}
+                                      onClick={() => reorderMgOption(g.id, optIdx, 'down')} title="Move down">
+                                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
+                                    </button>
                                   </div>
+                                </td>
+                                <td className="px-3 py-2 font-medium text-text-1">{opt.name}</td>
+                                <td className="px-3 py-2">
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
+                                </td>
+                                <td className="px-3 py-2 text-xs text-text-2">
+                                  {opt.item_type === 'recipe' && (
+                                    opt.recipe_name
+                                      ? <span className="flex items-center gap-1.5">
+                                          <span>{opt.recipe_name}</span>
+                                          <span className="text-text-3 font-mono">· {Number(opt.qty ?? 1)} {opt.recipe_yield_unit_abbr || 'ptn'}</span>
+                                        </span>
+                                      : <span className="text-text-3">#{opt.recipe_id}</span>
+                                  )}
+                                  {opt.item_type === 'ingredient' && (
+                                    opt.ingredient_name
+                                      ? <span className="flex items-center gap-1.5">
+                                          <span>{opt.ingredient_name}</span>
+                                          <span className="text-text-3 font-mono">· {Number(opt.qty ?? 1)} {opt.ingredient_unit_abbr || ''}</span>
+                                        </span>
+                                      : <span className="text-text-3">#{opt.ingredient_id}</span>
+                                  )}
+                                  {opt.item_type === 'manual' && <span className="text-text-3">—</span>}
+                                </td>
+                                <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
+                                  <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete option"
+                                    onClick={() => deleteMgOption(g.id, opt.id)}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                    </svg>
+                                  </button>
                                 </td>
                               </tr>
                             )
-                          }
-                          const recipeName     = opt.recipe_name     ?? recipes.find(r => r.id === opt.recipe_id)?.name
-                          const ingredientName = opt.ingredient_name ?? ingredients.find(i => i.id === opt.ingredient_id)?.name
-                          return (
-                            <tr key={opt.id} className="border-b border-border last:border-0 hover:bg-surface-2/50">
-                              <td className="px-3 py-2 font-medium text-text-1">{opt.name}</td>
-                              <td className="px-3 py-2">
-                                <span className={`text-xs px-1.5 py-0.5 rounded ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
-                              </td>
-                              <td className="px-3 py-2 text-xs text-text-2">
-                                {opt.item_type === 'recipe' && (
-                                  recipeName
-                                    ? <span className="flex items-center gap-1.5">
-                                        <span>{recipeName}</span>
-                                        {opt.recipe_yield_qty != null && (
-                                          <span className="text-text-3 font-mono">
-                                            · {Number(opt.recipe_yield_qty)}{opt.recipe_yield_unit_abbr ? ` ${opt.recipe_yield_unit_abbr}` : ' ptn'}
-                                          </span>
-                                        )}
-                                      </span>
-                                    : <span className="text-text-3">#{opt.recipe_id}</span>
-                                )}
-                                {opt.item_type === 'ingredient' && (
-                                  ingredientName
-                                    ? <span className="flex items-center gap-1.5">
-                                        <span>{ingredientName}</span>
-                                        {opt.ingredient_unit_abbr && (
-                                          <span className="text-text-3 font-mono">· {opt.ingredient_unit_abbr}</span>
-                                        )}
-                                      </span>
-                                    : <span className="text-text-3">#{opt.ingredient_id}</span>
-                                )}
-                                {opt.item_type === 'manual' && <span className="text-text-3">—</span>}
-                              </td>
-                              <td className="px-3 py-1.5">
-                                <div className="flex gap-1 justify-end">
-                                  <button
-                                    className="w-6 h-6 flex items-center justify-center rounded border border-border text-text-3 hover:border-accent hover:text-accent transition-colors text-xs"
-                                    title="Edit"
-                                    onClick={() => setEditingOption({ groupId: g.id, optId: opt.id, form: { name: opt.name, item_type: opt.item_type, recipe_id: opt.recipe_id, ingredient_id: opt.ingredient_id } })}
-                                  >✎</button>
-                                  <button
-                                    className="w-6 h-6 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 transition-colors text-xs"
-                                    title="Delete"
-                                    onClick={() => deleteMgOption(g.id, opt.id)}
-                                  >×</button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                        <ModifierOptionAddForm recipes={recipes} ingredients={ingredients} onAdd={opt => addMgOption(g.id, opt)} />
-                      </tbody>
-                    </table>
-                  </div>
+                          })}
+                          <tr>
+                            <td colSpan={5} className="px-3 py-2">
+                              <button className="btn btn-xs btn-outline"
+                                onClick={() => setMgEditTarget({ type: 'option', groupId: g.id, opt: null })}>
+                                + Add Option
+                              </button>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Resize handle */}
+          {mgEditTarget && (
+            <div onMouseDown={startMgPanelResize}
+              className="w-1 hover:w-1.5 bg-border hover:bg-accent cursor-col-resize flex-shrink-0 transition-all" />
+          )}
+
+          {/* Side panel */}
+          {mgEditTarget && (
+            <div className="flex-shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden"
+              style={{ width: mgPanelWidth }}>
+              {/* Panel header */}
+              <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-border">
+                <h3 className="text-sm font-semibold text-text-1 truncate">
+                  {mgEditTarget.type === 'group'
+                    ? `Edit Group: ${(mgEditTarget as { type: 'group'; group: ModifierGroup }).group.name}`
+                    : (mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }).opt?.id
+                      ? `Edit Option: ${(mgEditTarget as any).opt.name}`
+                      : 'Add Option'}
+                </h3>
+                <button onClick={() => setMgEditTarget(null)} className="p-1 rounded hover:bg-surface-2 text-text-3 hover:text-text-1 shrink-0">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+
+              {/* Panel body */}
+              <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+                {mgEditTarget.type === 'group' && mpGroupForm && (
+                  <>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name <span className="text-red-500">*</span></label>
+                      <input className="input w-full text-sm" value={mpGroupForm.name}
+                        onChange={e => setMpGroupForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name (customer-facing)</label>
+                      <input className="input w-full text-sm" placeholder="Leave blank to use name"
+                        value={mpGroupForm.display_name}
+                        onChange={e => setMpGroupForm(f => f ? { ...f, display_name: e.target.value } : f)} />
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Min Select</label>
+                        <input type="number" min="0" className="input w-full text-sm"
+                          value={mpGroupForm.min_select}
+                          onChange={e => setMpGroupForm(f => f ? { ...f, min_select: Number(e.target.value) } : f)} />
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Max Select</label>
+                        <input type="number" min="1" className="input w-full text-sm"
+                          value={mpGroupForm.max_select}
+                          onChange={e => setMpGroupForm(f => f ? { ...f, max_select: Number(e.target.value) } : f)} />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {mgEditTarget.type === 'option' && mpOptForm && (
+                  <>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name <span className="text-red-500">*</span></label>
+                      <input className="input w-full text-sm" value={mpOptForm.name}
+                        onChange={e => setMpOptForm(f => f ? { ...f, name: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name (customer-facing)</label>
+                      <input className="input w-full text-sm" placeholder="Leave blank to use name"
+                        value={mpOptForm.display_name}
+                        onChange={e => setMpOptForm(f => f ? { ...f, display_name: e.target.value } : f)} />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Type</label>
+                      <select className="input w-full text-sm" value={mpOptForm.item_type}
+                        onChange={e => setMpOptForm(f => f ? { ...f, item_type: e.target.value as 'recipe' | 'ingredient' | 'manual', recipe_id: null, ingredient_id: null } : f)}>
+                        <option value="manual">Manual</option>
+                        <option value="recipe">Recipe</option>
+                        <option value="ingredient">Ingredient</option>
+                      </select>
+                    </div>
+                    {mpOptForm.item_type === 'recipe' && (
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Recipe</label>
+                        <div className="relative">
+                          <input className="input w-full text-sm" placeholder="Search recipes…"
+                            value={mpOptRecipeSearch}
+                            onChange={e => { setMpOptRecipeSearch(e.target.value); setMpOptRecipeOpen(true) }}
+                            onFocus={() => setMpOptRecipeOpen(true)}
+                            onBlur={() => setTimeout(() => setMpOptRecipeOpen(false), 150)} />
+                          {mpOptRecipeOpen && (
+                            <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                              {recipes.filter(r => r.name.toLowerCase().includes(mpOptRecipeSearch.toLowerCase())).slice(0, 50).map(r => (
+                                <button key={r.id} className="w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center justify-between gap-2"
+                                  onMouseDown={() => { setMpOptForm(f => f ? { ...f, recipe_id: r.id } : f); setMpOptRecipeSearch(r.name); setMpOptRecipeOpen(false) }}>
+                                  <span className="font-medium">{r.name}</span>
+                                  {r.category_name && <span className="text-xs text-text-3 shrink-0">{r.category_name}</span>}
+                                </button>
+                              ))}
+                              {recipes.filter(r => r.name.toLowerCase().includes(mpOptRecipeSearch.toLowerCase())).length === 0 && (
+                                <p className="px-3 py-2 text-xs text-text-3">No matches</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {mpOptForm.item_type === 'ingredient' && (
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Ingredient</label>
+                        <div className="relative">
+                          <input className="input w-full text-sm" placeholder="Search ingredients…"
+                            value={mpOptIngSearch}
+                            onChange={e => { setMpOptIngSearch(e.target.value); setMpOptIngOpen(true) }}
+                            onFocus={() => setMpOptIngOpen(true)}
+                            onBlur={() => setTimeout(() => setMpOptIngOpen(false), 150)} />
+                          {mpOptIngOpen && (
+                            <div className="absolute top-full left-0 right-0 z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 max-h-44 overflow-y-auto">
+                              {ingredients.filter(i => i.name.toLowerCase().includes(mpOptIngSearch.toLowerCase())).slice(0, 50).map(i => (
+                                <button key={i.id} className="w-full text-left px-3 py-2 text-sm hover:bg-accent-dim flex items-center justify-between gap-2"
+                                  onMouseDown={() => { setMpOptForm(f => f ? { ...f, ingredient_id: i.id } : f); setMpOptIngSearch(i.name); setMpOptIngOpen(false) }}>
+                                  <span className="font-medium">{i.name}</span>
+                                  {i.base_unit_abbr && <span className="text-xs text-text-3 shrink-0">{i.base_unit_abbr}</span>}
+                                </button>
+                              ))}
+                              {ingredients.filter(i => i.name.toLowerCase().includes(mpOptIngSearch.toLowerCase())).length === 0 && (
+                                <p className="px-3 py-2 text-xs text-text-3">No matches</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {(mpOptForm.item_type === 'recipe' || mpOptForm.item_type === 'ingredient') && (
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Quantity</label>
+                        <div className="flex items-center gap-2">
+                          <input type="number" step="0.0001" min="0.0001" className="input w-28 text-sm"
+                            value={mpOptForm.qty}
+                            onChange={e => setMpOptForm(f => f ? { ...f, qty: parseFloat(e.target.value) || 1 } : f)} />
+                          <span className="text-sm text-text-3">
+                            {mpOptForm.item_type === 'ingredient'
+                              ? ingredients.find(i => i.id === mpOptForm.ingredient_id)?.base_unit_abbr || 'units'
+                              : 'portion(s)'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {mpOptForm.item_type === 'manual' && (
+                      <div>
+                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Manual Cost</label>
+                        <input type="number" step="0.01" min="0" className="input w-full text-sm" placeholder="0.00"
+                          value={mpOptForm.manual_cost ?? ''}
+                          onChange={e => setMpOptForm(f => f ? { ...f, manual_cost: parseFloat(e.target.value) || null } : f)} />
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
-            ))}
-          </div>
+
+              {/* Panel footer */}
+              <div className="flex-shrink-0 border-t border-border px-4 py-3 flex gap-2">
+                <button className="btn btn-primary flex-1 text-sm" disabled={mgPanelSaving} onClick={saveMgPanelItem}>
+                  {mgPanelSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button className="btn btn-ghost text-sm" onClick={() => setMgEditTarget(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── Modals ─────────────────────────────────────────────────────────────── */}
+
+      {/* New Modifier Group modal */}
+      {showNewMgModal && (
+        <Modal title="New Modifier Group" onClose={() => setShowNewMgModal(false)}>
+          <div className="space-y-4 p-1">
+            <div>
+              <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name <span className="text-red-500">*</span></label>
+              <input className="input w-full" placeholder="e.g. Choose Wings Flavor" value={newMgForm.name}
+                onChange={e => setNewMgForm(f => ({ ...f, name: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && newMgForm.name.trim() && createMg().then(() => setShowNewMgModal(false))} autoFocus />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Display Name (customer-facing)</label>
+              <input className="input w-full" placeholder="Leave blank to use name" value={newMgForm.display_name}
+                onChange={e => setNewMgForm(f => ({ ...f, display_name: e.target.value }))} />
+            </div>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Min Select</label>
+                <input type="number" min="0" className="input w-full" value={newMgForm.min_select}
+                  onChange={e => setNewMgForm(f => ({ ...f, min_select: Number(e.target.value) }))} />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Max Select</label>
+                <input type="number" min="1" className="input w-full" value={newMgForm.max_select}
+                  onChange={e => setNewMgForm(f => ({ ...f, max_select: Number(e.target.value) }))} />
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-4 mt-2 border-t border-border">
+            <button className="btn btn-ghost" onClick={() => setShowNewMgModal(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={!newMgForm.name.trim() || mgSaving}
+              onClick={() => createMg().then(() => { setShowNewMgModal(false); setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 }) })}>
+              {mgSaving ? 'Creating…' : '+ Create Group'}
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* Sales Item create (New only — edit is handled inline by the right panel) */}
       {siModal === 'new' && (

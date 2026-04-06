@@ -169,13 +169,15 @@ router.get('/menu/:id', async (req, res) => {
              r.name    AS recipe_name,
              rcat.name AS recipe_category,
              ing.name  AS ingredient_name,
-             icat.name AS ingredient_category
+             icat.name AS ingredient_category,
+             sicat.name AS si_category
       FROM   mcogs_menu_sales_items msi
       JOIN   mcogs_sales_items      si   ON si.id   = msi.sales_item_id
       LEFT JOIN mcogs_recipes       r    ON r.id    = si.recipe_id
       LEFT JOIN mcogs_categories    rcat ON rcat.id = r.category_id
       LEFT JOIN mcogs_ingredients   ing  ON ing.id  = si.ingredient_id
       LEFT JOIN mcogs_categories    icat ON icat.id = ing.category_id
+      LEFT JOIN mcogs_categories    sicat ON sicat.id = si.category_id
       WHERE  msi.menu_id = $1
       ORDER  BY msi.sort_order, msi.id
     `, [menuId]);
@@ -307,8 +309,10 @@ router.get('/menu/:id', async (req, res) => {
       }
 
       const category = mi.item_type === 'ingredient'
-        ? (mi.ingredient_category || null)
-        : (mi.recipe_category || null);
+        ? (mi.ingredient_category || mi.si_category || null)
+        : mi.item_type === 'recipe'
+          ? (mi.recipe_category || mi.si_category || null)
+          : (mi.si_category || null); // combo, manual
 
       return {
         menu_item_id:   mi.id,
