@@ -160,7 +160,7 @@ router.get('/menu/:id', async (req, res) => {
     // ── Load menu items from mcogs_menu_sales_items (new) ─────────────────────
     const { rows: menuItems } = await pool.query(`
       SELECT msi.id,
-             COALESCE(msi.display_name, si.display_name, si.name) AS display_name,
+             COALESCE(si.display_name, si.name) AS display_name,
              si.item_type,
              si.recipe_id,
              si.ingredient_id,
