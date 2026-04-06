@@ -12,13 +12,17 @@ async function fetchFull(id, client) {
   const { rows: items } = await db.query(
     `SELECT si.*,
             r.name   AS recipe_name,
+            COALESCE(r.yield_unit_text, ru.abbreviation) AS recipe_yield_unit_abbr,
             ing.name AS ingredient_name,
+            iu.abbreviation AS ingredient_base_unit_abbr,
             co.name  AS combo_name,
             c.name   AS category_name,
             gr.name  AS category_group_name
      FROM   mcogs_sales_items si
      LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
+     LEFT JOIN mcogs_units             ru  ON ru.id  = r.yield_unit_id
      LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+     LEFT JOIN mcogs_units             iu  ON iu.id  = ing.base_unit_id
      LEFT JOIN mcogs_combos            co  ON co.id  = si.combo_id
      LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
      LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
@@ -63,7 +67,9 @@ router.get('/', async (req, res, next) => {
     let sql = `
       SELECT si.*,
              r.name   AS recipe_name,
+             COALESCE(r.yield_unit_text, ru.abbreviation) AS recipe_yield_unit_abbr,
              ing.name AS ingredient_name,
+             iu.abbreviation AS ingredient_base_unit_abbr,
              co.name  AS combo_name,
              c.name   AS category_name,
              gr.name  AS category_group_name,
@@ -71,7 +77,9 @@ router.get('/', async (req, res, next) => {
              (SELECT COUNT(*) FROM mcogs_combo_steps WHERE combo_id = si.combo_id) AS step_count
       FROM   mcogs_sales_items si
       LEFT JOIN mcogs_recipes           r   ON r.id   = si.recipe_id
+      LEFT JOIN mcogs_units             ru  ON ru.id  = r.yield_unit_id
       LEFT JOIN mcogs_ingredients       ing ON ing.id = si.ingredient_id
+      LEFT JOIN mcogs_units             iu  ON iu.id  = ing.base_unit_id
       LEFT JOIN mcogs_combos            co  ON co.id  = si.combo_id
       LEFT JOIN mcogs_categories        c   ON c.id   = si.category_id
       LEFT JOIN mcogs_category_groups   gr  ON gr.id  = c.group_id
@@ -137,18 +145,18 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /sales-items ────────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
+    const { item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order, qty } = req.body;
     if (!item_type || !name) return res.status(400).json({ error: { message: 'item_type and name are required' } });
     if (!['recipe','ingredient','manual','combo'].includes(item_type)) {
       return res.status(400).json({ error: { message: 'item_type must be recipe, ingredient, manual, or combo' } });
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_sales_items (item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO mcogs_sales_items (item_type, name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order, qty)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [item_type, name.trim(), display_name?.trim() || null, category_id || null, description || null,
        recipe_id || null, ingredient_id || null, combo_id || null,
-       manual_cost || null, image_url || null, sort_order || 0]
+       manual_cost || null, image_url || null, sort_order || 0, qty != null ? qty : 1]
     );
     const full = await fetchFull(rows[0].id);
     res.status(201).json(full);
@@ -158,19 +166,90 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /sales-items/:id ─────────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order } = req.body;
+    const { name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order, qty } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_sales_items
        SET name=$1, display_name=$2, category_id=$3, description=$4, recipe_id=$5, ingredient_id=$6, combo_id=$7,
-           manual_cost=$8, image_url=$9, sort_order=$10, updated_at=NOW()
-       WHERE id=$11 RETURNING *`,
+           manual_cost=$8, image_url=$9, sort_order=$10, qty=$11, updated_at=NOW()
+       WHERE id=$12 RETURNING *`,
       [name?.trim(), display_name?.trim() || null, category_id || null, description || null,
        recipe_id || null, ingredient_id || null, combo_id || null,
-       manual_cost || null, image_url || null, sort_order || 0, req.params.id]
+       manual_cost || null, image_url || null, sort_order || 0, qty != null ? qty : 1, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Sales item not found' } });
     const full = await fetchFull(rows[0].id);
     res.json(full);
+  } catch (err) { next(err); }
+});
+
+// ─── POST /sales-items/bulk/category ─────────────────────────────────────────
+// body: { item_ids: [1,2,3], category_id: 5 | null }
+router.post('/bulk/category', async (req, res, next) => {
+  try {
+    const { item_ids, category_id } = req.body;
+    if (!Array.isArray(item_ids) || item_ids.length === 0)
+      return res.status(400).json({ error: { message: 'item_ids required' } });
+    await pool.query(
+      `UPDATE mcogs_sales_items SET category_id=$1, updated_at=NOW() WHERE id = ANY($2::int[])`,
+      [category_id || null, item_ids.map(Number)]
+    );
+    res.json({ updated: item_ids.length });
+  } catch (err) { next(err); }
+});
+
+// ─── POST /sales-items/bulk/markets ──────────────────────────────────────────
+// body: { item_ids: [1,2,3], country_ids: [4,5] }
+router.post('/bulk/markets', async (req, res, next) => {
+  try {
+    const { item_ids, country_ids } = req.body;
+    if (!Array.isArray(item_ids) || item_ids.length === 0)
+      return res.status(400).json({ error: { message: 'item_ids required' } });
+    const cids = Array.isArray(country_ids) ? country_ids.map(Number) : [];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE mcogs_sales_item_markets SET is_active=FALSE WHERE sales_item_id = ANY($1::int[])`,
+        [item_ids.map(Number)]
+      );
+      for (const siId of item_ids) {
+        for (const cid of cids) {
+          await client.query(
+            `INSERT INTO mcogs_sales_item_markets (sales_item_id, country_id, is_active)
+             VALUES ($1,$2,TRUE)
+             ON CONFLICT (sales_item_id, country_id) DO UPDATE SET is_active=TRUE`,
+            [siId, cid]
+          );
+        }
+      }
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; }
+    finally { client.release(); }
+    res.json({ updated: item_ids.length });
+  } catch (err) { next(err); }
+});
+
+// ─── POST /sales-items/bulk/add-modifier ─────────────────────────────────────
+// body: { item_ids: [1,2,3], modifier_group_id: 7 }
+router.post('/bulk/add-modifier', async (req, res, next) => {
+  try {
+    const { item_ids, modifier_group_id } = req.body;
+    if (!Array.isArray(item_ids) || item_ids.length === 0 || !modifier_group_id)
+      return res.status(400).json({ error: { message: 'item_ids and modifier_group_id required' } });
+    let added = 0;
+    for (const siId of item_ids) {
+      const { rowCount } = await pool.query(
+        `INSERT INTO mcogs_sales_item_modifier_groups (sales_item_id, modifier_group_id, sort_order)
+         SELECT $1, $2,
+                COALESCE((SELECT MAX(sort_order)+1 FROM mcogs_sales_item_modifier_groups WHERE sales_item_id=$1), 0)
+         WHERE NOT EXISTS (
+           SELECT 1 FROM mcogs_sales_item_modifier_groups WHERE sales_item_id=$1 AND modifier_group_id=$2
+         )`,
+        [siId, modifier_group_id]
+      );
+      added += rowCount || 0;
+    }
+    res.json({ added });
   } catch (err) { next(err); }
 });
 

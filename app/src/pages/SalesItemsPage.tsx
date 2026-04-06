@@ -6,7 +6,7 @@ import ImageUpload from '../components/ImageUpload'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Country    { id: number; name: string }
-interface Recipe     { id: number; name: string; category_name: string | null }
+interface Recipe     { id: number; name: string; category_name: string | null; yield_unit_abbr?: string | null }
 interface Ingredient { id: number; name: string; base_unit_abbr: string | null }
 interface SalesItemMarket { country_id: number; country_name: string; is_active: boolean }
 
@@ -51,10 +51,11 @@ interface SalesItem {
   name: string; display_name?: string | null
   category_id: number | null; category_name: string | null
   description: string | null
-  recipe_id: number | null; recipe_name?: string
-  ingredient_id: number | null; ingredient_name?: string
+  recipe_id: number | null; recipe_name?: string; recipe_yield_unit_abbr?: string | null
+  ingredient_id: number | null; ingredient_name?: string; ingredient_base_unit_abbr?: string | null
   combo_id: number | null; combo_name?: string
   manual_cost: number | null; image_url: string | null; sort_order: number
+  qty: number
   modifier_group_count?: number
   markets?: SalesItemMarket[]
   modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
@@ -364,6 +365,11 @@ export default function SalesItemsPage() {
   const [selectedSiId,  setSelectedSiId]  = useState<number | null>(null)
   const [siSortField,   setSiSortField]   = useState<string>('name')
   const [siSortDir,     setSiSortDir]     = useState<'asc' | 'desc'>('asc')
+  const [bulkSelected,  setBulkSelected]  = useState<Set<number>>(new Set())
+  const [bulkCategoryId, setBulkCategoryId] = useState<string>('')
+  const [bulkMarkets,   setBulkMarkets]   = useState<number[]>([])
+  const [bulkMgId,      setBulkMgId]      = useState<number | ''>('')
+  const [bulkApplying,  setBulkApplying]  = useState(false)
 
   // ── Panel edit form ─────────────────────────────────────────────────────────
   type PanelForm = {
@@ -371,7 +377,7 @@ export default function SalesItemsPage() {
     item_type: SalesItem['item_type']
     recipe_id: number | null; ingredient_id: number | null
     combo_id: number | null; manual_cost: number | null
-    image_url: string | null
+    image_url: string | null; qty: number
   }
   const blankPanelForm = (si: SalesItem): PanelForm => ({
     name:          si.name,
@@ -384,6 +390,7 @@ export default function SalesItemsPage() {
     combo_id:      si.combo_id      ?? null,
     manual_cost:   si.manual_cost   ?? null,
     image_url:     si.image_url     ?? null,
+    qty:           si.qty ?? 1,
   })
   const [panelForm,        setPanelForm]        = useState<PanelForm | null>(null)
   const [panelSaving,      setPanelSaving]      = useState(false)
@@ -442,6 +449,7 @@ export default function SalesItemsPage() {
         ingredient_id: panelForm.item_type === 'ingredient'  ? panelForm.ingredient_id : null,
         combo_id:      panelForm.item_type === 'combo'       ? panelForm.combo_id      : null,
         manual_cost:   panelForm.item_type === 'manual'      ? panelForm.manual_cost   : null,
+        qty:           panelForm.qty ?? 1,
       }
       const updated: SalesItem = await api.put(`/sales-items/${selectedSiId}`, payload)
       setSalesItems(prev => prev.map(s => s.id === selectedSiId ? { ...s, ...updated } : s))
@@ -921,6 +929,12 @@ export default function SalesItemsPage() {
                 <option value="combo">Combo</option>
                 <option value="manual">Manual</option>
               </select>
+              {bulkSelected.size > 0 && (
+                <button className="text-xs text-text-3 hover:text-text-1 transition-colors ml-1"
+                  onClick={() => setBulkSelected(new Set())}>
+                  Clear {bulkSelected.size} selected
+                </button>
+              )}
               <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
             </div>
 
@@ -931,34 +945,51 @@ export default function SalesItemsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[28%]">
+                      <th className="px-3 py-2.5 w-8">
+                        <input type="checkbox"
+                          checked={nonComboItems.length > 0 && nonComboItems.every(s => bulkSelected.has(s.id))}
+                          onChange={e => {
+                            if (e.target.checked) setBulkSelected(new Set(nonComboItems.map(s => s.id)))
+                            else setBulkSelected(new Set())
+                          }} />
+                      </th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[26%]">
                         <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('name')}>
                           Name {siSortField === 'name' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
                         </button>
                       </th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[12%]">
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[11%]">
                         <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('item_type')}>
                           Type {siSortField === 'item_type' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
                         </button>
                       </th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[18%]">
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[17%]">
                         <button className="flex items-center gap-1 hover:text-accent" onClick={() => toggleSort('category_name')}>
                           Category {siSortField === 'category_name' ? (siSortDir === 'asc' ? '▲' : '▼') : <span className="text-gray-300">⇅</span>}
                         </button>
                       </th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[25%]">Linked To</th>
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[10%]">Markets</th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[23%]">Linked To</th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-gray-600 w-[9%]">Markets</th>
                       <th className="px-4 py-2.5 w-[7%]" />
                     </tr>
                   </thead>
                   <tbody>
                     {nonComboItems.map(si => {
                       const mkt = marketsDisplay(si)
+                      const isBulkChecked = bulkSelected.has(si.id)
                       return (
                         <tr key={si.id}
-                          className={`border-b border-gray-100 group cursor-pointer transition-colors ${selectedSiId === si.id ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}
+                          className={`border-b border-gray-100 group cursor-pointer transition-colors ${isBulkChecked ? 'bg-blue-50' : selectedSiId === si.id ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}
                           onClick={() => setSelectedSiId(si.id)}>
-                          <td className={`px-4 py-2.5 font-medium ${selectedSiId === si.id ? 'text-accent border-l-2 border-accent' : 'text-gray-900'}`}>{si.name}</td>
+                          <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={isBulkChecked}
+                              onChange={e => setBulkSelected(prev => {
+                                const next = new Set(prev)
+                                e.target.checked ? next.add(si.id) : next.delete(si.id)
+                                return next
+                              })} />
+                          </td>
+                          <td className={`px-4 py-2.5 font-medium ${isBulkChecked ? 'text-blue-700' : selectedSiId === si.id ? 'text-accent border-l-2 border-accent' : 'text-gray-900'}`}>{si.name}</td>
                           <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span></td>
                           <td className="px-4 py-2.5 text-gray-500">{si.category_name || <span className="text-gray-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-gray-500 text-xs">
@@ -987,7 +1018,120 @@ export default function SalesItemsPage() {
             )}
           </div>{/* end left scroll area */}
 
-          {selectedSiId !== null && (() => {
+          {/* ── BULK ACTION PANEL ── */}
+          {bulkSelected.size > 0 && (() => {
+            const bulkIds = [...bulkSelected]
+            const applyBulkCategory = async () => {
+              setBulkApplying(true)
+              try {
+                await api.post('/sales-items/bulk/category', { item_ids: bulkIds, category_id: Number(bulkCategoryId) || null })
+                const catName = siCategories.find(c => String(c.id) === bulkCategoryId)?.name ?? null
+                setSalesItems(prev => prev.map(s => bulkSelected.has(s.id) ? { ...s, category_id: Number(bulkCategoryId) || null, category_name: catName } : s))
+                showToast(`Category updated for ${bulkIds.length} item${bulkIds.length !== 1 ? 's' : ''}`)
+              } catch { showToast('Failed to update category') } finally { setBulkApplying(false) }
+            }
+            const applyBulkMarkets = async () => {
+              setBulkApplying(true)
+              try {
+                await api.post('/sales-items/bulk/markets', { item_ids: bulkIds, country_ids: bulkMarkets })
+                setSalesItems(prev => prev.map(s => {
+                  if (!bulkSelected.has(s.id)) return s
+                  const newMarkets = countries.map(c => ({ country_id: c.id, country_name: c.name, is_active: bulkMarkets.includes(c.id) }))
+                  return { ...s, markets: newMarkets }
+                }))
+                showToast(`Markets updated for ${bulkIds.length} item${bulkIds.length !== 1 ? 's' : ''}`)
+              } catch { showToast('Failed to update markets') } finally { setBulkApplying(false) }
+            }
+            const applyBulkModifier = async () => {
+              if (!bulkMgId) return
+              setBulkApplying(true)
+              try {
+                const result: any = await api.post('/sales-items/bulk/add-modifier', { item_ids: bulkIds, modifier_group_id: bulkMgId })
+                showToast(`Modifier added to ${result.added ?? bulkIds.length} item${bulkIds.length !== 1 ? 's' : ''}`)
+                setBulkMgId('')
+                // Invalidate cached modifier data for affected items
+                setSiMgData(prev => {
+                  const next = { ...prev }
+                  bulkIds.forEach(id => { delete next[id] })
+                  return next
+                })
+              } catch { showToast('Failed to add modifier') } finally { setBulkApplying(false) }
+            }
+            return (
+              <div className="w-80 flex-shrink-0 border-l border-border bg-white flex flex-col">
+                {/* Bulk panel header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-blue-50">
+                  <div>
+                    <span className="font-semibold text-blue-800 text-sm">{bulkSelected.size} item{bulkSelected.size !== 1 ? 's' : ''} selected</span>
+                    <p className="text-xs text-blue-600 mt-0.5">Apply changes to all selected items</p>
+                  </div>
+                  <button className="text-blue-400 hover:text-blue-700 flex-shrink-0 ml-2" onClick={() => setBulkSelected(new Set())} title="Clear selection">✕</button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-5">
+
+                  {/* Set Category */}
+                  <div>
+                    <p className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Set Category</p>
+                    <select className="input w-full text-sm mb-2" value={bulkCategoryId}
+                      onChange={e => setBulkCategoryId(e.target.value)}>
+                      <option value="">— No category —</option>
+                      {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                    </select>
+                    <button className="btn btn-primary btn-sm w-full" disabled={bulkApplying}
+                      onClick={applyBulkCategory}>
+                      {bulkApplying ? 'Applying…' : 'Apply Category'}
+                    </button>
+                  </div>
+
+                  <hr className="border-border" />
+
+                  {/* Set Markets */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-text-3 uppercase tracking-wide">Set Market Visibility</p>
+                      <div className="flex gap-2">
+                        <button className="text-xs text-accent hover:underline" onClick={() => setBulkMarkets(countries.map(c => c.id))}>All</button>
+                        <span className="text-text-3 text-xs">·</span>
+                        <button className="text-xs text-accent hover:underline" onClick={() => setBulkMarkets([])}>None</button>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 mb-2">
+                      {countries.map(c => (
+                        <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                          <input type="checkbox" checked={bulkMarkets.includes(c.id)}
+                            onChange={e => setBulkMarkets(prev => e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id))} />
+                          <span className="text-text-2">{c.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button className="btn btn-primary btn-sm w-full" disabled={bulkApplying}
+                      onClick={applyBulkMarkets}>
+                      {bulkApplying ? 'Applying…' : 'Apply Markets'}
+                    </button>
+                  </div>
+
+                  <hr className="border-border" />
+
+                  {/* Add Modifier Group */}
+                  <div>
+                    <p className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Add Modifier Group</p>
+                    <select className="input w-full text-sm mb-2" value={String(bulkMgId)}
+                      onChange={e => setBulkMgId(e.target.value ? Number(e.target.value) : '')}>
+                      <option value="">Select a modifier group…</option>
+                      {modifierGroups.map(mg => <option key={mg.id} value={String(mg.id)}>{mg.name}</option>)}
+                    </select>
+                    <button className="btn btn-primary btn-sm w-full" disabled={bulkApplying || !bulkMgId}
+                      onClick={applyBulkModifier}>
+                      {bulkApplying ? 'Applying…' : 'Add to Selected'}
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+            )
+          })()}
+
+          {bulkSelected.size === 0 && selectedSiId !== null && (() => {
             const si = salesItems.find(s => s.id === selectedSiId)
             if (!si) return null
             const panelMgGroups    = siMgData[selectedSiId] ?? []
@@ -1123,6 +1267,29 @@ export default function SalesItemsPage() {
                           onChange={e => setPanelForm(f => f ? { ...f, manual_cost: parseFloat(e.target.value) || null } : f)} />
                       </div>
                     )}
+
+                    {/* Qty + unit */}
+                    {panelForm.item_type !== 'manual' && (() => {
+                      const unitLabel =
+                        panelForm.item_type === 'recipe'
+                          ? (si.recipe_yield_unit_abbr ?? null)
+                          : panelForm.item_type === 'ingredient'
+                          ? (si.ingredient_base_unit_abbr ?? null)
+                          : panelForm.item_type === 'combo'
+                          ? 'each'
+                          : null
+                      return (
+                        <div>
+                          <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Quantity</label>
+                          <div className="flex items-center gap-2">
+                            <input type="number" step="0.01" min="0.01" className="input text-sm font-mono w-28"
+                              value={panelForm.qty}
+                              onChange={e => setPanelForm(f => f ? { ...f, qty: parseFloat(e.target.value) || 1 } : f)} />
+                            {unitLabel && <span className="text-xs text-text-3 font-medium">{unitLabel}</span>}
+                          </div>
+                        </div>
+                      )
+                    })()}
 
                     {/* Category */}
                     <div>
