@@ -956,9 +956,9 @@ export default function SalesItemsPage() {
                       const mkt = marketsDisplay(si)
                       return (
                         <tr key={si.id}
-                          className={`border-b border-gray-100 hover:bg-gray-50 group cursor-pointer ${selectedSiId === si.id ? 'bg-accent-dim/20' : ''}`}
+                          className={`border-b border-gray-100 group cursor-pointer transition-colors ${selectedSiId === si.id ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}
                           onClick={() => setSelectedSiId(si.id)}>
-                          <td className="px-4 py-2.5 font-medium text-gray-900">{si.name}</td>
+                          <td className={`px-4 py-2.5 font-medium ${selectedSiId === si.id ? 'text-accent border-l-2 border-accent' : 'text-gray-900'}`}>{si.name}</td>
                           <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded font-medium ${TYPE_BADGE[si.item_type]}`}>{TYPE_LABEL[si.item_type]}</span></td>
                           <td className="px-4 py-2.5 text-gray-500">{si.category_name || <span className="text-gray-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-gray-500 text-xs">
@@ -1769,10 +1769,19 @@ export default function SalesItemsPage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                      <button className="btn btn-xs btn-outline" title="Duplicate this modifier group and all its options"
-                        onClick={() => duplicateMg(g)}>⧉ Duplicate</button>
-                      <button className="btn btn-xs btn-danger" onClick={() => deleteMg(g)}>Delete</button>
+                    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+                      <button className="p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors" title="Duplicate modifier group"
+                        onClick={() => duplicateMg(g)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                        </svg>
+                      </button>
+                      <button className="p-1.5 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete modifier group"
+                        onClick={() => deleteMg(g)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                        </svg>
+                      </button>
                     </div>
                   </div>
 

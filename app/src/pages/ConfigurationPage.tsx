@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
 import SettingsPage   from './SettingsPage'
 import { usePermissions } from '../hooks/usePermissions'
+import { useApi } from '../hooks/useApi'
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
 type Section =
+  | 'global-config'
   | 'location-structure'
   | 'categories'
   | 'units'
@@ -25,6 +27,7 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
+  { id: 'global-config',      icon: '⚙️', label: 'Global Config',      feature: 'settings'   },
   { id: 'location-structure', icon: '🌍', label: 'Location Structure', feature: 'markets'    },
   { id: 'categories',         icon: '🏷️', label: 'Categories',         feature: 'categories' },
   { id: 'units',              icon: '📐', label: 'Base Units',          feature: 'settings'   },
@@ -34,6 +37,222 @@ const SECTIONS: SectionDef[] = [
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
 ]
+
+// ── Global Config section ─────────────────────────────────────────────────────
+
+interface Recipe { id: number; name: string; category_name: string | null }
+interface SalesItemSlim { id: number; recipe_id: number | null }
+
+function GlobalConfigSection() {
+  const api = useApi()
+
+  // Bulk-create modal state
+  const [open,        setOpen]        = useState(false)
+  const [loading,     setLoading]     = useState(false)
+  const [recipes,     setRecipes]     = useState<Recipe[]>([])
+  const [usedIds,     setUsedIds]     = useState<Set<number>>(new Set())
+  const [search,      setSearch]      = useState('')
+  const [selected,    setSelected]    = useState<Set<number>>(new Set())
+  const [executing,   setExecuting]   = useState(false)
+  const [progress,    setProgress]    = useState(0)
+  const [result,      setResult]      = useState<{ created: number; skipped: number; errors: number } | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const openModal = async () => {
+    setOpen(true); setSearch(''); setSelected(new Set()); setResult(null); setProgress(0)
+    setLoading(true)
+    try {
+      const [recs, sis]: [Recipe[], SalesItemSlim[]] = await Promise.all([
+        api.get('/recipes'),
+        api.get('/sales-items?include_inactive=true'),
+      ])
+      setRecipes(recs || [])
+      setUsedIds(new Set((sis || []).filter(s => s.recipe_id).map(s => s.recipe_id as number)))
+    } catch { /* ignore — show empty */ }
+    finally { setLoading(false); setTimeout(() => searchRef.current?.focus(), 50) }
+  }
+
+  const filtered = recipes.filter(r =>
+    r.name.toLowerCase().includes(search.toLowerCase()) ||
+    (r.category_name ?? '').toLowerCase().includes(search.toLowerCase())
+  )
+
+  const newCount     = [...selected].filter(id => !usedIds.has(id)).length
+  const allFiltered  = filtered.length > 0 && filtered.every(r => selected.has(r.id))
+
+  const toggleAll = () => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (allFiltered) filtered.forEach(r => next.delete(r.id))
+      else             filtered.forEach(r => next.add(r.id))
+      return next
+    })
+  }
+
+  const execute = async () => {
+    setExecuting(true); setProgress(0)
+    let created = 0, skipped = 0, errors = 0
+    const toCreate = [...selected]
+    for (let i = 0; i < toCreate.length; i++) {
+      const recipeId = toCreate[i]
+      setProgress(Math.round(((i + 1) / toCreate.length) * 100))
+      if (usedIds.has(recipeId)) { skipped++; continue }
+      const recipe = recipes.find(r => r.id === recipeId)
+      if (!recipe) { skipped++; continue }
+      try {
+        await api.post('/sales-items', { item_type: 'recipe', name: recipe.name, recipe_id: recipeId })
+        created++
+      } catch { errors++ }
+    }
+    setResult({ created, skipped, errors })
+    setExecuting(false)
+  }
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <h2 className="text-lg font-semibold text-text-1 mb-1">Global Config</h2>
+      <p className="text-sm text-text-3 mb-6">System-wide operations and bulk actions.</p>
+
+      {/* ── Bulk create card ── */}
+      <div className="card p-5 mb-4">
+        <div className="flex items-start gap-4">
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-text-1 mb-1">Bulk Create Sales Items from Recipes</h3>
+            <p className="text-xs text-text-3">
+              Select multiple recipes and generate Sales Items for them in one step.
+              Recipes that already have a linked Sales Item will be skipped automatically.
+            </p>
+          </div>
+          <button className="btn btn-primary btn-sm shrink-0" onClick={openModal}>
+            Create from Recipes
+          </button>
+        </div>
+      </div>
+
+      {/* ── Modal ── */}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl flex flex-col w-full max-w-lg" style={{ maxHeight: '85vh' }}>
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+              <div>
+                <h3 className="font-semibold text-text-1">Create Sales Items from Recipes</h3>
+                <p className="text-xs text-text-3 mt-0.5">
+                  {loading ? 'Loading recipes…'
+                    : result  ? `Done — ${result.created} created, ${result.skipped} skipped${result.errors ? `, ${result.errors} failed` : ''}`
+                    : `${recipes.length} recipes · ${selected.size} selected · ${newCount} new`}
+                </p>
+              </div>
+              <button className="text-text-3 hover:text-text-1 ml-4" onClick={() => setOpen(false)}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            {/* Result banner */}
+            {result && (
+              <div className={`mx-5 mt-4 px-4 py-3 rounded-lg text-sm flex items-center gap-2 flex-shrink-0 ${result.errors > 0 ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-green-50 text-green-800 border border-green-200'}`}>
+                <span className="text-base">{result.errors > 0 ? '⚠️' : '✅'}</span>
+                <span>
+                  <strong>{result.created}</strong> Sales Item{result.created !== 1 ? 's' : ''} created
+                  {result.skipped > 0 && <>, <strong>{result.skipped}</strong> skipped (already exist)</>}
+                  {result.errors  > 0 && <>, <strong>{result.errors}</strong> failed</>}
+                </span>
+              </div>
+            )}
+
+            {/* Search + select-all */}
+            {!result && !loading && (
+              <div className="px-5 pt-4 pb-2 flex-shrink-0 space-y-2">
+                <input
+                  ref={searchRef}
+                  className="input w-full text-sm"
+                  placeholder="Search recipes by name or category…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                />
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none px-1">
+                  <input type="checkbox"
+                    checked={allFiltered}
+                    onChange={toggleAll}
+                    disabled={filtered.length === 0} />
+                  <span className="text-text-2 font-medium">
+                    {allFiltered ? 'Deselect all' : 'Select all'}
+                    {search && ` (${filtered.length} shown)`}
+                  </span>
+                </label>
+              </div>
+            )}
+
+            {/* Recipe list */}
+            <div className="flex-1 overflow-y-auto px-5 py-2">
+              {loading && (
+                <div className="flex items-center justify-center py-12 text-text-3 text-sm">Loading recipes…</div>
+              )}
+              {!loading && filtered.length === 0 && (
+                <div className="text-center py-12 text-text-3 text-sm italic">No recipes match "{search}"</div>
+              )}
+              {!loading && filtered.map(r => {
+                const alreadyExists = usedIds.has(r.id)
+                const isSelected    = selected.has(r.id)
+                return (
+                  <label key={r.id}
+                    className={`flex items-center gap-3 px-2 py-2 rounded cursor-pointer select-none transition-colors ${isSelected ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+                    <input type="checkbox"
+                      checked={isSelected}
+                      disabled={executing}
+                      onChange={() => setSelected(prev => {
+                        const next = new Set(prev)
+                        isSelected ? next.delete(r.id) : next.add(r.id)
+                        return next
+                      })} />
+                    <span className={`flex-1 text-sm ${isSelected ? 'text-accent font-medium' : 'text-text-1'}`}>{r.name}</span>
+                    {r.category_name && (
+                      <span className="text-xs text-text-3 shrink-0">{r.category_name}</span>
+                    )}
+                    {alreadyExists && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 shrink-0">exists</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+
+            {/* Progress bar */}
+            {executing && (
+              <div className="px-5 py-2 flex-shrink-0">
+                <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                  <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
+                </div>
+                <p className="text-xs text-text-3 mt-1 text-center">{progress}% complete</p>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-border flex items-center justify-between gap-3 flex-shrink-0">
+              <span className="text-xs text-text-3">
+                {!result && !loading && selected.size > 0 && `${newCount} will be created · ${selected.size - newCount} will be skipped`}
+              </span>
+              <div className="flex gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)} disabled={executing}>
+                  {result ? 'Close' : 'Cancel'}
+                </button>
+                {!result && (
+                  <button className="btn btn-primary btn-sm"
+                    disabled={selected.size === 0 || newCount === 0 || executing || loading}
+                    onClick={execute}>
+                    {executing ? 'Creating…' : `Create ${newCount} Sales Item${newCount !== 1 ? 's' : ''}`}
+                  </button>
+                )}
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Users & Roles combined section ────────────────────────────────────────────
 
@@ -67,7 +286,7 @@ function UsersRolesSection() {
 // ── ConfigurationPage ──────────────────────────────────────────────────────────
 
 export default function ConfigurationPage() {
-  const [active, setActive] = useState<Section>('location-structure')
+  const [active, setActive] = useState<Section>('global-config')
   const { can } = usePermissions()
 
   const visibleSections = SECTIONS.filter(s =>
@@ -81,6 +300,7 @@ export default function ConfigurationPage() {
 
   function renderContent() {
     switch (effectiveActive) {
+      case 'global-config':      return <GlobalConfigSection />
       case 'location-structure': return <MarketsPage />
       case 'categories':         return <CategoriesPage />
       case 'units':              return <SettingsPage embedded initialTab="units" />
