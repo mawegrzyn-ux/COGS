@@ -100,6 +100,6 @@ router.use('/upload',             auth,                                         
 // ── Misc / internal ────────────────────────────────────────────────────────────
 router.use('/seed',               ...can('settings', 'write'),                        require('./seed'));
 router.use('/feedback',           auth,                                               require('./feedback'));
-router.use('/internal/feedback',  auth,                                               require('./internal-feedback'));
+router.use('/internal/feedback',                                                       require('./internal-feedback'));
 
 module.exports = router;
