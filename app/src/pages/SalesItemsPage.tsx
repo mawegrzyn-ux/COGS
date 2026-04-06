@@ -724,12 +724,6 @@ export default function SalesItemsPage() {
     } catch { showToast('Failed') } finally { setMgSaving(false) }
   }
 
-  const saveMg = async (mg: ModifierGroup) => {
-    setMgSaving(true)
-    try { await api.put(`/modifier-groups/${mg.id}`, mg); setModifierGroups(prev => prev.map(g => g.id === mg.id ? { ...g, ...mg } : g)) }
-    catch { showToast('Failed') } finally { setMgSaving(false) }
-  }
-
   const deleteMg = async (mg: ModifierGroup) => {
     if (!window.confirm(`Delete modifier group "${mg.name}"?`)) return
     try { await api.delete(`/modifier-groups/${mg.id}`); setModifierGroups(prev => prev.filter(g => g.id !== mg.id)); if (expandedMgId === mg.id) setExpandedMgId(null) }
