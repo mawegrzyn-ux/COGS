@@ -387,40 +387,92 @@ Each sales item has one of four types:
 | Manual | No recipe/ingredient link — cost entered directly | Fixed cost you specify |
 | Combo | Structured bundle with selectable steps | Sum of step option costs |
 
-### Sales Item Fields
+### Editing a Sales Item — Panel Tabs
+
+Click any item row to open the right-side edit panel. The panel has three tabs:
+
+| Tab | Contents | Saves when |
+|---|---|---|
+| **Details** | Name, display name, type, linked item (recipe/ingredient/combo or manual cost), category, description, image | Click **Save** button |
+| **Markets** | Per-market enable/disable checkboxes | Automatically on each toggle |
+| **Modifiers** | Assigned modifier groups (remove or add) | Automatically on each change |
+
+Switching to a different item always resets the tab back to Details.
+
+### Sales Item Fields (Details tab)
 
 | Field | Description |
 |---|---|
-| Name | Display name for the item |
+| Name | Internal name for the item |
+| Display Name | Customer-facing name (leave blank to use Name) |
 | Type | recipe / ingredient / manual / combo |
+| Linked Item | Recipe, ingredient, or combo to link (shown based on type) |
+| Manual Cost | Fixed cost in USD (manual type only) |
 | Category | Sales item category (scope flag `for_sales_items = true`) |
 | Description | Optional description |
-| Image | Optional image URL |
-| Sort Order | Default display order |
-| Market Visibility | Enable/disable the item per market |
-| Default Prices | Default sell price per price level (can be overridden per menu) |
-| Modifier Groups | Attach reusable add-on option groups |
+| Image | Upload or paste an image URL |
 
 ### Combos
 
-A Combo sales item is built from **Steps** — each step represents a customer choice (e.g. "Choose your burger", "Choose your side"). Each step has one or more **Options** that link to a recipe, ingredient, or manual cost.
+The **Combos** tab manages structured bundle items. A Combo is built from **Steps** (e.g. "Choose your burger", "Choose your side"), each with one or more **Options** that link to a recipe, ingredient, or manual cost.
 
-- Steps have **min/max selection** rules (e.g. exactly 1 item, or up to 3 extras)
-- Options can carry a **price add-on** (e.g. +£1.50 for a premium choice)
-- Options can have **Modifier Groups** attached
+**UI workflow:**
+- The left sidebar lists all combos. Click a combo to load its steps.
+- Click a **step header** to expand/collapse its options list and simultaneously open that step's edit form in the right side panel.
+- Click an **option row** to open its edit form in the side panel.
+- Use the **Edit** button in the centre toolbar to edit the combo's top-level details.
+- The right side panel is resizable — drag the left edge to adjust width.
+- Delete buttons use the trash icon; they appear on hover for options and on the step header for steps.
+
+**Step settings:**
+
+| Field | Description |
+|---|---|
+| Name | Step label (e.g. "Choose your burger") |
+| Display Name | Customer-facing label |
+| Min Select | Minimum options the customer must pick |
+| Max Select | Maximum options allowed |
+| Allow Repeat | Whether the same option can be chosen more than once |
+| Auto Select | Automatically select when only one option exists |
+
+**Option settings:**
+
+| Field | Description |
+|---|---|
+| Type | recipe / ingredient / manual (what is linked to this option) |
+| Qty | Quantity of the linked item used per selection |
+| Price Add-on | Extra charge applied when this option is chosen |
+| Modifier Groups | Attach modifier groups to this specific option |
 
 Combo COGS is calculated as the sum of all step costs, using the average cost across options where a step allows multiple choices.
 
 ### Modifier Groups
 
-Modifier Groups are reusable add-on lists (e.g. "Sauce choice", "Extra toppings"). They are defined once and can be attached to any number of sales items or combo step options.
+The **Modifiers** tab manages reusable add-on lists (e.g. "Sauce choice", "Extra toppings"). Groups are defined once and can be attached to any sales item or combo step option.
+
+**Creating a group:** Click **+ New Modifier Group** in the page header to open the creation form.
+
+**Editing a group or option:** Click a group row or option row to open its edit form in the right side panel (same resizable pattern as Combos). Save from the panel footer.
 
 | Field | Description |
 |---|---|
-| Name | Group name shown to staff/customers |
-| Min Select | Minimum number of options the customer must choose |
-| Max Select | Maximum number of options allowed |
-| Options | List of add-on items — each links to a recipe, ingredient, or manual cost with an optional `price_addon` |
+| Name | Group name shown to staff/POS system |
+| Min Select | Minimum number of options the customer must choose (0 = optional) |
+| Max Select | Maximum options allowed |
+
+**Option fields:**
+
+| Field | Description |
+|---|---|
+| Name | Option label |
+| Type | recipe / ingredient / manual |
+| Linked Item | Recipe or ingredient linked to this option |
+| Qty | Quantity of the linked recipe/ingredient per selection (default 1) |
+| Price Add-on | Extra charge when this option is selected |
+
+Options can be **reordered** using the ↑ ↓ arrow buttons on each row. The sort order is saved to the database immediately.
+
+Use the **Duplicate** button on any group to create a copy with all its options.
 
 ---
 
@@ -571,6 +623,12 @@ Select a menu from the dropdown to see its items in the matrix. Allergen status 
 - Allergen status is set at ingredient level
 - Recipe-level allergen status is the combined status of all its ingredients (Contains overrides May Contain)
 - Menu item allergen status reflects the recipe (or ingredient) it is linked to
+- Combo items resolve allergens through all their step options (both recipe and ingredient options are followed)
+
+The **Category** column shows:
+- For recipe items: the recipe's category
+- For ingredient items: the ingredient's category
+- For combo and manual items: the category assigned directly on the sales item
 
 **Allergen Notes column:** The Menu matrix also has a per-row Allergen Notes field for each menu item. This field is separate from the ingredient-level notes and saves to the menu item record. It is useful for recording preparation notes relevant to allergen management at the point of service (e.g. "Served with separate gluten-free bun on request").
 

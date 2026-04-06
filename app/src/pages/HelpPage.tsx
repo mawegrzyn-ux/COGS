@@ -144,7 +144,7 @@ export default function HelpPage() {
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
-          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.3</p>
+          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.4</p>
         </div>
         <div className="px-2 pt-2">
           <input
@@ -544,6 +544,28 @@ export default function HelpPage() {
           </tbody>
         </table>
 
+        <H3 id="sales-item-panel">Editing a Sales Item — Three-Tab Panel</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Click any row in the Sales Items list to open the right-side edit panel. The panel is split into
+          three tabs so the form stays focused:
+        </p>
+        <div className="grid grid-cols-3 gap-2 my-3">
+          {[
+            { tab: 'Details', desc: 'Name, display name, type, linked item, category, description, image. Save button in footer.' },
+            { tab: 'Markets', desc: 'Enable/disable the item per market. Saves automatically on each checkbox toggle.' },
+            { tab: 'Modifiers', desc: 'Attach or remove modifier groups. Saves automatically on each change.' },
+          ].map(({ tab, desc }) => (
+            <div key={tab} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded-lg p-3">
+              <p className="text-xs font-bold text-[#146A34] mb-1">{tab}</p>
+              <p className="text-xs text-[#6B7F74] leading-snug">{desc}</p>
+            </div>
+          ))}
+        </div>
+        <InfoBox type="tip">
+          The panel tab resets to <strong>Details</strong> each time you select a different item.
+          Markets and Modifiers auto-save — no Save button click needed on those tabs.
+        </InfoBox>
+
         <H3 id="combos">Combos</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           A <strong>Combo</strong> is a structured sales item made up of <strong>steps</strong> (e.g.
@@ -552,10 +574,15 @@ export default function HelpPage() {
         </p>
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
           <li>Steps have <strong>min/max selection</strong> rules — e.g. exactly 1 burger (min=max=1) or up to 2 extras (min=0, max=2).</li>
-          <li>Step options can have a <strong>price add-on</strong> (e.g. +£1.00 for a premium burger).</li>
+          <li>Step options can have a <strong>price add-on</strong> (e.g. +£1.00 for a premium burger) and a <strong>Qty</strong> field (how much of the linked recipe/ingredient is used).</li>
           <li>Combo COGS is calculated as the sum of all step costs, using the average cost across options when a step allows multiple choices.</li>
           <li>Step options can also have <strong>Modifier Groups</strong> attached (see below).</li>
         </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-1">
+          <strong>Combos tab UI:</strong> Click a step header to expand/collapse its options <em>and</em> open
+          the step's edit form in the resizable right panel at the same time. Click an option row to edit
+          that option. There is no separate edit button — the row click does it all.
+        </p>
 
         <H3 id="modifiers">Modifier Groups</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
@@ -565,9 +592,16 @@ export default function HelpPage() {
         </p>
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
           <li>Each group has <strong>min/max select</strong> — e.g. "choose exactly 1 sauce" or "up to 3 toppings".</li>
-          <li>Each modifier option links to a recipe, ingredient, or manual cost, and can carry a <strong>price add-on</strong>.</li>
+          <li>Each modifier option links to a recipe, ingredient, or manual cost, carries an optional <strong>price add-on</strong>, and a <strong>Qty</strong> field (quantity of the linked item used per selection, default 1).</li>
           <li>Groups are global and reusable — attach the same "Sauce choice" group to multiple items without redefining the options.</li>
+          <li>Option rows can be <strong>reordered</strong> using ↑ ↓ arrow buttons. Order is saved immediately.</li>
+          <li>Use <strong>Duplicate</strong> on any group to create an independent copy with all its options.</li>
         </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-1">
+          <strong>Modifiers tab UI:</strong> Click <strong>+ New Modifier Group</strong> in the page header
+          to create a group. Click any group row or option row to open its edit form in the right side panel.
+          Save from the panel footer. The side panel is resizable (drag the left edge).
+        </p>
 
         <H3 id="pl-recipes">Price Level Recipes (PL Variations)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
@@ -597,11 +631,16 @@ export default function HelpPage() {
         </p>
 
         <H3 id="allergen-viewing">Viewing & Filtering</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Select a <strong>menu</strong> to view its allergen matrix. Columns = 14 allergens.
-          Rows = menu items. Filter by recipe category to focus on a menu section (e.g. just Desserts).
+          Rows = all sales items on the menu. Filter by category to focus on a section (e.g. just Desserts).
           The matrix uses bold for <strong>Contains</strong>, italic for <em>May Contain</em>,
           and blank for Free From.
+        </p>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          The <strong>Category</strong> column shows the category of the linked recipe (for recipe items),
+          the ingredient's category (for ingredient items), or the category assigned directly on the sales item
+          (for combo and manual items).
         </p>
 
         <H3 id="allergen-notes">Allergen Notes</H3>
@@ -610,7 +649,7 @@ export default function HelpPage() {
           Click into any Notes cell and type free-text notes about allergen specifics for that ingredient or menu item
           (e.g. "sourced from gluten-controlled facility", "contains due to shared fryer"). Notes auto-save on blur
           and are stored on <Mono>mcogs_ingredients.allergen_notes</Mono> (Inventory tab) or{' '}
-          <Mono>mcogs_menu_items.allergen_notes</Mono> (Menu tab).
+          <Mono>mcogs_menu_sales_items.allergen_notes</Mono> (Menu tab).
         </p>
 
         <H3 id="allergen-print">Printing</H3>

@@ -778,10 +778,33 @@ The Sales Items page manages the catalog of items available to place on menus. F
 **Sales Item features:**
 - **Market visibility** — each item can be enabled/disabled per market via `mcogs_sales_item_markets`
 - **Default sell prices** — per price level via `mcogs_sales_item_prices` (market-independent defaults; menu-specific overrides in `mcogs_menu_sales_item_prices`)
-- **Modifier Groups** — reusable add-on lists attached to a sales item (or combo step option) via `mcogs_sales_item_modifier_groups`. Each group has `min_select`/`max_select` and a list of options (recipe/ingredient/manual + `price_addon`)
+- **Modifier Groups** — reusable add-on lists attached to a sales item (or combo step option) via `mcogs_sales_item_modifier_groups`. Each group has `min_select`/`max_select` and a list of options (recipe/ingredient/manual + `price_addon` + `qty`)
 - **Combo structure**: `mcogs_combo_steps` → `mcogs_combo_step_options` → optional `mcogs_combo_step_option_modifier_groups`
 - **Category** — assigned via `category_id` FK referencing `mcogs_categories` (scope flag `for_sales_items = true`)
 - **Image** — `image_url` stored on the sales item
+
+**Edit panel — three tabs:**
+The right-side edit panel for sales items is divided into three tabs:
+- **Details** — name, display name, type selector, linked item (recipe/ingredient/combo search or manual cost), category, description, image. Save button in footer.
+- **Markets** — per-market enable/disable checkboxes. Auto-saves on toggle (no Save button needed).
+- **Modifiers** — lists all assigned modifier groups as removable rows; "+ Add Modifier Group" portal dropdown to attach unassigned groups. Auto-saves.
+
+Switching between items resets the panel tab to Details.
+
+**Combos tab — side panel UI:**
+- Left sidebar lists all combos. Clicking a combo loads its steps in the centre area.
+- Each step header is **clickable** — click to expand/collapse options AND open the step's edit form in the right side panel simultaneously.
+- The right side panel is resizable (drag handle at the left edge, inverted delta). It shows the edit form for whichever combo/step/option was last selected (`comboEditTarget` discriminated union: `'combo' | 'step' | 'option'`).
+- No separate cogwheel buttons — step header click replaces this. Options row has group-hover trash icon.
+- All delete buttons use SVG trash icons for visual consistency.
+
+**Modifiers tab — side panel UI:**
+- Header has "+ New Modifier Group" button → modal form.
+- Left list of all modifier groups. Click a group row to expand its options list; clicking the group name also opens its edit form in the right side panel.
+- Right side panel (resizable, same pattern as Combos) shows either a group edit form or an option edit form depending on what was selected (`mgEditTarget` discriminated union: `'group' | 'option'`).
+- Each modifier option now has a **Qty** field (`mcogs_modifier_options.qty NUMERIC(12,4) DEFAULT 1`) — the quantity of the linked recipe/ingredient used per selection.
+- Options can be reordered with ↑ ↓ arrow buttons; sort_order is persisted via API on each move.
+- Duplicate button on group row creates a copy of the group and all its options.
 
 **Database tables:**
 
@@ -818,8 +841,35 @@ Displays allergen status for all ingredients and menu items against the EU/UK FI
 - Both matrices have **sticky first row** (column headers) and **sticky first column(s)** — implemented using `border-separate border-spacing-0` (required because `border-collapse` breaks `position: sticky` in most browsers) with full `border border-border` on all cells individually.
 - **Allergen Notes field**: Added to both matrices as an inline editable textarea per row:
   - Inventory matrix: saves to `mcogs_ingredients.allergen_notes` via `PATCH /allergens/ingredient/:id/notes`
-  - Menu matrix: saves to `mcogs_menu_items.allergen_notes` via `PATCH /allergens/menu-item/:id/notes`
+  - Menu matrix: saves to `mcogs_menu_sales_items.allergen_notes` via `PATCH /allergens/menu-item/:id/notes`
   - Saves on blur with a spinner indicator during save
+
+**Menu matrix data source (current):**
+The menu allergen matrix queries `mcogs_menu_sales_items` (not the legacy `mcogs_menu_items`). The SQL joins `mcogs_sales_items` to resolve item type, then joins recipes/ingredients/categories as appropriate:
+
+```sql
+SELECT msi.id, COALESCE(si.display_name, si.name) AS display_name,
+       si.item_type, si.recipe_id, si.ingredient_id, si.combo_id, msi.allergen_notes,
+       r.name AS recipe_name, rcat.name AS recipe_category,
+       ing.name AS ingredient_name, icat.name AS ingredient_category,
+       sicat.name AS si_category          -- sales item's own category (for combo/manual)
+FROM   mcogs_menu_sales_items msi
+JOIN   mcogs_sales_items      si    ON si.id    = msi.sales_item_id
+LEFT JOIN mcogs_recipes        r    ON r.id     = si.recipe_id
+LEFT JOIN mcogs_categories     rcat ON rcat.id  = r.category_id
+LEFT JOIN mcogs_ingredients    ing  ON ing.id   = si.ingredient_id
+LEFT JOIN mcogs_categories     icat ON icat.id  = ing.category_id
+LEFT JOIN mcogs_categories     sicat ON sicat.id = si.category_id   -- combo/manual category
+WHERE  msi.menu_id = $1
+ORDER  BY msi.sort_order, msi.id
+```
+
+**Category resolution per item type:**
+- `ingredient` → `ingredient_category` or `si_category`
+- `recipe` → `recipe_category` or `si_category`
+- `combo` or `manual` → `si_category` (the category assigned directly on the sales item)
+
+**Combo ingredient chain:** For combo items the allergen system resolves ingredients via two extra queries — direct ingredient options from `mcogs_combo_step_options` + recipe options (then their ingredients via `mcogs_recipe_items`).
 
 ### ✅ Import Page (`/import`)
 
@@ -1350,6 +1400,77 @@ END $
 
 ---
 
+### Fix 17 — Allergen Matrix Showed "UNCATEGORISED" for Combo and Manual Items
+
+**Symptom:** In the Menu allergen matrix, all combo-type and manual-type sales items showed "UNCATEGORISED" in the Category column, even when the sales item had a category assigned.
+
+**Root Cause:** The matrix query joined `mcogs_categories` only through the recipe (`rcat`) and ingredient (`icat`) paths. Category resolution used:
+```js
+const category = mi.item_type === 'ingredient'
+  ? (mi.ingredient_category || null)
+  : (mi.recipe_category || null);  // null for combo/manual — no recipe linked directly
+```
+Combo and manual items have no `recipe_id` on the sales item, so `recipe_category` was always null.
+
+**Fix:**
+1. Added `LEFT JOIN mcogs_categories sicat ON sicat.id = si.category_id` to the query, selecting `sicat.name AS si_category`
+2. Updated category logic:
+```js
+const category = mi.item_type === 'ingredient'
+  ? (mi.ingredient_category || mi.si_category || null)
+  : mi.item_type === 'recipe'
+    ? (mi.recipe_category || mi.si_category || null)
+    : (mi.si_category || null);  // combo, manual — use sales item's own category
+```
+
+**File:** `api/src/routes/allergens.js`
+
+---
+
+### Fix 18 — Sales Items Edit Panel: Markets and Modifiers Stacked in Details Form
+
+**Symptom:** The Sales Items right-side edit panel showed all fields — form inputs, market checkboxes, AND modifier group badges — scrolled together in one long form. This made the panel cluttered and difficult to navigate for items with many markets or modifier groups.
+
+**Fix:** Introduced a `panelTab` state (`'details' | 'markets' | 'modifiers'`). Added a 3-tab bar below the panel header. Each section now lives in its own isolated tab panel:
+- **Details** — all item form fields + Save button in footer
+- **Markets** — country checkboxes with auto-save; footer shows "Changes saved automatically"
+- **Modifiers** — assigned modifier group rows (removable) + "+ Add Modifier Group" portal; footer shows "Changes saved automatically"
+
+Tab resets to Details whenever a different sales item is selected. Delete button always visible in footer regardless of active tab.
+
+**File:** `app/src/pages/SalesItemsPage.tsx`
+
+---
+
+### Fix 19 — Combos Tab: Cogwheel Button and × Delete Icons Inconsistent
+
+**Symptom:** Combo step options used `×` text buttons for deletion (inconsistent with other pages using SVG trash icons). Steps had a separate `⚙` cogwheel button to open the side panel, separate from the expand/collapse action on the step header.
+
+**Fix:**
+- All `×` delete buttons on step options replaced with SVG trash icons (12px, group-hover reveal pattern)
+- Step header click now **simultaneously expands/collapses options AND opens the step in the side panel** — the cogwheel button was removed entirely
+- Collapsing an already-expanded step also clears the side panel if that step's form was open
+
+**File:** `app/src/pages/SalesItemsPage.tsx`
+
+---
+
+### Fix 20 — Modifiers Tab Inline Edit Forms Replaced with Side Panel
+
+**Symptom:** The Modifiers tab used three separate inline forms (new group inline card, inline group edit row, inline `ModifierOptionAddForm` component) resulting in cluttered, hard-to-use UI that was visually inconsistent with the Combos tab.
+
+**Fix:** Full Modifiers tab refactor to match Combos tab side-panel pattern:
+- Removed `ModifierOptionAddForm` component, `addMgOption` function, `editMg` state, `editingOption` state, `saveOptEdit` function
+- Added `MgEditTarget` discriminated union (`'group' | 'option' | null`) and a resizable side panel
+- "+ New Modifier Group" button in page header → compact modal form
+- Clicking a group or option routes to the appropriate side panel form
+- Modifier option rows now have **↑ ↓ sort arrows** (persisted via API) and group-hover trash icons
+- Added `qty` field (NUMERIC(12,4) DEFAULT 1) to `mcogs_modifier_options` — migration step 80; exposed in API (POST/PUT `/modifier-groups/:id/options`)
+
+**Files:** `app/src/pages/SalesItemsPage.tsx`, `api/src/routes/modifier-groups.js`, `api/scripts/migrate.js`
+
+---
+
 ## 17. Critical Gotchas & Lessons Learned
 
 ### Server User Context
@@ -1685,4 +1806,6 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated; Markdown rendering added to Pepper — full inline parser (tables, code blocks, headings, lists, bold, italic, inline code, HTML-escaped before formatting); Menu filter added to Inventory Ingredients + Price Quotes tabs — resolves ingredient IDs via menu-items + recipes chain; Monthly token allowance — ai_monthly_token_limit in mcogs_settings, billing period 25th→24th, checkTokenAllowance() helper exported from ai-chat.js/imported by ai-upload.js, 429 JSON before SSE headers, usage bar in Pepper header, GET /ai-chat/my-usage endpoint, Settings → AI limit field + per-user period stats table; tool count 86→87 (export_to_excel); Bug fixes: Fix 12 AI chat focus loss (ChatPanel/HistoryPanel to module level + streaming→focus restore useEffect), Fix 13 sidebar height (h-full → flex flex-col self-stretch), Fix 14 Anthropic 400 error (input_str destructured off content blocks in agenticStream.js before pushing to assistantContent))*
+*README last updated: April 2026 (session: Sales Items edit panel split into three tabs — Details/Markets/Modifiers (panelTab state, auto-reset on item change); Combos tab UI — step header click opens side panel + expands simultaneously, cogwheel button removed, × delete replaced with SVG trash icons; Modifiers tab full refactor — side panel pattern (MgEditTarget discriminated union), + New Modifier Group button → modal, qty field on modifier options (mcogs_modifier_options.qty NUMERIC(12,4) DEFAULT 1, migration step 80, API updated), ↑↓ sort arrows on option rows with immediate API persist, Duplicate group button, saveMg dead function removed; Menu allergen matrix rewritten to query mcogs_menu_sales_items → mcogs_sales_items (not legacy mcogs_menu_items), added sicat JOIN for combo/manual category resolution — si_category field, category logic now covers all four item types; CLAUDE.md sections 12 (Sales Items Page, Allergen Matrix Page) updated; Fixes 17–20 added to section 16; user-guide.md Sales Items/Combos/Modifier Groups/Allergen Matrix sections updated; HelpPage v2.4 — new Sales Item Panel Tabs section, Combos + Modifier Groups UI notes, allergen matrix category explanation, mcogs_menu_sales_items.allergen_notes reference corrected)*
+
+*README previous session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated; Markdown rendering added to Pepper — full inline parser (tables, code blocks, headings, lists, bold, italic, inline code, HTML-escaped before formatting); Menu filter added to Inventory Ingredients + Price Quotes tabs — resolves ingredient IDs via menu-items + recipes chain; Monthly token allowance — ai_monthly_token_limit in mcogs_settings, billing period 25th→24th, checkTokenAllowance() helper exported from ai-chat.js/imported by ai-upload.js, 429 JSON before SSE headers, usage bar in Pepper header, GET /ai-chat/my-usage endpoint, Settings → AI limit field + per-user period stats table; tool count 86→87 (export_to_excel); Bug fixes: Fix 12 AI chat focus loss (ChatPanel/HistoryPanel to module level + streaming→focus restore useEffect), Fix 13 sidebar height (h-full → flex flex-col self-stretch), Fix 14 Anthropic 400 error (input_str destructured off content blocks in agenticStream.js before pushing to assistantContent))*
