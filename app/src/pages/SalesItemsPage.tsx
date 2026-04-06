@@ -911,6 +911,7 @@ export default function SalesItemsPage() {
               {t === 'items' ? 'Sales Items' : t === 'combos' ? 'Combos' : 'Modifiers'}
               {t === 'items' && nonComboItems.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{nonComboItems.length}</span>}
               {t === 'combos' && combos.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{combos.length}</span>}
+              {t === 'modifiers' && modifierGroups.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{modifierGroups.length}</span>}
             </button>
           ))}
         </div>
