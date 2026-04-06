@@ -340,7 +340,7 @@ function ChatPanel({
   return (
     <>
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3" style={{ background: 'var(--surface-2)' }}>
         {messages.length === 0 && (
           <div className="text-center py-8" style={{ color: 'var(--text-3)' }}>
             <div className="flex justify-center mb-3">
@@ -359,7 +359,7 @@ function ChatPanel({
             <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm"
               style={msg.role === 'user'
                 ? { background: 'var(--accent)', color: '#fff' }
-                : { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' }
+                : { background: 'var(--surface)', color: 'var(--text-1)', border: '1px solid var(--border)' }
               }>
               {msg.fileName && (
                 <div className="flex items-center gap-1 mb-1.5 text-xs opacity-80">

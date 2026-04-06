@@ -560,6 +560,31 @@ export default function SalesItemsPage() {
     catch { showToast('Failed') }
   }
 
+  const duplicateComboStep = async (stepId: number) => {
+    if (!selectedComboId) return
+    try { await api.post(`/combos/${selectedComboId}/steps/${stepId}/duplicate`, {}); await reloadComboDetail() }
+    catch { showToast('Failed to duplicate step') }
+  }
+
+  const reorderComboStep = async (stepIdx: number, direction: 'up' | 'down') => {
+    if (!comboDetail || !selectedComboId) return
+    const steps = [...(comboDetail.steps || [])]
+    const targetIdx = direction === 'up' ? stepIdx - 1 : stepIdx + 1
+    if (targetIdx < 0 || targetIdx >= steps.length) return
+    ;[steps[stepIdx], steps[targetIdx]] = [steps[targetIdx], steps[stepIdx]]
+    const updated = steps.map((s, i) => ({ ...s, sort_order: i }))
+    setComboDetail(d => d ? { ...d, steps: updated } : d)
+    try {
+      await Promise.all([
+        api.put(`/combos/${selectedComboId}/steps/${updated[stepIdx].id}`, { ...updated[stepIdx] }),
+        api.put(`/combos/${selectedComboId}/steps/${updated[targetIdx].id}`, { ...updated[targetIdx] }),
+      ])
+    } catch {
+      showToast('Failed to reorder')
+      reloadComboDetail()
+    }
+  }
+
   // Populate panel forms when the edit target changes
   useEffect(() => {
     if (!comboEditTarget) { setCpComboForm(null); setCpStepForm(null); setCpOptForm(null); return }
@@ -1279,7 +1304,7 @@ export default function SalesItemsPage() {
                   </div>
                   {(comboDetail.steps || []).length === 0 && <p className="text-sm text-gray-400">No steps yet.</p>}
                   <div className="space-y-2">
-                    {(comboDetail.steps || []).map(step => (
+                    {(comboDetail.steps || []).map((step, stepIdx) => (
                       <div key={step.id} className={`border rounded transition-colors ${comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id ? 'border-accent' : 'border-gray-200'}`}>
                         {/* Step header row — click to expand + open step in side panel */}
                         <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t"
@@ -1304,11 +1329,22 @@ export default function SalesItemsPage() {
                             {step.allow_repeat && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded" title="Same option can be chosen multiple times">repeat ✓</span>}
                             {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                           </div>
-                          <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                            <button className="btn btn-xs btn-primary" onClick={() => {
-                              setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } })
-                              setExpandedStep(step.id)
-                            }}>+ Option</button>
+                          {/* Step action icons — sort ↑↓, duplicate, trash */}
+                          <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+                            <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-30" title="Move up"
+                              disabled={stepIdx === 0} onClick={() => reorderComboStep(stepIdx, 'up')}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+                            </button>
+                            <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-30" title="Move down"
+                              disabled={stepIdx === (comboDetail.steps || []).length - 1} onClick={() => reorderComboStep(stepIdx, 'down')}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                            </button>
+                            <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors ml-0.5" title="Duplicate step"
+                              onClick={() => duplicateComboStep(step.id)}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                              </svg>
+                            </button>
                             <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete step"
                               onClick={() => deleteComboStep(step.id)}>
                               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1321,13 +1357,18 @@ export default function SalesItemsPage() {
                         {/* Options list */}
                         {expandedStep === step.id && (
                           <div className="p-2 space-y-1">
+                            {/* Add Option button at top */}
+                            <button className="w-full text-left text-xs text-accent hover:text-accent-dark px-2 py-1 rounded hover:bg-accent-dim transition-colors"
+                              onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } })}>
+                              + Add Option
+                            </button>
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet.</p>}
                             {(step.options || []).map(opt => (
                               <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
                                 onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
+                                <span className="font-medium text-gray-800 truncate">{opt.display_name || opt.name}</span>
+                                {opt.display_name && <span className="text-xs text-gray-400 italic shrink-0">({opt.name})</span>}
                                 <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE[opt.item_type]}`}>{TYPE_LABEL[opt.item_type]}</span>
-                                <span className="font-medium text-gray-800">{opt.name}</span>
-                                {opt.display_name && <span className="text-xs text-gray-400 italic shrink-0">"{opt.display_name}"</span>}
                                 {opt.recipe_name && (
                                   <span className="text-xs text-gray-400 shrink-0">
                                     → {opt.recipe_name} · <span className="text-gray-500 font-medium">{Number(opt.qty ?? 1)}</span> ptn

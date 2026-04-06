@@ -240,6 +240,68 @@ router.delete('/:id/steps/:sid', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── POST /combos/:id/steps/:sid/duplicate ────────────────────────────────────
+
+router.post('/:id/steps/:sid/duplicate', async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { rows: [src] } = await pool.query(
+      'SELECT * FROM mcogs_combo_steps WHERE id=$1 AND combo_id=$2',
+      [req.params.sid, req.params.id]
+    );
+    if (!src) return res.status(404).json({ error: { message: 'Step not found' } });
+
+    const { rows: srcOpts } = await pool.query(
+      'SELECT * FROM mcogs_combo_step_options WHERE combo_step_id=$1 ORDER BY sort_order',
+      [req.params.sid]
+    );
+    const { rows: [{ next_order }] } = await pool.query(
+      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM mcogs_combo_steps WHERE combo_id=$1`,
+      [req.params.id]
+    );
+
+    await client.query('BEGIN');
+    const { rows: [newStep] } = await client.query(
+      `INSERT INTO mcogs_combo_steps
+         (combo_id, name, display_name, description, sort_order, min_select, max_select, allow_repeat, auto_select)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [req.params.id, `${src.name} (Copy)`, src.display_name || null, src.description || null,
+       next_order, src.min_select ?? 1, src.max_select ?? 1, src.allow_repeat ?? false, src.auto_select ?? false]
+    );
+
+    for (const opt of srcOpts) {
+      const { rows: [newOpt] } = await client.query(
+        `INSERT INTO mcogs_combo_step_options
+           (combo_step_id, name, display_name, item_type, recipe_id, ingredient_id, sales_item_id,
+            manual_cost, price_addon, qty, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [newStep.id, opt.name, opt.display_name || null, opt.item_type,
+         opt.recipe_id || null, opt.ingredient_id || null, opt.sales_item_id || null,
+         opt.manual_cost || null, opt.price_addon || 0, opt.qty ?? 1, opt.sort_order || 0]
+      );
+      const { rows: mgs } = await client.query(
+        'SELECT * FROM mcogs_combo_step_option_modifier_groups WHERE combo_step_option_id=$1',
+        [opt.id]
+      );
+      for (const mg of mgs) {
+        await client.query(
+          `INSERT INTO mcogs_combo_step_option_modifier_groups (combo_step_option_id, modifier_group_id, sort_order)
+           VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+          [newOpt.id, mg.modifier_group_id, mg.sort_order || 0]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ ...newStep, options: srcOpts });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 // ─── Combo step options ───────────────────────────────────────────────────────
 
 router.post('/:id/steps/:sid/options', async (req, res, next) => {
