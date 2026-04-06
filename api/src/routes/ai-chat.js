@@ -188,6 +188,29 @@ CONFIRMATION REQUIRED before calling.`,
       required: ['type', 'title'],
     },
   },
+  {
+    name: 'update_feedback_status',
+    description: 'Updates the status of a feedback ticket. Call get_feedback first to get the ticket ID. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:     { type: 'integer', description: 'Ticket ID to update' },
+        status: { type: 'string', enum: ['open', 'in_progress', 'resolved'], description: 'New status' },
+      },
+      required: ['id', 'status'],
+    },
+  },
+  {
+    name: 'delete_feedback',
+    description: 'Permanently deletes a feedback ticket by ID. This cannot be undone. Call get_feedback first to confirm the correct ticket. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Ticket ID to delete' },
+      },
+      required: ['id'],
+    },
+  },
 
   // ── New Lookup / Read ────────────────────────────────────────────────────────
   {
@@ -1606,6 +1629,28 @@ async function executeTool(name, input, send = null, userCtx = {}) {
         [type, title, description || null, page || null, JSON.stringify(attachments)]
       );
       return rows[0];
+    }
+
+    case 'update_feedback_status': {
+      const { id, status } = input;
+      const validStatuses = ['open', 'in_progress', 'resolved'];
+      if (!validStatuses.includes(status)) return { error: `status must be one of: ${validStatuses.join(', ')}` };
+      const { rows } = await pool.query(
+        `UPDATE mcogs_feedback SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+        [status, id]
+      );
+      if (!rows.length) return { error: `Ticket #${id} not found` };
+      return rows[0];
+    }
+
+    case 'delete_feedback': {
+      const { id } = input;
+      const { rows } = await pool.query(
+        `DELETE FROM mcogs_feedback WHERE id=$1 RETURNING id`,
+        [id]
+      );
+      if (!rows.length) return { error: `Ticket #${id} not found` };
+      return { deleted: rows[0].id };
     }
 
     // ── New Lookup / Read ──────────────────────────────────────────────────────
@@ -3208,7 +3253,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 87 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback, **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), and **export_to_excel** (generates an Excel download filtered to the user's market scope).
+You have 89 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), and **export_to_excel** (generates an Excel download filtered to the user's market scope).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
@@ -3245,6 +3290,11 @@ When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
 2. It stages the data for review and returns a job URL
 3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. before confirming."
 4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import
+
+## FEEDBACK TOOL RULES
+- After calling submit_feedback, you MUST state the ticket ID from the tool result (e.g. "Ticket #15 logged"). Never confirm a ticket was submitted without seeing a successful tool result containing a valid id. If submit_feedback returns an error, tell the user it failed — do not claim success.
+- Never hallucinate ticket deletion or status updates. Only delete_feedback and update_feedback_status can perform those actions — call the actual tool.
+- CONFIRMATION REQUIRED before calling delete_feedback or update_feedback_status. State the ticket ID and what will change, then wait for explicit "yes" before calling.
 
 Be concise and practical. For numbers include currency symbols and units. Format data as readable lists or tables where appropriate.
 
