@@ -945,7 +945,7 @@ export default function SalesItemsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="px-3 py-2.5 w-8">
+                      <th className="px-3 py-2.5 w-8 text-left">
                         <input type="checkbox"
                           checked={nonComboItems.length > 0 && nonComboItems.every(s => bulkSelected.has(s.id))}
                           onChange={e => {
