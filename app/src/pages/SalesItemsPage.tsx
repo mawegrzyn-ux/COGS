@@ -18,6 +18,7 @@ interface ModifierOption {
   ingredient_id: number | null; ingredient_name?: string
   ingredient_unit_abbr?: string | null
   manual_cost: number | null; price_addon: number; sort_order: number; qty: number
+  image_url?: string | null
 }
 interface ModifierGroup {
   id: number; name: string; display_name?: string | null; description: string | null
@@ -740,7 +741,7 @@ export default function SalesItemsPage() {
   const [mgPanelWidth,    setMgPanelWidth]    = useState(360)
   const [mgPanelSaving,   setMgPanelSaving]   = useState(false)
   const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number } | null>(null)
-  const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number } | null>(null)
+  const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number; image_url: string | null } | null>(null)
   const [mpOptRecipeSearch, setMpOptRecipeSearch] = useState('')
   const [mpOptIngSearch,    setMpOptIngSearch]    = useState('')
   const [mpOptRecipeOpen,   setMpOptRecipeOpen]   = useState(false)
@@ -801,11 +802,11 @@ export default function SalesItemsPage() {
       const { opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
       setMpGroupForm(null)
       if (opt) {
-        setMpOptForm({ name: opt.name, display_name: opt.display_name ?? '', item_type: opt.item_type, recipe_id: opt.recipe_id, ingredient_id: opt.ingredient_id, manual_cost: opt.manual_cost, qty: opt.qty ?? 1, sort_order: opt.sort_order })
+        setMpOptForm({ name: opt.name, display_name: opt.display_name ?? '', item_type: opt.item_type, recipe_id: opt.recipe_id, ingredient_id: opt.ingredient_id, manual_cost: opt.manual_cost, qty: opt.qty ?? 1, sort_order: opt.sort_order, image_url: opt.image_url ?? null })
         setMpOptRecipeSearch(opt.recipe_name ?? '')
         setMpOptIngSearch(opt.ingredient_name ?? '')
       } else {
-        setMpOptForm({ name: '', display_name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, qty: 1, sort_order: 0 })
+        setMpOptForm({ name: '', display_name: '', item_type: 'manual', recipe_id: null, ingredient_id: null, manual_cost: null, qty: 1, sort_order: 0, image_url: null })
         setMpOptRecipeSearch('')
         setMpOptIngSearch('')
       }
@@ -2194,6 +2195,8 @@ export default function SalesItemsPage() {
                           onChange={e => setMpOptForm(f => f ? { ...f, manual_cost: parseFloat(e.target.value) || null } : f)} />
                       </div>
                     )}
+                    <ImageUpload label="Photo" value={mpOptForm.image_url}
+                      onChange={url => setMpOptForm(f => f ? { ...f, image_url: url } : f)} />
                   </>
                 )}
               </div>

@@ -998,6 +998,9 @@ const migrations = [
   // ── 81. Add qty to sales items ────────────────────────────────────────────
   `ALTER TABLE mcogs_sales_items ADD COLUMN IF NOT EXISTS qty NUMERIC(12,4) NOT NULL DEFAULT 1`,
 
+  // ── 82. Add image_url to modifier options ─────────────────────────────────
+  `ALTER TABLE mcogs_modifier_options ADD COLUMN IF NOT EXISTS image_url TEXT`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,
