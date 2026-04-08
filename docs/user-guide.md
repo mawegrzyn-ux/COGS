@@ -94,7 +94,7 @@ The Dashboard includes quick navigation links to all main sections of the app.
 
 ## Settings
 
-Settings are at `/settings`. The tab bar includes **Base Units**, **Price Levels**, **Currency**, **COGS Thresholds**, **AI**, **Storage**, **Import**, **Users**, and **Roles**. Test data loading and database clearing are no longer in Settings — they moved to **System → Database** (developer-only, see the System section below).
+Settings are at `/settings`. The tab bar includes **Base Units**, **Price Levels**, **Currency**, **COGS Thresholds**, **AI**, **Storage**, **Database**, **Test Data**, **Import**, **Users**, and **Roles**. The **Database** tab is only visible to users with `settings:write` (admin) and controls which PostgreSQL instance the API talks to (local vs standalone/RDS). The **Test Data** tab is only visible to users with the developer flag (`is_dev`) and houses the seed/clear controls — every destructive action requires typing today's date as `ddmmyyyy`. Both tabs are also surfaced as top-level sections in the **System** page — see that section below for details.
 
 ### Units Tab
 
@@ -1023,17 +1023,35 @@ If no Voyage AI key is configured in Settings → AI, the system falls back to k
 
 ## System
 
-The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Database, Architecture, API Reference, Security, Troubleshooting, and Domain Migration. Most sections are documentation; a couple (AI, Database) embed live controls from the Settings page.
+The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Database, Test Data, Architecture, API Reference, Security, Troubleshooting, and Domain Migration. Most sections are documentation; three (AI, Database, Test Data) embed live controls from the Settings page.
 
-Some sections are gated behind the **developer flag** (`is_dev` on `mcogs_users`). An Admin toggles the flag per-user from Settings → Users using the `</>` button in the Actions column. Dev-only sections display a purple **DEV** badge next to their sidebar label. Users without the flag simply don't see the entry; if they ever reach it directly (e.g. after their flag is revoked mid-session), a "Developer access required" fallback message is shown and they are bounced back to AI.
+Two sections are permission-gated:
+
+- **Database** requires `settings:write` (admin). It is marked with an amber **ADMIN** badge in the sidebar. This section controls which PostgreSQL instance the API talks to and is admin-only because switching databases affects every user on the system.
+- **Test Data** requires the **developer flag** (`is_dev` on `mcogs_users`). It is marked with a purple **DEV** badge. This section exposes destructive seed/clear actions that wipe operational data, so it's restricted to users with dev access. An Admin toggles the `is_dev` flag per-user from Settings → Users via the `</>` button.
+
+Users who don't meet a section's gate simply don't see the entry in the sidebar. If a user loses permission mid-session (e.g. their role changes or their dev flag is revoked) they are automatically bounced back to AI, and a fallback "Admin access required" or "Developer access required" message is shown as defence-in-depth if they somehow route into the section directly.
 
 ### AI Section
 
 Embeds the Settings → AI tab inside the System layout. Shows the same Anthropic/Voyage/Brave/Concise Mode/Monthly Token Allowance/Claude Code fields as Settings → AI. Changes made here persist to the same backend and affect Pepper immediately.
 
-### Database Section (dev only)
+### Database Section (admin only)
 
-This is where test data seeding and the database clear actions now live. The section is only visible to users with the `is_dev` flag on. It exposes four destructive actions:
+Controls the **database connection mode** for the API. Not to be confused with the Test Data section — this tab does not seed or clear data; it picks which PostgreSQL instance the API talks to.
+
+Two modes are supported:
+
+- **Local** — the PostgreSQL instance running on the API server itself (the default for dev/self-hosted deployments).
+- **Standalone** — a managed PostgreSQL host such as **AWS RDS**, connected over the network with SSL.
+
+For Standalone mode the form collects host, port, database name, username, password, SSL toggle + CA path, and pool max. A **Test** button opens a throwaway connection to verify the credentials before saving. Saving writes the config into the encrypted config store and requires an **API restart** for the new pool to take effect — a confirmation banner and restart button handle this.
+
+The section also exposes a **Migrate Data & Switch** flow: given a target connection, it applies the schema migrations on the target, previews row counts for every table on both sides, warns if the target isn't empty, then copies every operational row from the current DB to the target in dependency order. On success it updates the stored config to point at the new target so the next restart picks it up.
+
+### Test Data Section (dev only)
+
+This is where test data seeding and database-clear actions live. The section is only visible to users with the `is_dev` flag on. It exposes four actions:
 
 | Action | What it does |
 |---|---|
@@ -1042,7 +1060,7 @@ This is where test data seeding and the database clear actions now live. The sec
 | **Clear Database** | Permanently removes all rows from every operational table (ingredients, recipes, menus, sales items, combos, modifiers, menu scenarios, shared pages, HACCP logs, recipe variations, category groups, etc.). The schema and reference data (allergens, roles, users, AI chat log, feedback, import jobs) are preserved. |
 | **Load Default Data** | Adds a minimal production-ready starting point — 1 UK market, 3 units, 3 categories scoped for ingredients/recipes/sales-items, 1 default price level, 1 vendor, UK VAT rates. **Does not** clear existing records first, so it's safe to run after Clear Database. |
 
-**Date confirmation safeguard.** Every destructive action on the Database section requires the user to type **today's date as `ddmmyyyy`** into a confirmation modal before the action button activates. For example, if today is 8 April 2026 the user must type `08042026`. The date is computed from the browser's local time. The confirm button stays disabled and shows a red "That isn't today's date" error until the input matches, so an accidental double-click or muscle-memory Enter press cannot wipe the database. Pressing Enter while the input matches commits the action; pressing Escape cancels the modal.
+**Date confirmation safeguard.** Every destructive action in the Test Data section requires the user to type **today's date as `ddmmyyyy`** into a confirmation modal before the action button activates. For example, if today is 8 April 2026 the user must type `08042026`. The date is computed from the browser's local time. The confirm button stays disabled and shows a red "That isn't today's date" error until the input matches, so an accidental double-click or muscle-memory Enter press cannot wipe the database. Pressing Enter while the input matches commits the action; pressing Escape cancels the modal.
 
 This is a deliberately stronger gate than the plain "Are you sure?" dialog used elsewhere — the date has to be thought about, not just clicked through. Combined with the `is_dev` visibility gate, it means only developers can see the controls and only a conscious typed action will fire them.
 

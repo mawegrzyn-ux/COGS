@@ -29,11 +29,7 @@ interface AppSettings {
   target_cogs?:     number
 }
 
-// 'test-data' is intentionally kept as a tab id so SystemPage can embed the
-// TestDataTab via <SettingsPage embedded initialTab="test-data" />. It is
-// hidden from the standalone Settings tab bar below (only reachable via
-// System → Database for users with the dev flag).
-type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'import' | 'users' | 'roles'
+type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -42,9 +38,10 @@ const TAB_LABELS: Record<Tab, string> = {
   'price-levels': 'Price Levels',
   'currency':     'Currency',
   'thresholds':   'COGS Thresholds',
-  'test-data':    'Database',
+  'test-data':    'Test Data',
   'ai':           'AI',
   'storage':      'Storage',
+  'database':     'Database',
   'import':       'Import',
   'users':        'Users',
   'roles':        'Roles',
@@ -55,9 +52,10 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
   'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
   'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
-  'test-data':    'Explain the System → Database section. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
+  'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
+  'database':     'Explain the Database settings tab. What is the difference between Local and Standalone (AWS RDS) mode, when would I switch, what fields do I need (host, port, database, user, password, SSL), and what happens after I save?',
   'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
   'users':        'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
   'roles':        'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
@@ -67,18 +65,18 @@ const TAB_TUTORIALS: Record<Tab, string> = {
 
 export default function SettingsPage({ embedded, initialTab }: { embedded?: boolean; initialTab?: Tab } = {}) {
   const [tab, setTab] = useState<Tab>(initialTab ?? 'units')
-  const { isDev } = usePermissions()
+  const { isDev, can } = usePermissions()
 
   // Sync active tab when initialTab prop changes (used in embedded/Configuration context)
   useEffect(() => {
     if (initialTab) setTab(initialTab)
   }, [initialTab])
 
-  // The 'test-data' tab is never shown in the standalone Settings tab bar — it
-  // now lives under System → Database and is only reachable via
-  // <SettingsPage embedded initialTab="test-data" /> from SystemPage. The dev
-  // flag check happens there (and inside renderTabContent as a defence in depth).
-  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'ai', 'storage', 'import', 'users', 'roles'] as Tab[])
+  const canManageSettings = can('settings', 'write')
+
+  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'test-data', 'ai', 'storage', 'database', 'import', 'users', 'roles'] as Tab[])
+    .filter(t => t !== 'test-data' || isDev)
+    .filter(t => t !== 'database' || canManageSettings)
 
   function renderTabContent(t: Tab) {
     return (
@@ -90,6 +88,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
         {t === 'test-data'    && isDev && <TestDataTab />}
         {t === 'ai'           && <AiTab />}
         {t === 'storage'      && <StorageTab />}
+        {t === 'database'     && canManageSettings && <DatabaseTab />}
         {t === 'import'       && <ImportPage hideHeader />}
         {t === 'users'        && <UsersTab />}
         {t === 'roles'        && <RolesTab />}
@@ -129,6 +128,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
           >
             <span className="flex items-center gap-1.5">
               {TAB_LABELS[t]}
+              {t === 'test-data' && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">DEV</span>}
               <PepperHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
             </span>
           </button>
@@ -1316,6 +1316,635 @@ function StorageTab() {
       <button className="btn-primary px-5 py-2 text-sm" onClick={save} disabled={saving}>
         {saving ? 'Saving…' : 'Save Storage Settings'}
       </button>
+
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Database Tab ──────────────────────────────────────────────────────────────
+
+type DbMode = 'local' | 'standalone'
+
+type DbConfigForm = {
+  mode: DbMode
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string          // '' means "keep existing" on save unless the user typed something
+  ssl_enabled: boolean
+  ssl_ca_path: string
+  pool_max: number
+}
+
+type DbConfigResponse = {
+  stored: (DbConfigForm & { password_set?: boolean }) | null
+  active: { mode: string | null; target: string | null; version?: string; ok: boolean; error?: string }
+}
+
+type TestResult = {
+  ok: boolean
+  latency_ms?: number
+  version?: string | null
+  database?: string | null
+  target?: string
+  error?: string
+}
+
+type RowCounts = { per_table: Record<string, number | null>; total: number }
+
+type MigratePreview = {
+  ok: boolean
+  schema_applied?: number
+  order?: string[]
+  source?: RowCounts
+  target_before?: RowCounts
+  warnings?: string[]
+  target_not_empty?: boolean
+  error?: string
+}
+
+type MigrateResult = MigratePreview & {
+  copied?: RowCounts
+  saved?: unknown
+  restart_required?: boolean
+  message?: string
+  code?: string
+}
+
+function DatabaseTab() {
+  const api = useApi()
+
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [migrating, setMigrating] = useState(false)
+
+  const [active,  setActive]  = useState<DbConfigResponse['active'] | null>(null)
+  const [form, setForm] = useState<DbConfigForm>({
+    mode: 'local',
+    host: 'localhost',
+    port: 5432,
+    database: 'mcogs',
+    username: 'mcogs',
+    password: '',
+    ssl_enabled: false,
+    ssl_ca_path: '',
+    pool_max: 10,
+  })
+  const [passwordSet, setPasswordSet] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [confirmSave, setConfirmSave] = useState(false)
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const [toast, setToast] = useState<{ msg: string; type?: 'success' | 'error' } | null>(null)
+
+  // Migrate-and-switch state
+  const [migrateModalOpen, setMigrateModalOpen] = useState(false)
+  const [migratePreview, setMigratePreview] = useState<MigratePreview | null>(null)
+  const [migratePreviewLoading, setMigratePreviewLoading] = useState(false)
+  const [overwriteConfirmed, setOverwriteConfirmed] = useState(false)
+  const [migrateRunning, setMigrateRunning] = useState(false)
+  const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true)
+      const data = await api.get('/db-config') as DbConfigResponse
+      setActive(data.active)
+      if (data.stored) {
+        setForm(prev => ({
+          ...prev,
+          mode:         (data.stored!.mode as DbMode) || prev.mode,
+          host:         data.stored!.host || prev.host,
+          port:         data.stored!.port || prev.port,
+          database:     data.stored!.database || prev.database,
+          username:     data.stored!.username || prev.username,
+          password:     '',
+          ssl_enabled:  !!data.stored!.ssl_enabled,
+          ssl_ca_path:  data.stored!.ssl_ca_path || '',
+          pool_max:     data.stored!.pool_max || prev.pool_max,
+        }))
+        setPasswordSet(!!data.stored.password_set)
+      }
+    } catch (err) {
+      setToast({ msg: `Failed to load config: ${(err as Error).message}`, type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  // Build the candidate payload sent to the API. Omit password when empty so
+  // the server keeps whatever is already stored (matches StorageTab semantics).
+  const candidatePayload = useCallback(() => {
+    const p: Record<string, unknown> = {
+      mode: form.mode,
+      host: form.host.trim() || null,
+      port: form.port,
+      database: form.database.trim() || null,
+      username: form.username.trim() || null,
+      ssl_enabled: form.ssl_enabled,
+      ssl_ca_path: form.ssl_ca_path.trim() || null,
+      pool_max: form.pool_max,
+    }
+    if (form.password !== '') p.password = form.password
+    return p
+  }, [form])
+
+  async function handleTest() {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await api.post('/db-config/test', candidatePayload()) as TestResult
+      setTestResult(r)
+    } catch (err) {
+      setTestResult({ ok: false, error: (err as Error).message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  async function handleSave() {
+    setConfirmSave(false)
+    setSaving(true)
+    try {
+      await api.put('/db-config', candidatePayload())
+      setToast({ msg: 'Saved. Restart the API to activate the new connection.' })
+      await load()
+      setConfirmRestart(true)
+    } catch (err) {
+      setToast({ msg: `Save failed: ${(err as Error).message}`, type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleRestart() {
+    setConfirmRestart(false)
+    try {
+      await api.post('/db-config/restart', {})
+      setToast({ msg: 'API is restarting — refresh in a few seconds.' })
+    } catch (err) {
+      // Expected: the socket may close before we get a response.
+      setToast({ msg: 'Restart signal sent — refresh in a few seconds.' })
+      void err
+    }
+  }
+
+  async function handleMigrate() {
+    setMigrating(true)
+    try {
+      const r = await api.post('/db-config/migrate', {}) as { ok: boolean; applied?: number; error?: { message: string } }
+      if (r.ok) {
+        setToast({ msg: `Schema migrated: ${r.applied} statements applied.` })
+      } else {
+        setToast({ msg: `Migration failed: ${r.error?.message || 'unknown error'}`, type: 'error' })
+      }
+    } catch (err) {
+      setToast({ msg: `Migration failed: ${(err as Error).message}`, type: 'error' })
+    } finally {
+      setMigrating(false)
+    }
+  }
+
+  // ── Migrate-and-switch flow ──────────────────────────────────────────────
+  async function openMigrateModal() {
+    setMigrateModalOpen(true)
+    setMigratePreview(null)
+    setMigrateResult(null)
+    setOverwriteConfirmed(false)
+    setMigratePreviewLoading(true)
+    try {
+      const r = await api.post('/db-config/migrate-preview', candidatePayload()) as MigratePreview
+      setMigratePreview(r)
+    } catch (err) {
+      setMigratePreview({ ok: false, error: (err as Error).message })
+    } finally {
+      setMigratePreviewLoading(false)
+    }
+  }
+
+  async function runMigrateData() {
+    if (!migratePreview || !migratePreview.ok) return
+    if (migratePreview.target_not_empty && !overwriteConfirmed) return
+    setMigrateRunning(true)
+    try {
+      const body = { ...candidatePayload(), overwrite: !!migratePreview.target_not_empty }
+      const r = await api.post('/db-config/migrate-data', body) as MigrateResult
+      setMigrateResult(r)
+      if (r.ok) {
+        await load() // refresh masked stored config
+      }
+    } catch (err) {
+      setMigrateResult({ ok: false, error: (err as Error).message })
+    } finally {
+      setMigrateRunning(false)
+    }
+  }
+
+  function closeMigrateModal() {
+    setMigrateModalOpen(false)
+    setMigratePreview(null)
+    setMigrateResult(null)
+    setOverwriteConfirmed(false)
+  }
+
+  if (loading) return <Spinner />
+
+  const inStandalone = form.mode === 'standalone'
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-text-1 mb-1">Database</h2>
+        <p className="text-sm text-text-3">
+          Run the transactional database locally on the API server, or on a standalone host such as AWS RDS.
+          Changes take effect after restarting the API.
+        </p>
+      </div>
+
+      {/* Current status banner */}
+      <div className={`card p-4 flex items-start gap-3 ${active?.ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+        <span className={`mt-0.5 inline-block w-2.5 h-2.5 rounded-full ${active?.ok ? 'bg-green-500' : 'bg-red-500'}`} />
+        <div className="text-sm flex-1">
+          <div className="font-medium text-text-1">
+            {active?.ok ? 'Connected' : 'Not connected'}
+            {active?.mode && <span className="ml-2 text-xs font-mono text-text-3">mode: {active.mode}</span>}
+          </div>
+          {active?.target && <div className="text-xs text-text-3 font-mono">{active.target}</div>}
+          {active?.version && <div className="text-xs text-text-3 mt-1">{active.version}</div>}
+          {!active?.ok && active?.error && <div className="text-xs text-red-700 mt-1">{active.error}</div>}
+        </div>
+      </div>
+
+      {/* Mode toggle */}
+      <div className="card p-4 space-y-3">
+        <Field label="Mode">
+          <div className="flex gap-3">
+            {(['local', 'standalone'] as const).map(m => (
+              <label key={m} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="db_mode"
+                  value={m}
+                  checked={form.mode === m}
+                  onChange={() => setForm(prev => ({
+                    ...prev,
+                    mode: m,
+                    // Turn SSL on by default when switching to standalone
+                    ssl_enabled: m === 'standalone' ? true : prev.ssl_enabled,
+                    // Default to localhost when switching back
+                    host: m === 'local' && (!prev.host || prev.host === '') ? 'localhost' : prev.host,
+                  }))}
+                  className="accent-accent"
+                />
+                <span className="text-sm font-medium text-text-1">
+                  {m === 'local' ? '🖥️  Local (same host as the API)' : '☁️  Standalone (AWS RDS or remote Postgres)'}
+                </span>
+              </label>
+            ))}
+          </div>
+        </Field>
+        {inStandalone && (
+          <p className="text-xs text-text-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-blue-800">
+            For AWS RDS: allow inbound TCP/5432 from the API host's security group only. SSL is enabled by default.
+            For strict certificate verification, install the{' '}
+            <a href="https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem" className="underline" target="_blank" rel="noreferrer">
+              AWS RDS global CA bundle
+            </a>{' '}
+            on the API host and enter its path below.
+          </p>
+        )}
+      </div>
+
+      {/* Connection fields */}
+      <div className="card p-4 space-y-4">
+        <div className="grid grid-cols-3 gap-4">
+          <div className="col-span-2">
+            <Field label="Host" required>
+              <input
+                className="input font-mono text-sm"
+                value={form.host}
+                onChange={e => setForm(f => ({ ...f, host: e.target.value }))}
+                placeholder={inStandalone ? 'mcogs.abcdef1234.eu-west-2.rds.amazonaws.com' : 'localhost'}
+                autoComplete="off"
+              />
+            </Field>
+          </div>
+          <Field label="Port" required>
+            <input
+              className="input font-mono text-sm"
+              type="number"
+              value={form.port}
+              onChange={e => setForm(f => ({ ...f, port: parseInt(e.target.value || '5432', 10) }))}
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Database" required>
+            <input
+              className="input font-mono text-sm"
+              value={form.database}
+              onChange={e => setForm(f => ({ ...f, database: e.target.value }))}
+              placeholder="mcogs"
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="User" required>
+            <input
+              className="input font-mono text-sm"
+              value={form.username}
+              onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+              placeholder="mcogs"
+              autoComplete="off"
+            />
+          </Field>
+        </div>
+
+        <Field label={passwordSet ? 'Password (leave blank to keep current)' : 'Password'}>
+          <div className="relative">
+            <input
+              className="input font-mono text-sm pr-10"
+              type={showPassword ? 'text' : 'password'}
+              value={form.password}
+              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+              placeholder={passwordSet ? '••••••••  (stored, not shown)' : 'Enter the DB password'}
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1"
+              onClick={() => setShowPassword(v => !v)}
+            >{showPassword ? '🙈' : '👁️'}</button>
+          </div>
+        </Field>
+
+        {/* SSL */}
+        <div className="pt-2 border-t border-border">
+          <label className="flex items-center gap-2 cursor-pointer mb-2">
+            <input
+              type="checkbox"
+              checked={form.ssl_enabled}
+              onChange={e => setForm(f => ({ ...f, ssl_enabled: e.target.checked }))}
+              className="accent-accent"
+            />
+            <span className="text-sm font-medium text-text-1">Use SSL/TLS</span>
+          </label>
+          {form.ssl_enabled && (
+            <Field label="CA Bundle Path (optional, for strict verification)">
+              <input
+                className="input font-mono text-sm"
+                value={form.ssl_ca_path}
+                onChange={e => setForm(f => ({ ...f, ssl_ca_path: e.target.value }))}
+                placeholder="/etc/ssl/rds/global-bundle.pem"
+              />
+            </Field>
+          )}
+        </div>
+
+        {/* Pool size */}
+        <Field label="Pool max connections">
+          <input
+            className="input font-mono text-sm w-24"
+            type="number"
+            min={1}
+            max={200}
+            value={form.pool_max}
+            onChange={e => setForm(f => ({ ...f, pool_max: parseInt(e.target.value || '10', 10) }))}
+          />
+        </Field>
+      </div>
+
+      {/* Test result */}
+      {testResult && (
+        <div className={`card p-4 ${testResult.ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+          {testResult.ok ? (
+            <div className="text-sm text-green-800">
+              ✅ <span className="font-medium">Connected</span> in {testResult.latency_ms}ms
+              {testResult.database && <> — db <span className="font-mono">{testResult.database}</span></>}
+              {testResult.version && <div className="text-xs text-green-700 mt-1">{testResult.version}</div>}
+            </div>
+          ) : (
+            <div className="text-sm text-red-800">
+              ❌ <span className="font-medium">Connection failed:</span> {testResult.error}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex flex-wrap gap-3">
+        <button
+          className="btn-secondary px-5 py-2 text-sm"
+          onClick={handleTest}
+          disabled={testing || saving}
+        >{testing ? 'Testing…' : 'Test Connection'}</button>
+
+        <button
+          className="btn-primary px-5 py-2 text-sm"
+          onClick={() => setConfirmSave(true)}
+          disabled={saving || !form.host}
+        >{saving ? 'Saving…' : 'Save'}</button>
+
+        <button
+          className="btn-primary px-5 py-2 text-sm"
+          onClick={openMigrateModal}
+          disabled={saving || !form.host}
+          title="Copy schema and all data from the current active database into the target database, then save the new connection"
+        >Migrate Data &amp; Switch</button>
+
+        <button
+          className="btn-secondary px-5 py-2 text-sm ml-auto"
+          onClick={handleMigrate}
+          disabled={migrating}
+          title="Run CREATE TABLE IF NOT EXISTS for all mcogs_ tables against the currently-active database"
+        >{migrating ? 'Migrating…' : 'Run Migrations on Active DB'}</button>
+      </div>
+
+      {confirmSave && (
+        <ConfirmDialog
+          message="Save database configuration? The API will validate the connection before saving. After saving you'll need to restart the API for the change to take effect."
+          onConfirm={handleSave}
+          onCancel={() => setConfirmSave(false)}
+          danger={false}
+        />
+      )}
+
+      {confirmRestart && (
+        <ConfirmDialog
+          message="Restart API now? The API process will exit and be respawned by the process manager. This takes a couple of seconds."
+          onConfirm={handleRestart}
+          onCancel={() => setConfirmRestart(false)}
+          danger={false}
+        />
+      )}
+
+      {migrateModalOpen && (
+        <Modal title="Migrate Data & Switch Database" onClose={migrateRunning ? () => {} : closeMigrateModal} width="max-w-2xl">
+          {migratePreviewLoading && (
+            <div className="py-8 flex items-center gap-3 text-sm text-text-3">
+              <Spinner /> Connecting to target and counting rows…
+            </div>
+          )}
+
+          {!migratePreviewLoading && migratePreview && !migratePreview.ok && (
+            <div className="py-4">
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                ❌ <span className="font-medium">Preview failed:</span> {migratePreview.error}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+              </div>
+            </div>
+          )}
+
+          {!migratePreviewLoading && migratePreview && migratePreview.ok && !migrateResult && (
+            <div className="space-y-4">
+              <p className="text-sm text-text-2">
+                This will copy all <code className="font-mono text-xs">mcogs_*</code> tables and rows from the
+                <strong> currently active database</strong> into the <strong>target database</strong> you configured above,
+                then save the new connection. The current database is left untouched. After the copy you'll be prompted
+                to restart the API to start using the new target.
+              </p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="card p-4">
+                  <div className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Source (current)</div>
+                  <div className="text-2xl font-bold text-text-1">{(migratePreview.source?.total ?? 0).toLocaleString()}</div>
+                  <div className="text-xs text-text-3 mt-1">total rows across {migratePreview.order?.length ?? 0} tables</div>
+                </div>
+                <div className={`card p-4 ${migratePreview.target_not_empty ? 'border-amber-300 bg-amber-50' : ''}`}>
+                  <div className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Target</div>
+                  <div className={`text-2xl font-bold ${migratePreview.target_not_empty ? 'text-amber-700' : 'text-text-1'}`}>
+                    {(migratePreview.target_before?.total ?? 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-text-3 mt-1">
+                    {migratePreview.target_not_empty
+                      ? <span className="text-amber-700 font-medium">Existing data — will be overwritten</span>
+                      : 'empty — safe to copy into'}
+                  </div>
+                </div>
+              </div>
+
+              {migratePreview.target_not_empty && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 space-y-2">
+                  <div className="text-sm font-semibold text-red-800">
+                    ⚠ The target database is not empty
+                  </div>
+                  <div className="text-xs text-red-700">
+                    Continuing will <strong>TRUNCATE every <code className="font-mono">mcogs_*</code> table on the target</strong>
+                    {' '}and replace its rows with data from the source. This is destructive and cannot be undone from inside the app.
+                    Make sure you have a backup of the target database (or are deliberately overwriting empty test data) before continuing.
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={overwriteConfirmed}
+                      onChange={e => setOverwriteConfirmed(e.target.checked)}
+                      className="accent-red-600"
+                    />
+                    <span className="text-xs font-medium text-red-800">
+                      I understand this will overwrite existing data on the remote database
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {!!migratePreview.warnings && migratePreview.warnings.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800">
+                  <div className="font-semibold mb-1">Schema warnings:</div>
+                  <ul className="list-disc pl-4">
+                    {migratePreview.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <details className="text-xs text-text-3">
+                <summary className="cursor-pointer hover:text-text-1">Per-table row counts</summary>
+                <table className="w-full mt-2 text-xs">
+                  <thead>
+                    <tr className="text-left text-text-3">
+                      <th className="py-1">Table</th>
+                      <th className="py-1 text-right">Source</th>
+                      <th className="py-1 text-right">Target</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(migratePreview.order || []).map(t => (
+                      <tr key={t} className="border-t border-border">
+                        <td className="py-1 font-mono">{t}</td>
+                        <td className="py-1 text-right">{migratePreview.source?.per_table?.[t] ?? '—'}</td>
+                        <td className="py-1 text-right">{migratePreview.target_before?.per_table?.[t] ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  className="btn-secondary px-4 py-2 text-sm"
+                  onClick={closeMigrateModal}
+                  disabled={migrateRunning}
+                >Cancel</button>
+                <button
+                  className="btn-primary px-4 py-2 text-sm"
+                  onClick={runMigrateData}
+                  disabled={migrateRunning || (!!migratePreview.target_not_empty && !overwriteConfirmed)}
+                >{migrateRunning ? 'Migrating…' : 'Start Migration'}</button>
+              </div>
+            </div>
+          )}
+
+          {migrateResult && migrateResult.ok && (
+            <div className="space-y-4">
+              <div className="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+                ✅ <span className="font-medium">Migration complete.</span> Copied {(migrateResult.copied?.total ?? 0).toLocaleString()} rows
+                across {Object.keys(migrateResult.copied?.per_table || {}).length} tables. The new connection has been saved.
+                Restart the API to begin using the new database.
+              </div>
+              <details className="text-xs text-text-3">
+                <summary className="cursor-pointer hover:text-text-1">Per-table copy results</summary>
+                <table className="w-full mt-2 text-xs">
+                  <tbody>
+                    {Object.entries(migrateResult.copied?.per_table || {}).map(([t, n]) => (
+                      <tr key={t} className="border-t border-border">
+                        <td className="py-1 font-mono">{t}</td>
+                        <td className="py-1 text-right">{n}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+              <div className="flex justify-end gap-3">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+                <button
+                  className="btn-primary px-4 py-2 text-sm"
+                  onClick={() => { closeMigrateModal(); setConfirmRestart(true) }}
+                >Restart API now</button>
+              </div>
+            </div>
+          )}
+
+          {migrateResult && !migrateResult.ok && (
+            <div className="py-4 space-y-3">
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                ❌ <span className="font-medium">Migration failed:</span> {migrateResult.error}
+                {migrateResult.code === 'TARGET_NOT_EMPTY' && (
+                  <div className="mt-1 text-xs">Tick the overwrite checkbox above and try again.</div>
+                )}
+              </div>
+              <div className="flex justify-end">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </div>

@@ -541,19 +541,28 @@ function DomainMigrationSection() {
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
-type Section = 'ai' | 'database' | 'architecture' | 'api-reference' | 'security' | 'troubleshooting' | 'domain-migration'
+type Section =
+  | 'ai'
+  | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
+  | 'test-data'      // Seeding + clearing dummy data — dev-only, date-confirmed
+  | 'architecture'
+  | 'api-reference'
+  | 'security'
+  | 'troubleshooting'
+  | 'domain-migration'
 
 interface SectionDef {
   id:        Section
   icon:      string
   label:     string
-  /** If true, only users with the is_dev flag can see/activate this section */
-  devOnly?:  boolean
+  /** Permission level required: 'admin' = settings:write, 'dev' = is_dev flag. Omit for public. */
+  gate?:     'admin' | 'dev'
 }
 
 const SECTIONS: SectionDef[] = [
   { id: 'ai',               icon: '🤖', label: 'AI' },
-  { id: 'database',         icon: '🗄️', label: 'Database', devOnly: true },
+  { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
+  { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
   { id: 'api-reference',    icon: '📡', label: 'API Reference' },
   { id: 'security',         icon: '🔒', label: 'Security' },
@@ -564,26 +573,37 @@ const SECTIONS: SectionDef[] = [
 // ── SystemPage ─────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
-  const { isDev } = usePermissions()
+  const { isDev, can } = usePermissions()
+  const canManageSettings = can('settings', 'write')
   const [active, setActive] = useState<Section>('ai')
 
-  // Only show sections the current user is allowed to see
-  const visibleSections = SECTIONS.filter(s => !s.devOnly || isDev)
+  // Only show sections the current user is allowed to see. Database needs
+  // settings:write (it can switch the live transactional DB); Test Data needs
+  // the is_dev flag (it wipes and re-seeds operational data).
+  function sectionAllowed(s: SectionDef) {
+    if (s.gate === 'admin') return canManageSettings
+    if (s.gate === 'dev')   return isDev
+    return true
+  }
+  const visibleSections = SECTIONS.filter(sectionAllowed)
 
-  // If the user landed on a dev-only section but lost the flag (e.g. role
-  // change), bounce them back to the first visible section.
-  // Depend on isDev (stable) rather than the re-derived array.
+  // If the user landed on a gated section but no longer has the permission
+  // (e.g. role change or dev flag revoked mid-session), bounce them back to AI.
   useEffect(() => {
-    const stillAllowed = SECTIONS.some(s => s.id === active && (!s.devOnly || isDev))
+    const stillAllowed = SECTIONS.some(s => s.id === active && sectionAllowed(s))
     if (!stillAllowed) setActive('ai')
-  }, [active, isDev])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, isDev, canManageSettings])
 
   function renderContent() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
-      case 'database':         return isDev
+      case 'database':         return canManageSettings
+                                  ? <SettingsPage embedded initialTab="database" />
+                                  : <GatedFallback reason="admin" />
+      case 'test-data':        return isDev
                                   ? <SettingsPage embedded initialTab="test-data" />
-                                  : <DevOnlyFallback />
+                                  : <GatedFallback reason="dev" />
       case 'architecture':     return <ArchitectureSection />
       case 'api-reference':    return <ApiReferenceSection />
       case 'security':         return <SecuritySection />
@@ -616,9 +636,14 @@ export default function SystemPage() {
             >
               <span className="text-base leading-none shrink-0">{section.icon}</span>
               <span className="flex-1">{section.label}</span>
-              {section.devOnly && (
+              {section.gate === 'dev' && (
                 <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">
                   DEV
+                </span>
+              )}
+              {section.gate === 'admin' && (
+                <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">
+                  ADMIN
                 </span>
               )}
             </button>
@@ -635,22 +660,32 @@ export default function SystemPage() {
   )
 }
 
-// ── Fallback shown if a non-dev user somehow reaches a dev-only section ────
-function DevOnlyFallback() {
+// ── Fallback shown if a user loses access mid-session ────────────────────────
+function GatedFallback({ reason }: { reason: 'admin' | 'dev' }) {
+  const copy = reason === 'dev'
+    ? {
+        title:   'Developer access required',
+        body:    'This section is only visible to users with the dev flag enabled. An administrator can toggle it from Settings → Users.',
+        ring:    'bg-purple-100',
+        stroke:  '#7e22ce',
+      }
+    : {
+        title:   'Admin access required',
+        body:    'This section is only available to users with settings:write permission. Ask an administrator to grant your role the permission from Settings → Roles.',
+        ring:    'bg-amber-100',
+        stroke:  '#b45309',
+      }
   return (
     <div className="flex-1 flex items-center justify-center p-10">
       <div className="max-w-md text-center">
-        <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-3">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7e22ce" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <div className={`w-12 h-12 rounded-full ${copy.ring} flex items-center justify-center mx-auto mb-3`}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={copy.stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2"/>
             <path d="M7 11V7a5 5 0 0110 0v4"/>
           </svg>
         </div>
-        <h2 className="text-base font-bold text-text-1 mb-1">Developer access required</h2>
-        <p className="text-sm text-text-3">
-          This section is only visible to users with the <strong>dev flag</strong> enabled. An
-          administrator can toggle it from <em>Settings → Users</em>.
-        </p>
+        <h2 className="text-base font-bold text-text-1 mb-1">{copy.title}</h2>
+        <p className="text-sm text-text-3">{copy.body}</p>
       </div>
     </div>
   )
