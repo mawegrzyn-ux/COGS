@@ -6,16 +6,10 @@
 // Safe to run multiple times (CREATE TABLE IF NOT EXISTS)
 // =============================================================================
 
-require('dotenv').config();
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  host:     process.env.DB_HOST,
-  port:     parseInt(process.env.DB_PORT, 10),
-  database: process.env.DB_NAME,
-  user:     process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-});
+// When this script is run directly (e.g. `npm run migrate`) it opens its own
+// Pool against whatever config it can resolve. When required as a module (e.g.
+// from the /api/db-config/migrate admin endpoint) it only exports `migrations`
+// so the caller can run them against the live pool.
 
 const migrations = [
 
@@ -1065,7 +1059,7 @@ const migrations = [
   )`,
 ];
 
-async function migrate() {
+async function runMigrations(pool) {
   const client = await pool.connect();
   console.log('\n🗄  Menu COGS — Database Migration\n');
 
@@ -1087,11 +1081,30 @@ async function migrate() {
     await client.query('ROLLBACK');
     console.error('\n❌ Migration failed:', err.message);
     console.error(err);
-    process.exit(1);
+    throw err;
   } finally {
     client.release();
-    await pool.end();
   }
 }
 
-migrate();
+module.exports = { migrations, runMigrations };
+
+// CLI entry point — only runs when invoked directly (`node migrate.js` or
+// `npm run migrate`), never when required as a module.
+if (require.main === module) {
+  require('dotenv').config();
+  const { Pool } = require('pg');
+  const { buildPoolConfig, describeTarget } = require('../src/db/config');
+
+  const { mode, config } = buildPoolConfig();
+  console.log(`[migrate] Target: ${describeTarget({ mode, config })}`);
+  const pool = new Pool(config);
+
+  runMigrations(pool)
+    .then(() => pool.end())
+    .catch((err) => {
+      pool.end().catch(() => {});
+      console.error('[migrate] Fatal:', err.message);
+      process.exit(1);
+    });
+}

@@ -207,6 +207,8 @@ psql -U mcogs -d mcogs              # Connect to PostgreSQL
 ### API `.env` File (on server at `/var/www/menu-cogs/api/.env`)
 
 ```env
+# Local mode — DB runs on the same box as the API (current production default)
+DB_MODE=local
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=mcogs
@@ -215,6 +217,13 @@ DB_PASSWORD=<generated strong password — check server>
 NODE_ENV=production
 PORT=3001
 ```
+
+The API also supports **standalone mode** for running PostgreSQL on a
+separate host (e.g. AWS RDS). Set `DB_MODE=standalone`, point `DB_HOST` at
+the remote endpoint (or use `DB_CONNECTION_STRING`), and SSL is enabled by
+default. See [`docs/DATABASE.md`](./docs/DATABASE.md) and
+[`api/.env.example`](./api/.env.example) for the full variable reference
+and an AWS RDS walkthrough.
 
 ---
 

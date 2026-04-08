@@ -8,14 +8,11 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 const fs = require('fs');
+const { buildPoolConfig, describeTarget } = require('../src/db/config');
 
-const pool = new Pool({
-  host:     process.env.DB_HOST,
-  port:     parseInt(process.env.DB_PORT, 10),
-  database: process.env.DB_NAME,
-  user:     process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-});
+const { mode, config } = buildPoolConfig();
+console.log(`[import] Target: ${describeTarget({ mode, config })}`);
+const pool = new Pool(config);
 
 // Tables in import order (parents before children)
 const IMPORT_ORDER = [

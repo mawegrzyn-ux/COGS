@@ -91,6 +91,9 @@ router.use('/ai-chat',            ...can('ai_chat', 'read'),                    
 router.use('/ai-upload',          ...can('ai_chat', 'read'),                          require('./ai-upload'));
 router.use('/ai-config',          ...can('settings', 'read'),    write('settings'),   require('./ai-config'));
 
+// ── DB Config (admin-only — switch between local and standalone PostgreSQL) ───
+router.use('/db-config',          ...can('settings', 'write'),                        require('./db-config'));
+
 // ── Nutrition proxy (USDA lookup + ingredient enrichment) ──────────────────────
 router.use('/nutrition',          ...can('inventory', 'read'),   write('inventory'),  require('./nutrition'));
 

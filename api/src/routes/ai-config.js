@@ -1,17 +1,24 @@
 // =============================================================================
 // AI Config route
 // GET  /api/ai-config         — returns key status (set/not-set), never values
-// PATCH /api/ai-config        — save keys to DB + update runtime store
+// PATCH /api/ai-config        — save keys to the local config store + update runtime
 // DELETE /api/ai-config/:key  — clear a specific key
+//
+// All key values are persisted encrypted in the local config store (see
+// api/src/config-store). This replaces the legacy storage in mcogs_settings.
 // =============================================================================
 
-const crypto   = require('crypto');
-const router   = require('express').Router();
-const pool     = require('../db/pool');
-const aiConfig = require('../helpers/aiConfig');
-const rag      = require('../helpers/rag');
+const crypto      = require('crypto');
+const router      = require('express').Router();
+const aiConfig    = require('../helpers/aiConfig');
+const configStore = require('../config-store');
+const rag         = require('../helpers/rag');
 
-const ALLOWED_KEYS = ['ANTHROPIC_API_KEY', 'VOYAGE_API_KEY', 'BRAVE_SEARCH_API_KEY', 'CLAUDE_CODE_API_KEY', 'GITHUB_PAT', 'GITHUB_REPO'];
+const ALLOWED_KEYS = configStore.AI_KEY_NAMES;
+
+function actorOf(req) {
+  return (req.user && (req.user.email || req.user.sub)) || null;
+}
 
 // GET /ai-config — returns boolean flags only
 router.get('/', (_req, res) => {
@@ -23,9 +30,8 @@ router.patch('/', async (req, res) => {
   const updates = {};
   for (const key of ALLOWED_KEYS) {
     if (req.body[key] !== undefined) {
-      const val = req.body[key]?.trim() || null;
+      const val = (req.body[key] === null || req.body[key] === '') ? null : String(req.body[key]).trim();
       updates[key] = val;
-      aiConfig.set(key, val);
     }
   }
 
@@ -34,18 +40,11 @@ router.patch('/', async (req, res) => {
   }
 
   try {
-    // Merge into mcogs_settings.data.ai_keys (never return these to GET /settings)
-    await pool.query(
-      `UPDATE mcogs_settings
-       SET data = jsonb_set(
-         COALESCE(data, '{}'),
-         '{ai_keys}',
-         COALESCE(data->'ai_keys', '{}') || $1::jsonb
-       ),
-       updated_at = NOW()
-       WHERE id = 1`,
-      [JSON.stringify(updates)]
-    );
+    const actor = actorOf(req);
+    for (const [name, value] of Object.entries(updates)) {
+      await configStore.setAiKey(name, value, actor);
+      aiConfig.set(name, value);
+    }
 
     // Re-init RAG if Voyage key changed
     if (updates.VOYAGE_API_KEY !== undefined) {
@@ -54,7 +53,7 @@ router.patch('/', async (req, res) => {
 
     res.json(aiConfig.status());
   } catch (err) {
-    console.error(err);
+    console.error('[ai-config] save failed:', err);
     res.status(500).json({ error: { message: 'Failed to save AI config' } });
   }
 });
@@ -66,23 +65,12 @@ router.delete('/:key', async (req, res) => {
     return res.status(400).json({ error: { message: 'Invalid key name' } });
   }
 
-  aiConfig.set(key, null);
-
   try {
-    await pool.query(
-      `UPDATE mcogs_settings
-       SET data = jsonb_set(
-         COALESCE(data, '{}'),
-         '{ai_keys}',
-         COALESCE(data->'ai_keys', '{}') - $1
-       ),
-       updated_at = NOW()
-       WHERE id = 1`,
-      [key]
-    );
+    await configStore.deleteAiKey(key, actorOf(req));
+    aiConfig.set(key, null);
     res.json(aiConfig.status());
   } catch (err) {
-    console.error(err);
+    console.error('[ai-config] delete failed:', err);
     res.status(500).json({ error: { message: 'Failed to clear key' } });
   }
 });
@@ -91,37 +79,24 @@ router.delete('/:key', async (req, res) => {
 // Returns the key value so the user can copy it into their Claude Code settings
 router.post('/generate-claude-code-key', async (req, res) => {
   const key = 'ccak_' + crypto.randomBytes(24).toString('hex');
-  aiConfig.set('CLAUDE_CODE_API_KEY', key);
   try {
-    await pool.query(
-      `UPDATE mcogs_settings
-       SET data = jsonb_set(
-         COALESCE(data, '{}'),
-         '{ai_keys}',
-         COALESCE(data->'ai_keys', '{}') || $1::jsonb
-       ),
-       updated_at = NOW()
-       WHERE id = 1`,
-      [JSON.stringify({ CLAUDE_CODE_API_KEY: key })]
-    );
+    await configStore.setAiKey('CLAUDE_CODE_API_KEY', key, actorOf(req));
+    aiConfig.set('CLAUDE_CODE_API_KEY', key);
     res.json({ key, ...aiConfig.status() });
   } catch (err) {
-    console.error(err);
+    console.error('[ai-config] generate key failed:', err);
     res.status(500).json({ error: { message: 'Failed to save key' } });
   }
 });
 
 // GET /ai-config/claude-code-key — return the actual key value so user can copy it
 // (Only this key is ever returned in plaintext — it is self-generated, not a user credential)
-router.get('/claude-code-key', async (req, res) => {
+router.get('/claude-code-key', async (_req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT data->'ai_keys'->'CLAUDE_CODE_API_KEY' AS key FROM mcogs_settings WHERE id = 1`
-    );
-    const key = rows[0]?.key ? rows[0].key.replace(/^"|"$/g, '') : null;
-    res.json({ key });
+    const key = await configStore.getAiKey('CLAUDE_CODE_API_KEY');
+    res.json({ key: key || null });
   } catch (err) {
-    console.error(err);
+    console.error('[ai-config] fetch key failed:', err);
     res.status(500).json({ error: { message: 'Failed to fetch key' } });
   }
 });
