@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Step        = 'upload' | 'parsing' | 'mapping' | 'review' | 'recipe-ing' | 'confirm' | 'executing' | 'done'
+type Step        = 'upload' | 'parsing' | 'mapping' | 'review' | 'recipe-ing' | 'sales-items' | 'confirm' | 'executing' | 'done'
 type ImportPath  = 'template' | 'ai'
 type ReviewTab   = 'ingredients' | 'vendors' | 'price_quotes' | 'recipes' | 'menus'
 type RowAction   = 'create' | 'skip' | 'override'
@@ -41,6 +41,12 @@ interface RecipeIngMapping {
   new_prep_unit?: string
 }
 
+interface SalesItemDecision {
+  item_name:  string
+  item_type:  'recipe' | 'ingredient'
+  create:     boolean   // false = skip creating a new SI (will still reuse an existing one if found)
+}
+
 interface StagedData {
   vendors:                    StagedRow[]
   ingredients:                StagedRow[]
@@ -50,6 +56,7 @@ interface StagedData {
   category_mapping:           Record<string, CatMapping>
   recipe_ingredient_mapping:  Record<string, RecipeIngMapping>
   prerequisites:              { missing_units: string[]; missing_countries: string[] }
+  sales_item_decisions?:      SalesItemDecision[]
 }
 
 interface ImportResults {
@@ -59,7 +66,7 @@ interface ImportResults {
   price_quotes: number; price_quotes_skipped: number
   recipes: number; recipes_skipped: number; recipes_updated: number; recipe_items: number
   recipe_ings_created: number
-  menus: number; menus_skipped: number; menu_items: number
+  menus: number; menus_skipped: number; menu_items: number; sales_items_created: number
   errors: string[]
 }
 
@@ -77,12 +84,13 @@ interface DbUnit {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STEPS: { key: Step; label: string }[] = [
-  { key: 'upload',     label: 'Upload'      },
-  { key: 'mapping',    label: 'Categories'  },
-  { key: 'review',     label: 'Review'      },
-  { key: 'recipe-ing', label: 'Recipe Ing.' },
-  { key: 'confirm',    label: 'Confirm'     },
-  { key: 'done',       label: 'Done'        },
+  { key: 'upload',       label: 'Upload'      },
+  { key: 'mapping',      label: 'Categories'  },
+  { key: 'review',       label: 'Review'      },
+  { key: 'recipe-ing',   label: 'Recipe Ing.' },
+  { key: 'sales-items',  label: 'Sales Items' },
+  { key: 'confirm',      label: 'Confirm'     },
+  { key: 'done',         label: 'Done'        },
 ]
 const VISIBLE_STEPS = STEPS.map(s => s.key)
 
@@ -285,6 +293,46 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
       return { ...prev, [entity]: (prev[entity] as StagedRow[]).map(r => r._duplicate_of ? { ...r, _action: 'skip' as RowAction } : r) }
     })
   }, [])
+
+  // ── Navigate to Sales Items decision step ────────────────────────────────────
+
+  const goToSalesItemsStep = useCallback(() => {
+    if (!staged) return
+
+    // Collect all unique items from non-skipped menu rows
+    const seen = new Map<string, SalesItemDecision>()
+    for (const menu of (staged.menus as StagedRow[] || [])) {
+      if (menu._action === 'skip') continue
+      for (const item of ((menu.items as { item_name?: string; item_type?: string }[]) || [])) {
+        const name = (item.item_name || '').trim()
+        if (!name) continue
+        const type: 'recipe' | 'ingredient' = item.item_type === 'ingredient' ? 'ingredient' : 'recipe'
+        const key = `${type}:${name.toLowerCase()}`
+        if (!seen.has(key)) seen.set(key, { item_name: name, item_type: type, create: true })
+      }
+    }
+
+    if (seen.size === 0) {
+      // No menu items — skip this step entirely
+      saveStaged()
+      setStep('confirm')
+      return
+    }
+
+    // Preserve any decisions the user has already made (e.g. navigating back/forth)
+    const existingMap = new Map(
+      (staged.sales_item_decisions || []).map((d: SalesItemDecision) =>
+        [`${d.item_type}:${d.item_name.toLowerCase()}`, d.create]
+      )
+    )
+    const decisions: SalesItemDecision[] = [...seen.values()].map(d => {
+      const k = `${d.item_type}:${d.item_name.toLowerCase()}`
+      return { ...d, create: existingMap.has(k) ? existingMap.get(k)! : true }
+    })
+
+    setStaged(prev => prev ? { ...prev, sales_item_decisions: decisions } : prev)
+    setStep('sales-items')
+  }, [staged, saveStaged])
 
   // ── Missing recipe ingredients ───────────────────────────────────────────────
 
@@ -697,9 +745,9 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
               setStaged(prev => prev ? { ...prev, recipe_ingredient_mapping: newMap } : prev)
               setStep('recipe-ing')
             } else {
-              setStep('confirm')
+              goToSalesItemsStep()
             }
-          }} className="btn-primary px-6">Next: Confirm →</button>
+          }} className="btn-primary px-6">Next →</button>
         </div>
       </div>
     )
@@ -736,7 +784,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
           </div>
           <div className="flex justify-between">
             <button onClick={() => setStep('review')} className="btn-outline px-4">← Back</button>
-            <button onClick={() => { saveStaged(); setStep('confirm') }} className="btn-primary px-6">Next: Confirm →</button>
+            <button onClick={() => { saveStaged(); goToSalesItemsStep() }} className="btn-primary px-6">Next: Sales Items →</button>
           </div>
         </div>
       )
@@ -818,6 +866,121 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
         <div className="flex justify-between">
           <button onClick={() => setStep('review')} className="btn-outline px-4">← Back</button>
+          <button onClick={() => { saveStaged(); goToSalesItemsStep() }} className="btn-primary px-6">Next: Sales Items →</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── STEP: Sales Items ─────────────────────────────────────────────────────
+
+  const renderSalesItems = () => {
+    if (!staged) return null
+    const decisions = staged.sales_item_decisions || []
+
+    const updateDecision = (itemName: string, itemType: string, create: boolean) => {
+      setStaged(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          sales_item_decisions: (prev.sales_item_decisions || []).map(d =>
+            d.item_name === itemName && d.item_type === itemType ? { ...d, create } : d
+          ),
+        }
+      })
+    }
+
+    if (decisions.length === 0) {
+      return (
+        <div>
+          <div className="card p-8 text-center mb-6">
+            <div className="text-3xl mb-3">✅</div>
+            <p className="font-semibold" style={{ color: 'var(--accent)' }}>No menu items to configure</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>Your import contains no menus, so no Sales Items need to be assigned.</p>
+          </div>
+          <div className="flex justify-between">
+            <button onClick={() => setStep('recipe-ing')} className="btn-outline px-4">← Back</button>
+            <button onClick={() => { saveStaged(); setStep('confirm') }} className="btn-primary px-6">Next: Confirm →</button>
+          </div>
+        </div>
+      )
+    }
+
+    const newCount      = decisions.filter(d => d.create).length
+    const skipCount     = decisions.filter(d => !d.create).length
+
+    return (
+      <div>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-2)' }}>
+          The following recipes and ingredients are referenced in your menus.
+          A <strong>Sales Item</strong> is required to link each one to a menu in the COGS system.
+          Uncheck any items you do not want to create a Sales Item for — those menu lines will be skipped.
+          If a Sales Item already exists in the database for a recipe or ingredient, it will be reused automatically regardless of this setting.
+        </p>
+
+        {/* Summary + bulk actions */}
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <span className="badge-green text-xs">{newCount} will create SI</span>
+          {skipCount > 0 && <span className="badge-yellow text-xs">{skipCount} skipped</span>}
+          <div className="flex gap-2 ml-auto">
+            <button
+              onClick={() => setStaged(prev => prev ? { ...prev, sales_item_decisions: (prev.sales_item_decisions||[]).map(d => ({ ...d, create: true  })) } : prev)}
+              className="text-xs btn-outline px-3 py-1">Select All</button>
+            <button
+              onClick={() => setStaged(prev => prev ? { ...prev, sales_item_decisions: (prev.sales_item_decisions||[]).map(d => ({ ...d, create: false })) } : prev)}
+              className="text-xs btn-ghost px-3 py-1" style={{ color: 'var(--text-3)' }}>Deselect All</button>
+          </div>
+        </div>
+
+        <div className="card overflow-hidden mb-6">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>
+                  <input type="checkbox"
+                    checked={decisions.every(d => d.create)}
+                    onChange={e => setStaged(prev => prev ? { ...prev, sales_item_decisions: (prev.sales_item_decisions||[]).map(d => ({ ...d, create: e.target.checked })) } : prev)}
+                    className="w-4 h-4 mr-2" title="Toggle all" />
+                  Item Name
+                </th>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Type</th>
+                <th className="text-left px-4 py-2 text-xs font-semibold" style={{ color: 'var(--text-3)' }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {decisions.map(d => (
+                <tr key={`${d.item_type}:${d.item_name}`}
+                  style={{ borderBottom: '1px solid var(--border)', opacity: d.create ? 1 : 0.5 }}>
+                  <td className="px-4 py-2.5">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={d.create}
+                        onChange={e => updateDecision(d.item_name, d.item_type, e.target.checked)}
+                        className="w-4 h-4 flex-shrink-0"
+                      />
+                      <span className="font-medium" style={{ color: 'var(--text-1)' }}>{d.item_name}</span>
+                    </label>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${d.item_type === 'recipe' ? 'badge-green' : 'badge-neutral'}`}>
+                      {d.item_type === 'recipe' ? '📋 Recipe' : '🥬 Ingredient'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {d.create
+                      ? <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>✓ Create Sales Item</span>
+                      : <span className="text-xs italic" style={{ color: 'var(--text-3)' }}>Skip — menu line will be omitted</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-between">
+          <button onClick={() => setStep('recipe-ing')} className="btn-outline px-4">← Back</button>
           <button onClick={() => { saveStaged(); setStep('confirm') }} className="btn-primary px-6">Next: Confirm →</button>
         </div>
       </div>
@@ -869,7 +1032,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         </div>
 
         <div className="flex justify-between">
-          <button onClick={() => setStep('review')} className="btn-outline px-4">← Back to Review</button>
+          <button onClick={() => setStep((staged?.sales_item_decisions?.length ?? 0) > 0 ? 'sales-items' : 'recipe-ing')} className="btn-outline px-4">← Back</button>
           <div className="flex gap-3">
             <button onClick={handleDiscard} className="btn-ghost text-sm px-4" style={{ color: 'var(--text-3)' }}>Discard</button>
             <button onClick={handleExecute} className="btn-primary px-8">Import Now →</button>
@@ -910,7 +1073,8 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
       { label: 'Placeholder ings created', value: results.recipe_ings_created   },
       { label: 'Menus imported',        value: results.menus               },
       { label: 'Menus skipped',         value: results.menus_skipped,      muted: true },
-      { label: 'Menu items created',    value: results.menu_items          },
+      { label: 'Sales items created',   value: results.sales_items_created },
+      { label: 'Menu items linked',     value: results.menu_items          },
     ]
     return (
       <div className="max-w-xl">
@@ -966,14 +1130,15 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
       <StepBar step={step} />
 
-      {step === 'upload'     && renderUpload()}
-      {step === 'parsing'    && renderParsing()}
-      {step === 'mapping'    && renderMapping()}
-      {step === 'review'     && renderReview()}
-      {step === 'recipe-ing' && renderRecipeIng()}
-      {step === 'confirm'    && renderConfirm()}
-      {step === 'executing'  && renderExecuting()}
-      {step === 'done'       && renderDone()}
+      {step === 'upload'       && renderUpload()}
+      {step === 'parsing'      && renderParsing()}
+      {step === 'mapping'      && renderMapping()}
+      {step === 'review'       && renderReview()}
+      {step === 'recipe-ing'   && renderRecipeIng()}
+      {step === 'sales-items'  && renderSalesItems()}
+      {step === 'confirm'      && renderConfirm()}
+      {step === 'executing'    && renderExecuting()}
+      {step === 'done'         && renderDone()}
     </div>
   )
 }

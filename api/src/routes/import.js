@@ -927,7 +927,7 @@ router.post('/:id/execute', async (req, res) => {
       price_quotes: 0, price_quotes_skipped: 0,
       recipes: 0, recipes_skipped: 0, recipes_updated: 0, recipe_items: 0,
       recipe_ings_created: 0,
-      menus: 0, menus_skipped: 0, menu_items: 0,
+      menus: 0, menus_skipped: 0, menu_items: 0, sales_items_created: 0,
       errors: [],
     };
 
@@ -1121,10 +1121,31 @@ router.post('/:id/execute', async (req, res) => {
         }
       }
 
-      // 7. Menus
+      // 7. Menus — writes to mcogs_menu_sales_items (new structure)
+      //    Each item is resolved to/created as a mcogs_sales_item, then linked via junction table.
       const menuLookup = {};
       const { rows: exMn } = await client.query('SELECT id, LOWER(name) AS n FROM mcogs_menus');
       for (const m of exMn) menuLookup[m.n] = m.id;
+
+      // Build a lookup of existing sales items by (item_type + recipe_id / ingredient_id)
+      // so we reuse them rather than creating duplicates on repeated imports.
+      const { rows: exSi } = await client.query(
+        `SELECT id, item_type, recipe_id, ingredient_id FROM mcogs_sales_items`
+      );
+      const siByRecipe = new Map();
+      const siByIng    = new Map();
+      for (const s of exSi) {
+        if (s.item_type === 'recipe'     && s.recipe_id)     siByRecipe.set(s.recipe_id,     s.id);
+        if (s.item_type === 'ingredient' && s.ingredient_id) siByIng.set(s.ingredient_id, s.id);
+      }
+
+      // Build SI-creation decision lookup from user choices in the Sales Items step.
+      // Keys are lowercase item_name. A decision of create:false means skip auto-creating
+      // a new SI for that item (existing SIs are still reused regardless).
+      const siDecisions = new Map();
+      for (const d of (staged.sales_item_decisions || [])) {
+        siDecisions.set((d.item_name || '').toLowerCase().trim(), d.create);
+      }
 
       for (const row of staged.menus || []) {
         if (row._action === 'skip') { results.menus_skipped++; continue; }
@@ -1141,22 +1162,63 @@ router.post('/:id/execute', async (req, res) => {
         const mid = ins[0].id;
         menuLookup[row.name.toLowerCase()] = mid;
         let sortIdx = 1;
+
         for (const item of row.items || []) {
-          const iname = (item.item_name || '').toLowerCase().trim();
+          const iname    = (item.item_name || '').toLowerCase().trim();
           if (!iname) continue;
-          const displayName = item.display_name || item.item_name || iname;
-          let recipe_id = null, ingredient_id = null, itemType = item.item_type || 'recipe';
-          if (itemType === 'ingredient') {
-            ingredient_id = ingLookup[iname] || null;
-            if (!ingredient_id) { results.errors.push(`Menu item skipped: ingredient "${iname}" not found`); continue; }
-          } else {
-            recipe_id = recipeLookup[iname] || null;
-            if (!recipe_id) { results.errors.push(`Menu item skipped: recipe "${iname}" not found (import recipes first or check spelling)`); continue; }
-          }
+          const itemType   = item.item_type || 'recipe';
+          const displayName = String(item.display_name || item.item_name || iname).trim();
           const so = item.sort_order || sortIdx;
+
+          let salesItemId = null;
+
+          if (itemType === 'ingredient') {
+            const ingId = ingLookup[iname] || null;
+            if (!ingId) { results.errors.push(`Menu item skipped: ingredient "${iname}" not found`); continue; }
+            if (siByIng.has(ingId)) {
+              // Existing SI — always reuse regardless of decision
+              salesItemId = siByIng.get(ingId);
+            } else {
+              // No existing SI — check user's decision (default: create)
+              const shouldCreate = siDecisions.has(iname) ? siDecisions.get(iname) : true;
+              if (!shouldCreate) {
+                results.errors.push(`Menu item "${iname}" skipped: user chose not to create a Sales Item for this ingredient`);
+                continue;
+              }
+              const { rows: siNew } = await client.query(
+                `INSERT INTO mcogs_sales_items (item_type, name, display_name, ingredient_id) VALUES ('ingredient',$1,$2,$3) RETURNING id`,
+                [item.item_name || iname, displayName, ingId]
+              );
+              salesItemId = siNew[0].id;
+              siByIng.set(ingId, salesItemId);
+              results.sales_items_created++;
+            }
+          } else {
+            const recId = recipeLookup[iname] || null;
+            if (!recId) { results.errors.push(`Menu item skipped: recipe "${iname}" not found (import recipes first or check spelling)`); continue; }
+            if (siByRecipe.has(recId)) {
+              // Existing SI — always reuse regardless of decision
+              salesItemId = siByRecipe.get(recId);
+            } else {
+              // No existing SI — check user's decision (default: create)
+              const shouldCreate = siDecisions.has(iname) ? siDecisions.get(iname) : true;
+              if (!shouldCreate) {
+                results.errors.push(`Menu item "${iname}" skipped: user chose not to create a Sales Item for this recipe`);
+                continue;
+              }
+              const { rows: siNew } = await client.query(
+                `INSERT INTO mcogs_sales_items (item_type, name, display_name, recipe_id) VALUES ('recipe',$1,$2,$3) RETURNING id`,
+                [item.item_name || iname, displayName, recId]
+              );
+              salesItemId = siNew[0].id;
+              siByRecipe.set(recId, salesItemId);
+              results.sales_items_created++;
+            }
+          }
+
           await client.query(
-            'INSERT INTO mcogs_menu_items (menu_id,item_type,recipe_id,ingredient_id,display_name,sort_order) VALUES ($1,$2,$3,$4,$5,$6)',
-            [mid, itemType, recipe_id, ingredient_id, String(displayName).trim(), so]
+            'INSERT INTO mcogs_menu_sales_items (menu_id, sales_item_id, sort_order) VALUES ($1,$2,$3)',
+            [mid, salesItemId, so]
           );
           results.menu_items++;
           sortIdx++;
