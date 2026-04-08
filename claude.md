@@ -1100,7 +1100,8 @@ Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOL
 
 | Feature | Normal user | Dev user |
 |---|---|---|
-| **Test Data tab** in Settings | Hidden | Visible (marked DEV badge) |
+| **System → Test Data** section | Hidden | Visible (marked purple DEV badge) |
+| **Settings → Test Data** tab | Hidden | Visible (marked purple DEV badge) |
 
 The flag is separate from roles — a Viewer or Operator can be granted dev access independently of their COGS permissions.
 
@@ -1108,7 +1109,18 @@ The flag is separate from roles — a Viewer or Operator can be granted dev acce
 - Backend: `is_dev` is on `req.user` (loaded from DB via `loadOrCreateUser`)
 - API `/me`: returns `is_dev: boolean`
 - Frontend: `PermissionsContextValue.isDev` boolean, consumed via `usePermissions()`
-- Settings page: `isDev` from `usePermissions()` filters `test-data` out of the visible tab list if false; `{tab === 'test-data' && isDev && <TestDataTab />}` guards the render
+- `SettingsPage.tsx`: filters `test-data` out of the visible tab list unless `isDev`; `{t === 'test-data' && isDev && <TestDataTab />}` guards the render
+- `SystemPage.tsx`: `SECTIONS` entries declare a `gate: 'admin' | 'dev'` field. The sidebar hides any gated section the current user can't reach, a `useEffect` bounces them back to AI if they lose access mid-session, and a `GatedFallback` is shown as defence-in-depth if they somehow route into it directly
+- Destructive actions on the Test Data tab (Load Test Data, Load Small, Clear Database, Load Defaults) are gated behind the `DateConfirmDialog` — the user must type today's date as `ddmmyyyy` before the confirm button activates
+
+**Admin-gated vs dev-gated sections under `/system`:**
+
+| Section | Gate | Icon badge | What it does |
+|---|---|---|---|
+| **AI** | — | none | Embeds Settings → AI (API keys, token usage, concise mode) |
+| **Database** | `settings:write` (admin) | amber ADMIN | Embeds Settings → Database — DB connection mode (local vs standalone/RDS), test/save/migrate/switch |
+| **Test Data** | `is_dev` (dev) | purple DEV | Embeds Settings → Test Data — Load Test / Load Small / Clear / Load Defaults, all gated by `DateConfirmDialog` (ddmmyyyy) |
+| Architecture / API Reference / Security / Troubleshooting / Domain Migration | — | none | Reference documentation |
 
 ### Market Scope (Brand Partner Filtering)
 
@@ -1135,7 +1147,8 @@ mcogs_user_brand_partners → mcogs_brand_partners → mcogs_countries
 - **Sidebar** — hides nav items where `can(feature, 'read')` is false
 - **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope, toggle `is_dev` (the `</>` button)
 - **Settings → Roles tab** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
-- **Settings → Test Data tab** — only visible when `isDev` is true; marked with a purple `DEV` badge in the tab bar
+- **System → Database** — only visible when `can('settings', 'write')`; marked with an amber `ADMIN` badge. Embeds `SettingsPage initialTab="database"` — the DB connection config (local vs standalone/RDS), test/save/migrate/switch flow.
+- **System → Test Data** — only visible when `isDev`; marked with a purple `DEV` badge. Embeds `SettingsPage initialTab="test-data"`. All destructive actions (Load Test Data, Load Small, Clear Database, Load Defaults) are gated behind the `DateConfirmDialog` — the user must type today's date as `ddmmyyyy` before the confirm button activates.
 
 ### Pepper AI Auth Fix
 
