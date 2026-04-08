@@ -94,7 +94,7 @@ The Dashboard includes quick navigation links to all main sections of the app.
 
 ## Settings
 
-Settings are at `/settings`. There are five tabs.
+Settings are at `/settings`. The tab bar includes **Base Units**, **Price Levels**, **Currency**, **COGS Thresholds**, **AI**, **Storage**, **Import**, **Users**, and **Roles**. Test data loading and database clearing are no longer in Settings — they moved to **System → Database** (developer-only, see the System section below).
 
 ### Units Tab
 
@@ -1018,6 +1018,37 @@ If no Voyage AI key is configured in Settings → AI, the system falls back to k
 - Update Settings values — there is no tool to change settings like the Anthropic API key or COGS thresholds. Use the Settings page.
 - Access conversation history from a different device or browser session unless you open the History tab and load a past session.
 - Search the web autonomously — `search_web` is only invoked when you explicitly ask Pepper to search the internet.
+
+---
+
+## System
+
+The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Database, Architecture, API Reference, Security, Troubleshooting, and Domain Migration. Most sections are documentation; a couple (AI, Database) embed live controls from the Settings page.
+
+Some sections are gated behind the **developer flag** (`is_dev` on `mcogs_users`). An Admin toggles the flag per-user from Settings → Users using the `</>` button in the Actions column. Dev-only sections display a purple **DEV** badge next to their sidebar label. Users without the flag simply don't see the entry; if they ever reach it directly (e.g. after their flag is revoked mid-session), a "Developer access required" fallback message is shown and they are bounced back to AI.
+
+### AI Section
+
+Embeds the Settings → AI tab inside the System layout. Shows the same Anthropic/Voyage/Brave/Concise Mode/Monthly Token Allowance/Claude Code fields as Settings → AI. Changes made here persist to the same backend and affect Pepper immediately.
+
+### Database Section (dev only)
+
+This is where test data seeding and the database clear actions now live. The section is only visible to users with the `is_dev` flag on. It exposes four destructive actions:
+
+| Action | What it does |
+|---|---|
+| **Load Test Data** | Wipes ALL existing operational data, then inserts the full dummy dataset: 4 countries with realistic tax rates, 3 price levels, 10 vendors + 3 brand partners, 1,000 ingredients across 12 categories with allergen tags, 500 price quotes, 48 recipes with line items, 4 menus with items priced across all levels, 12 sales items (11 recipe/ingredient-backed + 1 "Classic Meal Deal" combo), 2 modifier groups (Extras, Dip Choice) with 8 options, and 1 standalone combo with 3 steps. |
+| **Load Small Data** | Same shape as Load Test Data but only 200 ingredients + 400 quotes. Faster for development. |
+| **Clear Database** | Permanently removes all rows from every operational table (ingredients, recipes, menus, sales items, combos, modifiers, menu scenarios, shared pages, HACCP logs, recipe variations, category groups, etc.). The schema and reference data (allergens, roles, users, AI chat log, feedback, import jobs) are preserved. |
+| **Load Default Data** | Adds a minimal production-ready starting point — 1 UK market, 3 units, 3 categories scoped for ingredients/recipes/sales-items, 1 default price level, 1 vendor, UK VAT rates. **Does not** clear existing records first, so it's safe to run after Clear Database. |
+
+**Date confirmation safeguard.** Every destructive action on the Database section requires the user to type **today's date as `ddmmyyyy`** into a confirmation modal before the action button activates. For example, if today is 8 April 2026 the user must type `08042026`. The date is computed from the browser's local time. The confirm button stays disabled and shows a red "That isn't today's date" error until the input matches, so an accidental double-click or muscle-memory Enter press cannot wipe the database. Pressing Enter while the input matches commits the action; pressing Escape cancels the modal.
+
+This is a deliberately stronger gate than the plain "Are you sure?" dialog used elsewhere — the date has to be thought about, not just clicked through. Combined with the `is_dev` visibility gate, it means only developers can see the controls and only a conscious typed action will fire them.
+
+### Architecture / API Reference / Security / Troubleshooting / Domain Migration
+
+These are reference documentation sections rendered in-page. They describe the code layout, REST endpoints, the Auth0 + RBAC model, common support scenarios, and the domain migration runbook. They're read-only and visible to everyone with access to the System page.
 
 ---
 
