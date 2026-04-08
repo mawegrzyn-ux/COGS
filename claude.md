@@ -1088,7 +1088,7 @@ Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOL
 
 | Feature | Normal user | Dev user |
 |---|---|---|
-| **Test Data tab** in Settings | Hidden | Visible (marked DEV badge) |
+| **System → Database** section | Hidden | Visible (marked DEV badge) |
 
 The flag is separate from roles — a Viewer or Operator can be granted dev access independently of their COGS permissions.
 
@@ -1096,7 +1096,8 @@ The flag is separate from roles — a Viewer or Operator can be granted dev acce
 - Backend: `is_dev` is on `req.user` (loaded from DB via `loadOrCreateUser`)
 - API `/me`: returns `is_dev: boolean`
 - Frontend: `PermissionsContextValue.isDev` boolean, consumed via `usePermissions()`
-- Settings page: `isDev` from `usePermissions()` filters `test-data` out of the visible tab list if false; `{tab === 'test-data' && isDev && <TestDataTab />}` guards the render
+- `SystemPage.tsx`: filters the `database` section out of the visible sidebar list unless `isDev`; `<SettingsPage embedded initialTab="test-data" />` renders the `TestDataTab` only when the dev flag is present (defence-in-depth via `{tab === 'test-data' && isDev && <TestDataTab />}`)
+- Destructive actions (Load Test Data, Load Small, Clear Database, Load Defaults) are gated behind the `DateConfirmDialog` — the user must type today's date as `ddmmyyyy` before the confirm button activates
 
 ### Market Scope (Brand Partner Filtering)
 
@@ -1123,7 +1124,7 @@ mcogs_user_brand_partners → mcogs_brand_partners → mcogs_countries
 - **Sidebar** — hides nav items where `can(feature, 'read')` is false
 - **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope, toggle `is_dev` (the `</>` button)
 - **Settings → Roles tab** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
-- **Settings → Test Data tab** — only visible when `isDev` is true; marked with a purple `DEV` badge in the tab bar
+- **System → Database** — only visible when `isDev` is true; marked with a purple `DEV` badge in the secondary nav. Embeds `SettingsPage initialTab="test-data"` under the hood. All destructive actions on this page require typing today's date as `ddmmyyyy` in a `DateConfirmDialog` before they fire.
 
 ### Pepper AI Auth Fix
 

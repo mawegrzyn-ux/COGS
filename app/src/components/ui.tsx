@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
@@ -159,6 +159,121 @@ export function ConfirmDialog({ message, onConfirm, onCancel, danger = true }: C
             className={danger ? 'btn-danger px-4 py-2 text-sm' : 'btn-primary px-4 py-2 text-sm'}
           >
             Confirm
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Date Confirm Dialog ───────────────────────────────────────────────────────
+// A stronger confirmation modal — the user must type today's date as ddmmyyyy
+// before the confirm button becomes active. Used to guard destructive ops like
+// clearing the database or wiping and reloading test data.
+interface DateConfirmProps {
+  title:      string
+  message:    React.ReactNode
+  confirmLabel?: string
+  onConfirm:  () => void
+  onCancel:   () => void
+  danger?:    boolean
+}
+
+export function DateConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  onConfirm,
+  onCancel,
+  danger = true,
+}: DateConfirmProps) {
+  const [value, setValue] = useState('')
+
+  // Compute today's date as ddmmyyyy in the user's local timezone.
+  // Local time is intentional: the user is typing what they see on a calendar today.
+  const expected = useMemo(() => {
+    const d  = new Date()
+    const dd = String(d.getDate()).padStart(2, '0')
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const yy = String(d.getFullYear())
+    return `${dd}${mm}${yy}`
+  }, [])
+
+  // Human-readable version shown in the placeholder / hint
+  const humanHint = useMemo(() => {
+    const dd = expected.slice(0, 2)
+    const mm = expected.slice(2, 4)
+    const yy = expected.slice(4, 8)
+    return `${dd}${mm}${yy}`
+  }, [expected])
+
+  // Only digits, max 8 chars
+  const sanitized = value.replace(/\D/g, '').slice(0, 8)
+  const matches   = sanitized === expected
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Enter' && matches) onConfirm()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onCancel, onConfirm, matches])
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative bg-surface rounded-xl shadow-modal w-full max-w-md p-6">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-9 h-9 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 9v2m0 4h.01M10.29 3.86l-8.18 14.14A2 2 0 003.84 21h16.32a2 2 0 001.73-3l-8.18-14.14a2 2 0 00-3.42 0z"/>
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-base font-bold text-text-1 mb-1">{title}</h2>
+            <div className="text-sm text-text-2 leading-relaxed">{message}</div>
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <label className="block text-xs font-semibold text-text-2 mb-1.5">
+            Type today&apos;s date as <span className="font-mono">ddmmyyyy</span> to confirm
+          </label>
+          <input
+            type="text"
+            autoFocus
+            inputMode="numeric"
+            pattern="\d{8}"
+            maxLength={8}
+            value={sanitized}
+            onChange={e => setValue(e.target.value)}
+            placeholder={humanHint}
+            className={`w-full px-3 py-2 font-mono text-base rounded border transition-colors tracking-widest
+              ${sanitized.length === 0
+                ? 'border-border bg-surface text-text-1'
+                : matches
+                  ? 'border-accent bg-accent-dim/30 text-text-1'
+                  : 'border-red-300 bg-red-50 text-red-700'
+              }
+              focus:outline-none focus:ring-2 focus:ring-accent/30`}
+          />
+          {sanitized.length > 0 && !matches && (
+            <p className="text-red-600 text-xs mt-1.5">
+              That isn&apos;t today&apos;s date. Expected 8 digits in <span className="font-mono">ddmmyyyy</span> format.
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="btn-ghost px-4 py-2 text-sm">Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={!matches}
+            className={`${danger ? 'btn-danger' : 'btn-primary'} px-4 py-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            {confirmLabel}
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, DateConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
 import { usePermissions } from '../hooks/usePermissions'
 import type { Feature, AccessLevel } from '../hooks/usePermissions'
@@ -29,6 +29,10 @@ interface AppSettings {
   target_cogs?:     number
 }
 
+// 'test-data' is intentionally kept as a tab id so SystemPage can embed the
+// TestDataTab via <SettingsPage embedded initialTab="test-data" />. It is
+// hidden from the standalone Settings tab bar below (only reachable via
+// System → Database for users with the dev flag).
 type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'import' | 'users' | 'roles'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
@@ -38,7 +42,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'price-levels': 'Price Levels',
   'currency':     'Currency',
   'thresholds':   'COGS Thresholds',
-  'test-data':    'Test Data',
+  'test-data':    'Database',
   'ai':           'AI',
   'storage':      'Storage',
   'import':       'Import',
@@ -51,7 +55,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
   'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
   'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
-  'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, and what are the risks?',
+  'test-data':    'Explain the System → Database section. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
   'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
@@ -70,8 +74,11 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
     if (initialTab) setTab(initialTab)
   }, [initialTab])
 
-  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'test-data', 'ai', 'storage', 'import', 'users', 'roles'] as Tab[])
-    .filter(t => t !== 'test-data' || isDev)
+  // The 'test-data' tab is never shown in the standalone Settings tab bar — it
+  // now lives under System → Database and is only reachable via
+  // <SettingsPage embedded initialTab="test-data" /> from SystemPage. The dev
+  // flag check happens there (and inside renderTabContent as a defence in depth).
+  const visibleTabs = (['units', 'price-levels', 'currency', 'thresholds', 'ai', 'storage', 'import', 'users', 'roles'] as Tab[])
 
   function renderTabContent(t: Tab) {
     return (
@@ -122,7 +129,6 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
           >
             <span className="flex items-center gap-1.5">
               {TAB_LABELS[t]}
-              {t === 'test-data' && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">DEV</span>}
               <PepperHelpButton prompt={TAB_TUTORIALS[t]} size={12} />
             </span>
           </button>
@@ -1088,8 +1094,16 @@ function TestDataTab() {
 
       {/* Confirm — seed (full) */}
       {confirmAction === 'seed' && (
-        <ConfirmDialog
-          message="This will DELETE all existing data and load the full test dataset (1,000 ingredients). This cannot be undone. Continue?"
+        <DateConfirmDialog
+          title="Load full test data?"
+          message={
+            <>
+              This will <strong>DELETE all existing data</strong> and load the full test dataset
+              (1,000 ingredients, 48 recipes, sales items, modifiers, combos, and 4 menus).
+              This cannot be undone.
+            </>
+          }
+          confirmLabel="Wipe & load test data"
           onConfirm={handleSeed}
           onCancel={() => setConfirmAction(null)}
         />
@@ -1097,8 +1111,16 @@ function TestDataTab() {
 
       {/* Confirm — seed (small) */}
       {confirmAction === 'seed-small' && (
-        <ConfirmDialog
-          message="This will DELETE all existing data and load the small test dataset (200 ingredients). This cannot be undone. Continue?"
+        <DateConfirmDialog
+          title="Load small test data?"
+          message={
+            <>
+              This will <strong>DELETE all existing data</strong> and load the small test dataset
+              (200 ingredients, 400 quotes, 48 recipes, sales items, modifiers, combos, and 4 menus).
+              This cannot be undone.
+            </>
+          }
+          confirmLabel="Wipe & load small data"
           onConfirm={handleSeedSmall}
           onCancel={() => setConfirmAction(null)}
         />
@@ -1106,8 +1128,15 @@ function TestDataTab() {
 
       {/* Confirm — clear */}
       {confirmAction === 'clear' && (
-        <ConfirmDialog
-          message="This will permanently DELETE ALL DATA from every table. The schema is preserved but all records will be gone. Are you sure?"
+        <DateConfirmDialog
+          title="Clear entire database?"
+          message={
+            <>
+              This will <strong>permanently DELETE ALL DATA</strong> from every operational table.
+              The schema is preserved but every record will be gone. This cannot be undone.
+            </>
+          }
+          confirmLabel="Clear database"
           onConfirm={handleClear}
           onCancel={() => setConfirmAction(null)}
         />
@@ -1115,8 +1144,17 @@ function TestDataTab() {
 
       {/* Confirm — defaults */}
       {confirmAction === 'defaults' && (
-        <ConfirmDialog
-          message="This will insert default data (UK market, 3 units, categories, price level, vendor, tax rates) into the current database without clearing existing records. Continue?"
+        <DateConfirmDialog
+          title="Load default data?"
+          message={
+            <>
+              This will insert default data (UK market, 3 units, categories, price level, vendor,
+              tax rates) into the current database <strong>without clearing existing records</strong>.
+              Existing rows may end up alongside the defaults.
+            </>
+          }
+          confirmLabel="Load defaults"
+          danger={false}
           onConfirm={handleDefaults}
           onCancel={() => setConfirmAction(null)}
         />

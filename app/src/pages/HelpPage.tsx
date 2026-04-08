@@ -896,14 +896,15 @@ export default function HelpPage() {
           <thead><tr><Th>Feature</Th><Th>Normal user</Th><Th>Dev user</Th></tr></thead>
           <tbody>
             {[
-              ['Test Data tab in Settings', 'Hidden', 'Visible — marked with purple DEV badge'],
+              ['System → Database section', 'Hidden', 'Visible — marked with purple DEV badge'],
             ].map(([feature, normal, dev]) => (
               <tr key={feature}><Td>{feature}</Td><Td><span className="text-[#6B7F74]">{normal}</span></Td><Td><span className="text-purple-700 font-semibold">{dev}</span></Td></tr>
             ))}
           </tbody>
         </table>
-        <InfoBox type="warning" title="Test Data is destructive">
-          The Test Data tab includes <strong>Clear Database</strong> (wipes all data) and <strong>Load Test Data</strong> (wipes then loads dummy data).
+        <InfoBox type="warning" title="Database actions are destructive">
+          The <strong>System → Database</strong> section exposes <strong>Load Test Data</strong>, <strong>Load Small Data</strong>, <strong>Clear Database</strong> and <strong>Load Defaults</strong>.
+          Every destructive action is guarded by a date-confirmation modal — the user must type today&apos;s date as <span className="font-mono">ddmmyyyy</span> before the button activates.
           Only grant dev access to users who understand these operations cannot be undone.
         </InfoBox>
 

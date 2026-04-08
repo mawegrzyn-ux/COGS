@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import SettingsPage from './SettingsPage'
+import { usePermissions } from '../hooks/usePermissions'
 
 // ── Shared doc helpers ─────────────────────────────────────────────────────────
 
@@ -540,25 +541,49 @@ function DomainMigrationSection() {
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
-type Section = 'ai' | 'architecture' | 'api-reference' | 'security' | 'troubleshooting' | 'domain-migration'
+type Section = 'ai' | 'database' | 'architecture' | 'api-reference' | 'security' | 'troubleshooting' | 'domain-migration'
 
-const SECTIONS = [
-  { id: 'ai' as Section,               icon: '🤖', label: 'AI' },
-  { id: 'architecture' as Section,     icon: '🏗️', label: 'Architecture' },
-  { id: 'api-reference' as Section,    icon: '📡', label: 'API Reference' },
-  { id: 'security' as Section,         icon: '🔒', label: 'Security' },
-  { id: 'troubleshooting' as Section,  icon: '🔧', label: 'Troubleshooting' },
-  { id: 'domain-migration' as Section, icon: '🌐', label: 'Domain Migration' },
+interface SectionDef {
+  id:        Section
+  icon:      string
+  label:     string
+  /** If true, only users with the is_dev flag can see/activate this section */
+  devOnly?:  boolean
+}
+
+const SECTIONS: SectionDef[] = [
+  { id: 'ai',               icon: '🤖', label: 'AI' },
+  { id: 'database',         icon: '🗄️', label: 'Database', devOnly: true },
+  { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
+  { id: 'api-reference',    icon: '📡', label: 'API Reference' },
+  { id: 'security',         icon: '🔒', label: 'Security' },
+  { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
+  { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
+  const { isDev } = usePermissions()
   const [active, setActive] = useState<Section>('ai')
+
+  // Only show sections the current user is allowed to see
+  const visibleSections = SECTIONS.filter(s => !s.devOnly || isDev)
+
+  // If the user landed on a dev-only section but lost the flag (e.g. role
+  // change), bounce them back to the first visible section.
+  // Depend on isDev (stable) rather than the re-derived array.
+  useEffect(() => {
+    const stillAllowed = SECTIONS.some(s => s.id === active && (!s.devOnly || isDev))
+    if (!stillAllowed) setActive('ai')
+  }, [active, isDev])
 
   function renderContent() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
+      case 'database':         return isDev
+                                  ? <SettingsPage embedded initialTab="test-data" />
+                                  : <DevOnlyFallback />
       case 'architecture':     return <ArchitectureSection />
       case 'api-reference':    return <ApiReferenceSection />
       case 'security':         return <SecuritySection />
@@ -579,7 +604,7 @@ export default function SystemPage() {
         </div>
 
         <nav className="py-3 flex-1">
-          {SECTIONS.map(section => (
+          {visibleSections.map(section => (
             <button
               key={section.id}
               onClick={() => setActive(section.id)}
@@ -590,7 +615,12 @@ export default function SystemPage() {
                 }`}
             >
               <span className="text-base leading-none shrink-0">{section.icon}</span>
-              <span>{section.label}</span>
+              <span className="flex-1">{section.label}</span>
+              {section.devOnly && (
+                <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">
+                  DEV
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -601,6 +631,27 @@ export default function SystemPage() {
         {renderContent()}
       </div>
 
+    </div>
+  )
+}
+
+// ── Fallback shown if a non-dev user somehow reaches a dev-only section ────
+function DevOnlyFallback() {
+  return (
+    <div className="flex-1 flex items-center justify-center p-10">
+      <div className="max-w-md text-center">
+        <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-3">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7e22ce" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/>
+            <path d="M7 11V7a5 5 0 0110 0v4"/>
+          </svg>
+        </div>
+        <h2 className="text-base font-bold text-text-1 mb-1">Developer access required</h2>
+        <p className="text-sm text-text-3">
+          This section is only visible to users with the <strong>dev flag</strong> enabled. An
+          administrator can toggle it from <em>Settings → Users</em>.
+        </p>
+      </div>
     </div>
   )
 }

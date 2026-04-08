@@ -3241,12 +3241,12 @@ The Settings page has these tabs — users sometimes ask what they do:
 
 **COGS Thresholds** — configure the green/amber/red colour thresholds for COGS% display. "Excellent" (green) and "Acceptable" (amber) percentages are set here; above acceptable = red.
 
-**Test Data** — developer/demo tool to populate the database with realistic dummy data for exploration and testing. Four actions:
-- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 10 vendors, 4 countries. Use this to explore a fully populated account.
-- "Load Small Data" — same but 200 ingredients (faster, for development).
-- "Clear Database" — permanently removes ALL rows from every table. Schema is preserved. Cannot be undone.
-- "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 6 categories, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
-Warning users: these operations cannot be undone and will delete real data. Only use Test Data on a demo or dev account.
+**System → Database** — developer/demo tool to populate the database with realistic dummy data for exploration and testing. Only visible to users with the `is_dev` flag on, and every destructive action requires typing today's date as ddmmyyyy in a confirmation modal. Four actions:
+- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 12 sales items (incl. a combo meal deal), 2 modifier groups, ingredient allergen tags, 10 vendors, 3 brand partners, 4 countries. Use this to explore a fully populated account.
+- "Load Small Data" — same shape, but 200 ingredients (faster, for development).
+- "Clear Database" — permanently removes ALL rows from every operational table (sales items, combos, modifiers, scenarios, HACCP logs, etc.). Schema and reference data (allergens, roles, users) preserved. Cannot be undone.
+- "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 3 unified categories scoped for ingredients/recipes/sales-items, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
+Warning users: these operations cannot be undone and will delete real data. Only use on a demo or dev account.
 
 **AI** — configure API keys (Anthropic for Pepper, Voyage for semantic search, Brave for web search), toggle Concise Mode, and generate a Claude Code integration key.
 
