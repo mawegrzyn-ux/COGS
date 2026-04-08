@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import SettingsPage from './SettingsPage'
+import { usePermissions } from '../hooks/usePermissions'
 
 // ── Shared doc helpers ─────────────────────────────────────────────────────────
 
@@ -540,10 +541,11 @@ function DomainMigrationSection() {
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
-type Section = 'ai' | 'architecture' | 'api-reference' | 'security' | 'troubleshooting' | 'domain-migration'
+type Section = 'ai' | 'database' | 'architecture' | 'api-reference' | 'security' | 'troubleshooting' | 'domain-migration'
 
 const SECTIONS = [
   { id: 'ai' as Section,               icon: '🤖', label: 'AI' },
+  { id: 'database' as Section,         icon: '🗄️', label: 'Database' },
   { id: 'architecture' as Section,     icon: '🏗️', label: 'Architecture' },
   { id: 'api-reference' as Section,    icon: '📡', label: 'API Reference' },
   { id: 'security' as Section,         icon: '🔒', label: 'Security' },
@@ -554,11 +556,16 @@ const SECTIONS = [
 // ── SystemPage ─────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
+  const { can } = usePermissions()
   const [active, setActive] = useState<Section>('ai')
+
+  // Database section is admin-only — it can switch the live transactional DB.
+  const visibleSections = SECTIONS.filter(s => s.id !== 'database' || can('settings', 'write'))
 
   function renderContent() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
+      case 'database':         return <SettingsPage embedded initialTab="database" />
       case 'architecture':     return <ArchitectureSection />
       case 'api-reference':    return <ApiReferenceSection />
       case 'security':         return <SecuritySection />
@@ -579,7 +586,7 @@ export default function SystemPage() {
         </div>
 
         <nav className="py-3 flex-1">
-          {SECTIONS.map(section => (
+          {visibleSections.map(section => (
             <button
               key={section.id}
               onClick={() => setActive(section.id)}
