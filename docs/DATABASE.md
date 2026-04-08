@@ -219,26 +219,129 @@ deploy, no `.env` editing required.
    click **Run Migrations on Active DB** *after* the restart to create the
    `mcogs_*` tables.
 
+> **Want to move your data too?** Use the **Migrate Data & Switch** button
+> instead of **Save** — it runs the schema migration and copies every row
+> from your current DB into the target before saving the new connection.
+> See [Migrate Data & Switch](#migrate-data--switch-automatic-data-copy) below.
+
 The endpoints powering this UI:
 
-| Method | Path                          | Purpose |
-|--------|-------------------------------|---------|
-| GET    | `/api/db-config`              | Current stored + active config (password masked) |
-| POST   | `/api/db-config/test`         | Dry-run a candidate config |
-| POST   | `/api/db-config/probe`        | Ping the live pool |
-| PUT    | `/api/db-config`              | Save (validates first) |
-| POST   | `/api/db-config/restart`      | Graceful exit (PM2 respawns) |
-| POST   | `/api/db-config/migrate`      | `CREATE TABLE IF NOT EXISTS …` against the live pool |
+| Method | Path                                  | Purpose |
+|--------|---------------------------------------|---------|
+| GET    | `/api/db-config`                      | Current stored + active config (password masked) |
+| POST   | `/api/db-config/test`                 | Dry-run a candidate config |
+| POST   | `/api/db-config/probe`                | Ping the live pool |
+| PUT    | `/api/db-config`                      | Save (validates first) |
+| POST   | `/api/db-config/restart`              | Graceful exit (PM2 respawns) |
+| POST   | `/api/db-config/migrate`              | `CREATE TABLE IF NOT EXISTS …` against the live pool |
+| POST   | `/api/db-config/migrate-preview`      | Count source + target rows for a candidate config (read-only) |
+| POST   | `/api/db-config/migrate-data`         | Copy schema + all data source → candidate target, then save |
 
 All routes require `settings:write` (Admin role).
 
 ---
 
+## Migrate Data & Switch (automatic data copy)
+
+The fastest way to move from local to standalone — or between any two
+databases — is the **Migrate Data & Switch** button on the Database tab.
+It replaces the manual `pg_dump` / `pg_restore` path described further
+below with a single guided flow inside the UI.
+
+### What it does
+
+1. Connects to the target database with the credentials you entered above.
+2. Runs `CREATE TABLE IF NOT EXISTS …` on the target (idempotent).
+3. Discovers every `mcogs_*` table on the **source** from `pg_catalog`.
+4. Topologically sorts them by foreign-key dependencies — parents before
+   children, so no `CASCADE` or `session_replication_role` tricks are
+   needed, and no special database privileges are required beyond the
+   usual `SELECT / INSERT / UPDATE / DELETE` + `TRUNCATE` on `mcogs_*`.
+5. `TRUNCATE`s the target tables in reverse order, then `INSERT`s all
+   source rows in forward order, 500 at a time, inside a single
+   target-side transaction. A failure anywhere rolls the target back —
+   the source is never touched.
+6. Resets every serial sequence past `max(id)` so subsequent API inserts
+   don't collide on primary keys.
+7. Persists the new connection to the config store (encrypted).
+8. Prompts you to restart the API.
+
+### Using it
+
+1. **System → Database**, fill in the target host/port/db/user/password,
+   SSL settings.
+2. Click **Test Connection** → confirms the credentials are valid.
+3. Click **Migrate Data & Switch**. A modal opens showing:
+   - Total row count on the **source** (your current DB)
+   - Total row count on the **target** (the DB you're about to switch to)
+   - An expandable per-table breakdown
+4. If the target is empty, the card is green and you can click
+   **Start Migration** immediately.
+5. If the target already has data, the target card turns amber, a red
+   warning banner appears, and **Start Migration is disabled** until you
+   tick the checkbox "I understand this will overwrite existing data on
+   the remote database". This is the only way to destructively replace
+   target data — there is no silent overwrite.
+6. Click **Start Migration**. Progress is logged to `pm2 logs` (look for
+   `[migrate]` lines) — for typical installs (<50k rows) it finishes in
+   a few seconds. The UI times out after 10 minutes.
+7. On success you see per-table copied row counts and a **Restart API
+   now** button.
+
+### What is and isn't copied
+
+**Copied** — every `mcogs_*` table in the transactional database:
+recipes, ingredients, menus, price quotes, users, roles, settings, and
+so on. Including `mcogs_settings` (legacy app settings) and
+`mcogs_users` (user accounts and role assignments).
+
+**Not copied** — the local config store (`mcogs_config` database). It
+stays on the API host and never moves. That's by design: the config
+store holds the connection credentials for the transactional DB, so it
+has to be accessible before the API can connect to anything else.
+
+### Caveats
+
+- **Users table is overwritten.** If the target DB had locally-created
+  users that don't exist on the source, they'll be wiped by the TRUNCATE
+  + INSERT. Export them first if you need to preserve them.
+- **This is a one-way operation at the moment of the click.** Source
+  rows written to the source DB *after* the migration starts are not
+  included (the migration reads a single point-in-time snapshot). For
+  near-zero-downtime migrations, stop write traffic on the source before
+  clicking the button, or run the migration during a maintenance window.
+- **The serial sequences are advanced past `max(id)`** so that the API
+  doesn't collide on PK inserts after the switch. This means the target
+  DB's sequences are rewound forward, not backward — harmless unless
+  another app shares the same sequences (which it shouldn't, since
+  sequences are per-table).
+- **Target schema is created fresh** via `CREATE TABLE IF NOT EXISTS`
+  before the copy. This will **not** add new columns to existing tables
+  on the target — if your source schema is newer than what's on the
+  target, you need to apply the schema changes manually first. For fresh
+  targets this is not an issue.
+
+---
+
 ## Switching an existing deployment from local to standalone
 
-The simplest path uses the UI flow above. The manual / scripted equivalent:
+**Recommended path — Migrate Data & Switch (in the UI):**
 
 1. Provision the standalone database (see the AWS RDS section above).
+   It only needs to exist and be reachable — you don't need to run
+   `npm run migrate` against it, the flow does that for you.
+2. Sign in as an Admin → **System → Database**.
+3. Fill in the target host / port / database / user / password / SSL.
+4. Click **Test Connection** → green.
+5. Click **Migrate Data & Switch** → review the row-count summary → **Start Migration**.
+6. On success, click **Restart API now**.
+7. Verify with `[db] PostgreSQL connected (standalone → …)` in `pm2 logs`.
+8. Once verified, stop the local PostgreSQL service if you no longer need it.
+
+**Manual / scripted equivalent (useful for very large databases or when
+you want more control):**
+
+1. Provision the standalone database.
 2. Back up the local DB: `pg_dump -Fc mcogs > mcogs.dump`
 3. Restore into the standalone DB: `pg_restore -h <rds-endpoint> -U mcogs -d mcogs --no-owner --no-acl mcogs.dump`
 4. In the UI: Settings → Database → Standalone, fill in fields, **Test**, **Save**, **Restart**.
