@@ -73,12 +73,38 @@ const COUNTRIES = [
   },
 ];
 
-const ING_CATEGORIES = [
-  'Meat & Poultry', 'Seafood', 'Dairy & Eggs', 'Produce - Vegetables',
-  'Produce - Fruit', 'Dry Goods & Grains', 'Canned & Preserved',
-  'Oils & Fats', 'Spices & Herbs', 'Sauces & Condiments', 'Bakery', 'Beverages',
+// Category groups (new unified grouping — mcogs_category_groups)
+const CATEGORY_GROUPS = [
+  'Proteins', 'Dairy', 'Produce', 'Dry Goods', 'Pantry',
+  'Sauces & Condiments', 'Bakery', 'Beverages', 'Menu Sections',
 ];
 
+// Unified categories list — each row targets one or more scopes via the
+// for_ingredients / for_recipes / for_sales_items flags (new schema).
+const CATEGORIES = [
+  // Ingredient-scoped
+  { name: 'Meat & Poultry',       group: 'Proteins',            for_ingredients: true },
+  { name: 'Seafood',              group: 'Proteins',            for_ingredients: true },
+  { name: 'Dairy & Eggs',         group: 'Dairy',               for_ingredients: true },
+  { name: 'Produce - Vegetables', group: 'Produce',             for_ingredients: true },
+  { name: 'Produce - Fruit',      group: 'Produce',             for_ingredients: true },
+  { name: 'Dry Goods & Grains',   group: 'Dry Goods',           for_ingredients: true },
+  { name: 'Canned & Preserved',   group: 'Pantry',              for_ingredients: true },
+  { name: 'Oils & Fats',          group: 'Pantry',              for_ingredients: true },
+  { name: 'Spices & Herbs',       group: 'Sauces & Condiments', for_ingredients: true },
+  { name: 'Sauces & Condiments',  group: 'Sauces & Condiments', for_ingredients: true },
+  // Shared — ingredients + recipes + sales items
+  { name: 'Bakery',    group: 'Bakery',        for_ingredients: true, for_recipes: true, for_sales_items: true },
+  { name: 'Beverages', group: 'Beverages',     for_ingredients: true, for_recipes: true, for_sales_items: true },
+  // Menu sections — recipes + sales items
+  { name: 'Starters',  group: 'Menu Sections', for_recipes: true, for_sales_items: true },
+  { name: 'Mains',     group: 'Menu Sections', for_recipes: true, for_sales_items: true },
+  { name: 'Sides',     group: 'Menu Sections', for_recipes: true, for_sales_items: true },
+  { name: 'Desserts',  group: 'Menu Sections', for_recipes: true, for_sales_items: true },
+];
+
+// Back-compat category name arrays used by other seed data generators below.
+const ING_CATEGORIES = CATEGORIES.filter(c => c.for_ingredients).map(c => c.name);
 const REC_CATEGORIES = ['Starters', 'Mains', 'Sides', 'Desserts', 'Beverages'];
 
 // Brand Partners = franchisees that operate markets (separate from ingredient vendors)
@@ -493,26 +519,79 @@ async function bulkInsert(client, table, columns, rows, returning = false) {
 // ── Clear ──────────────────────────────────────────────────────────────────────
 
 async function clearData(client) {
+  // Clear all operational / COGS data in dependency-safe order.
+  // CASCADE automatically truncates any referencing tables not listed here.
+  //
+  // Tables intentionally preserved (not truncated):
+  //   mcogs_allergens          — FIC 1169 reference data seeded by migration
+  //   mcogs_roles, mcogs_role_permissions — RBAC reference data seeded by migration
+  //   mcogs_users, mcogs_user_brand_partners — auth data (would break login)
+  //   mcogs_ai_chat_log        — AI assistant history
+  //   mcogs_feedback           — user-submitted bug/feature reports
+  //   mcogs_import_jobs        — import staging data
   await client.query(`
     TRUNCATE TABLE
+      -- Shared pages & changes (reference menus + scenarios)
+      mcogs_shared_page_changes,
+      mcogs_shared_pages,
+      -- Menu scenarios
+      mcogs_menu_scenarios,
+      -- Menu-level overrides for sales items, combo options, and modifiers
+      mcogs_menu_combo_option_prices,
+      mcogs_menu_modifier_option_prices,
+      mcogs_menu_sales_item_prices,
+      mcogs_menu_sales_items,
+      -- Menus + menu items + item prices
       mcogs_menu_item_prices,
       mcogs_menu_items,
       mcogs_menus,
+      -- Sales items catalog + market visibility + default prices + modifier links
+      mcogs_sales_item_modifier_groups,
+      mcogs_sales_item_prices,
+      mcogs_sales_item_markets,
+      mcogs_sales_items,
+      -- Modifier groups + options
+      mcogs_modifier_options,
+      mcogs_modifier_groups,
+      -- Standalone combos: steps, options, option-modifier junctions
+      mcogs_combo_step_option_modifier_groups,
+      mcogs_combo_step_options,
+      mcogs_combo_steps,
+      mcogs_combos,
+      -- Combo templates
+      mcogs_combo_template_step_options,
+      mcogs_combo_template_steps,
+      mcogs_combo_templates,
+      -- Recipes, items, and variation tables
+      mcogs_recipe_market_pl_variations,
+      mcogs_recipe_pl_variations,
+      mcogs_recipe_variations,
       mcogs_recipe_items,
       mcogs_recipes,
+      -- Ingredients + allergen junctions + preferred vendor + quotes
+      mcogs_ingredient_allergens,
       mcogs_ingredient_preferred_vendor,
       mcogs_price_quotes,
       mcogs_ingredients,
+      -- Vendors + brand partners
       mcogs_vendors,
+      mcogs_brand_partners,
+      -- Categories + category groups (new unified structure)
       mcogs_categories,
+      mcogs_category_groups,
+      -- Tax linking + countries + price levels + units
       mcogs_country_level_tax,
       mcogs_country_tax_rates,
       mcogs_countries,
       mcogs_price_levels,
       mcogs_units,
+      -- Locations + groups
       mcogs_locations,
       mcogs_location_groups,
-      mcogs_brand_partners
+      -- HACCP: equipment + temperature logs + CCP logs
+      mcogs_equipment_temp_logs,
+      mcogs_ccp_logs,
+      mcogs_equipment
     RESTART IDENTITY CASCADE
   `);
 }
@@ -595,28 +674,53 @@ async function seedData(client, log = console.log) {
   }
   log(`✓ ${bpCount} brand partners created`);
 
-  // 5. Categories
-  const ingCatIds = await bulkInsert(client, 'mcogs_categories',
-    ['name', 'group_name', 'type'],
-    ING_CATEGORIES.map(n => [n, n, 'ingredient']), true);
-  const recCatIds = await bulkInsert(client, 'mcogs_categories',
-    ['name', 'group_name', 'type'],
-    REC_CATEGORIES.map(n => [n, n, 'recipe']), true);
-  log(`✓ ${ingCatIds.length} ingredient + ${recCatIds.length} recipe categories created`);
+  // 5. Category Groups (new — mcogs_category_groups)
+  const groupIds = await bulkInsert(client, 'mcogs_category_groups',
+    ['name', 'sort_order'],
+    CATEGORY_GROUPS.map((n, i) => [n, i]), true);
+  const groupMap = {}; // group name → id
+  CATEGORY_GROUPS.forEach((n, i) => { groupMap[n] = groupIds[i]; });
+
+  // 5b. Categories (new schema: group_id FK + for_ingredients/for_recipes/for_sales_items scope flags)
+  const catRows = CATEGORIES.map((c, i) => [
+    c.name,
+    groupMap[c.group] || null,
+    !!c.for_ingredients,
+    !!c.for_recipes,
+    !!c.for_sales_items,
+    i,
+  ]);
+  const catIds = await bulkInsert(client, 'mcogs_categories',
+    ['name', 'group_id', 'for_ingredients', 'for_recipes', 'for_sales_items', 'sort_order'],
+    catRows, true);
+
+  // Build scope-aware lookup maps so ingredient / recipe / sales-item inserts
+  // can resolve category names → ids correctly even when a name is shared
+  // across scopes (e.g. "Bakery" and "Beverages").
+  const ingCatMap   = {}; // name → id  (scope: ingredients)
+  const recCatMap   = {}; // name → id  (scope: recipes)
+  const salesCatMap = {}; // name → id  (scope: sales items)
+  CATEGORIES.forEach((c, i) => {
+    if (c.for_ingredients) ingCatMap[c.name]   = catIds[i];
+    if (c.for_recipes)     recCatMap[c.name]   = catIds[i];
+    if (c.for_sales_items) salesCatMap[c.name] = catIds[i];
+  });
+
+  log(`✓ ${groupIds.length} category groups + ${catIds.length} categories created`);
 
   // 6. Vendors
   const vendorIds = await bulkInsert(client, 'mcogs_vendors', ['name', 'country_id'],
     VENDORS.map(v => [v.name, countryNameMap[v.country]]), true);
   log(`✓ ${vendorIds.length} vendors created`);
 
-  // 7. Ingredients (200 — all 177 base names + first 23 "(Fresh)" variants)
+  // 7. Ingredients (200 — all 177 base names + first 23 "(Fresh)" variants) — uses category_id FK (new schema)
   const ingList = generateIngredientList();
   const ingRows = ingList.map(ing => {
     const unitId = unitMap[ing.unit] || unitIds[0];
-    return [ing.name, ing.category, unitId, ing.wastePct];
+    return [ing.name, ingCatMap[ing.category] || null, unitId, ing.wastePct];
   });
   const ingIds = await bulkInsert(client, 'mcogs_ingredients',
-    ['name', 'category', 'base_unit_id', 'waste_pct'], ingRows, true);
+    ['name', 'category_id', 'base_unit_id', 'waste_pct'], ingRows, true);
   log(`✓ ${ingIds.length} ingredients created`);
 
   // Build ingredient name → id map for recipe item linking
@@ -685,19 +789,16 @@ async function seedData(client, log = console.log) {
     log(`⚠ Preferred vendors skipped (${pvErr.message})`);
   }
 
-  // 10. Recipes (48)
-  const recCatMap = {};
-  REC_CATEGORIES.forEach((n, i) => { recCatMap[n] = recCatIds[i]; });
-
+  // 10. Recipes (48) — uses category_id FK (new schema)
   let recipeItemCount = 0;
   const recipeNameMap = {};
 
   for (const tmpl of RECIPE_TEMPLATES) {
     const yieldUnitId = unitMap[tmpl.yield[1]] || unitIds[4];
     const { rows: [rec] } = await client.query(
-      `INSERT INTO mcogs_recipes (name, category, yield_qty, yield_unit_id)
+      `INSERT INTO mcogs_recipes (name, category_id, yield_qty, yield_unit_id)
        VALUES ($1, $2, $3, $4) RETURNING id`,
-      [tmpl.name, tmpl.category, tmpl.yield[0], yieldUnitId]
+      [tmpl.name, recCatMap[tmpl.category] || null, tmpl.yield[0], yieldUnitId]
     );
     recipeNameMap[tmpl.name] = rec.id;
 
@@ -766,14 +867,279 @@ async function seedData(client, log = console.log) {
   }
   log(`✓ ${MENUS.length} menus, ${menuItemCount} menu items, ${mipCount} item prices seeded`);
 
+  // 12. Ingredient allergens — tag common ingredients (Phase 4 feature)
+  let ingAllergenCount = 0;
+  await client.query('SAVEPOINT before_allergens');
+  try {
+    const { rows: allergens } = await client.query(`SELECT id, code FROM mcogs_allergens`);
+    const allergenByCode = {};
+    allergens.forEach(a => { allergenByCode[a.code] = a.id; });
+
+    const ALLERGEN_RULES = [
+      ['Whole Milk', ['MILK']], ['Double Cream', ['MILK']], ['Single Cream', ['MILK']],
+      ['Unsalted Butter', ['MILK']], ['Salted Butter', ['MILK']], ['Cheddar Cheese', ['MILK']],
+      ['Mozzarella', ['MILK']], ['Parmesan', ['MILK']], ['Feta Cheese', ['MILK']],
+      ['Cream Cheese', ['MILK']], ['Mascarpone', ['MILK']], ['Ricotta', ['MILK']],
+      ['Greek Yoghurt', ['MILK']], ['Sour Cream', ['MILK']],
+      ['Eggs', ['EGGS']],
+      ['Plain Flour', ['GLUTEN']], ['Bread Flour', ['GLUTEN']], ['Self-Raising Flour', ['GLUTEN']],
+      ['Spaghetti', ['GLUTEN']], ['Penne', ['GLUTEN']], ['Fusilli', ['GLUTEN']],
+      ['Breadcrumbs', ['GLUTEN']], ['Panko Breadcrumbs', ['GLUTEN']],
+      ['White Bread', ['GLUTEN']], ['Wholemeal Bread', ['GLUTEN']], ['Sourdough Bread', ['GLUTEN']],
+      ['Baguette', ['GLUTEN']], ['Croissant', ['GLUTEN','MILK','EGGS']],
+      ['Ciabatta Roll', ['GLUTEN']], ['Pitta Bread', ['GLUTEN']], ['Tortilla Wrap', ['GLUTEN']],
+      ['Salmon Fillet', ['FISH']], ['Cod Fillet', ['FISH']], ['Tuna Steak', ['FISH']],
+      ['Sea Bass Fillet', ['FISH']], ['Haddock Fillet', ['FISH']], ['Mackerel Fillet', ['FISH']],
+      ['Trout Fillet', ['FISH']], ['Sardines', ['FISH']],
+      ['Tiger Prawns', ['CRUSTACEANS']], ['King Prawns', ['CRUSTACEANS']],
+      ['Crab Claws', ['CRUSTACEANS']], ['Lobster Tail', ['CRUSTACEANS']],
+      ['Mussels', ['MOLLUSCS']], ['Scallops', ['MOLLUSCS']], ['Squid', ['MOLLUSCS']],
+      ['Soy Sauce', ['SOYBEANS','GLUTEN']], ['Fish Sauce', ['FISH']],
+      ['Oyster Sauce', ['MOLLUSCS','SOYBEANS']],
+      ['Dijon Mustard', ['MUSTARD']], ['Wholegrain Mustard', ['MUSTARD']],
+      ['Tahini', ['SESAME']], ['Sesame Oil', ['SESAME']], ['Celery', ['CELERY']],
+      ['White Wine', ['SULPHITES']], ['Red Wine', ['SULPHITES']], ['Beer', ['GLUTEN','SULPHITES']],
+    ];
+    for (const [baseName, codes] of ALLERGEN_RULES) {
+      const ingId = ingNameMap[baseName];
+      if (!ingId) continue;
+      for (const code of codes) {
+        const allergenId = allergenByCode[code];
+        if (!allergenId) continue;
+        await client.query(
+          `INSERT INTO mcogs_ingredient_allergens (ingredient_id, allergen_id, status)
+           VALUES ($1, $2, 'contains')
+           ON CONFLICT (ingredient_id, allergen_id) DO NOTHING`,
+          [ingId, allergenId]
+        );
+        ingAllergenCount++;
+      }
+    }
+    await client.query('RELEASE SAVEPOINT before_allergens');
+    log(`✓ ${ingAllergenCount} ingredient-allergen tags added`);
+  } catch (aErr) {
+    await client.query('ROLLBACK TO SAVEPOINT before_allergens');
+    await client.query('RELEASE SAVEPOINT before_allergens');
+    log(`⚠ Allergen tagging skipped (${aErr.message})`);
+  }
+
+  // 13. Modifier groups + options (new sales-items feature)
+  const modifierGroupDefs = [
+    {
+      name: 'Extras', description: 'Add-ons for any burger or sandwich',
+      min_select: 0, max_select: 4,
+      options: [
+        { name: 'Extra Cheddar', ingredient: 'Cheddar Cheese', price_addon: 1.00, qty: 0.02 },
+        { name: 'Bacon',         ingredient: 'Pork Belly',     price_addon: 1.50, qty: 0.03 },
+        { name: 'Avocado',       ingredient: 'Avocado',        price_addon: 1.50, qty: 0.5  },
+        { name: 'Fried Egg',     ingredient: 'Eggs',           price_addon: 1.00, qty: 1    },
+      ],
+    },
+    {
+      name: 'Dip Choice', description: 'Choose one sauce',
+      min_select: 1, max_select: 1,
+      options: [
+        { name: 'Mayonnaise',   ingredient: 'Mayonnaise', price_addon: 0,    qty: 0.03 },
+        { name: 'Ketchup',      ingredient: 'Ketchup',    price_addon: 0,    qty: 0.03 },
+        { name: 'BBQ Sauce',    manual_cost: 0.15,        price_addon: 0,    qty: 1    },
+        { name: 'Garlic Aioli', manual_cost: 0.20,        price_addon: 0.50, qty: 1    },
+      ],
+    },
+  ];
+
+  const modifierGroupMap = {};
+  let modOptionCount = 0;
+  for (const mg of modifierGroupDefs) {
+    const { rows: [g] } = await client.query(
+      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [mg.name, mg.description, mg.min_select, mg.max_select]
+    );
+    modifierGroupMap[mg.name] = g.id;
+
+    for (let oi = 0; oi < mg.options.length; oi++) {
+      const o = mg.options[oi];
+      const ingId = o.ingredient ? ingNameMap[o.ingredient] : null;
+      const itemType = ingId ? 'ingredient' : 'manual';
+      await client.query(
+        `INSERT INTO mcogs_modifier_options
+           (modifier_group_id, name, item_type, ingredient_id, manual_cost, price_addon, qty, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [g.id, o.name, itemType, ingId, ingId ? null : (o.manual_cost || 0), o.price_addon || 0, o.qty || 1, oi]
+      );
+      modOptionCount++;
+    }
+  }
+  log(`✓ ${modifierGroupDefs.length} modifier groups, ${modOptionCount} options created`);
+
+  // 14. Standalone Combos (new — mcogs_combos with steps + options)
+  let comboId = null;
+  let comboStepCount = 0;
+  let comboOptionCount = 0;
+  const mainsCatId = salesCatMap['Mains'] || null;
+  const mealDealRecipeOptions = [
+    'Beef Burger', 'Grilled Chicken Breast', 'Club Sandwich', 'Chicken Caesar Wrap',
+  ].map(n => recipeNameMap[n]).filter(Boolean);
+  const sideRecipeOptions = [
+    'Chips', 'Side Salad', 'Coleslaw', 'Onion Rings',
+  ].map(n => recipeNameMap[n]).filter(Boolean);
+  const drinkIngredientOptions = [
+    'Cola', 'Lemonade', 'Orange Juice', 'Sparkling Water',
+  ].map(n => ingNameMap[n]).filter(Boolean);
+
+  if (mealDealRecipeOptions.length && sideRecipeOptions.length) {
+    const { rows: [co] } = await client.query(
+      `INSERT INTO mcogs_combos (name, description, category_id, sort_order)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      ['Classic Meal Deal', 'Pick a main, a side, and a drink for a fixed combo price', mainsCatId, 0]
+    );
+    comboId = co.id;
+
+    const stepDefs = [
+      { name: 'Choose your main',  min_select: 1, max_select: 1, options: mealDealRecipeOptions.map(rid => ({ type: 'recipe',     ref: rid, qty: 1,    addon: 0 })) },
+      { name: 'Choose your side',  min_select: 1, max_select: 1, options: sideRecipeOptions.map(rid     => ({ type: 'recipe',     ref: rid, qty: 1,    addon: 0 })) },
+      { name: 'Choose your drink', min_select: 1, max_select: 1, options: drinkIngredientOptions.map(iid => ({ type: 'ingredient', ref: iid, qty: 0.33, addon: 0 })) },
+    ];
+
+    for (let si = 0; si < stepDefs.length; si++) {
+      const s = stepDefs[si];
+      const { rows: [step] } = await client.query(
+        `INSERT INTO mcogs_combo_steps
+           (combo_id, name, sort_order, min_select, max_select, allow_repeat, auto_select)
+         VALUES ($1, $2, $3, $4, $5, FALSE, FALSE) RETURNING id`,
+        [comboId, s.name, si, s.min_select, s.max_select]
+      );
+      comboStepCount++;
+
+      for (let oi = 0; oi < s.options.length; oi++) {
+        const opt = s.options[oi];
+        const recipeFk     = opt.type === 'recipe'     ? opt.ref : null;
+        const ingredientFk = opt.type === 'ingredient' ? opt.ref : null;
+        let optName = '';
+        if (opt.type === 'recipe')     optName = Object.keys(recipeNameMap).find(k => recipeNameMap[k] === opt.ref) || 'Option';
+        if (opt.type === 'ingredient') optName = Object.keys(ingNameMap).find(k => ingNameMap[k] === opt.ref) || 'Option';
+        await client.query(
+          `INSERT INTO mcogs_combo_step_options
+             (combo_step_id, name, item_type, recipe_id, ingredient_id, price_addon, qty, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [step.id, optName, opt.type, recipeFk, ingredientFk, opt.addon, opt.qty, oi]
+        );
+        comboOptionCount++;
+      }
+    }
+    log(`✓ 1 combo "Classic Meal Deal" with ${comboStepCount} steps, ${comboOptionCount} options`);
+  }
+
+  // 15. Sales Items (new — mcogs_sales_items catalog)
+  let salesItemCount       = 0;
+  let salesItemMarketCount = 0;
+  let salesItemPriceCount  = 0;
+  let salesItemModCount    = 0;
+
+  const salesItemDefs = [
+    { name: 'Beef Burger',          recipe: 'Beef Burger',            cat: 'Mains',    modGroups: ['Extras', 'Dip Choice'] },
+    { name: 'Grilled Chicken',      recipe: 'Grilled Chicken Breast', cat: 'Mains',    modGroups: ['Extras'] },
+    { name: 'Fish & Chips',         recipe: 'Fish & Chips',           cat: 'Mains',    modGroups: ['Dip Choice'] },
+    { name: 'Margherita Pizza',     recipe: 'Margherita Pizza',       cat: 'Mains',    modGroups: [] },
+    { name: 'Club Sandwich',        recipe: 'Club Sandwich',          cat: 'Mains',    modGroups: ['Dip Choice'] },
+    { name: 'Side of Chips',        recipe: 'Chips',                  cat: 'Sides',    modGroups: ['Dip Choice'] },
+    { name: 'Garlic Mash',          recipe: 'Garlic Mashed Potato',   cat: 'Sides',    modGroups: [] },
+    { name: 'Chocolate Brownie',    recipe: 'Chocolate Brownie',      cat: 'Desserts', modGroups: [] },
+    { name: 'Cheesecake',           recipe: 'Cheesecake',             cat: 'Desserts', modGroups: [] },
+    { name: 'Bottled Cola',         ingredient: 'Cola',               cat: 'Beverages', qty: 0.33, modGroups: [] },
+    { name: 'Orange Juice (Glass)', ingredient: 'Orange Juice',       cat: 'Beverages', qty: 0.25, modGroups: [] },
+  ];
+
+  for (let i = 0; i < salesItemDefs.length; i++) {
+    const d = salesItemDefs[i];
+    const recipeFk     = d.recipe     ? recipeNameMap[d.recipe]   : null;
+    const ingredientFk = d.ingredient ? ingNameMap[d.ingredient]  : null;
+    const itemType     = recipeFk ? 'recipe' : (ingredientFk ? 'ingredient' : 'manual');
+    const categoryFk   = salesCatMap[d.cat] || null;
+
+    const { rows: [si] } = await client.query(
+      `INSERT INTO mcogs_sales_items
+         (item_type, name, display_name, category_id, recipe_id, ingredient_id, qty, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [itemType, d.name, d.name, categoryFk, recipeFk, ingredientFk, d.qty || 1, i]
+    );
+    salesItemCount++;
+
+    for (const cid of countryIds) {
+      await client.query(
+        `INSERT INTO mcogs_sales_item_markets (sales_item_id, country_id, is_active)
+         VALUES ($1, $2, TRUE) ON CONFLICT DO NOTHING`,
+        [si.id, cid]
+      );
+      salesItemMarketCount++;
+    }
+
+    const basePrice = MENU_PRICES['UK Dinner Menu']?.[d.recipe]
+      || MENU_PRICES['UK Lunch Menu']?.[d.recipe]
+      || (d.ingredient ? 3.50 : 10.00);
+    for (let pi = 0; pi < PRICE_LEVELS.length; pi++) {
+      const multiplier = LEVEL_MULTIPLIERS[PRICE_LEVELS[pi].name] ?? 1.0;
+      const sellPrice  = Math.round(basePrice * multiplier * 100) / 100;
+      await client.query(
+        `INSERT INTO mcogs_sales_item_prices (sales_item_id, price_level_id, sell_price)
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+        [si.id, plIds[pi], sellPrice]
+      );
+      salesItemPriceCount++;
+    }
+
+    for (let gi = 0; gi < (d.modGroups || []).length; gi++) {
+      const mgId = modifierGroupMap[d.modGroups[gi]];
+      if (!mgId) continue;
+      await client.query(
+        `INSERT INTO mcogs_sales_item_modifier_groups (sales_item_id, modifier_group_id, sort_order)
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+        [si.id, mgId, gi]
+      );
+      salesItemModCount++;
+    }
+  }
+
+  if (comboId) {
+    const comboBasePrice = 12.50;
+    const { rows: [si] } = await client.query(
+      `INSERT INTO mcogs_sales_items
+         (item_type, name, display_name, category_id, combo_id, qty, sort_order)
+       VALUES ('combo', $1, $2, $3, $4, 1, $5) RETURNING id`,
+      ['Classic Meal Deal', 'Classic Meal Deal', salesCatMap['Mains'] || null, comboId, salesItemDefs.length]
+    );
+    salesItemCount++;
+    for (const cid of countryIds) {
+      await client.query(
+        `INSERT INTO mcogs_sales_item_markets (sales_item_id, country_id, is_active)
+         VALUES ($1, $2, TRUE) ON CONFLICT DO NOTHING`,
+        [si.id, cid]
+      );
+      salesItemMarketCount++;
+    }
+    for (let pi = 0; pi < PRICE_LEVELS.length; pi++) {
+      const multiplier = LEVEL_MULTIPLIERS[PRICE_LEVELS[pi].name] ?? 1.0;
+      const sellPrice  = Math.round(comboBasePrice * multiplier * 100) / 100;
+      await client.query(
+        `INSERT INTO mcogs_sales_item_prices (sales_item_id, price_level_id, sell_price)
+         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+        [si.id, plIds[pi], sellPrice]
+      );
+      salesItemPriceCount++;
+    }
+  }
+  log(`✓ ${salesItemCount} sales items, ${salesItemMarketCount} market links, ${salesItemPriceCount} default prices, ${salesItemModCount} modifier attachments`);
+
   return {
     units: unitIds.length,
     priceLevels: plIds.length,
     countries: countryIds.length,
     brandPartners: bpCount,
-    categories: ingCatIds.length + recCatIds.length,
+    categoryGroups: groupIds.length,
+    categories: catIds.length,
     vendors: vendorIds.length,
     ingredients: ingIds.length,
+    ingredientAllergens: ingAllergenCount,
     priceQuotes: quoteIds.length,
     preferredVendors: pvCount,
     recipes: RECIPE_TEMPLATES.length,
@@ -781,6 +1147,14 @@ async function seedData(client, log = console.log) {
     menus: MENUS.length,
     menuItems: menuItemCount,
     menuItemPrices: mipCount,
+    modifierGroups: modifierGroupDefs.length,
+    modifierOptions: modOptionCount,
+    combos: comboId ? 1 : 0,
+    comboSteps: comboStepCount,
+    comboOptions: comboOptionCount,
+    salesItems: salesItemCount,
+    salesItemMarkets: salesItemMarketCount,
+    salesItemPrices: salesItemPriceCount,
   };
 }
 

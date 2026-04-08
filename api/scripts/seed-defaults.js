@@ -92,32 +92,55 @@ async function seedDefaults(client, push) {
     push(`  ✓ Price level "Default" created (id ${defaultPriceLevelId})`);
   }
 
-  // ── 3. Categories ────────────────────────────────────────────────────────────
-  push('Creating categories…');
+  // ── 3. Category Groups + Categories (new unified schema) ───────────────────
+  push('Creating category groups + categories…');
+  // Reusable group for all default categories — avoids leaving them ungrouped.
+  const existingCatGroup = await client.query(
+    `SELECT id FROM mcogs_category_groups WHERE name = 'Default' LIMIT 1`
+  );
+  let defaultGroupId;
+  if (existingCatGroup.rows.length) {
+    defaultGroupId = existingCatGroup.rows[0].id;
+  } else {
+    const newGrp = await client.query(
+      `INSERT INTO mcogs_category_groups (name, sort_order) VALUES ('Default', 0) RETURNING id`
+    );
+    defaultGroupId = newGrp.rows[0].id;
+  }
+
+  // Each category now has three scope flags (for_ingredients / for_recipes / for_sales_items)
+  // instead of the old single `type` column. We create a single row per name and flag
+  // it for every scope so it appears everywhere it's needed.
   const catDefs = [
-    ['Food',     'ingredient', 1],
-    ['Beverage', 'ingredient', 2],
-    ['Other',    'ingredient', 3],
-    ['Food',     'recipe',     1],
-    ['Beverage', 'recipe',     2],
-    ['Other',    'recipe',     3],
+    { name: 'Food',     sort_order: 1 },
+    { name: 'Beverage', sort_order: 2 },
+    { name: 'Other',    sort_order: 3 },
   ];
   let catCount = 0;
-  for (const [name, type, sort_order] of catDefs) {
+  for (const { name, sort_order } of catDefs) {
     const exists = await client.query(
-      `SELECT id FROM mcogs_categories WHERE name = $1 AND type = $2 LIMIT 1`, [name, type]
+      `SELECT id FROM mcogs_categories WHERE name = $1 LIMIT 1`, [name]
     );
     if (!exists.rows.length) {
       await client.query(
-        `INSERT INTO mcogs_categories (name, type, group_name, sort_order)
-         VALUES ($1,$2,$3,$4)`,
-        [name, type, name, sort_order]
+        `INSERT INTO mcogs_categories
+           (name, group_id, sort_order, for_ingredients, for_recipes, for_sales_items)
+         VALUES ($1, $2, $3, TRUE, TRUE, TRUE)`,
+        [name, defaultGroupId, sort_order]
       );
       catCount++;
+    } else {
+      // Make sure existing row has all scope flags on so the Default data feels complete
+      await client.query(
+        `UPDATE mcogs_categories
+         SET group_id=$1, for_ingredients=TRUE, for_recipes=TRUE, for_sales_items=TRUE, updated_at=NOW()
+         WHERE id=$2`,
+        [defaultGroupId, exists.rows[0].id]
+      );
     }
   }
   summary.categories = catCount;
-  push(`  ✓ ${catCount} new category row(s) created`);
+  push(`  ✓ ${catCount} new category row(s) created (group "Default", scopes: all)`);
 
   // ── 4. Country — United Kingdom ─────────────────────────────────────────────
   push('Creating United Kingdom market…');
