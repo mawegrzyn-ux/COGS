@@ -912,21 +912,25 @@ function TestDataTab() {
   const SEED_SUMMARY = [
     ['4',     'Countries with realistic tax rates per level'],
     ['3',     'Price Levels (Eat-In, Takeaway, Delivery)'],
-    ['10',    'Vendors'],
-    ['1,000', 'Ingredients across 12 categories'],
+    ['10',    'Vendors + 3 Brand Partners'],
+    ['1,000', 'Ingredients across 12 categories with allergen tags'],
     ['500',   'Price Quotes'],
     ['48',    'Recipes with ingredient line items'],
     ['4',     'Menus — items priced across all price levels'],
+    ['12',    'Sales Items (incl. 1 combo meal deal)'],
+    ['2',     'Modifier Groups (Extras, Dip Choice)'],
   ]
 
   const SMALL_SEED_SUMMARY = [
     ['4',   'Countries with realistic tax rates per level'],
     ['3',   'Price Levels (Eat-In, Takeaway, Delivery)'],
-    ['10',  'Vendors'],
-    ['200', 'Ingredients across 12 categories'],
+    ['10',  'Vendors + 3 Brand Partners'],
+    ['200', 'Ingredients across 12 categories with allergen tags'],
     ['400', 'Price Quotes (2 per ingredient)'],
     ['48',  'Recipes with ingredient line items'],
     ['4',   'Menus — items priced across all price levels'],
+    ['12',  'Sales Items (incl. 1 combo meal deal)'],
+    ['2',   'Modifier Groups (Extras, Dip Choice)'],
   ]
 
   return (
