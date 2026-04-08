@@ -57,12 +57,28 @@ function getUploadsDir() {
   return dir;
 }
 
-function getAppBaseUrl() {
-  return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+// Local files are served as /uploads/* on the same origin as the app, so use
+// a relative path. This works across dev (Vite proxy), prod (reverse proxy),
+// and mobile clients — avoids bleeding host-specific URLs like localhost.
+function localUrl(filename) {
+  return `/uploads/${filename}`;
 }
 
-function localUrl(filename) {
-  return `${getAppBaseUrl()}/uploads/${filename}`;
+// Strip host prefix from any legacy absolute /uploads URL so existing rows
+// that were saved before the relative-URL fix still render.
+function normalizeLocalUrl(url) {
+  if (!url) return url;
+  return url.replace(/^https?:\/\/[^/]+(\/uploads\/)/, '$1');
+}
+
+function normalizeItem(item) {
+  if (!item || item.storage_type !== 'local') return item;
+  return {
+    ...item,
+    url:       normalizeLocalUrl(item.url),
+    thumb_url: normalizeLocalUrl(item.thumb_url),
+    web_url:   normalizeLocalUrl(item.web_url),
+  };
 }
 
 async function s3Upload(cfg, key, buffer, mimeType) {
@@ -225,7 +241,7 @@ router.get('/', async (req, res) => {
     `, vals);
 
     const categories = await fetchCategories();
-    res.json({ items, categories });
+    res.json({ items: items.map(normalizeItem), categories });
   } catch (err) {
     res.status(500).json({ error: { message: err.message } });
   }
@@ -259,7 +275,7 @@ router.post('/upload', upload.array('images', 50), async (req, res) => {
       const isDupe   = existingNames.has(file.originalname.toLowerCase());
       const variants = await generateVariants(file.buffer, file.mimetype);
       const item     = await saveFile(cfg, base, ext, file.mimetype, variants, uploadedBy, categoryId, scope, formKey);
-      results.push({ ...item, duplicate_of: isDupe ? file.originalname : null });
+      results.push({ ...normalizeItem(item), duplicate_of: isDupe ? file.originalname : null });
     }
 
     res.json({ items: results });
@@ -422,7 +438,7 @@ router.put('/:id', async (req, res) => {
       vals
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
-    res.json(rows[0]);
+    res.json(normalizeItem(rows[0]));
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });
 

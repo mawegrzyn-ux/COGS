@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import ImageEditor from './ImageEditor'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -100,6 +101,9 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
   const [editCatId, setEditCatId] = useState<number | null>(null)
   const [editingFilename, setEditingFilename] = useState(false)
   const [savingDetail, setSavingDetail] = useState(false)
+
+  // Image editor
+  const [editorItem, setEditorItem] = useState<MediaItem | null>(null)
 
   // Panel resize
   const panelRef = useRef<HTMLDivElement>(null)
@@ -346,6 +350,39 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
       })
       await load()
     } catch { /* ignore */ }
+  }
+
+  // ── Image editor: open / save ───────────────────────────────────────────────
+
+  function openEditor(item: MediaItem) {
+    // Allow host app to override via prop; otherwise use the built-in editor
+    if (onEditImage) { onEditImage(item); return }
+    setEditorItem(item)
+  }
+
+  async function handleEditorSave(blob: Blob, mimeType: string) {
+    if (!editorItem) return
+    try {
+      const token = await getAccessTokenSilently()
+      const ext = mimeType === 'image/png' ? '.png' : '.jpg'
+      const baseName = editorItem.filename.replace(/\.[^.]+$/, '')
+      const file = new File([blob], `${baseName}-edited${ext}`, { type: mimeType })
+      const fd = new FormData()
+      fd.append('images', file)
+      if (editorItem.category_id != null) fd.append('category_id', String(editorItem.category_id))
+      fd.append('scope', editorItem.scope)
+      if (editorItem.form_key) fd.append('form_key', editorItem.form_key)
+      const res = await fetch(`${API_BASE}/media/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      if (!res.ok) throw new Error('Upload failed')
+      setEditorItem(null)
+      await load()
+    } catch {
+      // leave editor open so the user can retry
+    }
   }
 
   // ── Bulk actions ─────────────────────────────────────────────────────────────
@@ -712,7 +749,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
                 onSave={saveDetail}
                 onDelete={deleteItem}
                 onToggleScope={toggleScope}
-                onEditImage={onEditImage}
+                onEditImage={openEditor}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -745,6 +782,16 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
     </>
   )
 
+  // Editor overlay — shared across modal and page modes
+  const editorOverlay = editorItem && (
+    <ImageEditor
+      open={true}
+      src={editorItem.web_url || editorItem.url}
+      onClose={() => setEditorItem(null)}
+      onSave={handleEditorSave}
+    />
+  )
+
   // Page mode: render inline without portal/backdrop/fixed positioning
   if (mode === 'page') {
     return (
@@ -753,6 +800,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
         onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop}
       >
         {innerContent}
+        {editorOverlay}
       </div>
     )
   }
@@ -775,6 +823,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
       <div className={dialogClass}>
         {innerContent}
       </div>
+      {editorOverlay}
     </div>,
     document.body
   )
@@ -827,17 +876,6 @@ function GridView({ items, selectedIds, onSelect }: {
                 )}
               </div>
             </div>
-
-            {/* Selected checkmark overlay top-right */}
-            {selected && (
-              <div className="absolute top-1.5 right-1.5">
-                <div className="w-5 h-5 rounded-full bg-accent flex items-center justify-center">
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5">
-                    <path d="M20 6L9 17l-5-5"/>
-                  </svg>
-                </div>
-              </div>
-            )}
           </div>
         )
       })}
@@ -924,7 +962,7 @@ function DetailPanel({
   onSave: () => void
   onDelete: (item: MediaItem) => void
   onToggleScope: (item: MediaItem) => void
-  onEditImage?: (item: MediaItem) => void
+  onEditImage: (item: MediaItem) => void
 }) {
   const previewSrc = item.web_url || item.url
 
@@ -1013,14 +1051,12 @@ function DetailPanel({
         </button>
 
         {/* Edit image */}
-        {onEditImage && (
-          <button
-            onClick={() => onEditImage(item)}
-            className="btn-ghost text-xs py-1.5 px-3 w-full border border-border"
-          >
-            Edit image
-          </button>
-        )}
+        <button
+          onClick={() => onEditImage(item)}
+          className="btn-ghost text-xs py-1.5 px-3 w-full border border-border"
+        >
+          Edit image
+        </button>
       </div>
 
       {/* Footer */}
