@@ -1207,6 +1207,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                           label="Image"
                           value={form.image_url || null}
                           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+                          formKey="ingredient"
                         />
                       </>
                     )}
@@ -1324,6 +1325,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               label="Image"
               value={form.image_url || null}
               onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+              formKey="ingredient"
             />
             {!withQuote && (
               <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">

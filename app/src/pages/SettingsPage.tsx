@@ -1176,6 +1176,9 @@ function StorageTab() {
   const [saving,  setSaving]  = useState(false)
   const [toast,   setToast]   = useState<{ msg: string; type?: 'success' | 'error' } | null>(null)
   const [cfg,     setCfg]     = useState<StorageCfg>({ type: 'local' })
+  const [migrating,   setMigrating]   = useState(false)
+  const [migrateLog,  setMigrateLog]  = useState<string[]>([])
+  const [migrateDone, setMigrateDone] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
 
   useEffect(() => {
@@ -1199,6 +1202,45 @@ function StorageTab() {
 
   const set = (k: keyof StorageCfg) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setCfg(prev => ({ ...prev, [k]: e.target.value } as StorageCfg))
+
+  const startMigration = async () => {
+    setMigrating(true)
+    setMigrateLog([])
+    setMigrateDone(false)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/media/migrate-to-s3`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.body) { setMigrateLog(['No response stream']); return }
+      const reader = res.body.getReader()
+      const dec    = new TextDecoder()
+      let buf      = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue
+          try {
+            const d = JSON.parse(line.slice(5).trim())
+            if (d.complete)    { setMigrateDone(true); setMigrateLog(p => [...p, `✅ Migration complete — ${d.migrated} items migrated`]) }
+            else if (d.error)       setMigrateLog(p => [...p, `❌ ${d.error}`])
+            else if (d.error_item)  setMigrateLog(p => [...p, `⚠ Item ${d.error_item}: ${d.reason}`])
+            else if (d.skip)        setMigrateLog(p => [...p, `⏭ Item ${d.skip} skipped: ${d.reason}`])
+            else if (d.done != null) setMigrateLog(p => [...p, `[${d.done}/${d.total}] ${d.filename}`])
+            else if (d.message)     setMigrateLog(p => [...p, d.message])
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+    } catch (e: unknown) {
+      setMigrateLog(p => [...p, `Error: ${e instanceof Error ? e.message : String(e)}`])
+    } finally {
+      setMigrating(false)
+    }
+  }
 
   if (loading) return <Spinner />
 
@@ -1286,6 +1328,36 @@ function StorageTab() {
       </button>
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+
+      {cfg.type === 's3' && cfg.s3_bucket && (
+        <div className="mt-6 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
+          <h4 className="font-semibold text-sm mb-2" style={{ color: 'var(--text-1)' }}>Migrate existing files to S3</h4>
+          <p className="text-xs mb-3" style={{ color: 'var(--text-3)' }}>
+            Moves all locally-stored media library items to S3. New uploads already go to S3 once the settings above are saved.
+            This is a one-time operation for existing files.
+          </p>
+          <button
+            onClick={startMigration}
+            disabled={migrating}
+            className="btn-outline px-4 text-sm"
+          >
+            {migrating ? '⏳ Migrating…' : '☁ Migrate local files → S3'}
+          </button>
+          {migrateLog.length > 0 && (
+            <div
+              className="mt-3 max-h-40 overflow-y-auto rounded-lg p-3 font-mono text-xs space-y-0.5"
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text-2)' }}
+            >
+              {migrateLog.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+          )}
+          {migrateDone && (
+            <p className="mt-2 text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+              All done! Refresh the page to see updated storage indicators.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

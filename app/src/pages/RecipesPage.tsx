@@ -2024,6 +2024,7 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           label="Recipe Image"
           value={form.image_url || null}
           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+          formKey="recipe"
         />
 
         {!recipe && (

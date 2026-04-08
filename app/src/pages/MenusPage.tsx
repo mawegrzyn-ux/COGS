@@ -5267,7 +5267,7 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="menu_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>

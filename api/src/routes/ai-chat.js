@@ -1308,6 +1308,37 @@ Returns a summary of what was exported; the file downloads automatically in the 
       required: ['dataset'],
     },
   },
+  {
+    name: 'save_to_media_library',
+    description: `Saves an image URL that is already accessible (e.g. a screenshot or uploaded image from this conversation) into the Media Library so the user can find it later in Settings → Media Library.
+Use when the user says "save this to the library", "add to media library", "keep this screenshot", etc.
+Requires: url (the image URL to save). Optional: filename, category_id, form_key.
+Returns the saved media item with its id and thumb_url.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:         { type: 'string',  description: 'The image URL to register in the library. Must be publicly accessible.' },
+        filename:    { type: 'string',  description: 'Optional display filename. Defaults to the URL basename.' },
+        category_id: { type: 'integer', description: 'Optional category ID to file it under.' },
+        form_key:    { type: 'string',  description: 'Optional form scope (e.g. "ingredient", "recipe"). Defaults to "shared".' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'list_media_library',
+    description: `Lists items in the Media Library. Use when the user asks to "show me the media library", "what images do we have", "find images of X", etc.
+Supports optional filters: category_id, form_key, search query.
+Returns items with their urls and metadata.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        q:           { type: 'string',  description: 'Search by filename.' },
+        category_id: { type: 'integer', description: 'Filter by category ID.' },
+        form_key:    { type: 'string',  description: 'Filter by form scope.' },
+      },
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3115,6 +3146,45 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       }
     }
 
+    case 'save_to_media_library': {
+      try {
+        const { url, filename, category_id, form_key } = input;
+        if (!url) return { error: 'url is required' };
+        const safeName = filename || url.split('/').pop()?.split('?')[0] || 'image.jpg';
+        const { rows } = await pool.query(
+          `INSERT INTO mcogs_media_items (filename, original_filename, url, thumb_url, web_url, storage_type, mime_type, size_bytes, scope, form_key, category_id, uploaded_by)
+           VALUES ($1,$2,$3,$3,$3,'external','image/jpeg',0,$4,$5,$6,$7)
+           RETURNING id, filename, url, thumb_url, web_url, scope, category_id, created_at`,
+          [safeName, safeName, url, form_key ? 'form' : 'shared', form_key || null, category_id || null, userCtx?.sub || null]
+        );
+        return { saved: true, item: rows[0], message: `Saved "${safeName}" to the media library (id: ${rows[0].id})` };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'list_media_library': {
+      try {
+        const { q, category_id, form_key } = input;
+        const conds = [], vals = [];
+        if (q) { vals.push(`%${q.toLowerCase()}%`); conds.push(`LOWER(m.filename) LIKE $${vals.length}`); }
+        if (category_id) { vals.push(Number(category_id)); conds.push(`m.category_id = $${vals.length}`); }
+        if (form_key) { vals.push(form_key); conds.push(`m.form_key = $${vals.length}`); }
+        const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+        const { rows } = await pool.query(
+          `SELECT m.id, m.filename, m.url, m.thumb_url, m.web_url, m.scope, m.form_key,
+                  m.size_bytes, m.width, m.height, m.created_at, c.name AS category_name
+           FROM mcogs_media_items m
+           LEFT JOIN mcogs_media_categories c ON c.id = m.category_id
+           ${where} ORDER BY m.created_at DESC LIMIT 50`,
+          vals
+        );
+        return { count: rows.length, items: rows };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -3122,7 +3192,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(context, helpContext, conciseMode = false) {
+function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false) {
   const page = context?.currentPage || 'unknown';
   return `You are Pepper — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
@@ -3241,12 +3311,12 @@ The Settings page has these tabs — users sometimes ask what they do:
 
 **COGS Thresholds** — configure the green/amber/red colour thresholds for COGS% display. "Excellent" (green) and "Acceptable" (amber) percentages are set here; above acceptable = red.
 
-**Test Data** — developer/demo tool to populate the database with realistic dummy data for exploration and testing. Four actions:
-- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 10 vendors, 4 countries. Use this to explore a fully populated account.
-- "Load Small Data" — same but 200 ingredients (faster, for development).
-- "Clear Database" — permanently removes ALL rows from every table. Schema is preserved. Cannot be undone.
+**Test Data** (System → Database section, visible to dev users only) — developer/demo tool to populate the database with realistic dummy data. Four actions:
+- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 10 vendors, 4 countries. Requires typing today's date (ddmmyyyy format) to confirm.
+- "Load Small Data" — same but 200 ingredients (faster, for development). Also requires date confirmation.
+- "Clear Database" — permanently removes ALL rows from every table. Schema is preserved. Requires date confirmation.
 - "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 6 categories, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
-Warning users: these operations cannot be undone and will delete real data. Only use Test Data on a demo or dev account.
+Warning users: these operations cannot be undone and will delete real data. Only use Test Data on a demo or dev account. The Test Data section is only visible to users with the dev flag enabled (Settings → Users → </> button).${is_dev ? '\nThe current user HAS the dev flag — they can access System → Database → Test Data.' : ''}
 
 **AI** — configure API keys (Anthropic for Pepper, Voyage for semantic search, Brave for web search), toggle Concise Mode, and generate a Claude Code integration key.
 
@@ -3354,7 +3424,7 @@ router.post('/', async (req, res) => {
     conciseMode = sRows[0]?.v === 'true';
   } catch (_) {}
 
-  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode);
+  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false);
 
   // Build messages array (enforce max 20 history items)
   const messages = [

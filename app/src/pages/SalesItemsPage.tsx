@@ -124,7 +124,7 @@ function ComboFormModal({ mode, initial, onSave, saving, onClose }: {
           <textarea className="input w-full" rows={2} value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="sales_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -274,7 +274,7 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="sales_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -1311,7 +1311,7 @@ export default function SalesItemsPage() {
                     </div>
 
                     {/* Image */}
-                    <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} />
+                    <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} formKey="sales_item" />
                   </div>
                   )}{/* end details tab */}
 
@@ -2196,7 +2196,7 @@ export default function SalesItemsPage() {
                       </div>
                     )}
                     <ImageUpload label="Photo" value={mpOptForm.image_url}
-                      onChange={url => setMpOptForm(f => f ? { ...f, image_url: url } : f)} />
+                      onChange={url => setMpOptForm(f => f ? { ...f, image_url: url } : f)} formKey="modifier_option" />
                   </>
                 )}
               </div>

@@ -11,6 +11,7 @@ import SalesItemsPage       from './pages/SalesItemsPage'
 import AllergenMatrixPage   from './pages/AllergenMatrixPage'
 import HACCPPage            from './pages/HACCPPage'
 import HelpPage             from './pages/HelpPage'
+import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
 import SharedMenuPage       from './pages/SharedMenuPage'
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<AllergenMatrixPage />} />
             <Route path="haccp"         element={<HACCPPage />} />
+            <Route path="media"         element={<MediaLibraryPage />} />
             <Route path="help"          element={<HelpPage />} />
             <Route path="import"        element={<Navigate to="/configuration" replace />} />
           </Route>

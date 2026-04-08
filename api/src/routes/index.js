@@ -100,6 +100,9 @@ router.use('/nutrition',          ...can('inventory', 'read'),   write('inventor
 // ── Image upload (local disk or S3) ───────────────────────────────────────────
 router.use('/upload',             auth,                                               require('./upload'));
 
+// ── Media library ──────────────────────────────────────────────────────────────
+router.use('/media',              auth,                                               require('./media'));
+
 // ── Misc / internal ────────────────────────────────────────────────────────────
 router.use('/seed',               ...can('settings', 'write'),                        require('./seed'));
 router.use('/feedback',           auth,                                               require('./feedback'));

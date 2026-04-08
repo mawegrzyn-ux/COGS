@@ -995,6 +995,43 @@ const migrations = [
   // ── 82. Add image_url to modifier options ─────────────────────────────────
   `ALTER TABLE mcogs_modifier_options ADD COLUMN IF NOT EXISTS image_url TEXT`,
 
+  // ── 83. Media library — categories ───────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_media_categories (
+  id         SERIAL PRIMARY KEY,
+  name       VARCHAR(200) NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
+
+  // ── 84. Media library — items (stores original + thumb + web variants) ───
+  `CREATE TABLE IF NOT EXISTS mcogs_media_items (
+  id                SERIAL PRIMARY KEY,
+  filename          VARCHAR(500) NOT NULL,
+  original_filename VARCHAR(500) NOT NULL,
+  url               TEXT NOT NULL,
+  thumb_url         TEXT,
+  web_url           TEXT,
+  storage_type      VARCHAR(10)  NOT NULL DEFAULT 'local',
+  storage_key       TEXT,
+  thumb_key         TEXT,
+  web_key           TEXT,
+  mime_type         VARCHAR(100) NOT NULL DEFAULT 'image/jpeg',
+  size_bytes        INTEGER      NOT NULL DEFAULT 0,
+  width             INTEGER,
+  height            INTEGER,
+  scope             VARCHAR(10)  NOT NULL DEFAULT 'shared',
+  form_key          VARCHAR(100),
+  category_id       INTEGER REFERENCES mcogs_media_categories(id) ON DELETE SET NULL,
+  uploaded_by       TEXT,
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+)`,
+
+  // ── 85. Media library — indexes ───────────────────────────────────────────
+  `CREATE INDEX IF NOT EXISTS idx_media_items_category  ON mcogs_media_items(category_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_media_items_scope     ON mcogs_media_items(scope, form_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_media_items_created   ON mcogs_media_items(created_at DESC)`,
+
   // ── 62–67. Drop old category indexes, create FK indexes ──────────────────
   `DROP INDEX IF EXISTS idx_ingredients_category`,
   `DROP INDEX IF EXISTS idx_recipes_category`,
