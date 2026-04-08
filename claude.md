@@ -221,9 +221,12 @@ PORT=3001
 The API also supports **standalone mode** for running PostgreSQL on a
 separate host (e.g. AWS RDS). Set `DB_MODE=standalone`, point `DB_HOST` at
 the remote endpoint (or use `DB_CONNECTION_STRING`), and SSL is enabled by
-default. See [`docs/DATABASE.md`](./docs/DATABASE.md) and
-[`api/.env.example`](./api/.env.example) for the full variable reference
-and an AWS RDS walkthrough.
+default. Admins can also switch modes — including **copying all data** from
+the current database into a new target in one click — from the UI at
+**System → Database** (gated by `settings:write`). See
+[`docs/DATABASE.md`](./docs/DATABASE.md) and
+[`api/.env.example`](./api/.env.example) for the full variable reference,
+the Migrate Data & Switch walkthrough, and the AWS RDS setup steps.
 
 ---
 
