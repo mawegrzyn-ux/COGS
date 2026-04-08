@@ -1320,6 +1320,27 @@ type TestResult = {
   error?: string
 }
 
+type RowCounts = { per_table: Record<string, number | null>; total: number }
+
+type MigratePreview = {
+  ok: boolean
+  schema_applied?: number
+  order?: string[]
+  source?: RowCounts
+  target_before?: RowCounts
+  warnings?: string[]
+  target_not_empty?: boolean
+  error?: string
+}
+
+type MigrateResult = MigratePreview & {
+  copied?: RowCounts
+  saved?: unknown
+  restart_required?: boolean
+  message?: string
+  code?: string
+}
+
 function DatabaseTab() {
   const api = useApi()
 
@@ -1346,6 +1367,14 @@ function DatabaseTab() {
   const [confirmSave, setConfirmSave] = useState(false)
   const [confirmRestart, setConfirmRestart] = useState(false)
   const [toast, setToast] = useState<{ msg: string; type?: 'success' | 'error' } | null>(null)
+
+  // Migrate-and-switch state
+  const [migrateModalOpen, setMigrateModalOpen] = useState(false)
+  const [migratePreview, setMigratePreview] = useState<MigratePreview | null>(null)
+  const [migratePreviewLoading, setMigratePreviewLoading] = useState(false)
+  const [overwriteConfirmed, setOverwriteConfirmed] = useState(false)
+  const [migrateRunning, setMigrateRunning] = useState(false)
+  const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1447,6 +1476,48 @@ function DatabaseTab() {
     } finally {
       setMigrating(false)
     }
+  }
+
+  // ── Migrate-and-switch flow ──────────────────────────────────────────────
+  async function openMigrateModal() {
+    setMigrateModalOpen(true)
+    setMigratePreview(null)
+    setMigrateResult(null)
+    setOverwriteConfirmed(false)
+    setMigratePreviewLoading(true)
+    try {
+      const r = await api.post('/db-config/migrate-preview', candidatePayload()) as MigratePreview
+      setMigratePreview(r)
+    } catch (err) {
+      setMigratePreview({ ok: false, error: (err as Error).message })
+    } finally {
+      setMigratePreviewLoading(false)
+    }
+  }
+
+  async function runMigrateData() {
+    if (!migratePreview || !migratePreview.ok) return
+    if (migratePreview.target_not_empty && !overwriteConfirmed) return
+    setMigrateRunning(true)
+    try {
+      const body = { ...candidatePayload(), overwrite: !!migratePreview.target_not_empty }
+      const r = await api.post('/db-config/migrate-data', body) as MigrateResult
+      setMigrateResult(r)
+      if (r.ok) {
+        await load() // refresh masked stored config
+      }
+    } catch (err) {
+      setMigrateResult({ ok: false, error: (err as Error).message })
+    } finally {
+      setMigrateRunning(false)
+    }
+  }
+
+  function closeMigrateModal() {
+    setMigrateModalOpen(false)
+    setMigratePreview(null)
+    setMigrateResult(null)
+    setOverwriteConfirmed(false)
   }
 
   if (loading) return <Spinner />
@@ -1648,6 +1719,13 @@ function DatabaseTab() {
         >{saving ? 'Saving…' : 'Save'}</button>
 
         <button
+          className="btn-primary px-5 py-2 text-sm"
+          onClick={openMigrateModal}
+          disabled={saving || !form.host}
+          title="Copy schema and all data from the current active database into the target database, then save the new connection"
+        >Migrate Data &amp; Switch</button>
+
+        <button
           className="btn-secondary px-5 py-2 text-sm ml-auto"
           onClick={handleMigrate}
           disabled={migrating}
@@ -1671,6 +1749,169 @@ function DatabaseTab() {
           onCancel={() => setConfirmRestart(false)}
           danger={false}
         />
+      )}
+
+      {migrateModalOpen && (
+        <Modal title="Migrate Data & Switch Database" onClose={migrateRunning ? () => {} : closeMigrateModal} width="max-w-2xl">
+          {migratePreviewLoading && (
+            <div className="py-8 flex items-center gap-3 text-sm text-text-3">
+              <Spinner /> Connecting to target and counting rows…
+            </div>
+          )}
+
+          {!migratePreviewLoading && migratePreview && !migratePreview.ok && (
+            <div className="py-4">
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                ❌ <span className="font-medium">Preview failed:</span> {migratePreview.error}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+              </div>
+            </div>
+          )}
+
+          {!migratePreviewLoading && migratePreview && migratePreview.ok && !migrateResult && (
+            <div className="space-y-4">
+              <p className="text-sm text-text-2">
+                This will copy all <code className="font-mono text-xs">mcogs_*</code> tables and rows from the
+                <strong> currently active database</strong> into the <strong>target database</strong> you configured above,
+                then save the new connection. The current database is left untouched. After the copy you'll be prompted
+                to restart the API to start using the new target.
+              </p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="card p-4">
+                  <div className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Source (current)</div>
+                  <div className="text-2xl font-bold text-text-1">{(migratePreview.source?.total ?? 0).toLocaleString()}</div>
+                  <div className="text-xs text-text-3 mt-1">total rows across {migratePreview.order?.length ?? 0} tables</div>
+                </div>
+                <div className={`card p-4 ${migratePreview.target_not_empty ? 'border-amber-300 bg-amber-50' : ''}`}>
+                  <div className="text-xs font-semibold text-text-3 uppercase tracking-wide mb-2">Target</div>
+                  <div className={`text-2xl font-bold ${migratePreview.target_not_empty ? 'text-amber-700' : 'text-text-1'}`}>
+                    {(migratePreview.target_before?.total ?? 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-text-3 mt-1">
+                    {migratePreview.target_not_empty
+                      ? <span className="text-amber-700 font-medium">Existing data — will be overwritten</span>
+                      : 'empty — safe to copy into'}
+                  </div>
+                </div>
+              </div>
+
+              {migratePreview.target_not_empty && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 space-y-2">
+                  <div className="text-sm font-semibold text-red-800">
+                    ⚠ The target database is not empty
+                  </div>
+                  <div className="text-xs text-red-700">
+                    Continuing will <strong>TRUNCATE every <code className="font-mono">mcogs_*</code> table on the target</strong>
+                    {' '}and replace its rows with data from the source. This is destructive and cannot be undone from inside the app.
+                    Make sure you have a backup of the target database (or are deliberately overwriting empty test data) before continuing.
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={overwriteConfirmed}
+                      onChange={e => setOverwriteConfirmed(e.target.checked)}
+                      className="accent-red-600"
+                    />
+                    <span className="text-xs font-medium text-red-800">
+                      I understand this will overwrite existing data on the remote database
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {!!migratePreview.warnings && migratePreview.warnings.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800">
+                  <div className="font-semibold mb-1">Schema warnings:</div>
+                  <ul className="list-disc pl-4">
+                    {migratePreview.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              <details className="text-xs text-text-3">
+                <summary className="cursor-pointer hover:text-text-1">Per-table row counts</summary>
+                <table className="w-full mt-2 text-xs">
+                  <thead>
+                    <tr className="text-left text-text-3">
+                      <th className="py-1">Table</th>
+                      <th className="py-1 text-right">Source</th>
+                      <th className="py-1 text-right">Target</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(migratePreview.order || []).map(t => (
+                      <tr key={t} className="border-t border-border">
+                        <td className="py-1 font-mono">{t}</td>
+                        <td className="py-1 text-right">{migratePreview.source?.per_table?.[t] ?? '—'}</td>
+                        <td className="py-1 text-right">{migratePreview.target_before?.per_table?.[t] ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  className="btn-secondary px-4 py-2 text-sm"
+                  onClick={closeMigrateModal}
+                  disabled={migrateRunning}
+                >Cancel</button>
+                <button
+                  className="btn-primary px-4 py-2 text-sm"
+                  onClick={runMigrateData}
+                  disabled={migrateRunning || (!!migratePreview.target_not_empty && !overwriteConfirmed)}
+                >{migrateRunning ? 'Migrating…' : 'Start Migration'}</button>
+              </div>
+            </div>
+          )}
+
+          {migrateResult && migrateResult.ok && (
+            <div className="space-y-4">
+              <div className="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+                ✅ <span className="font-medium">Migration complete.</span> Copied {(migrateResult.copied?.total ?? 0).toLocaleString()} rows
+                across {Object.keys(migrateResult.copied?.per_table || {}).length} tables. The new connection has been saved.
+                Restart the API to begin using the new database.
+              </div>
+              <details className="text-xs text-text-3">
+                <summary className="cursor-pointer hover:text-text-1">Per-table copy results</summary>
+                <table className="w-full mt-2 text-xs">
+                  <tbody>
+                    {Object.entries(migrateResult.copied?.per_table || {}).map(([t, n]) => (
+                      <tr key={t} className="border-t border-border">
+                        <td className="py-1 font-mono">{t}</td>
+                        <td className="py-1 text-right">{n}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+              <div className="flex justify-end gap-3">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+                <button
+                  className="btn-primary px-4 py-2 text-sm"
+                  onClick={() => { closeMigrateModal(); setConfirmRestart(true) }}
+                >Restart API now</button>
+              </div>
+            </div>
+          )}
+
+          {migrateResult && !migrateResult.ok && (
+            <div className="py-4 space-y-3">
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                ❌ <span className="font-medium">Migration failed:</span> {migrateResult.error}
+                {migrateResult.code === 'TARGET_NOT_EMPTY' && (
+                  <div className="mt-1 text-xs">Tick the overwrite checkbox above and try again.</div>
+                )}
+              </div>
+              <div className="flex justify-end">
+                <button className="btn-secondary px-4 py-2 text-sm" onClick={closeMigrateModal}>Close</button>
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
