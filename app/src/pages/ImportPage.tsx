@@ -314,7 +314,6 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
     if (seen.size === 0) {
       // No menu items — skip this step entirely
-      saveStaged()
       setStep('confirm')
       return
     }
@@ -332,7 +331,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
 
     setStaged(prev => prev ? { ...prev, sales_item_decisions: decisions } : prev)
     setStep('sales-items')
-  }, [staged, saveStaged])
+  }, [staged])
 
   // ── Missing recipe ingredients ───────────────────────────────────────────────
 
@@ -745,6 +744,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
               setStaged(prev => prev ? { ...prev, recipe_ingredient_mapping: newMap } : prev)
               setStep('recipe-ing')
             } else {
+              await saveStaged()
               goToSalesItemsStep()
             }
           }} className="btn-primary px-6">Next →</button>
