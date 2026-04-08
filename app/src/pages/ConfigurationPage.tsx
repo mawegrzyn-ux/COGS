@@ -3,6 +3,7 @@ import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
 import SettingsPage   from './SettingsPage'
+import MediaLibraryPage from './MediaLibraryPage'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 
@@ -17,6 +18,7 @@ type Section =
   | 'currency'
   | 'cogs-thresholds'
   | 'users-roles'
+  | 'media-library'
   | 'import'
 
 interface SectionDef {
@@ -35,6 +37,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'currency',           icon: '💱', label: 'Currency',            feature: 'settings'   },
   { id: 'cogs-thresholds',    icon: '🎯', label: 'COGS Thresholds',     feature: 'settings'   },
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
+  { id: 'media-library',      icon: '🖼️', label: 'Media Library',      feature: null         },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
 ]
 
@@ -308,6 +311,7 @@ export default function ConfigurationPage() {
       case 'currency':           return <SettingsPage embedded initialTab="currency" />
       case 'cogs-thresholds':    return <SettingsPage embedded initialTab="thresholds" />
       case 'users-roles':        return <UsersRolesSection />
+      case 'media-library':      return <MediaLibraryPage />
       case 'import':             return <ImportPage />
       default:                   return null
     }
@@ -342,7 +346,10 @@ export default function ConfigurationPage() {
       </aside>
 
       {/* ── Main content panel ──────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      {/* Media Library manages its own scrolling, so we switch the wrapper to
+          overflow-hidden when it's active; other sections expect the wrapper
+          to scroll their own content. */}
+      <div className={`flex-1 flex flex-col min-w-0 ${effectiveActive === 'media-library' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {renderContent()}
       </div>
 
