@@ -1,7 +1,8 @@
 // =============================================================================
-// RAG helper — loads claude.md at startup, embeds sections via Voyage AI,
-// retrieves top-k relevant chunks per user query.
-// Falls back to keyword search if VOYAGE_API_KEY is not set.
+// RAG helper — loads claude.md + docs/user-guide.md at startup, embeds each
+// section (split on ## headings) via Voyage AI, retrieves top-k relevant
+// chunks per user query. Falls back to keyword search if VOYAGE_API_KEY is
+// not set. Add more markdown sources in SOURCE_FILES below.
 // =============================================================================
 
 const fs       = require('fs');
