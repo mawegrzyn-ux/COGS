@@ -158,4 +158,63 @@ function describeTarget({ mode, config }) {
   return `${mode} → ${config.host || '?'}:${config.port || '?'}/${config.database || '?'}`;
 }
 
-module.exports = { buildPoolConfig, describeTarget };
+// -----------------------------------------------------------------------------
+// buildPoolConfigFromStored — accepts a record returned by the config store's
+// getDbConnection() and produces a pg Pool config in the same shape as
+// buildPoolConfig() so the rest of the API is agnostic about where the
+// connection details came from.
+// -----------------------------------------------------------------------------
+function buildPoolConfigFromStored(stored) {
+  if (!stored) return null;
+
+  const mode = stored.mode === 'standalone' ? 'standalone' : 'local';
+
+  const base = {
+    max:                     Number.isFinite(stored.pool_max) ? stored.pool_max : 10,
+    idleTimeoutMillis:       Number.isFinite(stored.idle_timeout_ms) ? stored.idle_timeout_ms : 30000,
+    connectionTimeoutMillis: Number.isFinite(stored.connection_timeout_ms) ? stored.connection_timeout_ms : 10000,
+  };
+
+  // SSL
+  if (stored.ssl_enabled) {
+    const ssl = {
+      rejectUnauthorized: stored.ssl_reject_unauthorized === null || stored.ssl_reject_unauthorized === undefined
+        ? Boolean(stored.ssl_ca_path)
+        : !!stored.ssl_reject_unauthorized,
+    };
+    if (stored.ssl_ca_path) {
+      const caPath = path.isAbsolute(stored.ssl_ca_path)
+        ? stored.ssl_ca_path
+        : path.resolve(process.cwd(), stored.ssl_ca_path);
+      try {
+        ssl.ca = fs.readFileSync(caPath, 'utf8');
+      } catch (err) {
+        throw new Error(`[db] Failed to read DB CA bundle at ${caPath}: ${err.message}`);
+      }
+    }
+    base.ssl = ssl;
+  }
+
+  let config;
+  if (stored.connection_string) {
+    config = { ...base, connectionString: stored.connection_string };
+    if (stored.host)     config.host     = stored.host;
+    if (stored.port)     config.port     = stored.port;
+    if (stored.database) config.database = stored.database;
+    if (stored.username) config.user     = stored.username;
+    if (stored.password) config.password = stored.password;
+  } else {
+    config = {
+      ...base,
+      host:     stored.host,
+      port:     stored.port,
+      database: stored.database,
+      user:     stored.username,
+      password: stored.password,
+    };
+  }
+
+  return { mode, config };
+}
+
+module.exports = { buildPoolConfig, buildPoolConfigFromStored, describeTarget };
