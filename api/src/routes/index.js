@@ -25,7 +25,8 @@ router.use('/public/share',      require('./shared-pages').publicRouter);
 // ── Public: local media file serving ─────────────────────────────────────────
 // <img src> tags cannot send auth headers so this must be outside requireAuth.
 // Filenames are random (timestamp + nanoid) so enumeration is not practical.
-router.use('/media/file',        require('./media-file'));
+// Query-param URL avoids Nginx extension-based static-file rules (*.jpg etc.)
+router.use('/media/img',         require('./media-file'));
 
 // ── Auth identity ──────────────────────────────────────────────────────────────
 // me.js applies requireAuth internally

@@ -58,9 +58,9 @@ function getUploadsDir() {
 }
 
 function localUrl(filename) {
-  // Route through the /api proxy so Nginx forwards to Express automatically.
-  // No additional Nginx location block or static file config needed.
-  return `/api/media/file/${encodeURIComponent(filename)}`;
+  // Use a query-param URL so Nginx's extension-based static-file rules
+  // (e.g. location ~* \.(jpg|png)$) don't intercept before the /api proxy.
+  return `/api/media/img?f=${encodeURIComponent(filename)}`;
 }
 
 async function s3Upload(cfg, key, buffer, mimeType) {
@@ -400,7 +400,7 @@ router.delete('/categories/:id', async (req, res) => {
 
 // ── POST /api/media/fix-local-urls — one-shot migration ──────────────────────
 // Rewrites any absolute http(s):// local URLs in mcogs_media_items to the new
-// /api/media/file/:filename path. Safe to run multiple times (idempotent).
+// /api/media/img?f=:filename path. Safe to run multiple times (idempotent).
 
 router.post('/fix-local-urls', async (req, res) => {
   try {
@@ -413,9 +413,9 @@ router.post('/fix-local-urls', async (req, res) => {
     let fixed = 0;
     for (const item of rows) {
       const toLocal = (url, key) => {
-        if (!url || url.startsWith('/api/media/file/')) return url; // already correct
+        if (!url || url.startsWith('/api/media/img?f=')) return url; // already correct
         const filename = key ? path.basename(key) : path.basename(url);
-        return `/api/media/file/${encodeURIComponent(filename)}`;
+        return `/api/media/img?f=${encodeURIComponent(filename)}`;
       };
 
       const newUrl      = toLocal(item.url,       item.storage_key);
