@@ -1202,6 +1202,41 @@ interface StorageCfg {
   s3_base_url?:  string
 }
 
+function FixLocalUrlsButton() {
+  const api = useApi()
+  const [running, setRunning] = useState(false)
+  const [result,  setResult]  = useState<{ fixed: number; total: number } | null>(null)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null)
+    try {
+      const data = await api.post('/media/fix-local-urls', {})
+      setResult(data)
+    } catch (e: any) {
+      setError(e.message || 'Request failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <button className="btn-outline px-4 text-sm" onClick={run} disabled={running}>
+        {running ? 'Fixing…' : '🔧 Fix Image URLs'}
+      </button>
+      {result && (
+        <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
+          ✅ Fixed {result.fixed} of {result.total} local items
+        </span>
+      )}
+      {error && (
+        <span className="text-xs font-medium text-red-600">{error}</span>
+      )}
+    </div>
+  )
+}
+
 function StorageTab() {
   const api                 = useApi()
   const [loading, setLoading] = useState(true)
@@ -1360,6 +1395,16 @@ function StorageTab() {
       </button>
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Fix-local-URLs — one-shot migration for images stored with old absolute URLs */}
+      <div className="mt-6 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
+        <h4 className="font-semibold text-sm mb-1" style={{ color: 'var(--text-1)' }}>Fix Image URLs</h4>
+        <p className="text-xs mb-3" style={{ color: 'var(--text-3)' }}>
+          If images in the Media Library show as broken (e.g. after a domain change), click this to rewrite
+          all locally-stored image paths to the current format. Safe to run multiple times.
+        </p>
+        <FixLocalUrlsButton />
+      </div>
 
       {cfg.type === 's3' && cfg.s3_bucket && (
         <div className="mt-6 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>

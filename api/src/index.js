@@ -27,9 +27,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve locally-uploaded images at /api/uploads/ so they flow through the
-// existing Nginx /api proxy block — no additional Nginx location needed.
-app.use('/api/uploads', express.static(path.join(__dirname, '../../uploads')));
+// Note: local uploads are served via GET /api/media/file/:filename route
+// (in api/src/routes/media.js) so they flow through the /api Nginx proxy.
+// No separate static file serving or additional Nginx location is needed.
 
 // =============================================================================
 // Startup sequence

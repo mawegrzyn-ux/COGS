@@ -58,10 +58,9 @@ function getUploadsDir() {
 }
 
 function localUrl(filename) {
-  // Root-relative path — domain-agnostic, works regardless of which hostname
-  // the app is accessed from. Express serves /api/uploads/ as static files;
-  // Nginx proxies /api → Express so this path is always reachable.
-  return `/api/uploads/${filename}`;
+  // Route through the /api proxy so Nginx forwards to Express automatically.
+  // No additional Nginx location block or static file config needed.
+  return `/api/media/file/${encodeURIComponent(filename)}`;
 }
 
 async function s3Upload(cfg, key, buffer, mimeType) {
@@ -397,6 +396,62 @@ router.delete('/categories/:id', async (req, res) => {
     await pool.query(`DELETE FROM mcogs_media_categories WHERE id=$1`, [req.params.id]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
+});
+
+// ── POST /api/media/fix-local-urls — one-shot migration ──────────────────────
+// Rewrites any absolute http(s):// local URLs in mcogs_media_items to the new
+// /api/media/file/:filename path. Safe to run multiple times (idempotent).
+
+router.post('/fix-local-urls', async (req, res) => {
+  try {
+    // Fetch all local-storage items that still have absolute URLs
+    const { rows } = await pool.query(
+      `SELECT id, url, thumb_url, web_url, storage_key, thumb_key, web_key
+       FROM mcogs_media_items WHERE storage_type = 'local'`
+    );
+
+    let fixed = 0;
+    for (const item of rows) {
+      const toLocal = (url, key) => {
+        if (!url || url.startsWith('/api/media/file/')) return url; // already correct
+        const filename = key ? path.basename(key) : path.basename(url);
+        return `/api/media/file/${encodeURIComponent(filename)}`;
+      };
+
+      const newUrl      = toLocal(item.url,       item.storage_key);
+      const newThumbUrl = toLocal(item.thumb_url,  item.thumb_key);
+      const newWebUrl   = toLocal(item.web_url,    item.web_key);
+
+      if (newUrl !== item.url || newThumbUrl !== item.thumb_url || newWebUrl !== item.web_url) {
+        await pool.query(
+          `UPDATE mcogs_media_items SET url=$1, thumb_url=$2, web_url=$3, updated_at=NOW() WHERE id=$4`,
+          [newUrl, newThumbUrl, newWebUrl, item.id]
+        );
+        fixed++;
+      }
+    }
+
+    res.json({ ok: true, fixed, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// ── GET /api/media/file/:filename — serve local upload files ─────────────────
+// Placed before /:id so "file" is never treated as a numeric id.
+// Routes through /api Nginx proxy — no extra Nginx location block needed.
+
+router.get('/file/:filename', (req, res) => {
+  const dir      = getUploadsDir();
+  const filename = decodeURIComponent(req.params.filename);
+  const filePath = path.resolve(path.join(dir, filename));
+  // Security: reject path traversal attempts
+  if (!filePath.startsWith(path.resolve(dir))) {
+    return res.status(403).end();
+  }
+  res.sendFile(filePath, err => {
+    if (err) res.status(404).end();
+  });
 });
 
 // ── PUT /api/media/:id ────────────────────────────────────────────────────────
