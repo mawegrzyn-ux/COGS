@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import AiChat, { type PepperMode } from './AiChat'
+import MediaLibrary from './MediaLibrary'
 
 const PANEL_WIDTH_KEY  = 'pepper-panel-width'
 const MIN_PANEL_WIDTH  = 280
@@ -171,6 +172,7 @@ export default function AppLayout() {
     (localStorage.getItem('pepper-mode') as PepperMode) || 'float'
   )
   const [pepperFloatOpen, setPepperFloatOpen] = useState(false)
+  const [mediaOpen,       setMediaOpen]       = useState(false)
   const [panelWidth, setPanelWidth] = useState<number>(() =>
     parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || String(DEFAULT_PANEL_W), 10)
   )
@@ -282,6 +284,8 @@ export default function AppLayout() {
           pepperMode={pepperMode}
           pepperOpen={pepperMode !== 'float' || pepperFloatOpen}
           onPepperToggle={() => setPepperFloatOpen(o => !o)}
+          mediaOpen={mediaOpen}
+          onMediaToggle={() => setMediaOpen(o => !o)}
         />
       </div>
 
@@ -353,6 +357,12 @@ export default function AppLayout() {
           onClose={() => setCtxMenu(null)}
         />
       )}
+
+      {/* Global Media Library modal — triggered from sidebar button */}
+      <MediaLibrary
+        open={mediaOpen}
+        onClose={() => setMediaOpen(false)}
+      />
     </div>
   )
 }

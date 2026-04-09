@@ -27,8 +27,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve locally-uploaded images (fallback when S3 is not configured)
-app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+// Serve locally-uploaded images at /api/uploads/ so they flow through the
+// existing Nginx /api proxy block — no additional Nginx location needed.
+app.use('/api/uploads', express.static(path.join(__dirname, '../../uploads')));
 
 // =============================================================================
 // Startup sequence

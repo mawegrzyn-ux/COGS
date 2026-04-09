@@ -57,12 +57,11 @@ function getUploadsDir() {
   return dir;
 }
 
-function getAppBaseUrl() {
-  return (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
-}
-
 function localUrl(filename) {
-  return `${getAppBaseUrl()}/uploads/${filename}`;
+  // Root-relative path — domain-agnostic, works regardless of which hostname
+  // the app is accessed from. Express serves /api/uploads/ as static files;
+  // Nginx proxies /api → Express so this path is always reachable.
+  return `/api/uploads/${filename}`;
 }
 
 async function s3Upload(cfg, key, buffer, mimeType) {

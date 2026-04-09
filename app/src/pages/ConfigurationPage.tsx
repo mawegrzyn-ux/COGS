@@ -3,6 +3,7 @@ import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
 import SettingsPage   from './SettingsPage'
+import MediaLibrary   from '../components/MediaLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 
@@ -18,6 +19,7 @@ type Section =
   | 'cogs-thresholds'
   | 'users-roles'
   | 'import'
+  | 'media'
 
 interface SectionDef {
   id:      Section
@@ -36,6 +38,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'cogs-thresholds',    icon: '🎯', label: 'COGS Thresholds',     feature: 'settings'   },
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
+  { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
 ]
 
 // ── Global Config section ─────────────────────────────────────────────────────
@@ -309,6 +312,11 @@ export default function ConfigurationPage() {
       case 'cogs-thresholds':    return <SettingsPage embedded initialTab="thresholds" />
       case 'users-roles':        return <UsersRolesSection />
       case 'import':             return <ImportPage />
+      case 'media':              return (
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+          <MediaLibrary open={true} onClose={() => {}} mode="page" />
+        </div>
+      )
       default:                   return null
     }
   }
