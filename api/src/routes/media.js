@@ -437,23 +437,6 @@ router.post('/fix-local-urls', async (req, res) => {
   }
 });
 
-// ── GET /api/media/file/:filename — serve local upload files ─────────────────
-// Placed before /:id so "file" is never treated as a numeric id.
-// Routes through /api Nginx proxy — no extra Nginx location block needed.
-
-router.get('/file/:filename', (req, res) => {
-  const dir      = getUploadsDir();
-  const filename = decodeURIComponent(req.params.filename);
-  const filePath = path.resolve(path.join(dir, filename));
-  // Security: reject path traversal attempts
-  if (!filePath.startsWith(path.resolve(dir))) {
-    return res.status(403).end();
-  }
-  res.sendFile(filePath, err => {
-    if (err) res.status(404).end();
-  });
-});
-
 // ── PUT /api/media/:id ────────────────────────────────────────────────────────
 
 router.put('/:id', async (req, res) => {

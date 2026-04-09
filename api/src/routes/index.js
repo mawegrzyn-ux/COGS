@@ -22,6 +22,11 @@ const write = (f) => (req, res, next) => {
 router.use('/health',            require('./health'));
 router.use('/public/share',      require('./shared-pages').publicRouter);
 
+// ── Public: local media file serving ─────────────────────────────────────────
+// <img src> tags cannot send auth headers so this must be outside requireAuth.
+// Filenames are random (timestamp + nanoid) so enumeration is not practical.
+router.use('/media/file',        require('./media-file'));
+
 // ── Auth identity ──────────────────────────────────────────────────────────────
 // me.js applies requireAuth internally
 router.use('/me',                require('./me'));
