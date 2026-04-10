@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import ImageEditor from './ImageEditor'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -110,6 +111,9 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
 
   // Bulk action
   const [bulkCatId, setBulkCatId] = useState<number | null>(null)
+
+  // Image editor
+  const [editingImage, setEditingImage] = useState<MediaItem | null>(null)
 
   // ── Auth helper ─────────────────────────────────────────────────────────────
 
@@ -377,6 +381,33 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
     } catch { /* ignore */ }
   }
 
+  // ── Save edited image ─────────────────────────────────────────────────────────
+
+  async function saveEditedImage(blob: Blob, mimeType: string) {
+    if (!editingImage) return
+    const token = await getAccessTokenSilently()
+    const ext = mimeType === 'image/png' ? '.png' : '.jpg'
+    const file = new File([blob], editingImage.filename.replace(/\.[^.]+$/, ext), { type: mimeType })
+    const fd = new FormData()
+    fd.append('images', file)
+    if (editingImage.category_id != null) fd.append('category_id', String(editingImage.category_id))
+    fd.append('scope', editingImage.scope)
+    if (editingImage.form_key) fd.append('form_key', editingImage.form_key)
+    try {
+      // Delete old, upload new
+      await fetch(`${API_BASE}/media/${editingImage.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      })
+      await fetch(`${API_BASE}/media/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
+      })
+      setEditingImage(null)
+      setDetailItem(null)
+      setSelectedIds(new Set())
+      await load()
+    } catch { /* silent */ }
+  }
+
   // ── Panel resize ─────────────────────────────────────────────────────────────
 
   function startResize(e: React.MouseEvent) {
@@ -453,7 +484,8 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
               )}
             </button>
             )}
-            {/* Close */}
+            {/* Close (modal mode only) */}
+            {mode !== 'page' && (
             <button
               onClick={onClose}
               className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-text-1 transition-colors"
@@ -463,6 +495,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
                 <path d="M18 6L6 18M6 6l12 12"/>
               </svg>
             </button>
+            )}
           </div>
         </div>
 
@@ -712,7 +745,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
                 onSave={saveDetail}
                 onDelete={deleteItem}
                 onToggleScope={toggleScope}
-                onEditImage={onEditImage}
+                onEditImage={setEditingImage}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center px-6">
@@ -725,9 +758,22 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditI
           </div>
         </div>
 
+        {/* Image editor */}
+        {editingImage && (
+          <ImageEditor
+            open={true}
+            src={editingImage.web_url || editingImage.url}
+            onClose={() => setEditingImage(null)}
+            onSave={saveEditedImage}
+          />
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-border shrink-0 bg-surface-2">
-          <button onClick={onClose} className="btn-outline text-sm py-1.5 px-4">Close</button>
+          {mode !== 'page' && (
+            <button onClick={onClose} className="btn-outline text-sm py-1.5 px-4">Close</button>
+          )}
+          {mode === 'page' && <div />}
           {onInsert && (
             <button
               onClick={() => {
@@ -796,7 +842,7 @@ function GridView({ items, selectedIds, onSelect }: {
         return (
           <div
             key={item.id}
-            onClick={() => onSelect(item)}
+            onClick={() => onSelect(item, anySelected)}
             className={`group relative cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${selected ? 'border-accent shadow-sm' : 'border-transparent hover:border-border'}`}
           >
             {/* Thumbnail */}
@@ -828,16 +874,6 @@ function GridView({ items, selectedIds, onSelect }: {
               </div>
             </div>
 
-            {/* Selected checkmark overlay top-right */}
-            {selected && (
-              <div className="absolute top-1.5 right-1.5">
-                <div className="w-5 h-5 rounded-full bg-accent flex items-center justify-center">
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5">
-                    <path d="M20 6L9 17l-5-5"/>
-                  </svg>
-                </div>
-              </div>
-            )}
           </div>
         )
       })}

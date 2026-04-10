@@ -20,6 +20,7 @@ type Section =
   | 'users-roles'
   | 'import'
   | 'media'
+  | 'storage'
 
 interface SectionDef {
   id:      Section
@@ -39,6 +40,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
+  { id: 'storage',            icon: '☁️', label: 'Storage (S3)',         feature: 'settings'   },
 ]
 
 // ── Global Config section ─────────────────────────────────────────────────────
@@ -317,6 +319,7 @@ export default function ConfigurationPage() {
           <MediaLibrary open={true} onClose={() => {}} mode="page" />
         </div>
       )
+      case 'storage':            return <SettingsPage embedded initialTab="storage" />
       default:                   return null
     }
   }
