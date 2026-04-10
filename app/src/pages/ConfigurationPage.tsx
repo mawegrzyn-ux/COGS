@@ -22,7 +22,6 @@ type Section =
   | 'import'
   | 'media'
   | 'stock-config'
-  | 'storage'
 
 interface SectionDef {
   id:      Section
@@ -43,7 +42,6 @@ const SECTIONS: SectionDef[] = [
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
   { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'stock_manager' },
-  { id: 'storage',            icon: '☁️', label: 'Storage (S3)',         feature: 'settings'   },
 ]
 
 // ── Global Config section ─────────────────────────────────────────────────────
@@ -420,7 +418,6 @@ export default function ConfigurationPage() {
         </div>
       )
       case 'stock-config':       return <StockConfigSection />
-      case 'storage':            return <SettingsPage embedded initialTab="storage" />
       default:                   return null
     }
   }

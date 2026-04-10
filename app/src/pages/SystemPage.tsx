@@ -890,6 +890,7 @@ function AuditRow({ entry: e, expanded, onToggle, actionColor, formatDate }: {
 type Section =
   | 'ai'
   | 'audit-log'      // Central audit trail — admin-only
+  | 'storage'        // Media storage config (local vs S3) — admin-only
   | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
   | 'test-data'      // Seeding + clearing dummy data — dev-only, date-confirmed
   | 'architecture'
@@ -909,6 +910,7 @@ interface SectionDef {
 const SECTIONS: SectionDef[] = [
   { id: 'ai',               icon: '🤖', label: 'AI' },
   { id: 'audit-log',        icon: '📋', label: 'Audit Log',        gate: 'admin' },
+  { id: 'storage',          icon: '☁️', label: 'Storage',           gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
   { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
@@ -948,6 +950,9 @@ export default function SystemPage() {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
       case 'audit-log':        return canManageSettings
                                   ? <AuditLogSection />
+                                  : <GatedFallback reason="admin" />
+      case 'storage':          return canManageSettings
+                                  ? <SettingsPage embedded initialTab="storage" />
                                   : <GatedFallback reason="admin" />
       case 'database':         return canManageSettings
                                   ? <SettingsPage embedded initialTab="database" />
