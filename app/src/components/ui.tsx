@@ -338,7 +338,7 @@ function safeEval(expr: string): number | null {
   }
 }
 
-export function CalcInput({ value, onChange, className = 'input w-full', placeholder, step, min, disabled }: CalcInputProps) {
+export function CalcInput({ value, onChange, className = 'input w-full', placeholder, disabled }: CalcInputProps) {
   const [rawText, setRawText] = useState(value)
   const [focused, setFocused] = useState(false)
 
