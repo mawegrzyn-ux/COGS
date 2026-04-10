@@ -61,10 +61,13 @@ router.get('/:id', async (req, res) => {
              ing.name         AS ingredient_name,
              ing.base_unit_id,
              u.name           AS base_unit_name,
-             u.abbreviation   AS base_unit_abbr
+             u.abbreviation   AS base_unit_abbr,
+             poi.store_id     AS item_store_id,
+             ist.name         AS item_store_name
       FROM   mcogs_purchase_order_items poi
       LEFT JOIN mcogs_ingredients ing ON ing.id = poi.ingredient_id
       LEFT JOIN mcogs_units       u   ON u.id   = ing.base_unit_id
+      LEFT JOIN mcogs_stores      ist ON ist.id  = poi.store_id
       WHERE  poi.po_id = $1
       ORDER BY poi.sort_order, poi.id
     `, [req.params.id]);
@@ -76,10 +79,51 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// GET /purchase-orders/quote-lookup?ingredient_id=&vendor_id=
+// Returns the best active price quote for an ingredient from a vendor
+router.get('/quote-lookup', async (req, res) => {
+  const { ingredient_id, vendor_id } = req.query;
+  if (!ingredient_id || !vendor_id) return res.status(400).json({ error: { message: 'ingredient_id and vendor_id required' } });
+  try {
+    // Find active price quotes for this ingredient+vendor
+    const { rows: quotes } = await pool.query(`
+      SELECT pq.*,
+             ing.name AS ingredient_name,
+             ing.base_unit_id,
+             u.name AS base_unit_name,
+             u.abbreviation AS base_unit_abbr,
+             ing.default_prep_unit,
+             ing.default_prep_to_base_conversion
+      FROM   mcogs_price_quotes pq
+      JOIN   mcogs_ingredients ing ON ing.id = pq.ingredient_id
+      LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
+      WHERE  pq.ingredient_id = $1 AND pq.vendor_id = $2 AND pq.is_active = true
+      ORDER BY pq.updated_at DESC
+      LIMIT  1
+    `, [ingredient_id, vendor_id]);
+
+    if (quotes.length) {
+      res.json({ has_quote: true, quote: quotes[0] });
+    } else {
+      // Return ingredient info even without a quote
+      const { rows: [ing] } = await pool.query(`
+        SELECT ing.name, ing.base_unit_id, u.name AS base_unit_name, u.abbreviation AS base_unit_abbr,
+               ing.default_prep_unit, ing.default_prep_to_base_conversion
+        FROM   mcogs_ingredients ing
+        LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
+        WHERE  ing.id = $1
+      `, [ingredient_id]);
+      res.json({ has_quote: false, ingredient: ing || null });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to look up quote' } });
+  }
+});
+
 // POST /purchase-orders
 router.post('/', async (req, res) => {
   const { store_id, vendor_id, order_date, expected_date, notes, items } = req.body;
-  if (!store_id)  return res.status(400).json({ error: { message: 'store_id is required' } });
   if (!vendor_id) return res.status(400).json({ error: { message: 'vendor_id is required' } });
 
   const client = await pool.connect();
@@ -92,7 +136,7 @@ router.post('/', async (req, res) => {
       VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', COALESCE($3, CURRENT_DATE), $4, $5, $6)
       RETURNING *
     `, [
-      store_id,
+      store_id || null,
       vendor_id,
       order_date || null,
       expected_date || null,
@@ -105,8 +149,8 @@ router.post('/', async (req, res) => {
         const it = items[i];
         await client.query(`
           INSERT INTO mcogs_purchase_order_items
-            (po_id, ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (po_id, ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order, store_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `, [
           po.id,
           it.ingredient_id,
@@ -116,6 +160,7 @@ router.post('/', async (req, res) => {
           it.purchase_unit || null,
           it.qty_in_base_units || 0,
           it.sort_order ?? i,
+          it.store_id || null,
         ]);
       }
     }
@@ -192,7 +237,7 @@ router.delete('/:id', async (req, res) => {
 
 // POST /purchase-orders/:id/items
 router.post('/:id/items', async (req, res) => {
-  const { ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units } = req.body;
+  const { ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, store_id } = req.body;
   if (!ingredient_id) return res.status(400).json({ error: { message: 'ingredient_id is required' } });
 
   try {
@@ -209,8 +254,8 @@ router.post('/:id/items', async (req, res) => {
 
     const { rows: [item] } = await pool.query(`
       INSERT INTO mcogs_purchase_order_items
-        (po_id, ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (po_id, ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order, store_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `, [
       req.params.id,
@@ -221,6 +266,7 @@ router.post('/:id/items', async (req, res) => {
       purchase_unit || null,
       qty_in_base_units || 0,
       maxSort.next_sort,
+      store_id || null,
     ]);
     res.status(201).json(item);
   } catch (err) {
@@ -231,7 +277,7 @@ router.post('/:id/items', async (req, res) => {
 
 // PUT /purchase-orders/:id/items/:itemId
 router.put('/:id/items/:itemId', async (req, res) => {
-  const { ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order } = req.body;
+  const { ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, sort_order, store_id } = req.body;
   try {
     const { rows: [po] } = await pool.query(
       `SELECT status FROM mcogs_purchase_orders WHERE id = $1`, [req.params.id]
@@ -242,8 +288,8 @@ router.put('/:id/items/:itemId', async (req, res) => {
     const { rows: [item] } = await pool.query(`
       UPDATE mcogs_purchase_order_items
       SET    ingredient_id=$1, quote_id=$2, qty_ordered=$3, unit_price=$4,
-             purchase_unit=$5, qty_in_base_units=$6, sort_order=$7
-      WHERE  id=$8 AND po_id=$9
+             purchase_unit=$5, qty_in_base_units=$6, sort_order=$7, store_id=$8
+      WHERE  id=$9 AND po_id=$10
       RETURNING *
     `, [
       ingredient_id,
@@ -253,6 +299,7 @@ router.put('/:id/items/:itemId', async (req, res) => {
       purchase_unit || null,
       qty_in_base_units || 0,
       sort_order ?? 0,
+      store_id || null,
       req.params.itemId,
       req.params.id,
     ]);

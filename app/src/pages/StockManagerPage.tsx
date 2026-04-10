@@ -34,11 +34,12 @@ interface StockMovement {
 }
 
 interface PurchaseOrder {
-  id: number; store_id: number; vendor_id: number; po_number: string
+  id: number; store_id: number | null; vendor_id: number; po_number: string
   status: 'draft' | 'submitted' | 'partial' | 'received' | 'cancelled'
   order_date: string; expected_date: string | null; notes: string | null
   template_id: number | null; created_by: string | null; item_count?: number
   store_name?: string; vendor_name?: string; location_name?: string
+  items?: POItem[]
 }
 
 interface POItem {
@@ -46,6 +47,7 @@ interface POItem {
   qty_ordered: number; qty_received: number; unit_price: number
   purchase_unit: string | null; qty_in_base_units: number | null; sort_order: number
   ingredient_name?: string; base_unit_abbr?: string
+  item_store_id?: number | null; item_store_name?: string | null
 }
 
 interface GoodsReceived {
@@ -676,11 +678,17 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
   const [showItemForm, setShowItemForm] = useState(false)
   const [editItem, setEditItem] = useState<POItem | null>(null)
 
+  // Quote lookup state
+  const [quoteLookup, setQuoteLookup] = useState<{ has_quote: boolean; quote?: any; ingredient?: any } | null>(null)
+  const [lookingUpQuote, setLookingUpQuote] = useState(false)
+  const [saveAsQuote, setSaveAsQuote] = useState(false)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const q = storeId ? `?store_id=${storeId}` : ''
-      const data = await api.get(`/purchase-orders${q}`)
+      const params = new URLSearchParams()
+      if (storeId) params.set('store_id', String(storeId))
+      const data = await api.get(`/purchase-orders?${params}`)
       setOrders(data || [])
     } finally { setLoading(false) }
   }, [api, storeId])
@@ -689,8 +697,8 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
 
   const loadItems = useCallback(async (poId: number) => {
     try {
-      const data = await api.get(`/purchase-orders/${poId}/items`)
-      setItems(data || [])
+      const data = await api.get(`/purchase-orders/${poId}`)
+      setItems(data.items || [])
     } catch { setItems([]) }
   }, [api])
 
@@ -706,15 +714,16 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
     return result
   }, [orders, statusFilter, vendorFilter])
 
-  // Form state for new PO
+  // Form state for new PO — store_id is now optional
   const [newPO, setNewPO] = useState({ store_id: '', vendor_id: '', notes: '', expected_date: '' })
 
   const handleCreatePO = async () => {
-    if (!newPO.store_id || !newPO.vendor_id) return
+    if (!newPO.vendor_id) return
     setSaving(true)
     try {
       const created = await api.post('/purchase-orders', {
-        store_id: Number(newPO.store_id), vendor_id: Number(newPO.vendor_id),
+        store_id: newPO.store_id ? Number(newPO.store_id) : null,
+        vendor_id: Number(newPO.vendor_id),
         notes: newPO.notes.trim() || null,
         expected_date: newPO.expected_date || null,
       })
@@ -726,27 +735,86 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
     finally { setSaving(false) }
   }
 
-  const handleStatusChange = async (po: PurchaseOrder, newStatus: string) => {
+  const handleSubmit = async (po: PurchaseOrder) => {
     try {
-      await api.patch(`/purchase-orders/${po.id}`, { status: newStatus })
-      showToast(`PO ${po.po_number} updated to ${newStatus}`)
+      const updated = await api.post(`/purchase-orders/${po.id}/submit`, {})
+      showToast(`${po.po_number} submitted`)
       load()
-      if (selected?.id === po.id) setSelected({ ...po, status: newStatus as PurchaseOrder['status'] })
-    } catch (err: any) { showToast(err.message || 'Failed to update status', 'error') }
+      if (selected?.id === po.id) setSelected({ ...po, status: 'submitted' })
+    } catch (err: any) { showToast(err.message || 'Failed to submit', 'error') }
   }
 
-  // Item form
-  const [itemForm, setItemForm] = useState({ ingredient_id: null as number | null, qty_ordered: '', unit_price: '', purchase_unit: '' })
+  const handleCancel = async (po: PurchaseOrder) => {
+    try {
+      await api.post(`/purchase-orders/${po.id}/cancel`, {})
+      showToast(`${po.po_number} cancelled`)
+      load()
+      if (selected?.id === po.id) setSelected({ ...po, status: 'cancelled' })
+    } catch (err: any) { showToast(err.message || 'Failed to cancel', 'error') }
+  }
+
+  // Item form — now includes store_id, quote_id, base_unit info
+  const [itemForm, setItemForm] = useState({
+    ingredient_id: null as number | null,
+    qty_ordered: '',
+    unit_price: '',
+    purchase_unit: '',
+    qty_in_base_units: '',
+    store_id: '' as string,
+    quote_id: null as number | null,
+  })
+
+  // Look up quote when ingredient changes
+  const lookupQuote = async (ingredientId: number) => {
+    if (!selected) return
+    setLookingUpQuote(true)
+    setQuoteLookup(null)
+    setSaveAsQuote(false)
+    try {
+      const data = await api.get(`/purchase-orders/quote-lookup?ingredient_id=${ingredientId}&vendor_id=${selected.vendor_id}`)
+      setQuoteLookup(data)
+      if (data.has_quote && data.quote) {
+        // Auto-populate from quote
+        setItemForm(f => ({
+          ...f,
+          unit_price: String(data.quote.purchase_price),
+          purchase_unit: data.quote.purchase_unit || '',
+          qty_in_base_units: String(data.quote.qty_in_base_units || ''),
+          quote_id: data.quote.id,
+        }))
+      } else {
+        // No quote — clear price fields, show base unit info
+        setItemForm(f => ({
+          ...f,
+          unit_price: '',
+          purchase_unit: '',
+          qty_in_base_units: '',
+          quote_id: null,
+        }))
+      }
+    } catch { setQuoteLookup(null) }
+    finally { setLookingUpQuote(false) }
+  }
+
+  const handleSelectIngredient = (id: number | null) => {
+    setItemForm(f => ({ ...f, ingredient_id: id, unit_price: '', purchase_unit: '', qty_in_base_units: '', quote_id: null }))
+    setQuoteLookup(null)
+    setSaveAsQuote(false)
+    if (id) lookupQuote(id)
+  }
 
   const handleSaveItem = async () => {
     if (!selected || !itemForm.ingredient_id || !itemForm.qty_ordered) return
     setSaving(true)
     try {
-      const payload = {
+      const payload: any = {
         ingredient_id: itemForm.ingredient_id,
         qty_ordered: Number(itemForm.qty_ordered),
         unit_price: Number(itemForm.unit_price) || 0,
         purchase_unit: itemForm.purchase_unit.trim() || null,
+        qty_in_base_units: itemForm.qty_in_base_units ? Number(itemForm.qty_in_base_units) : null,
+        quote_id: itemForm.quote_id || null,
+        store_id: itemForm.store_id ? Number(itemForm.store_id) : null,
       }
       if (editItem) {
         await api.put(`/purchase-orders/${selected.id}/items/${editItem.id}`, payload)
@@ -755,9 +823,27 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
         await api.post(`/purchase-orders/${selected.id}/items`, payload)
         showToast('Item added')
       }
+
+      // Save as price quote if checkbox is checked
+      if (saveAsQuote && !itemForm.quote_id && itemForm.ingredient_id && itemForm.unit_price) {
+        try {
+          await api.post('/price-quotes', {
+            ingredient_id: itemForm.ingredient_id,
+            vendor_id: selected.vendor_id,
+            purchase_price: Number(itemForm.unit_price),
+            qty_in_base_units: Number(itemForm.qty_in_base_units) || 1,
+            purchase_unit: itemForm.purchase_unit.trim() || null,
+            is_active: true,
+          })
+          showToast('Price quote saved')
+        } catch { /* silent — main item was saved */ }
+      }
+
       setShowItemForm(false)
       setEditItem(null)
-      setItemForm({ ingredient_id: null, qty_ordered: '', unit_price: '', purchase_unit: '' })
+      setQuoteLookup(null)
+      setSaveAsQuote(false)
+      setItemForm({ ingredient_id: null, qty_ordered: '', unit_price: '', purchase_unit: '', qty_in_base_units: '', store_id: '', quote_id: null })
       loadItems(selected.id)
     } catch (err: any) { showToast(err.message || 'Failed to save item', 'error') }
     finally { setSaving(false) }
@@ -774,7 +860,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
 
   const handleBulkCancel = async () => {
     try {
-      await Promise.all([...checked].map(id => api.patch(`/purchase-orders/${id}`, { status: 'cancelled' })))
+      await Promise.all([...checked].map(id => api.post(`/purchase-orders/${id}/cancel`, {})))
       showToast(`${checked.size} order(s) cancelled`)
       setChecked(new Set())
       load()
@@ -785,6 +871,8 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
   })
 
+  const activeStores = stores.filter(s => s.is_active)
+
   if (loading) return <div className="flex items-center justify-center h-64"><Spinner /></div>
 
   return (
@@ -794,7 +882,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
         <div className="p-3 border-b border-border space-y-2 shrink-0">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-text-3 uppercase tracking-wide">Purchase Orders</h3>
-            {canWrite && <button className="btn btn-sm btn-primary text-xs py-1" onClick={() => {
+            {canWrite && <button className="btn-primary text-xs py-1 px-2.5 rounded" onClick={() => {
               setNewPO({ store_id: storeId ? String(storeId) : '', vendor_id: '', notes: '', expected_date: '' })
               setShowModal(true)
             }}>+ New PO</button>}
@@ -810,7 +898,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
         </div>
         {checked.size > 0 && canWrite && (
           <div className="p-2 border-b border-border bg-yellow-50 shrink-0">
-            <button className="btn btn-sm w-full bg-red-600 text-white hover:bg-red-700 text-xs" onClick={handleBulkCancel}>
+            <button className="w-full bg-red-600 text-white hover:bg-red-700 text-xs py-1.5 px-3 rounded font-medium" onClick={handleBulkCancel}>
               Cancel {checked.size} selected
             </button>
           </div>
@@ -829,8 +917,10 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                     <span className="text-sm font-medium text-text-1 truncate">{po.po_number}</span>
                     <StatusBadge status={po.status} />
                   </div>
-                  <div className="text-xs text-text-3 mt-0.5 truncate">{po.vendor_name} &middot; {po.store_name}</div>
-                  <div className="text-xs text-text-3">{fmtDate(po.order_date)} &middot; {po.item_count ?? 0} items</div>
+                  <div className="text-xs text-text-3 mt-0.5 truncate">
+                    {po.vendor_name}{po.store_name ? ` · ${po.store_name}` : ''}
+                  </div>
+                  <div className="text-xs text-text-3">{fmtDate(po.order_date)} · {po.item_count ?? 0} items</div>
                 </div>
               </div>
             </div>
@@ -847,19 +937,18 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                 <div>
                   <h3 className="text-sm font-bold text-text-1">{selected.po_number}</h3>
                   <div className="text-xs text-text-3 mt-0.5">
-                    {selected.vendor_name} &middot; {selected.store_name} &middot; {fmtDate(selected.order_date)}
+                    {selected.vendor_name}
+                    {selected.store_name ? ` · ${selected.store_name}` : ' · No store assigned'}
+                    {' · '}{fmtDate(selected.order_date)}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <StatusBadge status={selected.status} />
                   {canWrite && selected.status === 'draft' && (
-                    <button className="btn btn-sm btn-primary text-xs" onClick={() => handleStatusChange(selected, 'submitted')}>Submit</button>
-                  )}
-                  {canWrite && (selected.status === 'submitted' || selected.status === 'partial') && (
-                    <button className="btn btn-sm btn-primary text-xs" onClick={() => handleStatusChange(selected, 'received')}>Mark Received</button>
+                    <button className="btn-primary text-xs py-1.5 px-3 rounded font-medium" onClick={() => handleSubmit(selected)}>Submit</button>
                   )}
                   {canWrite && selected.status !== 'cancelled' && selected.status !== 'received' && (
-                    <button className="btn btn-sm bg-red-600 text-white hover:bg-red-700 text-xs" onClick={() => handleStatusChange(selected, 'cancelled')}>Cancel</button>
+                    <button className="bg-red-600 text-white hover:bg-red-700 text-xs py-1.5 px-3 rounded font-medium" onClick={() => handleCancel(selected)}>Cancel</button>
                   )}
                 </div>
               </div>
@@ -870,9 +959,11 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-xs font-bold text-text-3 uppercase tracking-wide">Line Items ({items.length})</h4>
                 {canWrite && selected.status === 'draft' && (
-                  <button className="btn btn-sm btn-outline text-xs" onClick={() => {
-                    setItemForm({ ingredient_id: null, qty_ordered: '', unit_price: '', purchase_unit: '' })
+                  <button className="btn-outline text-xs py-1.5 px-3 rounded font-medium" onClick={() => {
+                    setItemForm({ ingredient_id: null, qty_ordered: '', unit_price: '', purchase_unit: '', qty_in_base_units: '', store_id: selected.store_id ? String(selected.store_id) : '', quote_id: null })
                     setEditItem(null)
+                    setQuoteLookup(null)
+                    setSaveAsQuote(false)
                     setShowItemForm(true)
                   }}>+ Add Item</button>
                 )}
@@ -882,19 +973,30 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
               ) : (
                 <table className="w-full text-sm">
                   <thead><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
-                    <th className="pb-2 pr-3">Ingredient</th><th className="pb-2 pr-3 text-right">Qty Ordered</th>
-                    <th className="pb-2 pr-3 text-right">Qty Received</th><th className="pb-2 pr-3 text-right">Unit Price</th>
+                    <th className="pb-2 pr-3">Ingredient</th>
+                    <th className="pb-2 pr-3">Store</th>
+                    <th className="pb-2 pr-3 text-right">Qty</th>
+                    <th className="pb-2 pr-3 text-right">Received</th>
+                    <th className="pb-2 pr-3 text-right">Price</th>
                     <th className="pb-2 pr-3">Unit</th>
+                    <th className="pb-2 pr-3">Quote</th>
                     {canWrite && selected.status === 'draft' && <th className="pb-2 w-16"></th>}
                   </tr></thead>
                   <tbody>
                     {items.map(item => (
                       <tr key={item.id} className="border-b border-border/50 hover:bg-surface-2">
                         <td className="py-2 pr-3 font-medium">{item.ingredient_name}</td>
+                        <td className="py-2 pr-3 text-xs text-text-3">{item.item_store_name || <span className="italic">PO default</span>}</td>
                         <td className="py-2 pr-3 text-right">{fmtNum(item.qty_ordered)}</td>
                         <td className="py-2 pr-3 text-right">{fmtNum(item.qty_received)}</td>
                         <td className="py-2 pr-3 text-right">{fmtNum(item.unit_price, 4)}</td>
                         <td className="py-2 pr-3">{item.purchase_unit || item.base_unit_abbr || '-'}</td>
+                        <td className="py-2 pr-3">
+                          {item.quote_id
+                            ? <span className="text-xs bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Quoted</span>
+                            : <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">No quote</span>
+                          }
+                        </td>
                         {canWrite && selected.status === 'draft' && (
                           <td className="py-2">
                             <div className="flex items-center gap-1">
@@ -905,7 +1007,12 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                                   qty_ordered: String(item.qty_ordered),
                                   unit_price: String(item.unit_price),
                                   purchase_unit: item.purchase_unit || '',
+                                  qty_in_base_units: item.qty_in_base_units ? String(item.qty_in_base_units) : '',
+                                  store_id: item.item_store_id ? String(item.item_store_id) : '',
+                                  quote_id: item.quote_id || null,
                                 })
+                                setQuoteLookup(item.quote_id ? { has_quote: true } : { has_quote: false })
+                                setSaveAsQuote(false)
                                 setShowItemForm(true)
                               }}>
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
@@ -928,45 +1035,110 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
         )}
       </div>
 
-      {/* Right - add item form */}
+      {/* Right - add/edit item form */}
       {showItemForm && selected && (
-        <div className="w-72 border-l border-border overflow-y-auto shrink-0 bg-surface p-4 space-y-3">
-          <h3 className="text-sm font-bold text-text-1">{editItem ? 'Edit Item' : 'Add Item'}</h3>
+        <div className="w-80 border-l border-border overflow-y-auto shrink-0 bg-surface p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-text-1">{editItem ? 'Edit Item' : 'Add Item'}</h3>
+            <button className="text-text-3 hover:text-text-1" onClick={() => { setShowItemForm(false); setEditItem(null); setQuoteLookup(null) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+
           <Field label="Ingredient *">
             <SearchSelect items={ingredients} value={itemForm.ingredient_id}
-              onChange={(id) => setItemForm(f => ({ ...f, ingredient_id: id }))}
+              onChange={handleSelectIngredient}
               placeholder="Search ingredients..."
               renderSecondary={(i: IngredientRef) => i.base_unit_abbr || null} />
           </Field>
+
+          {/* Quote status indicator */}
+          {itemForm.ingredient_id && !lookingUpQuote && quoteLookup && (
+            <div className={`p-2.5 rounded-lg border text-xs ${quoteLookup.has_quote ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+              {quoteLookup.has_quote ? (
+                <div>
+                  <span className="font-semibold">Quote found</span> — price and unit auto-populated from active quote
+                  {quoteLookup.quote && (
+                    <div className="mt-1 text-[11px] text-green-600">
+                      {quoteLookup.quote.purchase_price}/{quoteLookup.quote.purchase_unit || quoteLookup.quote.base_unit_abbr}
+                      {quoteLookup.quote.vendor_product_code && ` (${quoteLookup.quote.vendor_product_code})`}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <span className="font-semibold">No active quote</span> for this ingredient from {selected.vendor_name}.
+                  <div className="mt-1 text-[11px]">
+                    Base unit: <span className="font-mono font-medium">{quoteLookup.ingredient?.base_unit_abbr || '—'}</span>
+                    {quoteLookup.ingredient?.default_prep_unit && (
+                      <> · Prep unit: <span className="font-mono font-medium">{quoteLookup.ingredient.default_prep_unit}</span></>
+                    )}
+                  </div>
+                  <div className="mt-1">Enter purchase unit and price manually below.</div>
+                </div>
+              )}
+            </div>
+          )}
+          {lookingUpQuote && (
+            <div className="flex items-center gap-2 text-xs text-text-3 p-2"><Spinner /> Looking up quote...</div>
+          )}
+
+          <Field label="Store" hint="Defaults to PO store. Override per item if needed.">
+            <select className="input w-full text-sm" value={itemForm.store_id}
+              onChange={e => setItemForm(f => ({ ...f, store_id: e.target.value }))}>
+              <option value="">{selected.store_id ? 'Use PO default store' : 'Select store...'}</option>
+              {activeStores.map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
+            </select>
+          </Field>
+
           <Field label="Qty Ordered *">
             <input type="number" step="0.01" min="0" className="input w-full" value={itemForm.qty_ordered}
               onChange={e => setItemForm(f => ({ ...f, qty_ordered: e.target.value }))} />
           </Field>
-          <Field label="Unit Price">
+
+          <Field label="Unit Price" hint={quoteLookup?.has_quote ? 'Auto-populated from quote' : undefined}>
             <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.unit_price}
               onChange={e => setItemForm(f => ({ ...f, unit_price: e.target.value }))} />
           </Field>
-          <Field label="Purchase Unit">
-            <input className="input w-full" value={itemForm.purchase_unit} placeholder="e.g. case, bag"
+
+          <Field label="Purchase Unit" hint={quoteLookup?.has_quote ? 'Auto-populated from quote' : 'e.g. case, bag, 25kg sack'}>
+            <input className="input w-full" value={itemForm.purchase_unit}
               onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
           </Field>
+
+          <Field label="Qty in Base Units" hint={`How many base units per purchase unit${quoteLookup?.ingredient?.base_unit_abbr ? ` (${quoteLookup.ingredient.base_unit_abbr})` : ''}`}>
+            <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.qty_in_base_units}
+              onChange={e => setItemForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+          </Field>
+
+          {/* Save as price quote option — only when no existing quote */}
+          {!quoteLookup?.has_quote && itemForm.ingredient_id && itemForm.unit_price && (
+            <label className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
+              <input type="checkbox" checked={saveAsQuote} onChange={e => setSaveAsQuote(e.target.checked)} className="rounded" />
+              <div>
+                <span className="text-xs font-medium text-blue-800">Save as price quote</span>
+                <p className="text-[10px] text-blue-600 mt-0.5">Creates a new active price quote for this ingredient + vendor</p>
+              </div>
+            </label>
+          )}
+
           <div className="flex gap-2 pt-2">
-            <button className="btn btn-outline flex-1" onClick={() => { setShowItemForm(false); setEditItem(null) }}>Cancel</button>
-            <button className="btn btn-primary flex-1" disabled={!itemForm.ingredient_id || !itemForm.qty_ordered || saving} onClick={handleSaveItem}>
+            <button className="btn-outline flex-1 py-1.5 rounded text-sm" onClick={() => { setShowItemForm(false); setEditItem(null); setQuoteLookup(null) }}>Cancel</button>
+            <button className="btn-primary flex-1 py-1.5 rounded text-sm" disabled={!itemForm.ingredient_id || !itemForm.qty_ordered || saving} onClick={handleSaveItem}>
               {saving ? 'Saving...' : editItem ? 'Update' : 'Add'}
             </button>
           </div>
         </div>
       )}
 
-      {/* New PO modal */}
+      {/* New PO modal — store is now optional */}
       {showModal && (
         <Modal title="New Purchase Order" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="Store *">
+            <Field label="Store" hint="Optional. When set, new items default to this store.">
               <select className="input w-full" value={newPO.store_id} onChange={e => setNewPO(f => ({ ...f, store_id: e.target.value }))}>
-                <option value="">Select store...</option>
-                {stores.filter(s => s.is_active).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
+                <option value="">No default store</option>
+                {activeStores.map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
             <Field label="Vendor *">
@@ -985,8 +1157,8 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
             </Field>
           </div>
           <div className="flex justify-end gap-2 mt-4">
-            <button className="btn btn-outline" onClick={() => setShowModal(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={!newPO.store_id || !newPO.vendor_id || saving} onClick={handleCreatePO}>
+            <button className="btn-outline py-1.5 px-4 rounded" onClick={() => setShowModal(false)}>Cancel</button>
+            <button className="btn-primary py-1.5 px-4 rounded" disabled={!newPO.vendor_id || saving} onClick={handleCreatePO}>
               {saving ? 'Creating...' : 'Create PO'}
             </button>
           </div>

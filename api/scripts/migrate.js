@@ -1464,6 +1464,10 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_audit_action     ON mcogs_audit_log(action)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_created    ON mcogs_audit_log(created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_context    ON mcogs_audit_log USING gin(context jsonb_path_ops)`,
+
+  // ── Step 101: Add store_id to PO items for per-item location assignment ────
+  `ALTER TABLE mcogs_purchase_order_items ADD COLUMN IF NOT EXISTS store_id INTEGER REFERENCES mcogs_stores(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_poi_store ON mcogs_purchase_order_items(store_id) WHERE store_id IS NOT NULL`,
 ];
 
 async function runMigrations(pool) {
