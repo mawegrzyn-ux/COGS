@@ -284,8 +284,6 @@ export default function AppLayout() {
           pepperMode={pepperMode}
           pepperOpen={pepperMode !== 'float' || pepperFloatOpen}
           onPepperToggle={() => setPepperFloatOpen(o => !o)}
-          mediaOpen={mediaOpen}
-          onMediaToggle={() => setMediaOpen(o => !o)}
         />
       </div>
 

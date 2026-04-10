@@ -28,12 +28,10 @@ const NAV_ITEMS: NavItem[] = [
 
 const STORAGE_KEY = 'mcogs_sidebar_collapsed'
 
-export default function Sidebar({ pepperMode = 'float', pepperOpen = false, onPepperToggle, mediaOpen = false, onMediaToggle }: {
+export default function Sidebar({ pepperMode = 'float', pepperOpen = false, onPepperToggle }: {
   pepperMode?: PepperMode
   pepperOpen?: boolean
   onPepperToggle?: () => void
-  mediaOpen?: boolean
-  onMediaToggle?: () => void
 }) {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY) === 'true' } catch { return false }
