@@ -304,6 +304,95 @@ export function Field({ label, hint, error, required, children }: FieldProps) {
   )
 }
 
+// ── CalcInput — number field that evaluates basic math on blur ───────────────
+// Supports: + - * / ( ) and decimal numbers
+// Usage: <CalcInput className="input w-full" value={form.qty} onChange={v => setForm({...form, qty: v})} />
+//
+// While typing, the raw expression is shown (e.g. "24*0.5"). On blur, the
+// expression is evaluated and the result replaces the text (e.g. "12").
+// If the expression is invalid, the last valid value is preserved.
+
+interface CalcInputProps {
+  value: string
+  onChange: (value: string) => void
+  className?: string
+  placeholder?: string
+  step?: string
+  min?: string
+  disabled?: boolean
+}
+
+function safeEval(expr: string): number | null {
+  const cleaned = expr.replace(/\s/g, '')
+  // Only allow digits, decimal points, +, -, *, /, (, )
+  if (!/^[0-9.+\-*/()]+$/.test(cleaned)) return null
+  if (!cleaned) return null
+  try {
+    // Use Function constructor instead of eval for slightly better isolation
+    // The regex above ensures only math chars reach this point
+    const result = new Function(`"use strict"; return (${cleaned})`)()
+    if (typeof result !== 'number' || !isFinite(result)) return null
+    return result
+  } catch {
+    return null
+  }
+}
+
+export function CalcInput({ value, onChange, className = 'input w-full', placeholder, step, min, disabled }: CalcInputProps) {
+  const [rawText, setRawText] = useState(value)
+  const [focused, setFocused] = useState(false)
+
+  // Sync from parent when not focused
+  useEffect(() => {
+    if (!focused) setRawText(value)
+  }, [value, focused])
+
+  const handleBlur = () => {
+    setFocused(false)
+    const trimmed = rawText.trim()
+    // If it's a plain number, just pass it through
+    if (!trimmed) { onChange(''); return }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) { onChange(trimmed); return }
+    // Try to evaluate as expression
+    const result = safeEval(trimmed)
+    if (result !== null) {
+      // Round to avoid floating point noise (max 8 decimal places)
+      const rounded = String(Math.round(result * 100000000) / 100000000)
+      setRawText(rounded)
+      onChange(rounded)
+    } else {
+      // Invalid expression — revert to last good value
+      setRawText(value)
+    }
+  }
+
+  const hasExpression = focused && rawText.trim() !== '' && !/^-?\d*\.?\d*$/.test(rawText.trim())
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        inputMode="decimal"
+        className={className}
+        value={rawText}
+        onChange={e => { setRawText(e.target.value); if (/^-?\d*\.?\d*$/.test(e.target.value)) onChange(e.target.value) }}
+        onFocus={() => setFocused(true)}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        disabled={disabled}
+      />
+      {hasExpression && (() => {
+        const preview = safeEval(rawText.trim())
+        return preview !== null ? (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-accent font-mono pointer-events-none">
+            = {Math.round(preview * 10000) / 10000}
+          </div>
+        ) : null
+      })()}
+    </div>
+  )
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────────
 interface ToastProps {
   message: string

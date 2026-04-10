@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput } from '../components/ui'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
@@ -1163,10 +1163,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                               setForm(f => ({
                                 ...f,
                                 base_unit_id: e.target.value,
+                                // Auto-populate prep unit from the unit's default if user hasn't set one
                                 ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
                                   ? { default_prep_unit: selectedUnit.default_recipe_unit }
                                   : {}),
-                                ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
+                                // Auto-populate conversion — apply if user hasn't manually set a custom value
+                                // (treat '1' and '' as "not yet set" since '1' is the initial default)
+                                ...(selectedUnit?.default_recipe_unit_conversion != null
+                                    && (!f.default_prep_to_base_conversion || f.default_prep_to_base_conversion === '1')
                                   ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
                                   : {}),
                               }))
@@ -1190,14 +1194,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                               <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
                             </Field>
                             <Field label="Conversion to Base Unit">
-                              <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                              <CalcInput className="input w-full font-mono" value={form.default_prep_to_base_conversion} placeholder="e.g. 1/1000" onChange={v => setForm(f => ({ ...f, default_prep_to_base_conversion: v }))} />
                               <p className="text-xs text-text-3 mt-1">{convHint()}</p>
                             </Field>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <Field label="Waste %">
-                            <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                            <CalcInput className="input w-full font-mono" value={form.waste_pct} placeholder="0" onChange={v => setForm(f => ({ ...f, waste_pct: v }))} />
                           </Field>
                           <Field label="Notes">
                             <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
@@ -1282,7 +1286,8 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                     ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
                       ? { default_prep_unit: selectedUnit.default_recipe_unit }
                       : {}),
-                    ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
+                    ...(selectedUnit?.default_recipe_unit_conversion != null
+                        && (!f.default_prep_to_base_conversion || f.default_prep_to_base_conversion === '1')
                       ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
                       : {}),
                   }))
@@ -1307,14 +1312,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
                 </Field>
                 <Field label="Conversion to Base Unit">
-                  <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                  <CalcInput className="input w-full font-mono" value={form.default_prep_to_base_conversion} placeholder="e.g. 1/1000" onChange={v => setForm(f => ({ ...f, default_prep_to_base_conversion: v }))} />
                   <p className="text-xs text-text-3 mt-1">{convHint()}</p>
                 </Field>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Waste %">
-                <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                <CalcInput className="input w-full font-mono" value={form.waste_pct} placeholder="0" onChange={v => setForm(f => ({ ...f, waste_pct: v }))} />
                 <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
               </Field>
               <Field label="Notes">

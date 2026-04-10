@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
-import { Modal, Field, Spinner, ConfirmDialog } from '../components/ui'
+import { Modal, Field, Spinner, ConfirmDialog, CalcInput } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ApiType = {
@@ -1103,13 +1103,13 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
           </Field>
 
           <Field label="Qty Ordered *">
-            <input type="number" step="0.01" min="0" className="input w-full" value={itemForm.qty_ordered}
-              onChange={e => setItemForm(f => ({ ...f, qty_ordered: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.qty_ordered} placeholder="e.g. 24*0.5"
+              onChange={v => setItemForm(f => ({ ...f, qty_ordered: v }))} />
           </Field>
 
           <Field label="Unit Price" hint={quoteLookup?.has_quote ? 'Auto-populated from quote' : undefined}>
-            <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.unit_price}
-              onChange={e => setItemForm(f => ({ ...f, unit_price: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.unit_price}
+              onChange={v => setItemForm(f => ({ ...f, unit_price: v }))} />
           </Field>
 
           {/* Conversion to Base Unit — only shown when:
@@ -1124,8 +1124,8 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
             if (!showConversion) return null
             return (
               <Field label={`Conversion to Base Unit${baseUnit ? ` (${baseUnit})` : ''}`} hint={baseUnit ? `How many ${baseUnit} in one ${itemForm.purchase_unit.trim() || 'purchase unit'}` : 'How many base units per purchase unit'}>
-                <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.qty_in_base_units}
-                  onChange={e => setItemForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                <CalcInput className="input w-full" value={itemForm.qty_in_base_units} placeholder="e.g. 1000/25"
+                  onChange={v => setItemForm(f => ({ ...f, qty_in_base_units: v }))} />
               </Field>
             )
           })()}
