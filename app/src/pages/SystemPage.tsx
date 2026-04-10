@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import SettingsPage from './SettingsPage'
 import { usePermissions } from '../hooks/usePermissions'
+import { useApi } from '../hooks/useApi'
 
 // ── Shared doc helpers ─────────────────────────────────────────────────────────
 
@@ -539,10 +540,356 @@ function DomainMigrationSection() {
   )
 }
 
+// ── Audit Log Section ─────────────────────────────────────────────────────────
+
+interface AuditEntry {
+  id: number
+  user_sub: string | null
+  user_email: string | null
+  user_name: string | null
+  action: string
+  entity_type: string
+  entity_id: number | null
+  entity_label: string | null
+  field_changes: Record<string, { old: any; new: any }> | null
+  context: Record<string, any> | null
+  related_entities: { type: string; id: number; label?: string }[] | null
+  ip_address: string | null
+  created_at: string
+}
+
+function AuditLogSection() {
+  const api = useApi()
+  const [entries, setEntries] = useState<AuditEntry[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(0)
+  const pageSize = 30
+
+  // Filters
+  const [filterUser, setFilterUser] = useState('')
+  const [filterAction, setFilterAction] = useState('')
+  const [filterEntity, setFilterEntity] = useState('')
+  const [filterFrom, setFilterFrom] = useState('')
+  const [filterTo, setFilterTo] = useState('')
+  const [filterSearch, setFilterSearch] = useState('')
+
+  // Expanded row
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (filterUser)   params.set('user_sub', filterUser)
+      if (filterAction) params.set('action', filterAction)
+      if (filterEntity) params.set('entity_type', filterEntity)
+      if (filterFrom)   params.set('from', filterFrom)
+      if (filterTo)     params.set('to', filterTo)
+      if (filterSearch) params.set('q', filterSearch)
+      params.set('limit', String(pageSize))
+      params.set('offset', String(page * pageSize))
+      const data = await api.get(`/audit?${params}`)
+      setEntries(data.items || [])
+      setTotal(data.total || 0)
+    } catch { /* silent */ }
+    finally { setLoading(false) }
+  }, [api, filterUser, filterAction, filterEntity, filterFrom, filterTo, filterSearch, page])
+
+  useEffect(() => { load() }, [load])
+
+  // Reset page when filters change
+  useEffect(() => { setPage(0) }, [filterUser, filterAction, filterEntity, filterFrom, filterTo, filterSearch])
+
+  // Unique users/actions/entities for filter dropdowns
+  const uniqueUsers = useMemo(() => {
+    const set = new Set(entries.map(e => e.user_email).filter(Boolean) as string[])
+    return [...set].sort()
+  }, [entries])
+
+  const actions = ['create', 'update', 'delete', 'status_change', 'confirm', 'approve', 'reverse']
+  const entityTypes = [
+    'ingredient', 'recipe', 'recipe_item', 'price_quote',
+    'purchase_order', 'goods_received', 'invoice', 'credit_note',
+    'stock_level', 'waste_log', 'stock_transfer', 'stocktake',
+  ]
+
+  const totalPages = Math.ceil(total / pageSize)
+
+  const actionColor: Record<string, string> = {
+    create:        'bg-green-50 text-green-700',
+    update:        'bg-blue-50 text-blue-700',
+    delete:        'bg-red-50 text-red-600',
+    status_change: 'bg-purple-50 text-purple-700',
+    confirm:       'bg-emerald-50 text-emerald-700',
+    approve:       'bg-emerald-50 text-emerald-700',
+    reverse:       'bg-orange-50 text-orange-700',
+  }
+
+  function formatDate(iso: string) {
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+
+  return (
+    <div className="p-6 max-w-full">
+      <div className="mb-5">
+        <h2 className="text-base font-bold text-text-1">Audit Log</h2>
+        <p className="text-sm text-text-3 mt-0.5">Central trail of all data changes across the system</p>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-4 p-3 bg-surface-2 rounded-lg border border-border">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">Search</label>
+          <input
+            value={filterSearch} onChange={e => setFilterSearch(e.target.value)}
+            placeholder="Entity label..."
+            className="input text-sm py-1.5 w-44"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">Action</label>
+          <select value={filterAction} onChange={e => setFilterAction(e.target.value)} className="input text-sm py-1.5 w-36">
+            <option value="">All actions</option>
+            {actions.map(a => <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">Entity</label>
+          <select value={filterEntity} onChange={e => setFilterEntity(e.target.value)} className="input text-sm py-1.5 w-40">
+            <option value="">All entities</option>
+            {entityTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">User</label>
+          <input
+            value={filterUser} onChange={e => setFilterUser(e.target.value)}
+            placeholder="User sub or email"
+            className="input text-sm py-1.5 w-44"
+            list="audit-users"
+          />
+          <datalist id="audit-users">
+            {uniqueUsers.map(u => <option key={u} value={u} />)}
+          </datalist>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">From</label>
+          <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="input text-sm py-1.5 w-36" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-semibold uppercase text-text-3">To</label>
+          <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="input text-sm py-1.5 w-36" />
+        </div>
+        <div className="flex flex-col justify-end">
+          <button onClick={() => { setFilterUser(''); setFilterAction(''); setFilterEntity(''); setFilterFrom(''); setFilterTo(''); setFilterSearch('') }}
+            className="btn-ghost text-xs py-1.5 px-3 border border-border">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* Summary */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm text-text-3">
+          {total} entr{total === 1 ? 'y' : 'ies'} found
+          {total > pageSize && ` — showing ${page * pageSize + 1}–${Math.min((page + 1) * pageSize, total)}`}
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button disabled={page === 0} onClick={() => setPage(p => p - 1)}
+              className="btn-ghost text-xs py-1 px-2 border border-border disabled:opacity-40">
+              ← Prev
+            </button>
+            <span className="text-xs text-text-3 px-2">Page {page + 1} of {totalPages}</span>
+            <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
+              className="btn-ghost text-xs py-1 px-2 border border-border disabled:opacity-40">
+              Next →
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div className="flex items-center justify-center h-32">
+          <svg className="animate-spin w-6 h-6 text-accent" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="text-center py-12 text-text-3">
+          <p className="text-sm">No audit entries found</p>
+          <p className="text-xs mt-1">Adjust your filters or wait for some data changes to be logged</p>
+        </div>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
+                <th className="text-left px-3 py-2.5 font-semibold w-40">Timestamp</th>
+                <th className="text-left px-3 py-2.5 font-semibold w-36">User</th>
+                <th className="text-left px-3 py-2.5 font-semibold w-24">Action</th>
+                <th className="text-left px-3 py-2.5 font-semibold w-28">Entity</th>
+                <th className="text-left px-3 py-2.5 font-semibold">Label</th>
+                <th className="text-left px-3 py-2.5 font-semibold w-16">Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(e => (
+                <AuditRow key={e.id} entry={e} expanded={expandedId === e.id}
+                  onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                  actionColor={actionColor} formatDate={formatDate} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Bottom pagination */}
+      {totalPages > 1 && (
+        <div className="flex justify-center mt-4">
+          <div className="flex items-center gap-1">
+            <button disabled={page === 0} onClick={() => setPage(p => p - 1)}
+              className="btn-ghost text-xs py-1 px-2 border border-border disabled:opacity-40">
+              ← Prev
+            </button>
+            <span className="text-xs text-text-3 px-2">Page {page + 1} of {totalPages}</span>
+            <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
+              className="btn-ghost text-xs py-1 px-2 border border-border disabled:opacity-40">
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Audit Row (expandable) ───────────────────────────────────────────────────
+
+function AuditRow({ entry: e, expanded, onToggle, actionColor, formatDate }: {
+  entry: AuditEntry; expanded: boolean
+  onToggle: () => void
+  actionColor: Record<string, string>
+  formatDate: (iso: string) => string
+}) {
+  return (
+    <>
+      <tr onClick={onToggle}
+        className={`border-t border-border cursor-pointer transition-colors ${expanded ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+        <td className="px-3 py-2 text-text-3 whitespace-nowrap text-xs font-mono">
+          {formatDate(e.created_at)}
+        </td>
+        <td className="px-3 py-2 text-text-2 truncate max-w-[140px]" title={e.user_email || e.user_sub || ''}>
+          {e.user_name || e.user_email || e.user_sub || '—'}
+        </td>
+        <td className="px-3 py-2">
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${actionColor[e.action] || 'bg-gray-100 text-gray-600'}`}>
+            {e.action.replace(/_/g, ' ')}
+          </span>
+        </td>
+        <td className="px-3 py-2 text-text-3 text-xs">
+          {e.entity_type.replace(/_/g, ' ')}
+          {e.entity_id != null && <span className="text-text-3 ml-1">#{e.entity_id}</span>}
+        </td>
+        <td className="px-3 py-2 text-text-1 truncate max-w-[250px]" title={e.entity_label || ''}>
+          {e.entity_label || '—'}
+        </td>
+        <td className="px-3 py-2 text-center">
+          <span className="text-text-3 text-xs">{expanded ? '▼' : '▶'}</span>
+        </td>
+      </tr>
+
+      {expanded && (
+        <tr className="bg-white">
+          <td colSpan={6} className="px-4 py-3 border-t border-border">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+
+              {/* Field changes */}
+              {e.field_changes && Object.keys(e.field_changes).length > 0 && (
+                <div>
+                  <p className="font-semibold text-text-1 mb-1.5 uppercase tracking-wide text-[10px]">Field Changes</p>
+                  <table className="w-full text-xs border border-border rounded overflow-hidden">
+                    <thead>
+                      <tr className="bg-surface-2">
+                        <th className="text-left px-2 py-1 font-semibold text-text-3">Field</th>
+                        <th className="text-left px-2 py-1 font-semibold text-text-3">Old</th>
+                        <th className="text-left px-2 py-1 font-semibold text-text-3">New</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(e.field_changes).map(([field, vals]) => (
+                        <tr key={field} className="border-t border-border">
+                          <td className="px-2 py-1 font-medium text-text-2">{field.replace(/_/g, ' ')}</td>
+                          <td className="px-2 py-1 text-red-600 font-mono">
+                            {vals.old != null ? String(vals.old) : <span className="italic text-text-3">null</span>}
+                          </td>
+                          <td className="px-2 py-1 text-green-700 font-mono">
+                            {vals.new != null ? String(vals.new) : <span className="italic text-text-3">null</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Context */}
+              {e.context && Object.keys(e.context).length > 0 && (
+                <div>
+                  <p className="font-semibold text-text-1 mb-1.5 uppercase tracking-wide text-[10px]">Context</p>
+                  <div className="bg-surface-2 border border-border rounded p-2 space-y-1">
+                    {Object.entries(e.context).map(([k, v]) => (
+                      <div key={k} className="flex gap-2">
+                        <span className="text-text-3 font-medium shrink-0">{k}:</span>
+                        <span className="text-text-1 font-mono break-all">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Related entities */}
+              {e.related_entities && e.related_entities.length > 0 && (
+                <div>
+                  <p className="font-semibold text-text-1 mb-1.5 uppercase tracking-wide text-[10px]">Related Entities</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {e.related_entities.map((r, i) => (
+                      <span key={i} className="bg-surface-2 border border-border rounded px-2 py-0.5 text-text-2">
+                        {r.type.replace(/_/g, ' ')} #{r.id}
+                        {r.label && <span className="text-text-3 ml-1">({r.label})</span>}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* IP + raw IDs */}
+              <div>
+                <p className="font-semibold text-text-1 mb-1.5 uppercase tracking-wide text-[10px]">Metadata</p>
+                <div className="bg-surface-2 border border-border rounded p-2 space-y-1 text-text-3">
+                  <div>Audit ID: <span className="font-mono text-text-1">{e.id}</span></div>
+                  {e.user_sub && <div>User sub: <span className="font-mono text-text-1 break-all">{e.user_sub}</span></div>}
+                  {e.ip_address && <div>IP: <span className="font-mono text-text-1">{e.ip_address}</span></div>}
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
 // ── Section definitions ────────────────────────────────────────────────────────
 
 type Section =
   | 'ai'
+  | 'audit-log'      // Central audit trail — admin-only
   | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
   | 'test-data'      // Seeding + clearing dummy data — dev-only, date-confirmed
   | 'architecture'
@@ -561,6 +908,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { id: 'ai',               icon: '🤖', label: 'AI' },
+  { id: 'audit-log',        icon: '📋', label: 'Audit Log',        gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
   { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
@@ -598,6 +946,9 @@ export default function SystemPage() {
   function renderContent() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
+      case 'audit-log':        return canManageSettings
+                                  ? <AuditLogSection />
+                                  : <GatedFallback reason="admin" />
       case 'database':         return canManageSettings
                                   ? <SettingsPage embedded initialTab="database" />
                                   : <GatedFallback reason="admin" />

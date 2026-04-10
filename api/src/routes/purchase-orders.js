@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /purchase-orders
 router.get('/', async (req, res) => {
@@ -120,6 +121,18 @@ router.post('/', async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    // Audit
+    const { rows: meta } = await pool.query('SELECT name FROM mcogs_vendors WHERE id=$1', [vendor_id]);
+    await logAudit(pool, req, {
+      action: 'create',
+      entity_type: 'purchase_order',
+      entity_id: po.id,
+      entity_label: po.po_number,
+      context: { source: 'manual', vendor: meta[0]?.name, items_count: items?.length || 0 },
+      related_entities: [{ type: 'store', id: store_id }, { type: 'vendor', id: vendor_id }],
+    });
+
     res.status(201).json(po);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -287,6 +300,14 @@ router.post('/:id/submit', async (req, res) => {
       WHERE  id=$1
       RETURNING *
     `, [req.params.id]);
+
+    await logAudit(pool, req, {
+      action: 'status_change', entity_type: 'purchase_order',
+      entity_id: po.id, entity_label: po.po_number,
+      field_changes: { status: { old: 'draft', new: 'submitted' } },
+      context: { source: 'manual' },
+    });
+
     res.json(po);
   } catch (err) {
     console.error(err);
@@ -298,7 +319,7 @@ router.post('/:id/submit', async (req, res) => {
 router.post('/:id/cancel', async (req, res) => {
   try {
     const { rows: [existing] } = await pool.query(
-      `SELECT status FROM mcogs_purchase_orders WHERE id = $1`, [req.params.id]
+      `SELECT status, po_number FROM mcogs_purchase_orders WHERE id = $1`, [req.params.id]
     );
     if (!existing) return res.status(404).json({ error: { message: 'Purchase order not found' } });
     if (existing.status === 'cancelled') return res.status(409).json({ error: { message: 'Purchase order is already cancelled' } });
@@ -309,6 +330,14 @@ router.post('/:id/cancel', async (req, res) => {
       WHERE  id=$1
       RETURNING *
     `, [req.params.id]);
+
+    await logAudit(pool, req, {
+      action: 'status_change', entity_type: 'purchase_order',
+      entity_id: po.id, entity_label: po.po_number,
+      field_changes: { status: { old: existing.status, new: 'cancelled' } },
+      context: { source: 'manual' },
+    });
+
     res.json(po);
   } catch (err) {
     console.error(err);

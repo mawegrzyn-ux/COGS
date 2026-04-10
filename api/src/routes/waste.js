@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  WASTE LOG
@@ -85,6 +86,16 @@ router.post('/', async (req, res) => {
     `, [store_id, ingredient_id, qty]);
 
     await client.query('COMMIT');
+
+    const { rows: meta } = await pool.query('SELECT name FROM mcogs_ingredients WHERE id=$1', [ingredient_id]);
+    await logAudit(pool, req, {
+      action: 'create', entity_type: 'waste_log', entity_id: waste.id,
+      entity_label: meta[0]?.name || `Ingredient #${ingredient_id}`,
+      field_changes: { quantity: { old: null, new: qty }, unit_cost: { old: null, new: unit_cost || 0 } },
+      context: { source: 'manual', reason_code_id: reason_code_id || null, waste_date: waste.waste_date },
+      related_entities: [{ type: 'store', id: store_id }],
+    });
+
     res.status(201).json(waste);
   } catch (err) {
     await client.query('ROLLBACK');

@@ -1,6 +1,7 @@
 const router  = require('express').Router();
 const pool = require('../db/pool');
 const { loadAllRecipeItemsDeep } = require('./cogs');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ── GET /recipes  (list with item count) ──────────────────────────────────────
 router.get('/', async (req, res) => {
@@ -460,6 +461,12 @@ router.post('/', async (req, res) => {
       INSERT INTO mcogs_recipes (name, category_id, description, yield_qty, yield_unit_text, image_url)
       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
     `, [name.trim(), category_id||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null]);
+    await logAudit(pool, req, {
+      action: 'create', entity_type: 'recipe', entity_id: r.id,
+      entity_label: r.name,
+      field_changes: { name: { old: null, new: r.name }, yield_qty: { old: null, new: r.yield_qty } },
+      context: { source: 'manual' },
+    });
     res.status(201).json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
@@ -472,12 +479,27 @@ router.put('/:id', async (req, res) => {
   const { name, category_id, description, yield_qty, yield_unit_text, image_url } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    // Snapshot before update
+    const { rows: [oldRow] } = await pool.query('SELECT * FROM mcogs_recipes WHERE id=$1', [req.params.id]);
+    if (!oldRow) return res.status(404).json({ error: { message: 'Not found' } });
+
     const { rows: [r] } = await pool.query(`
       UPDATE mcogs_recipes SET name=$1, category_id=$2, description=$3,
              yield_qty=$4, yield_unit_text=$5, image_url=$6, updated_at=NOW()
       WHERE id=$7 RETURNING *
     `, [name.trim(), category_id||null, description?.trim()||null, yield_qty||1, yield_unit_text?.trim()||null, image_url?.trim()||null, req.params.id]);
     if (!r) return res.status(404).json({ error: { message: 'Not found' } });
+
+    const changes = diffFields(oldRow, r, ['name', 'category_id', 'description', 'yield_qty', 'yield_unit_text', 'image_url']);
+    if (changes) {
+      await logAudit(pool, req, {
+        action: 'update', entity_type: 'recipe', entity_id: parseInt(req.params.id),
+        entity_label: r.name,
+        field_changes: changes,
+        context: { source: 'manual' },
+      });
+    }
+
     res.json({ ...r, yield_unit_abbr: r.yield_unit_text || null });
   } catch (err) {
     console.error(err);
@@ -514,7 +536,16 @@ router.patch('/:id/items/reorder', async (req, res) => {
 // ── DELETE /recipes/:id ───────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT id, name FROM mcogs_recipes WHERE id=$1', [req.params.id]);
     await pool.query(`DELETE FROM mcogs_recipes WHERE id=$1`, [req.params.id]);
+
+    if (old) {
+      await logAudit(pool, req, {
+        action: 'delete', entity_type: 'recipe', entity_id: old.id,
+        entity_label: old.name,
+        context: { source: 'manual' },
+      });
+    }
     res.status(204).end();
   } catch (err) {
     console.error(err);
@@ -536,6 +567,19 @@ router.post('/:id/items', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
     `, [req.params.id, item_type, ingredient_id||null, recipe_item_id||null,
         prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1]);
+    // Audit: look up recipe + item name for context
+    const { rows: [recipeMeta] } = await pool.query('SELECT name FROM mcogs_recipes WHERE id=$1', [req.params.id]);
+    const itemName = item_type === 'ingredient'
+      ? (await pool.query('SELECT name FROM mcogs_ingredients WHERE id=$1', [ingredient_id])).rows[0]?.name
+      : (await pool.query('SELECT name FROM mcogs_recipes WHERE id=$1', [recipe_item_id])).rows[0]?.name;
+    await logAudit(pool, req, {
+      action: 'create', entity_type: 'recipe_item', entity_id: item.id,
+      entity_label: `${itemName || 'Unknown'} in ${recipeMeta?.name || 'Recipe #' + req.params.id}`,
+      field_changes: { prep_qty: { old: null, new: prep_qty }, item_type: { old: null, new: item_type } },
+      context: { source: 'manual' },
+      related_entities: [{ type: 'recipe', id: parseInt(req.params.id) }],
+    });
+
     res.status(201).json(item);
   } catch (err) {
     console.error(err);
@@ -547,11 +591,28 @@ router.post('/:id/items', async (req, res) => {
 router.put('/:id/items/:itemId', async (req, res) => {
   const { prep_qty, prep_unit, prep_to_base_conversion } = req.body;
   try {
+    const { rows: [oldItem] } = await pool.query(
+      'SELECT * FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2', [req.params.itemId, req.params.id]);
+
     const { rows: [item] } = await pool.query(`
       UPDATE mcogs_recipe_items SET prep_qty=$1, prep_unit=$2, prep_to_base_conversion=$3, updated_at=NOW()
       WHERE id=$4 AND recipe_id=$5 AND variation_id IS NULL AND pl_variation_id IS NULL AND market_pl_variation_id IS NULL RETURNING *
     `, [prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1, req.params.itemId, req.params.id]);
     if (!item) return res.status(404).json({ error: { message: 'Item not found' } });
+
+    if (oldItem) {
+      const changes = diffFields(oldItem, item, ['prep_qty', 'prep_unit', 'prep_to_base_conversion']);
+      if (changes) {
+        await logAudit(pool, req, {
+          action: 'update', entity_type: 'recipe_item', entity_id: item.id,
+          entity_label: `Item #${item.id} in Recipe #${req.params.id}`,
+          field_changes: changes,
+          context: { source: 'manual' },
+          related_entities: [{ type: 'recipe', id: parseInt(req.params.id) }],
+        });
+      }
+    }
+
     res.json(item);
   } catch (err) {
     console.error(err);
@@ -562,7 +623,25 @@ router.put('/:id/items/:itemId', async (req, res) => {
 // ── DELETE /recipes/:id/items/:itemId ─────────────────────────────────────────
 router.delete('/:id/items/:itemId', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query(
+      `SELECT ri.*, COALESCE(i.name, r2.name) AS item_name
+       FROM mcogs_recipe_items ri
+       LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
+       LEFT JOIN mcogs_recipes r2 ON r2.id = ri.recipe_item_id
+       WHERE ri.id=$1 AND ri.recipe_id=$2`, [req.params.itemId, req.params.id]);
+
     await pool.query(`DELETE FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2 AND variation_id IS NULL AND pl_variation_id IS NULL AND market_pl_variation_id IS NULL`, [req.params.itemId, req.params.id]);
+
+    if (old) {
+      await logAudit(pool, req, {
+        action: 'delete', entity_type: 'recipe_item', entity_id: parseInt(req.params.itemId),
+        entity_label: `${old.item_name || 'Item'} removed from Recipe #${req.params.id}`,
+        field_changes: { prep_qty: { old: old.prep_qty, new: null }, item_type: { old: old.item_type, new: null } },
+        context: { source: 'manual' },
+        related_entities: [{ type: 'recipe', id: parseInt(req.params.id) }],
+      });
+    }
+
     res.status(204).end();
   } catch (err) {
     console.error(err);

@@ -1438,6 +1438,32 @@ const migrations = [
      IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_xfer_number_seq')
      THEN CREATE SEQUENCE mcogs_xfer_number_seq START 1001; END IF;
    END $$`,
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ██  AUDIT LOG — Step 100
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── Step 100: Central audit log ────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_audit_log (
+     id               SERIAL PRIMARY KEY,
+     user_sub         VARCHAR(200),
+     user_email       VARCHAR(200),
+     user_name        VARCHAR(200),
+     action           VARCHAR(30) NOT NULL CHECK (action IN ('create','update','delete','status_change','confirm','approve','reverse')),
+     entity_type      VARCHAR(50) NOT NULL,
+     entity_id        INTEGER,
+     entity_label     VARCHAR(500),
+     field_changes    JSONB,
+     context          JSONB,
+     related_entities JSONB,
+     ip_address       VARCHAR(45),
+     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_entity     ON mcogs_audit_log(entity_type, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_user       ON mcogs_audit_log(user_sub)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_action     ON mcogs_audit_log(action)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_created    ON mcogs_audit_log(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_context    ON mcogs_audit_log USING gin(context jsonb_path_ops)`,
 ];
 
 async function runMigrations(pool) {

@@ -99,6 +99,9 @@ router.use('/waste',              ...can('stock_manager', 'read'), write('stock_
 router.use('/stock-transfers',    ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-transfers'));
 router.use('/stocktakes',         ...can('stock_manager', 'read'), write('stock_manager'), require('./stocktakes'));
 
+// ── Audit Log ─────────────────────────────────────────────────────────────────
+router.use('/audit',              auth,                                               require('./audit'));
+
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);
 

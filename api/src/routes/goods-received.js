@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /goods-received
 router.get('/', async (req, res) => {
@@ -391,6 +392,22 @@ router.post('/:id/confirm', async (req, res) => {
     `, [grn.id]);
 
     await client.query('COMMIT');
+
+    // Audit: log GRN confirmation with related entities
+    await logAudit(pool, req, {
+      action: 'confirm',
+      entity_type: 'goods_received',
+      entity_id: grn.id,
+      entity_label: grn.grn_number,
+      field_changes: { status: { old: 'draft', new: 'confirmed' } },
+      context: { source: 'goods_received', items_count: grnItems.length },
+      related_entities: [
+        ...(grn.po_id ? [{ type: 'purchase_order', id: grn.po_id }] : []),
+        { type: 'store', id: grn.store_id },
+        { type: 'vendor', id: grn.vendor_id },
+      ],
+    });
+
     res.json(confirmed);
   } catch (err) {
     await client.query('ROLLBACK');

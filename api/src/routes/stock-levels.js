@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /stock-levels?store_id=&low_stock=&q=
 router.get('/', async (req, res, next) => {
@@ -114,6 +115,21 @@ router.post('/adjust', async (req, res, next) => {
     `, [store_id, ingredient_id, qty]);
 
     await client.query('COMMIT');
+
+    // Audit
+    const { rows: meta } = await pool.query(
+      'SELECT name FROM mcogs_ingredients WHERE id=$1', [ingredient_id]
+    );
+    await logAudit(pool, req, {
+      action: 'update',
+      entity_type: 'stock_level',
+      entity_id: slRows[0].id,
+      entity_label: meta[0]?.name || `Ingredient #${ingredient_id}`,
+      field_changes: { qty_on_hand: { old: slRows[0].qty_on_hand - qty, new: slRows[0].qty_on_hand } },
+      context: { source: 'manual_adjust', quantity: qty, notes: notes || null },
+      related_entities: [{ type: 'store', id: store_id }, { type: 'stock_movement', id: movRows[0].id }],
+    });
+
     res.status(201).json({ movement: movRows[0], stock_level: slRows[0] });
   } catch (err) {
     await client.query('ROLLBACK');

@@ -1,5 +1,6 @@
 const router = require('express').Router()
 const pool   = require('../db/pool')
+const { logAudit, diffFields } = require('../helpers/audit')
 
 // GET /ingredients/stats — lightweight counts for header badges (no auth needed beyond the route guard)
 router.get('/stats', async (_req, res) => {
@@ -106,6 +107,12 @@ router.post('/', async (req, res) => {
       LEFT JOIN mcogs_categories c ON c.id = i.category_id
       LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       WHERE i.id = $1`, [rows[0].id])
+    await logAudit(pool, req, {
+      action: 'create', entity_type: 'ingredient', entity_id: full[0].id,
+      entity_label: full[0].name,
+      field_changes: { name: { old: null, new: full[0].name }, category: { old: null, new: full[0].category_name || null }, waste_pct: { old: null, new: full[0].waste_pct } },
+      context: { source: 'manual' },
+    })
     res.status(201).json(full[0])
   } catch (err) {
     console.error(err)
@@ -118,6 +125,10 @@ router.put('/:id', async (req, res) => {
   const { name, category_id, base_unit_id, default_prep_unit, default_prep_to_base_conversion, notes, image_url, waste_pct } = req.body
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } })
   try {
+    // Snapshot before update
+    const { rows: [oldRow] } = await pool.query('SELECT * FROM mcogs_ingredients WHERE id=$1', [req.params.id])
+    if (!oldRow) return res.status(404).json({ error: { message: 'Not found' } })
+
     const { rows } = await pool.query(`
       UPDATE mcogs_ingredients
       SET name=$1, category_id=$2, base_unit_id=$3, default_prep_unit=$4,
@@ -143,6 +154,20 @@ router.put('/:id', async (req, res) => {
       LEFT JOIN mcogs_categories c ON c.id = i.category_id
       LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       WHERE i.id = $1`, [rows[0].id])
+
+    const changes = diffFields(oldRow, rows[0], [
+      'name', 'category_id', 'base_unit_id', 'default_prep_unit',
+      'default_prep_to_base_conversion', 'waste_pct', 'image_url',
+    ])
+    if (changes) {
+      await logAudit(pool, req, {
+        action: 'update', entity_type: 'ingredient', entity_id: parseInt(req.params.id),
+        entity_label: rows[0].name,
+        field_changes: changes,
+        context: { source: 'manual' },
+      })
+    }
+
     res.json(full[0])
   } catch (err) {
     console.error(err)
@@ -153,10 +178,19 @@ router.put('/:id', async (req, res) => {
 // DELETE /ingredients/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT id, name FROM mcogs_ingredients WHERE id=$1', [req.params.id])
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_ingredients WHERE id=$1`, [req.params.id]
     )
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } })
+
+    if (old) {
+      await logAudit(pool, req, {
+        action: 'delete', entity_type: 'ingredient', entity_id: old.id,
+        entity_label: old.name,
+        context: { source: 'manual' },
+      })
+    }
     res.status(204).send()
   } catch (err) {
     if (err.code === '23503') {

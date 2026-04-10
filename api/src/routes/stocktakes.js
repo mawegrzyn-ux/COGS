@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /stocktakes?store_id=&status=&stocktake_type=&from=&to=
 router.get('/', async (req, res) => {
@@ -326,6 +327,16 @@ router.post('/:id/approve', async (req, res) => {
     `, [approved_by, stocktake.id]);
 
     await client.query('COMMIT');
+
+    const varianceCount = items.length;
+    await logAudit(pool, req, {
+      action: 'approve', entity_type: 'stocktake', entity_id: stocktake.id,
+      entity_label: `${stocktake.stocktake_type} stocktake #${stocktake.id}`,
+      field_changes: { status: { old: 'completed', new: 'approved' } },
+      context: { source: 'stocktake', stocktake_type: stocktake.stocktake_type, variance_items: varianceCount },
+      related_entities: [{ type: 'store', id: stocktake.store_id }],
+    });
+
     res.json(updated[0]);
   } catch (err) {
     await client.query('ROLLBACK');
