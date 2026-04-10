@@ -55,6 +55,8 @@ router.get('/config', async (req, res) => {
     res.json({
       po_prefix: config.po_prefix || 'PO',
       allow_backdated_po: config.allow_backdated_po || false,
+      allow_quote_creation_from_po: config.allow_quote_creation_from_po !== false,  // default true
+      allow_po_price_override: config.allow_po_price_override !== false,            // default true
     });
   } catch (err) {
     console.error(err);

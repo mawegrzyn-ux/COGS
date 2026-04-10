@@ -273,6 +273,8 @@ function StockConfigSection() {
     cn_prefix: 'CN',
     xfer_prefix: 'TRF',
     allow_backdated_po: false,
+    allow_quote_creation_from_po: true,
+    allow_po_price_override: true,
   })
   const [toast, setToast] = useState<string | null>(null)
 
@@ -336,7 +338,23 @@ function StockConfigSection() {
             <input type="checkbox" checked={config.allow_backdated_po} onChange={e => setConfig(c => ({ ...c, allow_backdated_po: e.target.checked }))} className="rounded" />
             <div>
               <span className="text-sm font-medium text-text-1">Allow backdated purchase orders</span>
-              <p className="text-xs text-text-3 mt-0.5">When disabled, PO dates must be today or in the future. Enable this if you need to record orders that were placed on earlier dates.</p>
+              <p className="text-xs text-text-3 mt-0.5">When disabled, PO dates must be today or in the future.</p>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-3 p-3 bg-surface-2 rounded-lg border border-border cursor-pointer hover:bg-white transition-colors mt-2">
+            <input type="checkbox" checked={config.allow_quote_creation_from_po} onChange={e => setConfig(c => ({ ...c, allow_quote_creation_from_po: e.target.checked }))} className="rounded" />
+            <div>
+              <span className="text-sm font-medium text-text-1">Allow creating price quotes from purchase orders</span>
+              <p className="text-xs text-text-3 mt-0.5">When enabled, users with Inventory write access can save new price quotes directly from PO line items. When disabled, quotes can only be created in the Inventory module.</p>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-3 p-3 bg-surface-2 rounded-lg border border-border cursor-pointer hover:bg-white transition-colors mt-2">
+            <input type="checkbox" checked={config.allow_po_price_override} onChange={e => setConfig(c => ({ ...c, allow_po_price_override: e.target.checked }))} className="rounded" />
+            <div>
+              <span className="text-sm font-medium text-text-1">Allow overriding quoted prices on purchase orders</span>
+              <p className="text-xs text-text-3 mt-0.5">When disabled, users must use the price, unit, and conversion from the existing quote. They can still change the order quantity. Disable this to enforce price consistency.</p>
             </div>
           </label>
         </div>

@@ -238,9 +238,10 @@ function OverviewTab({ storeId, api, stores }: { storeId: number | null; api: Ap
     setLoading(true)
     try {
       const q = storeId ? `?store_id=${storeId}` : ''
+      const mq = storeId ? `?store_id=${storeId}&limit=20` : '?limit=20'
       const [lv, mv] = await Promise.all([
         api.get(`/stock-levels${q}`),
-        api.get(`/stock-levels/movements${q}&limit=20`.replace('movements&', `movements${q ? '&' : '?'}limit=20`.replace(q + '&', q + '&'))),
+        api.get(`/stock-levels/movements${mq}`),
       ].map(p => p.catch(() => [])))
       setLevels(lv || [])
       setMovements(mv || [])
@@ -662,9 +663,9 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
 // ════════════════════════════════════════════════════════════════════════════════
 // PurchaseOrdersTab
 // ════════════════════════════════════════════════════════════════════════════════
-function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrite, showToast }: {
+function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrite, canWriteInventory, showToast }: {
   api: ApiType; stores: Store[]; vendors: VendorRef[]; ingredients: IngredientRef[]
-  storeId: number | null; canWrite: boolean; showToast: (msg: string, type?: 'success' | 'error') => void
+  storeId: number | null; canWrite: boolean; canWriteInventory: boolean; showToast: (msg: string, type?: 'success' | 'error') => void
 }) {
   const [orders, setOrders] = useState<PurchaseOrder[]>([])
   const [loading, setLoading] = useState(true)
@@ -874,7 +875,10 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
 
   const activeStores = stores.filter(s => s.is_active)
 
-  const [poConfig, setPoConfig] = useState<{ allow_backdated_po?: boolean; po_prefix?: string }>({})
+  const [poConfig, setPoConfig] = useState<{
+    allow_backdated_po?: boolean; po_prefix?: string;
+    allow_quote_creation_from_po?: boolean; allow_po_price_override?: boolean;
+  }>({})
   useEffect(() => {
     api.get('/purchase-orders/config').then(c => setPoConfig(c || {})).catch(() => {})
   }, [api])
@@ -1097,61 +1101,76 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
             </select>
           </Field>
 
-          <Field label="Purchase Unit" hint={quoteLookup?.has_quote ? 'Auto-populated from quote — change to override' : 'e.g. case, bag, 25kg sack'}>
-            <input className="input w-full" value={itemForm.purchase_unit}
-              onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
-          </Field>
-
-          <Field label="Qty Ordered *">
-            <CalcInput className="input w-full" value={itemForm.qty_ordered} placeholder="e.g. 24*0.5"
-              onChange={v => setItemForm(f => ({ ...f, qty_ordered: v }))} />
-          </Field>
-
-          <Field label="Unit Price" hint={quoteLookup?.has_quote ? 'Auto-populated from quote' : undefined}>
-            <CalcInput className="input w-full" value={itemForm.unit_price}
-              onChange={v => setItemForm(f => ({ ...f, unit_price: v }))} />
-          </Field>
-
-          {/* Conversion to Base Unit — only shown when:
-              1. No quote exists (user must specify conversion), OR
-              2. User has overridden the purchase unit from the quoted value */}
+          {/* ── Price/Unit fields — locked when quote exists + override disabled ── */}
           {(() => {
+            const hasQuote = !!quoteLookup?.has_quote
+            const canOverride = poConfig.allow_po_price_override !== false
+            const fieldsLocked = hasQuote && !canOverride
             const baseUnit = quoteLookup?.quote?.base_unit_abbr || quoteLookup?.ingredient?.base_unit_abbr || null
             const quotedUnit = quoteLookup?.quote?.purchase_unit || ''
-            const userOverrodePurchaseUnit = quoteLookup?.has_quote && itemForm.purchase_unit.trim() !== '' && itemForm.purchase_unit.trim() !== quotedUnit.trim()
-            const showConversion = !quoteLookup?.has_quote || userOverrodePurchaseUnit
+            const userOverrodePurchaseUnit = hasQuote && canOverride && itemForm.purchase_unit.trim() !== '' && itemForm.purchase_unit.trim() !== quotedUnit.trim()
 
-            if (!showConversion) return null
+            // Can create quote if: global toggle ON + user has inventory:write + (no quote OR overridden unit)
+            const canCreateQuote = (poConfig.allow_quote_creation_from_po !== false) && canWriteInventory
+            const showSaveAsQuote = canCreateQuote && (!hasQuote || userOverrodePurchaseUnit) && itemForm.ingredient_id && itemForm.unit_price
+            const showConversion = !hasQuote || userOverrodePurchaseUnit
+
             return (
-              <Field label={`Conversion to Base Unit${baseUnit ? ` (${baseUnit})` : ''}`} hint={baseUnit ? `How many ${baseUnit} in one ${itemForm.purchase_unit.trim() || 'purchase unit'}` : 'How many base units per purchase unit'}>
-                <CalcInput className="input w-full" value={itemForm.qty_in_base_units} placeholder="e.g. 1000/25"
-                  onChange={v => setItemForm(f => ({ ...f, qty_in_base_units: v }))} />
-              </Field>
-            )
-          })()}
+              <>
+                <Field label="Purchase Unit" hint={
+                  fieldsLocked ? 'Locked to quoted value — override disabled by admin'
+                    : hasQuote ? 'Auto-populated from quote — change to override'
+                    : 'e.g. case, bag, 25kg sack'
+                }>
+                  <input className={`input w-full ${fieldsLocked ? 'bg-gray-50 text-text-3' : ''}`} value={itemForm.purchase_unit}
+                    disabled={fieldsLocked}
+                    onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
+                </Field>
 
-          {/* Save as price quote option — shown when:
-              1. No existing quote (user is entering price manually), OR
-              2. User has overridden the purchase unit from the quoted value (new unit = new quote) */}
-          {(() => {
-            const quotedUnit = quoteLookup?.quote?.purchase_unit || ''
-            const userOverrodePurchaseUnit = quoteLookup?.has_quote && itemForm.purchase_unit.trim() !== '' && itemForm.purchase_unit.trim() !== quotedUnit.trim()
-            const showSaveAsQuote = (!quoteLookup?.has_quote || userOverrodePurchaseUnit) && itemForm.ingredient_id && itemForm.unit_price
+                <Field label="Qty Ordered *">
+                  <CalcInput className="input w-full" value={itemForm.qty_ordered} placeholder="e.g. 24*0.5"
+                    onChange={v => setItemForm(f => ({ ...f, qty_ordered: v }))} />
+                </Field>
 
-            if (!showSaveAsQuote) return null
-            return (
-              <label className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
-                <input type="checkbox" checked={saveAsQuote} onChange={e => setSaveAsQuote(e.target.checked)} className="rounded" />
-                <div>
-                  <span className="text-xs font-medium text-blue-800">Save as price quote</span>
-                  <p className="text-[10px] text-blue-600 mt-0.5">
-                    {userOverrodePurchaseUnit
-                      ? `Creates a new quote for "${itemForm.purchase_unit.trim()}" unit (different from quoted "${quotedUnit}")`
-                      : 'Creates a new active price quote for this ingredient + vendor'
-                    }
-                  </p>
-                </div>
-              </label>
+                <Field label="Unit Price" hint={
+                  fieldsLocked ? 'Locked to quoted price — override disabled by admin'
+                    : hasQuote ? 'Auto-populated from quote' : undefined
+                }>
+                  <CalcInput className={`input w-full ${fieldsLocked ? 'bg-gray-50 text-text-3' : ''}`} value={itemForm.unit_price}
+                    disabled={fieldsLocked}
+                    onChange={v => setItemForm(f => ({ ...f, unit_price: v }))} />
+                </Field>
+
+                {showConversion && (
+                  <Field label={`Conversion to Base Unit${baseUnit ? ` (${baseUnit})` : ''}`}
+                    hint={baseUnit ? `How many ${baseUnit} in one ${itemForm.purchase_unit.trim() || 'purchase unit'}` : 'How many base units per purchase unit'}>
+                    <CalcInput className="input w-full" value={itemForm.qty_in_base_units} placeholder="e.g. 1000/25"
+                      onChange={v => setItemForm(f => ({ ...f, qty_in_base_units: v }))} />
+                  </Field>
+                )}
+
+                {/* No quote + no override permission = show info message */}
+                {!hasQuote && !canOverride && (
+                  <div className="p-2.5 rounded-lg border bg-red-50 border-red-200 text-xs text-red-800">
+                    <span className="font-semibold">No price quote found</span> and overriding is disabled. Ask an admin to create a price quote for this ingredient from this vendor first.
+                  </div>
+                )}
+
+                {showSaveAsQuote && (
+                  <label className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
+                    <input type="checkbox" checked={saveAsQuote} onChange={e => setSaveAsQuote(e.target.checked)} className="rounded" />
+                    <div>
+                      <span className="text-xs font-medium text-blue-800">Save as price quote</span>
+                      <p className="text-[10px] text-blue-600 mt-0.5">
+                        {userOverrodePurchaseUnit
+                          ? `Creates a new quote for "${itemForm.purchase_unit.trim()}" (different from quoted "${quotedUnit}")`
+                          : 'Creates a new active price quote for this ingredient + vendor'
+                        }
+                      </p>
+                    </div>
+                  </label>
+                )}
+              </>
             )
           })()}
 
@@ -2772,6 +2791,7 @@ export default function StockManagerPage() {
   const api = useApi()
   const { can } = usePermissions()
   const canWrite = can('stock_manager', 'write')
+  const canWriteInventory = can('inventory', 'write')  // needed for quote creation from POs
 
   const [activeTab, setActiveTab] = useState<Tab>('overview')
 
@@ -2861,7 +2881,7 @@ export default function StockManagerPage() {
       <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === 'overview' && <OverviewTab storeId={activeStoreId} api={api} stores={stores} />}
         {activeTab === 'stores' && <StoresTab api={api} locations={locations} canWrite={canWrite} showToast={showToast} onStoresChange={loadRefData} />}
-        {activeTab === 'purchase-orders' && <PurchaseOrdersTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
+        {activeTab === 'purchase-orders' && <PurchaseOrdersTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} canWriteInventory={canWriteInventory} showToast={showToast} />}
         {activeTab === 'goods-in' && <GoodsInTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
         {activeTab === 'invoices' && <InvoicesTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
         {activeTab === 'waste' && <WasteTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
