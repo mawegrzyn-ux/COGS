@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
-import { Modal, Field, Spinner } from '../components/ui'
+import { Modal, Field, Spinner, ConfirmDialog } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ApiType = {
@@ -77,7 +77,8 @@ interface InvoiceItem {
   line_total: number; sort_order: number; ingredient_name?: string
 }
 
-interface CreditNote {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _CreditNote {
   id: number; store_id: number; vendor_id: number; invoice_id: number | null
   grn_id: number | null; credit_number: string
   status: 'draft' | 'submitted' | 'approved' | 'applied'
@@ -655,9 +656,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
       {/* Delete confirm */}
       {deleting && (
         <ConfirmDialog
-          title="Delete Store"
-          message={`Are you sure you want to delete "${deleting.name}"? This will also remove all stock levels and movements for this store.`}
-          confirmLabel="Delete"
+          message={`Delete "${deleting.name}"? This will also remove all stock levels and movements for this store.`}
           onConfirm={handleDelete}
           onCancel={() => setDeleting(null)}
         />
@@ -1688,7 +1687,6 @@ function WasteTab({ api, stores, ingredients, storeId, canWrite, showToast }: {
   const [reasonCodes, setReasonCodes] = useState<WasteReasonCode[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [showReasonPanel, setShowReasonPanel] = useState(false)
   const [editReason, setEditReason] = useState<WasteReasonCode | null>(null)
   const [reasonForm, setReasonForm] = useState({ name: '', description: '', is_active: true })
 
