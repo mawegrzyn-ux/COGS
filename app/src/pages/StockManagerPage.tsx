@@ -77,14 +77,6 @@ interface InvoiceItem {
   line_total: number; sort_order: number; ingredient_name?: string
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-interface _CreditNote {
-  id: number; store_id: number; vendor_id: number; invoice_id: number | null
-  grn_id: number | null; credit_number: string
-  status: 'draft' | 'submitted' | 'approved' | 'applied'
-  credit_date: string; reason: string | null; total: number
-  store_name?: string; vendor_name?: string
-}
 
 interface WasteEntry {
   id: number; store_id: number; ingredient_id: number; reason_code_id: number | null
