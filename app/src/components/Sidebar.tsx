@@ -98,27 +98,6 @@ export default function Sidebar({ pepperMode = 'float', pepperOpen = false, onPe
         })}
       </nav>
 
-      {/* Media Library quick-access button */}
-      <div className={`px-2 pb-1 ${collapsed ? 'flex justify-center' : ''}`}>
-        <button
-          onClick={() => onMediaToggle?.()}
-          title="Media Library"
-          className={[
-            'flex items-center gap-3 rounded px-2 py-2 transition-colors text-sm font-semibold w-full',
-            mediaOpen
-              ? 'bg-accent-dim text-accent'
-              : 'text-text-2 hover:bg-surface-2 hover:text-text-1',
-          ].join(' ')}
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-            <polyline points="21 15 16 10 5 21"/>
-          </svg>
-          {!collapsed && <span>Media Library</span>}
-        </button>
-      </div>
-
       {/* Pepper AI button — float mode: toggles panel; docked modes: always active */}
       <div className={`px-2 pb-1 ${collapsed ? 'flex justify-center' : ''}`}>
         <button

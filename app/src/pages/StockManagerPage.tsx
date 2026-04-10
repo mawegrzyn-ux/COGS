@@ -715,7 +715,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
   }, [orders, statusFilter, vendorFilter])
 
   // Form state for new PO — store_id is now optional
-  const [newPO, setNewPO] = useState({ store_id: '', vendor_id: '', notes: '', expected_date: '' })
+  const [newPO, setNewPO] = useState({ store_id: '', vendor_id: '', notes: '', expected_date: '', order_date: '' })
 
   const handleCreatePO = async () => {
     if (!newPO.vendor_id) return
@@ -726,6 +726,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
         vendor_id: Number(newPO.vendor_id),
         notes: newPO.notes.trim() || null,
         expected_date: newPO.expected_date || null,
+        order_date: newPO.order_date || null,
       })
       showToast('Purchase order created')
       setShowModal(false)
@@ -873,6 +874,11 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
 
   const activeStores = stores.filter(s => s.is_active)
 
+  const [poConfig, setPoConfig] = useState<{ allow_backdated_po?: boolean; po_prefix?: string }>({})
+  useEffect(() => {
+    api.get('/purchase-orders/config').then(c => setPoConfig(c || {})).catch(() => {})
+  }, [api])
+
   if (loading) return <div className="flex items-center justify-center h-64"><Spinner /></div>
 
   return (
@@ -883,7 +889,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold text-text-3 uppercase tracking-wide">Purchase Orders</h3>
             {canWrite && <button className="btn-primary text-xs py-1 px-2.5 rounded" onClick={() => {
-              setNewPO({ store_id: storeId ? String(storeId) : '', vendor_id: '', notes: '', expected_date: '' })
+              setNewPO({ store_id: storeId ? String(storeId) : '', vendor_id: '', notes: '', expected_date: '', order_date: '' })
               setShowModal(true)
             }}>+ New PO</button>}
           </div>
@@ -1106,10 +1112,15 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
               onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
           </Field>
 
-          <Field label="Qty in Base Units" hint={`How many base units per purchase unit${quoteLookup?.ingredient?.base_unit_abbr ? ` (${quoteLookup.ingredient.base_unit_abbr})` : ''}`}>
-            <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.qty_in_base_units}
-              onChange={e => setItemForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
-          </Field>
+          {(() => {
+            const baseUnit = quoteLookup?.quote?.base_unit_abbr || quoteLookup?.ingredient?.base_unit_abbr || null
+            return (
+              <Field label={`Qty in Base Units${baseUnit ? ` (${baseUnit})` : ''}`} hint={baseUnit ? `How many ${baseUnit} per purchase unit` : 'How many base units per purchase unit'}>
+                <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.qty_in_base_units}
+                  onChange={e => setItemForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+              </Field>
+            )
+          })()}
 
           {/* Save as price quote option — only when no existing quote */}
           {!quoteLookup?.has_quote && itemForm.ingredient_id && itemForm.unit_price && (
@@ -1147,8 +1158,14 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                 {vendors.map(v => <option key={v.id} value={String(v.id)}>{v.name}</option>)}
               </select>
             </Field>
+            <Field label="Order Date" hint={!poConfig.allow_backdated_po ? 'Backdating is disabled — today or future only' : undefined}>
+              <input type="date" className="input w-full" value={newPO.order_date}
+                min={!poConfig.allow_backdated_po ? new Date().toISOString().slice(0, 10) : undefined}
+                onChange={e => setNewPO(f => ({ ...f, order_date: e.target.value }))} />
+            </Field>
             <Field label="Expected Delivery Date">
               <input type="date" className="input w-full" value={newPO.expected_date}
+                min={new Date().toISOString().slice(0, 10)}
                 onChange={e => setNewPO(f => ({ ...f, expected_date: e.target.value }))} />
             </Field>
             <Field label="Notes">

@@ -71,8 +71,8 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     const ext  = path.extname(req.file.originalname).toLowerCase() || '.jpg';
     const name = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
     fs.writeFileSync(path.join(uploadsDir, name), req.file.buffer);
-    const baseUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
-    const fileUrl = `${baseUrl}/uploads/${name}`;
+    // Use relative query-param URL to avoid domain/cert issues (same pattern as media.js)
+    const fileUrl = `/api/media/img?f=${encodeURIComponent(name)}`;
     // Backfill into media library (non-blocking)
     pool.query(
       `INSERT INTO mcogs_media_items (filename, original_filename, url, thumb_url, web_url, storage_type, storage_key, mime_type, size_bytes, scope, form_key, uploaded_by)

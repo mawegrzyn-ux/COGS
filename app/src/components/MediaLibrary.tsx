@@ -191,17 +191,51 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, mode = 
   }, [items]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Select item (open detail panel) ─────────────────────────────────────────
+  //
+  // Selection modes:
+  //
+  //   SINGLE MODE (0 or 1 items selected):
+  //     • Clicking the image/row = FOCUS — replaces selection with this item
+  //     • Clicking the checkbox  = ADD   — adds to selection (enters multi mode if now 2+)
+  //
+  //   MULTI MODE (2+ items selected):
+  //     • Clicking ANYWHERE on the image/row/checkbox = TOGGLE — adds or removes
+  //
+  //   TRANSITION: When toggling off brings count back to 1, we remain in that
+  //   state — the remaining item is selected. The next click on a different
+  //   image (not checkbox) will replace it (single mode behaviour).
+  //
+  //   `fromCheckbox` = true when the click originated from the checkbox element
+  //   (stopPropagation prevents the outer div handler from also firing).
 
-  function selectItem(item: MediaItem, toggle = false) {
+  function selectItem(item: MediaItem, fromCheckbox = false) {
     if (onInsert) {
-      // picker mode: single select only
+      // picker mode: always single select
       setSelectedIds(new Set([item.id]))
       setDetailItem(item)
       setEditFilename(item.filename)
       setEditCatId(item.category_id)
       return
     }
-    if (toggle) {
+
+    const isMultiMode = selectedIds.size >= 2
+
+    if (isMultiMode) {
+      // MULTI MODE — any click toggles
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        if (next.has(item.id)) next.delete(item.id)
+        else next.add(item.id)
+        return next
+      })
+      // Update detail panel to show this item if we're adding it
+      if (!selectedIds.has(item.id)) {
+        setDetailItem(item)
+        setEditFilename(item.filename)
+        setEditCatId(item.category_id)
+      }
+    } else if (fromCheckbox) {
+      // SINGLE MODE + checkbox click — ADD to selection (may enter multi mode)
       setSelectedIds(prev => {
         const next = new Set(prev)
         if (next.has(item.id)) next.delete(item.id)
@@ -214,6 +248,7 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, mode = 
         setEditCatId(item.category_id)
       }
     } else {
+      // SINGLE MODE + image/row click — FOCUS (replace selection)
       setSelectedIds(new Set([item.id]))
       setDetailItem(item)
       setEditFilename(item.filename)
@@ -831,8 +866,9 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, mode = 
 function GridView({ items, selectedIds, onSelect }: {
   items: MediaItem[]
   selectedIds: Set<number>
-  onSelect: (item: MediaItem, toggle?: boolean) => void
+  onSelect: (item: MediaItem, fromCheckbox?: boolean) => void
 }) {
+  const isMultiMode = selectedIds.size >= 2
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-3">
       {items.map(item => {
@@ -842,7 +878,7 @@ function GridView({ items, selectedIds, onSelect }: {
         return (
           <div
             key={item.id}
-            onClick={() => onSelect(item, anySelected)}
+            onClick={() => onSelect(item, false)}
             className={`group relative cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${selected ? 'border-accent shadow-sm' : 'border-transparent hover:border-border'}`}
           >
             {/* Thumbnail */}
@@ -860,9 +896,11 @@ function GridView({ items, selectedIds, onSelect }: {
               <p className="text-[11px] text-text-2 truncate">{item.filename}</p>
             </div>
 
-            {/* Checkbox (top-left, visible on hover or if any selected) */}
+            {/* Checkbox (top-left)
+                 - In single mode: visible on hover or when this item is selected
+                 - In multi mode: always visible on all items */}
             <div
-              className={`absolute top-1.5 left-1.5 transition-opacity ${(anySelected || selected) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+              className={`absolute top-1.5 left-1.5 transition-opacity ${isMultiMode || anySelected || selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
               onClick={e => { e.stopPropagation(); onSelect(item, true) }}
             >
               <div className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer transition-colors ${selected ? 'bg-accent border-accent' : 'bg-white/90 border-border hover:border-accent'}`}>
@@ -886,7 +924,7 @@ function GridView({ items, selectedIds, onSelect }: {
 function ListView({ items, selectedIds, onSelect }: {
   items: MediaItem[]
   selectedIds: Set<number>
-  onSelect: (item: MediaItem, toggle?: boolean) => void
+  onSelect: (item: MediaItem, fromCheckbox?: boolean) => void
 }) {
   return (
     <table className="w-full text-sm border-separate border-spacing-0">
@@ -907,7 +945,7 @@ function ListView({ items, selectedIds, onSelect }: {
           return (
             <tr
               key={item.id}
-              onClick={() => onSelect(item)}
+              onClick={() => onSelect(item, false)}
               className={`cursor-pointer transition-colors ${selected ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}
             >
               <td className="py-1.5 pr-2">

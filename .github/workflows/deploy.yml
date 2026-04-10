@@ -62,10 +62,10 @@ jobs:
             # Ensure uploads directory exists and is writable by the API
             mkdir -p /var/www/menu-cogs/uploads
             chmod 755 /var/www/menu-cogs/uploads
-            # Inject APP_URL into .env (used by upload.js to construct local image URLs)
+            # Inject APP_URL into .env — uses LIGHTSAIL_HOST secret (never hardcode the domain)
             grep -q "^APP_URL=" .env \
-              && sed -i "s|^APP_URL=.*|APP_URL=https://cogs.flavorconnect.tech|" .env \
-              || echo "APP_URL=https://cogs.flavorconnect.tech" >> .env
+              && sed -i "s|^APP_URL=.*|APP_URL=https://${{ secrets.LIGHTSAIL_HOST }}|" .env \
+              || echo "APP_URL=https://${{ secrets.LIGHTSAIL_HOST }}" >> .env
             pm2 restart menu-cogs-api
             # Ensure nginx allows uploads up to 11 MB (covers the 10 MB app limit + multipart overhead)
             grep -q 'client_max_body_size' /etc/nginx/sites-available/menu-cogs \

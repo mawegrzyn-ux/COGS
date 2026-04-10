@@ -1759,6 +1759,26 @@ This pattern is used by `GET /ingredients/stats` for the Inventory page header b
 
 The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
 
+### Media Library Selection Behaviour
+
+The Media Library (`app/src/components/MediaLibrary.tsx`) uses a **focus-vs-select** model with two modes that transition automatically:
+
+**SINGLE MODE (0 or 1 items selected):**
+- Clicking the image/row = **FOCUS** — replaces selection with this item, opens detail panel
+- Clicking the checkbox = **ADD** — adds to selection without removing the existing one
+- When a second item is added via checkbox, the mode transitions to Multi Mode
+
+**MULTI MODE (2+ items selected):**
+- Clicking **anywhere** on the image, row, or checkbox = **TOGGLE** — adds or removes from selection
+- All checkboxes are always visible (not just on hover)
+- The bulk action panel appears (move to category, bulk delete)
+
+**TRANSITION BACK:** When toggling off brings the count back to 1, the system returns to Single Mode automatically. The remaining item stays selected. The next click on a different image (not checkbox) will replace it.
+
+**Implementation:** `selectItem(item, fromCheckbox)` in MediaLibrary.tsx checks `selectedIds.size >= 2` for multi mode. In single mode, `fromCheckbox=true` toggles, `fromCheckbox=false` replaces. In multi mode, both paths toggle. GridView and ListView pass `fromCheckbox=false` from the outer click and `fromCheckbox=true` from the checkbox `onClick` (with `e.stopPropagation()`).
+
+**Critical:** Do not change this selection logic without understanding the mode transitions. The `fromCheckbox` parameter (not `toggle`) is the key discriminator.
+
 ---
 
 ## 18. Backlog

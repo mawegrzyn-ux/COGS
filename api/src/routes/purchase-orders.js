@@ -2,6 +2,13 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit } = require('../helpers/audit');
 
+async function getStockConfig() {
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    return rows[0]?.data?.stock_config || {};
+  } catch { return {}; }
+}
+
 // GET /purchase-orders
 router.get('/', async (req, res) => {
   const { store_id, vendor_id, status, from, to } = req.query;
@@ -37,6 +44,62 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch purchase orders' } });
+  }
+});
+
+// GET /purchase-orders/config — get stock config for the PO form
+// IMPORTANT: Must be defined BEFORE /:id to avoid Express matching 'config' as an ID
+router.get('/config', async (req, res) => {
+  try {
+    const config = await getStockConfig();
+    res.json({
+      po_prefix: config.po_prefix || 'PO',
+      allow_backdated_po: config.allow_backdated_po || false,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to get config' } });
+  }
+});
+
+// GET /purchase-orders/quote-lookup?ingredient_id=&vendor_id=
+// Returns the best active price quote for an ingredient from a vendor
+// IMPORTANT: Must be defined BEFORE /:id to avoid Express matching 'quote-lookup' as an ID
+router.get('/quote-lookup', async (req, res) => {
+  const { ingredient_id, vendor_id } = req.query;
+  if (!ingredient_id || !vendor_id) return res.status(400).json({ error: { message: 'ingredient_id and vendor_id required' } });
+  try {
+    const { rows: quotes } = await pool.query(`
+      SELECT pq.*,
+             ing.name AS ingredient_name,
+             ing.base_unit_id,
+             u.name AS base_unit_name,
+             u.abbreviation AS base_unit_abbr,
+             ing.default_prep_unit,
+             ing.default_prep_to_base_conversion
+      FROM   mcogs_price_quotes pq
+      JOIN   mcogs_ingredients ing ON ing.id = pq.ingredient_id
+      LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
+      WHERE  pq.ingredient_id = $1 AND pq.vendor_id = $2 AND pq.is_active = true
+      ORDER BY pq.updated_at DESC
+      LIMIT  1
+    `, [ingredient_id, vendor_id]);
+
+    if (quotes.length) {
+      res.json({ has_quote: true, quote: quotes[0] });
+    } else {
+      const { rows: [ing] } = await pool.query(`
+        SELECT ing.name, ing.base_unit_id, u.name AS base_unit_name, u.abbreviation AS base_unit_abbr,
+               ing.default_prep_unit, ing.default_prep_to_base_conversion
+        FROM   mcogs_ingredients ing
+        LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
+        WHERE  ing.id = $1
+      `, [ingredient_id]);
+      res.json({ has_quote: false, ingredient: ing || null });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to look up quote' } });
   }
 });
 
@@ -79,48 +142,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// GET /purchase-orders/quote-lookup?ingredient_id=&vendor_id=
-// Returns the best active price quote for an ingredient from a vendor
-router.get('/quote-lookup', async (req, res) => {
-  const { ingredient_id, vendor_id } = req.query;
-  if (!ingredient_id || !vendor_id) return res.status(400).json({ error: { message: 'ingredient_id and vendor_id required' } });
-  try {
-    // Find active price quotes for this ingredient+vendor
-    const { rows: quotes } = await pool.query(`
-      SELECT pq.*,
-             ing.name AS ingredient_name,
-             ing.base_unit_id,
-             u.name AS base_unit_name,
-             u.abbreviation AS base_unit_abbr,
-             ing.default_prep_unit,
-             ing.default_prep_to_base_conversion
-      FROM   mcogs_price_quotes pq
-      JOIN   mcogs_ingredients ing ON ing.id = pq.ingredient_id
-      LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
-      WHERE  pq.ingredient_id = $1 AND pq.vendor_id = $2 AND pq.is_active = true
-      ORDER BY pq.updated_at DESC
-      LIMIT  1
-    `, [ingredient_id, vendor_id]);
-
-    if (quotes.length) {
-      res.json({ has_quote: true, quote: quotes[0] });
-    } else {
-      // Return ingredient info even without a quote
-      const { rows: [ing] } = await pool.query(`
-        SELECT ing.name, ing.base_unit_id, u.name AS base_unit_name, u.abbreviation AS base_unit_abbr,
-               ing.default_prep_unit, ing.default_prep_to_base_conversion
-        FROM   mcogs_ingredients ing
-        LEFT JOIN mcogs_units u ON u.id = ing.base_unit_id
-        WHERE  ing.id = $1
-      `, [ingredient_id]);
-      res.json({ has_quote: false, ingredient: ing || null });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: { message: 'Failed to look up quote' } });
-  }
-});
-
 // POST /purchase-orders
 router.post('/', async (req, res) => {
   const { store_id, vendor_id, order_date, expected_date, notes, items } = req.body;
@@ -130,14 +151,39 @@ router.post('/', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const config = await getStockConfig();
+    const prefix = config.po_prefix || 'PO';
+
+    // Validate date if backdating is disabled
+    if (!config.allow_backdated_po && order_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (order_date < today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: 'Backdated purchase orders are not allowed. Change the date to today or a future date, or enable backdating in Stock settings.' } });
+      }
+    }
+
+    // expected_date must always be today or future (it's a future expectation)
+    if (expected_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (expected_date < today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: 'Expected delivery date must be today or a future date.' } });
+      }
+    }
+
+    const { rows: [seqRow] } = await client.query(`SELECT nextval('mcogs_po_number_seq') AS num`);
+    const poNumber = `${prefix}-${seqRow.num}`;
+
     const { rows: [po] } = await client.query(`
       INSERT INTO mcogs_purchase_orders
         (store_id, vendor_id, po_number, status, order_date, expected_date, notes, created_by)
-      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', COALESCE($3, CURRENT_DATE), $4, $5, $6)
+      VALUES ($1, $2, $3, 'draft', COALESCE($4, CURRENT_DATE), $5, $6, $7)
       RETURNING *
     `, [
       store_id || null,
       vendor_id,
+      poNumber,
       order_date || null,
       expected_date || null,
       notes?.trim() || null,
@@ -198,6 +244,24 @@ router.put('/:id', async (req, res) => {
     );
     if (!existing) return res.status(404).json({ error: { message: 'Purchase order not found' } });
     if (existing.status !== 'draft') return res.status(409).json({ error: { message: 'Only draft POs can be edited' } });
+
+    const config = await getStockConfig();
+
+    // Validate date if backdating is disabled
+    if (!config.allow_backdated_po && order_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (order_date < today) {
+        return res.status(400).json({ error: { message: 'Backdated purchase orders are not allowed. Change the date to today or a future date, or enable backdating in Stock settings.' } });
+      }
+    }
+
+    // expected_date must always be today or future
+    if (expected_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (expected_date < today) {
+        return res.status(400).json({ error: { message: 'Expected delivery date must be today or a future date.' } });
+      }
+    }
 
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_purchase_orders
@@ -409,15 +473,40 @@ router.post('/from-template/:templateId', async (req, res) => {
       return res.status(404).json({ error: { message: 'Order template not found' } });
     }
 
+    const config = await getStockConfig();
+    const prefix = config.po_prefix || 'PO';
+
+    // Validate date if backdating is disabled
+    if (!config.allow_backdated_po && order_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (order_date < today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: 'Backdated purchase orders are not allowed. Change the date to today or a future date, or enable backdating in Stock settings.' } });
+      }
+    }
+
+    // expected_date must always be today or future
+    if (expected_date) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (expected_date < today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: 'Expected delivery date must be today or a future date.' } });
+      }
+    }
+
+    const { rows: [seqRow] } = await client.query(`SELECT nextval('mcogs_po_number_seq') AS num`);
+    const poNumber = `${prefix}-${seqRow.num}`;
+
     // Create PO from template
     const { rows: [po] } = await client.query(`
       INSERT INTO mcogs_purchase_orders
         (store_id, vendor_id, po_number, status, order_date, expected_date, notes, template_id, created_by)
-      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', COALESCE($3, CURRENT_DATE), $4, $5, $6, $7)
+      VALUES ($1, $2, $3, 'draft', COALESCE($4, CURRENT_DATE), $5, $6, $7, $8)
       RETURNING *
     `, [
       store_id || tpl.store_id,
       tpl.vendor_id,
+      poNumber,
       order_date || null,
       expected_date || null,
       notes?.trim() || tpl.notes || null,

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
@@ -6,6 +6,7 @@ import SettingsPage   from './SettingsPage'
 import MediaLibrary   from '../components/MediaLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
+import { Field, Spinner } from '../components/ui'
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
@@ -20,6 +21,7 @@ type Section =
   | 'users-roles'
   | 'import'
   | 'media'
+  | 'stock-config'
   | 'storage'
 
 interface SectionDef {
@@ -40,6 +42,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
+  { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'stock_manager' },
   { id: 'storage',            icon: '☁️', label: 'Storage (S3)',         feature: 'settings'   },
 ]
 
@@ -259,6 +262,103 @@ function GlobalConfigSection() {
   )
 }
 
+// ── Stock Config section ──────────────────────────────────────────────────────
+
+function StockConfigSection() {
+  const api = useApi()
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [config, setConfig] = useState({
+    po_prefix: 'PO',
+    grn_prefix: 'GRN',
+    inv_prefix: 'INV',
+    cn_prefix: 'CN',
+    xfer_prefix: 'TRF',
+    allow_backdated_po: false,
+  })
+  const [toast, setToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const settings = await api.get('/settings')
+        if (settings?.stock_config) setConfig(prev => ({ ...prev, ...settings.stock_config }))
+      } catch { /* silent */ }
+      finally { setLoading(false) }
+    })()
+  }, [api])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.patch('/settings', { stock_config: config })
+      setToast('Stock configuration saved')
+      setTimeout(() => setToast(null), 3000)
+    } catch { setToast('Failed to save') }
+    finally { setSaving(false) }
+  }
+
+  if (loading) return <div className="p-6 flex justify-center"><Spinner /></div>
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <h2 className="text-base font-bold text-text-1 mb-1">Stock Configuration</h2>
+      <p className="text-sm text-text-3 mb-5">Configure document number prefixes and stock manager behaviour.</p>
+
+      <div className="space-y-6">
+        {/* Document Number Prefixes */}
+        <div>
+          <h3 className="text-sm font-semibold text-text-1 mb-3">Document Number Prefixes</h3>
+          <p className="text-xs text-text-3 mb-3">Customise the prefix for auto-generated document numbers. Numbers are sequential (e.g. PO-1001, PO-1002).</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Purchase Order Prefix">
+              <input className="input w-full" value={config.po_prefix} onChange={e => setConfig(c => ({ ...c, po_prefix: e.target.value }))} placeholder="PO" />
+            </Field>
+            <Field label="Goods Received Prefix">
+              <input className="input w-full" value={config.grn_prefix} onChange={e => setConfig(c => ({ ...c, grn_prefix: e.target.value }))} placeholder="GRN" />
+            </Field>
+            <Field label="Invoice Prefix">
+              <input className="input w-full" value={config.inv_prefix} onChange={e => setConfig(c => ({ ...c, inv_prefix: e.target.value }))} placeholder="INV" />
+            </Field>
+            <Field label="Credit Note Prefix">
+              <input className="input w-full" value={config.cn_prefix} onChange={e => setConfig(c => ({ ...c, cn_prefix: e.target.value }))} placeholder="CN" />
+            </Field>
+            <Field label="Transfer Prefix">
+              <input className="input w-full" value={config.xfer_prefix} onChange={e => setConfig(c => ({ ...c, xfer_prefix: e.target.value }))} placeholder="TRF" />
+            </Field>
+          </div>
+        </div>
+
+        <hr className="border-border" />
+
+        {/* Behaviour Settings */}
+        <div>
+          <h3 className="text-sm font-semibold text-text-1 mb-3">Behaviour</h3>
+          <label className="flex items-center gap-3 p-3 bg-surface-2 rounded-lg border border-border cursor-pointer hover:bg-white transition-colors">
+            <input type="checkbox" checked={config.allow_backdated_po} onChange={e => setConfig(c => ({ ...c, allow_backdated_po: e.target.checked }))} className="rounded" />
+            <div>
+              <span className="text-sm font-medium text-text-1">Allow backdated purchase orders</span>
+              <p className="text-xs text-text-3 mt-0.5">When disabled, PO dates must be today or in the future. Enable this if you need to record orders that were placed on earlier dates.</p>
+            </div>
+          </label>
+        </div>
+
+        <div className="pt-2">
+          <button className="btn-primary py-2 px-5 rounded text-sm" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Configuration'}
+          </button>
+        </div>
+      </div>
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-accent text-white px-4 py-3 rounded-lg shadow-lg text-sm font-semibold">
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Users & Roles combined section ────────────────────────────────────────────
 
 function UsersRolesSection() {
@@ -319,6 +419,7 @@ export default function ConfigurationPage() {
           <MediaLibrary open={true} onClose={() => {}} mode="page" />
         </div>
       )
+      case 'stock-config':       return <StockConfigSection />
       case 'storage':            return <SettingsPage embedded initialTab="storage" />
       default:                   return null
     }
