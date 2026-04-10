@@ -28,6 +28,8 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 18. [Backlog](#18-backlog)
 19. [Domain Migration Log](#19-domain-migration-log)
 20. [Key Contacts & Resources](#20-key-contacts--resources)
+21. [Stock Manager Module](#21-stock-manager-module)
+22. [Audit Log](#22-audit-log)
 
 ---
 
@@ -112,6 +114,7 @@ COGS/
 │           ├── AllergenMatrixPage.tsx  # Allergen matrix (EU/UK FIC 14)
 │           ├── HACCPPage.tsx       # HACCP temp logs & CCP logs
 │           ├── MarketsPage.tsx     # Markets (countries) + brand partners
+│           ├── StockManagerPage.tsx # Stock Manager (8 tabs: Overview/Stores/POs/GRN/Invoices/Waste/Transfers/Stocktake)
 │           └── HelpPage.tsx        # Help & documentation
 │
 ├── api/                            # Node.js/Express API
@@ -120,7 +123,8 @@ COGS/
 │   └── src/
 │       ├── index.js                # Express entry point
 │       ├── helpers/
-│       │   └── agenticStream.js    # Shared SSE agentic loop (ai-chat + ai-upload)
+│       │   ├── agenticStream.js    # Shared SSE agentic loop (ai-chat + ai-upload)
+│       │   └── audit.js            # Audit logger: logAudit() + diffFields()
 │       └── routes/
 │           ├── index.js            # Route registry
 │           ├── health.js
@@ -152,7 +156,18 @@ COGS/
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── feedback.js
-│           └── internal-feedback.js
+│           ├── internal-feedback.js
+│           ├── stock-stores.js         # Stock stores CRUD (sub-locations)
+│           ├── stock-levels.js         # Stock on hand, adjustments, movements
+│           ├── purchase-orders.js      # Purchase order lifecycle
+│           ├── order-templates.js      # Saved PO templates
+│           ├── goods-received.js       # Goods received notes (GRN)
+│           ├── invoices.js             # Invoice lifecycle
+│           ├── credit-notes.js         # Credit notes
+│           ├── waste.js                # Waste logging + reason codes
+│           ├── stock-transfers.js      # Inter-store stock transfers
+│           ├── stocktakes.js           # Stocktake sessions + counts
+│           └── audit.js                # Central audit log (read-only)
 │
 └── api/scripts/
     ├── migrate.js                  # DB schema migration (npm run migrate)
@@ -387,6 +402,26 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 27 | `mcogs_role_permissions` | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
 | 28 | `mcogs_users` | App users mapped from Auth0 sub. Stores status (`pending`/`active`/`disabled`), role, `is_dev` flag, last login |
 | 29 | `mcogs_user_brand_partners` | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
+| 30 | `mcogs_stores` | Sub-locations within a location (kitchen, bar, walk-in). `is_store_itself` flag. UNIQUE(location_id, name) |
+| 31 | `mcogs_stock_levels` | Materialized stock on hand per store per ingredient. UNIQUE(store_id, ingredient_id) |
+| 32 | `mcogs_stock_movements` | Immutable audit ledger of all stock changes. Types: goods_in, waste, transfer_out/in, stocktake_adjust, etc. |
+| 33 | `mcogs_purchase_orders` | PO lifecycle: draft → submitted → partial → received → cancelled |
+| 34 | `mcogs_purchase_order_items` | PO line items with per-item store_id, quote_id link |
+| 35 | `mcogs_order_templates` | Saved PO templates for recurring vendor orders |
+| 36 | `mcogs_order_template_items` | Template line items |
+| 37 | `mcogs_goods_received` | GRN lifecycle: draft → confirmed. On confirm: updates stock |
+| 38 | `mcogs_goods_received_items` | GRN line items |
+| 39 | `mcogs_invoices` | Invoice lifecycle: draft → pending → approved → paid → disputed |
+| 40 | `mcogs_invoice_items` | Invoice line items (ingredient optional — supports non-ingredient charges) |
+| 41 | `mcogs_credit_notes` | Credit note lifecycle: draft → submitted → approved → applied |
+| 42 | `mcogs_credit_note_items` | Credit note line items |
+| 43 | `mcogs_waste_reason_codes` | Configurable waste reason codes (Expired, Damaged, Spillage, etc.) |
+| 44 | `mcogs_waste_log` | Waste events with quantity, cost, reason code |
+| 45 | `mcogs_stock_transfers` | Two-step transfers: pending → in_transit → confirmed. CHECK(from != to) |
+| 46 | `mcogs_stock_transfer_items` | Transfer line items with qty_sent and qty_received |
+| 47 | `mcogs_stocktakes` | Stocktake sessions: full or spot_check. in_progress → completed → approved |
+| 48 | `mcogs_stocktake_items` | Count items with expected/counted/variance. UNIQUE(stocktake_id, ingredient_id) |
+| 49 | `mcogs_audit_log` | Central audit trail: action, entity, field_changes JSONB, context JSONB, related_entities JSONB |
 
 ### Key Schema Details
 
@@ -517,6 +552,17 @@ All routes registered in `api/src/routes/index.js`.
 | `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 87 tools (includes web search, GitHub, and Excel export) |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
+| `GET/POST/PUT/DELETE /api/stock-stores` | `stock-stores.js` | ✅ Active — requires `stock_manager:read` / `stock_manager:write` |
+| `GET/PUT/POST /api/stock-levels` | `stock-levels.js` | ✅ Active — stock on hand, adjustments, movements query |
+| `GET/POST/PUT/DELETE /api/purchase-orders` | `purchase-orders.js` | ✅ Active — PO lifecycle + line items + quote-lookup |
+| `GET/POST/PUT/DELETE /api/order-templates` | `order-templates.js` | ✅ Active — saved PO templates |
+| `GET/POST/PUT/DELETE /api/goods-received` | `goods-received.js` | ✅ Active — GRN lifecycle, confirm updates stock |
+| `GET/POST/PUT/DELETE /api/invoices` | `invoices.js` | ✅ Active — invoice lifecycle + from-GRN creation |
+| `GET/POST/PUT/DELETE /api/credit-notes` | `credit-notes.js` | ✅ Active — credit note lifecycle |
+| `GET/POST/DELETE /api/waste` | `waste.js` | ✅ Active — waste logging, reason codes, summary report |
+| `GET/POST/PUT/DELETE /api/stock-transfers` | `stock-transfers.js` | ✅ Active — two-step transfer lifecycle |
+| `GET/POST/PUT/DELETE /api/stocktakes` | `stocktakes.js` | ✅ Active — stocktake lifecycle + populate + approve |
+| `GET /api/audit` | `audit.js` | ✅ Active — central audit log query (entity, field, stats) |
 
 ### Exchange Rate Sync
 
@@ -596,6 +642,7 @@ Generic data grid with:
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
   /import         → ImportPage
+  /stock-manager  → StockManagerPage
   /help           → HelpPage
   /countries      → redirects to /markets
   /locations      → redirects to /markets
@@ -912,6 +959,26 @@ AI-powered data import wizard. Accepts spreadsheet exports (CSV, XLSX, XLSB) and
 - `Menus` — menu_name, country, description
 - `Menu Items` — menu_name, item_type, item_name, display_name, sort_order
 
+### ✅ Stock Manager Page (`/stock-manager`)
+
+Full inventory management module with 8 tabs. Requires `stock_manager` RBAC permission.
+
+**Tab 1: Overview** — KPI cards (total items, low stock, out of stock, stores), stock levels grid with status badges (OK/Low/Out), recent movements feed.
+
+**Tab 2: Stores** — Three-panel layout: locations list → stores within location → store detail. CRUD for stores (sub-locations within mcogs_locations). `is_store_itself` flag.
+
+**Tab 3: Purchase Orders** — Three-panel: PO list with filters → PO detail with line items → smart add-item form. Auto-populates price/unit from vendor quotes via `/purchase-orders/quote-lookup`. No-quote warning with manual entry + "Save as price quote" option. Per-item store assignment. Status flow: draft → submitted → partial → received → cancelled.
+
+**Tab 4: Goods In** — Three-panel: GRN list → GRN detail with items → item form. When linked to PO, auto-populates remaining quantities. Confirm action creates stock_movements + updates stock_levels + updates PO qty_received.
+
+**Tab 5: Invoices** — Three-panel: invoice list with totals → invoice detail with subtotal/tax/total → item form. Status flow: draft → pending → approved → paid → disputed. Create from GRN or standalone.
+
+**Tab 6: Waste** — Bulk entry form (multi-row: ingredient, qty, reason code, notes) + waste log history. Right panel: reason codes management. Each waste entry creates stock_movement + decrements stock_level.
+
+**Tab 7: Transfers** — Three-panel: transfer list → transfer detail → item form. Two-step: dispatch (deducts source store) → confirm (adds destination store). Cancel reverses if dispatched.
+
+**Tab 8: Stocktake** — Three-panel: session list → count entry grid → item detail. Full count: "Populate All" from stock_levels. Spot check: add specific items. Variance calculation on complete. Approve adjusts stock to counted quantities.
+
 ---
 
 ## 13. Pages Remaining to Build
@@ -1080,9 +1147,9 @@ Three system roles are seeded automatically and cannot be deleted:
 
 Custom roles can be created in Settings → Roles and assigned any combination.
 
-### Features (12)
+### Features (13)
 
-`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users`
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_manager`
 
 ### User Lifecycle
 
@@ -1834,6 +1901,108 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ---
 
-*README last updated: April 2026 (session: Sales Items edit panel split into three tabs — Details/Markets/Modifiers (panelTab state, auto-reset on item change); Combos tab UI — step header click opens side panel + expands simultaneously, cogwheel button removed, × delete replaced with SVG trash icons; Modifiers tab full refactor — side panel pattern (MgEditTarget discriminated union), + New Modifier Group button → modal, qty field on modifier options (mcogs_modifier_options.qty NUMERIC(12,4) DEFAULT 1, migration step 80, API updated), ↑↓ sort arrows on option rows with immediate API persist, Duplicate group button, saveMg dead function removed; Menu allergen matrix rewritten to query mcogs_menu_sales_items → mcogs_sales_items (not legacy mcogs_menu_items), added sicat JOIN for combo/manual category resolution — si_category field, category logic now covers all four item types; CLAUDE.md sections 12 (Sales Items Page, Allergen Matrix Page) updated; Fixes 17–20 added to section 16; user-guide.md Sales Items/Combos/Modifier Groups/Allergen Matrix sections updated; HelpPage v2.4 — new Sales Item Panel Tabs section, Combos + Modifier Groups UI notes, allergen matrix category explanation, mcogs_menu_sales_items.allergen_notes reference corrected)*
+## 21. Stock Manager Module
+
+### Architecture
+
+The Stock Manager is a self-contained inventory management module at `/stock-manager`. It has its own RBAC feature (`stock_manager`) and creates only new database tables — no modifications to existing tables.
+
+**Key design principle:** Every stock-changing operation writes to both `mcogs_stock_movements` (immutable audit ledger) and `mcogs_stock_levels` (materialized balance) in a single transaction. Movements are the source of truth; levels can be rebuilt from movements.
+
+### Database Tables (migration steps 86-101)
+
+14 new tables created in steps 86-99, plus:
+- Step 100: `mcogs_audit_log` — central audit trail
+- Step 101: `store_id` column on `mcogs_purchase_order_items` for per-item store assignment
+
+### Auto-Generated Numbers
+
+PostgreSQL sequences (all START 1001):
+- `mcogs_po_number_seq` → PO-1001, PO-1002, ...
+- `mcogs_grn_number_seq` → GRN-1001, ...
+- `mcogs_inv_number_seq` → INV-1001, ...
+- `mcogs_cn_number_seq` → CN-1001, ...
+- `mcogs_xfer_number_seq` → TRF-1001, ...
+
+### Stock Level Consistency
+
+Every operation that changes stock goes through this transaction pattern:
+1. INSERT into `mcogs_stock_movements` (immutable record)
+2. UPSERT into `mcogs_stock_levels` via `ON CONFLICT (store_id, ingredient_id) DO UPDATE SET qty_on_hand = ...`
+
+Operations that modify stock:
+- GRN confirm (goods_in / goods_in_no_po)
+- Waste logging (waste)
+- Transfer dispatch (transfer_out) and confirm (transfer_in)
+- Stocktake approve (stocktake_adjust)
+- Manual adjustments (manual_adjust)
+- Credit note apply (credit_note)
+
+### Purchase Order Smart Item Form
+
+When adding items to a PO:
+1. User selects ingredient → system calls `GET /purchase-orders/quote-lookup?ingredient_id=X&vendor_id=Y`
+2. If active quote exists: auto-populates unit_price, purchase_unit, qty_in_base_units, quote_id
+3. If no quote: shows amber warning with base unit info, prompts manual entry, offers "Save as price quote" checkbox
+4. Per-item store assignment: defaults to PO-level store, can override per line item
+
+---
+
+## 22. Audit Log
+
+### Overview
+
+Central audit trail for all data changes. Stored in `mcogs_audit_log` with full context.
+
+### Data Model
+
+Each entry stores:
+- **Who:** user_sub, user_email, user_name, ip_address
+- **What:** entity_type, entity_id, entity_label, action
+- **Changes:** field_changes JSONB — `{ field: { old, new } }` diffs
+- **Why:** context JSONB — `{ source, tool, job_id, ... }` free-form metadata
+- **Related:** related_entities JSONB — `[{ type, id, label }]` links to other records
+
+### Actions
+
+`create` · `update` · `delete` · `status_change` · `confirm` · `approve` · `reverse`
+
+### API Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/audit` | List with filters (entity_type, entity_id, user, action, date range, search) + pagination |
+| `GET /api/audit/entity/:type/:id` | Full history for one entity |
+| `GET /api/audit/field/:type/:id/:field` | History of a specific field (for right-click "Audit trail") |
+| `GET /api/audit/stats` | Summary stats (by action/entity, top users) |
+
+### Wired Routes
+
+Audit logging is integrated into:
+- `ingredients.js` — create, update (field diff), delete
+- `recipes.js` — create, update (diff), delete, add/update/delete recipe items
+- `price-quotes.js` — create, update (diff), delete
+- `purchase-orders.js` — create, submit, cancel
+- `goods-received.js` — confirm (with related PO/store/vendor)
+- `stock-levels.js` — manual adjustments
+- `waste.js` — waste logging
+- `stocktakes.js` — approval
+
+### Helper
+
+`api/src/helpers/audit.js` exports:
+- `logAudit(dbOrClient, req, opts)` — writes audit entry (never throws, fails silently)
+- `diffFields(oldRow, newRow, fields)` — compares two objects, returns `{ field: { old, new } }` or null
+
+### UI
+
+System → Audit Log (admin-only, gated by `settings:write`). Features:
+- Filter bar: search, action dropdown, entity type dropdown, user input, date range
+- Paginated table (30 per page)
+- Expandable rows showing field changes (old→new with color coding), context, related entities, metadata
+
+---
+
+*README last updated: April 2026 (session: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files (stock-stores, stock-levels, purchase-orders, order-templates, goods-received, invoices, credit-notes, waste, stock-transfers, stocktakes, audit), StockManagerPage.tsx with 8 tabs (Overview/Stores/POs/GRN/Invoices/Waste/Transfers/Stocktake), stock_manager RBAC feature added (13 features total), audit helper (api/src/helpers/audit.js) with logAudit() + diffFields(), audit logging wired into ingredients/recipes/price-quotes/purchase-orders/goods-received/stock-levels/waste/stocktakes routes, auto-generated PO/GRN/INV/CN/TRF numbers via PostgreSQL sequences, dual-write stock consistency (mcogs_stock_movements + mcogs_stock_levels in single transaction), PO smart item form with quote-lookup auto-populate; CLAUDE.md sections 21 (Stock Manager Module) and 22 (Audit Log) added, sections 3/8/9/10/12/15 updated)*
 
 *README previous session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated; Markdown rendering added to Pepper — full inline parser (tables, code blocks, headings, lists, bold, italic, inline code, HTML-escaped before formatting); Menu filter added to Inventory Ingredients + Price Quotes tabs — resolves ingredient IDs via menu-items + recipes chain; Monthly token allowance — ai_monthly_token_limit in mcogs_settings, billing period 25th→24th, checkTokenAllowance() helper exported from ai-chat.js/imported by ai-upload.js, 429 JSON before SSE headers, usage bar in Pepper header, GET /ai-chat/my-usage endpoint, Settings → AI limit field + per-user period stats table; tool count 86→87 (export_to_excel); Bug fixes: Fix 12 AI chat focus loss (ChatPanel/HistoryPanel to module level + streaming→focus restore useEffect), Fix 13 sidebar height (h-full → flex flex-col self-stretch), Fix 14 Anthropic 400 error (input_str destructured off content blocks in agenticStream.js before pushing to assistantContent))*

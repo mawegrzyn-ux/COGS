@@ -1141,6 +1141,122 @@ Typical targets: QSR 28–32%, casual dining 30–35%, fine dining 35–40%. Del
 
 ---
 
+## Stock Manager
+
+The Stock Manager module provides full inventory management across your locations. Access it from the sidebar at `/stock-manager` (requires the Stock Manager permission).
+
+### Stores
+
+Stores are physical stock-holding areas within your locations — for example, Main Kitchen, Bar, Walk-in Fridge, or Dry Store. Each store belongs to a location.
+
+When creating a store, tick **"Location is the store"** if the location itself is the only stock-holding area (no sub-stores needed). This creates a 1:1 mapping between the location and the store.
+
+Manage stores from the **Stores** tab. Each store shows its location, type, and whether it is active.
+
+### Stock Overview
+
+The **Overview** tab is the stock dashboard. It shows:
+
+| Section | What it displays |
+|---|---|
+| KPI cards | Total items in stock, low stock alerts, out of stock count, active stores |
+| Stock levels grid | Current quantity on hand per ingredient per store, with min/max thresholds |
+| Status badges | **OK** (green) — above minimum; **Low** (amber) — below minimum threshold; **Out** (red) — zero or below |
+| Recent movements | The last 20 stock changes across all stores |
+
+Stock levels are updated automatically by purchase order receiving, waste logging, transfers, and stocktake approvals. Every change is recorded in the stock movements ledger for full traceability.
+
+### Purchase Orders
+
+Create purchase orders for your vendors from the **Purchase Orders** tab.
+
+**Creating a PO:**
+
+1. Click **"+ New PO"** and select a vendor. Optionally select a default store for line items.
+2. Add ingredients — the system automatically looks up the active price quote from that vendor via the quote lookup.
+3. If a quote exists: price, purchase unit, and base unit conversion are auto-populated from the quote.
+4. If no quote exists: an amber warning shows the ingredient's base unit. Enter the price and unit details manually. Optionally tick **"Save as price quote"** to create a new quote from this line item's data.
+5. Each line item can have its own store (defaults to the PO-level store if set).
+6. Submit the PO when ready — status changes from **Draft** to **Submitted**.
+
+**PO status flow:** Draft → Submitted → Partial (some items received) → Received (all items received) or Cancelled.
+
+### Goods In (Receiving)
+
+Record deliveries from the **Goods In** tab.
+
+1. Create a **GRN** (Goods Received Note) — optionally link it to a purchase order to auto-populate the expected items and quantities.
+2. Enter received quantities for each item (pre-filled from the PO if linked).
+3. **Confirm** the GRN — stock levels are updated automatically, and the linked PO status updates to Partial or Received based on quantities received.
+
+### Invoices
+
+Track vendor invoices from the **Invoices** tab.
+
+- Create an invoice from a confirmed GRN (items are auto-copied) or create a standalone invoice.
+- Add line items with quantities, unit prices, and descriptions.
+- **Status flow:** Draft → Pending → Approved → Paid (or Disputed at any stage).
+- Issue **credit notes** against invoices when needed — for returns, overcharges, or damaged goods.
+
+### Waste
+
+Log waste events from the **Waste** tab.
+
+- **Bulk entry mode:** add multiple waste items in one go — select ingredient, enter quantity, choose a reason code, and add optional notes.
+- Stock levels are automatically decremented when waste is logged.
+- **Reason codes** are configurable: Expired, Damaged, Spillage, Over-production, Quality Issue, Staff Meal, Other.
+- View waste history and summary filtered by date range.
+
+### Stock Transfers
+
+Move stock between stores from the **Transfers** tab. Transfers use a two-step process:
+
+1. **Create** a transfer — select source and destination stores, add items with quantities.
+2. **Dispatch** — deducts stock from the source store. Status changes to Dispatched.
+3. **Confirm** — adds stock to the destination store. You can record actual received quantities if they differ from the dispatched amounts.
+4. **Cancel** — if the transfer has been dispatched, cancelling it reverses the deduction from the source store.
+
+### Stocktake
+
+Conduct inventory counts from the **Stocktake** tab. Two count types are supported:
+
+| Type | How it works |
+|---|---|
+| **Full count** | Start a stocktake, click **"Populate All"** to load every ingredient with stock in that store, then enter counted quantities for each item. |
+| **Spot check** | Start a spot check, then add only the specific ingredients you want to count. |
+
+**Stocktake workflow:**
+
+1. Create a stocktake (full or spot check) for a store.
+2. Enter counted quantities for each item.
+3. **Complete** the stocktake — the system calculates variances (expected quantity vs counted quantity) for each item.
+4. **Approve** the stocktake — stock levels are adjusted to match the counted quantities. Variances are recorded in the stock movements ledger.
+
+---
+
+## Audit Log
+
+The **Audit Log** is available under System → Audit Log (admin only, requires `settings:read` permission). It provides a central trail of all data changes across the system.
+
+Every create, update, delete, and status change is recorded with:
+
+| Field | What it captures |
+|---|---|
+| User | Name and email of the person who made the change |
+| Action | Create, Update, Delete, or Status Change |
+| Entity | The type (e.g. purchase_order, ingredient, recipe) and its ID and label |
+| Changes | Field-level diffs showing old value and new value for each changed field |
+| Context | Source (manual, import, AI), related entities (linked POs, GRNs, stores) |
+| Timestamp | When the change occurred |
+
+**Filtering the audit log:**
+
+Use the filter controls at the top of the page to narrow results by user, action type, entity type, date range, or search by entity label. Click any row to expand it and see the full change details including field-level diffs.
+
+**Routes with audit logging:** Purchase Orders, Goods Received, Stocktakes, Waste, Stock Levels, Ingredients, Recipes, and Price Quotes all write to the audit log on every data mutation.
+
+---
+
 ## Troubleshooting
 
 **Recipe shows £0 COGS or zero cost per portion**
@@ -1197,4 +1313,4 @@ A menu filter may be active in the toolbar. Check for a selected menu in the "Fi
 
 ---
 
-*User guide last updated: April 2026*
+*User guide last updated: April 2026 (Stock Manager module and Audit Log sections added)*

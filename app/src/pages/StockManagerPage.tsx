@@ -737,7 +737,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
 
   const handleSubmit = async (po: PurchaseOrder) => {
     try {
-      const updated = await api.post(`/purchase-orders/${po.id}/submit`, {})
+      await api.post(`/purchase-orders/${po.id}/submit`, {})
       showToast(`${po.po_number} submitted`)
       load()
       if (selected?.id === po.id) setSelected({ ...po, status: 'submitted' })
