@@ -1097,6 +1097,11 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
             </select>
           </Field>
 
+          <Field label="Purchase Unit" hint={quoteLookup?.has_quote ? 'Auto-populated from quote — change to override' : 'e.g. case, bag, 25kg sack'}>
+            <input className="input w-full" value={itemForm.purchase_unit}
+              onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
+          </Field>
+
           <Field label="Qty Ordered *">
             <input type="number" step="0.01" min="0" className="input w-full" value={itemForm.qty_ordered}
               onChange={e => setItemForm(f => ({ ...f, qty_ordered: e.target.value }))} />
@@ -1107,31 +1112,48 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
               onChange={e => setItemForm(f => ({ ...f, unit_price: e.target.value }))} />
           </Field>
 
-          <Field label="Purchase Unit" hint={quoteLookup?.has_quote ? 'Auto-populated from quote' : 'e.g. case, bag, 25kg sack'}>
-            <input className="input w-full" value={itemForm.purchase_unit}
-              onChange={e => setItemForm(f => ({ ...f, purchase_unit: e.target.value }))} />
-          </Field>
-
+          {/* Conversion to Base Unit — only shown when:
+              1. No quote exists (user must specify conversion), OR
+              2. User has overridden the purchase unit from the quoted value */}
           {(() => {
             const baseUnit = quoteLookup?.quote?.base_unit_abbr || quoteLookup?.ingredient?.base_unit_abbr || null
+            const quotedUnit = quoteLookup?.quote?.purchase_unit || ''
+            const userOverrodePurchaseUnit = quoteLookup?.has_quote && itemForm.purchase_unit.trim() !== '' && itemForm.purchase_unit.trim() !== quotedUnit.trim()
+            const showConversion = !quoteLookup?.has_quote || userOverrodePurchaseUnit
+
+            if (!showConversion) return null
             return (
-              <Field label={`Qty in Base Units${baseUnit ? ` (${baseUnit})` : ''}`} hint={baseUnit ? `How many ${baseUnit} per purchase unit` : 'How many base units per purchase unit'}>
+              <Field label={`Conversion to Base Unit${baseUnit ? ` (${baseUnit})` : ''}`} hint={baseUnit ? `How many ${baseUnit} in one ${itemForm.purchase_unit.trim() || 'purchase unit'}` : 'How many base units per purchase unit'}>
                 <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.qty_in_base_units}
                   onChange={e => setItemForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
               </Field>
             )
           })()}
 
-          {/* Save as price quote option — only when no existing quote */}
-          {!quoteLookup?.has_quote && itemForm.ingredient_id && itemForm.unit_price && (
-            <label className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
-              <input type="checkbox" checked={saveAsQuote} onChange={e => setSaveAsQuote(e.target.checked)} className="rounded" />
-              <div>
-                <span className="text-xs font-medium text-blue-800">Save as price quote</span>
-                <p className="text-[10px] text-blue-600 mt-0.5">Creates a new active price quote for this ingredient + vendor</p>
-              </div>
-            </label>
-          )}
+          {/* Save as price quote option — shown when:
+              1. No existing quote (user is entering price manually), OR
+              2. User has overridden the purchase unit from the quoted value (new unit = new quote) */}
+          {(() => {
+            const quotedUnit = quoteLookup?.quote?.purchase_unit || ''
+            const userOverrodePurchaseUnit = quoteLookup?.has_quote && itemForm.purchase_unit.trim() !== '' && itemForm.purchase_unit.trim() !== quotedUnit.trim()
+            const showSaveAsQuote = (!quoteLookup?.has_quote || userOverrodePurchaseUnit) && itemForm.ingredient_id && itemForm.unit_price
+
+            if (!showSaveAsQuote) return null
+            return (
+              <label className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg cursor-pointer">
+                <input type="checkbox" checked={saveAsQuote} onChange={e => setSaveAsQuote(e.target.checked)} className="rounded" />
+                <div>
+                  <span className="text-xs font-medium text-blue-800">Save as price quote</span>
+                  <p className="text-[10px] text-blue-600 mt-0.5">
+                    {userOverrodePurchaseUnit
+                      ? `Creates a new quote for "${itemForm.purchase_unit.trim()}" unit (different from quoted "${quotedUnit}")`
+                      : 'Creates a new active price quote for this ingredient + vendor'
+                    }
+                  </p>
+                </div>
+              </label>
+            )
+          })()}
 
           <div className="flex gap-2 pt-2">
             <button className="btn-outline flex-1 py-1.5 rounded text-sm" onClick={() => { setShowItemForm(false); setEditItem(null); setQuoteLookup(null) }}>Cancel</button>
