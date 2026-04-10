@@ -166,7 +166,7 @@ router.put('/:id', async (req, res) => {
 
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_goods_received
-      SET    vendor_id=$1, po_id=$2, received_date=$3, notes=$4, updated_at=NOW()
+      SET    vendor_id=$1, po_id=$2, received_date=COALESCE($3, received_date), notes=$4, updated_at=NOW()
       WHERE  id=$5
       RETURNING *
     `, [

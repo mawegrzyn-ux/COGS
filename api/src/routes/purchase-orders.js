@@ -88,7 +88,7 @@ router.post('/', async (req, res) => {
     const { rows: [po] } = await client.query(`
       INSERT INTO mcogs_purchase_orders
         (store_id, vendor_id, po_number, status, order_date, expected_date, notes, created_by)
-      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', $3, $4, $5, $6)
+      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', COALESCE($3, CURRENT_DATE), $4, $5, $6)
       RETURNING *
     `, [
       store_id,
@@ -143,7 +143,7 @@ router.put('/:id', async (req, res) => {
 
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_purchase_orders
-      SET    vendor_id=$1, order_date=$2, expected_date=$3, notes=$4, updated_at=NOW()
+      SET    vendor_id=$1, order_date=COALESCE($2, order_date), expected_date=$3, notes=$4, updated_at=NOW()
       WHERE  id=$5
       RETURNING *
     `, [
@@ -337,7 +337,7 @@ router.post('/from-template/:templateId', async (req, res) => {
     const { rows: [po] } = await client.query(`
       INSERT INTO mcogs_purchase_orders
         (store_id, vendor_id, po_number, status, order_date, expected_date, notes, template_id, created_by)
-      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', $3, $4, $5, $6, $7)
+      VALUES ($1, $2, 'PO-' || nextval('mcogs_po_number_seq'), 'draft', COALESCE($3, CURRENT_DATE), $4, $5, $6, $7)
       RETURNING *
     `, [
       store_id || tpl.store_id,
