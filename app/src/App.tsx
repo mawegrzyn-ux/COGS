@@ -10,6 +10,7 @@ import MenusPage            from './pages/MenusPage'
 import SalesItemsPage       from './pages/SalesItemsPage'
 import AllergenMatrixPage   from './pages/AllergenMatrixPage'
 import HACCPPage            from './pages/HACCPPage'
+import StockManagerPage     from './pages/StockManagerPage'
 import HelpPage             from './pages/HelpPage'
 import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
@@ -61,6 +62,7 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<AllergenMatrixPage />} />
             <Route path="haccp"         element={<HACCPPage />} />
+            <Route path="stock-manager" element={<StockManagerPage />} />
             <Route path="media"         element={<MediaLibraryPage />} />
             <Route path="help"          element={<HelpPage />} />
             <Route path="import"        element={<Navigate to="/configuration" replace />} />

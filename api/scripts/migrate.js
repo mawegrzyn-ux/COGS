@@ -1094,6 +1094,350 @@ const migrations = [
      sell_price         NUMERIC(12,4) NOT NULL DEFAULT 0,
      PRIMARY KEY (menu_sales_item_id, modifier_option_id, price_level_id)
   )`,
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ██  STOCK MANAGER MODULE — Steps 86-99
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── Step 86: Stores (sub-locations within mcogs_locations) ─────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_stores (
+     id              SERIAL PRIMARY KEY,
+     location_id     INTEGER NOT NULL REFERENCES mcogs_locations(id) ON DELETE CASCADE,
+     name            VARCHAR(200) NOT NULL,
+     code            VARCHAR(50),
+     store_type      VARCHAR(50),
+     is_store_itself BOOLEAN NOT NULL DEFAULT FALSE,
+     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+     notes           TEXT,
+     sort_order      INTEGER NOT NULL DEFAULT 0,
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     UNIQUE (location_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_stores_location ON mcogs_stores(location_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_stores_active   ON mcogs_stores(is_active) WHERE is_active = TRUE`,
+
+  // ── Step 87: Stock Levels (materialized on-hand per store per ingredient) ──
+  `CREATE TABLE IF NOT EXISTS mcogs_stock_levels (
+     id              SERIAL PRIMARY KEY,
+     store_id        INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE CASCADE,
+     ingredient_id   INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE CASCADE,
+     qty_on_hand     NUMERIC(18,4) NOT NULL DEFAULT 0,
+     min_stock_level NUMERIC(18,4),
+     max_stock_level NUMERIC(18,4),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     UNIQUE (store_id, ingredient_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_levels_store      ON mcogs_stock_levels(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_levels_ingredient ON mcogs_stock_levels(ingredient_id)`,
+
+  // ── Step 88: Stock Movements (immutable audit ledger) ──────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_stock_movements (
+     id              SERIAL PRIMARY KEY,
+     store_id        INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     ingredient_id   INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     movement_type   VARCHAR(30) NOT NULL CHECK (movement_type IN (
+       'goods_in','goods_in_no_po','waste','transfer_out','transfer_in',
+       'stocktake_adjust','credit_note','manual_adjust'
+     )),
+     quantity        NUMERIC(18,4) NOT NULL,
+     unit_cost       NUMERIC(18,4),
+     reference_type  VARCHAR(30),
+     reference_id    INTEGER,
+     notes           TEXT,
+     created_by      VARCHAR(200),
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_mov_store      ON mcogs_stock_movements(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_mov_ingredient ON mcogs_stock_movements(ingredient_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_mov_type       ON mcogs_stock_movements(movement_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_mov_ref        ON mcogs_stock_movements(reference_type, reference_id) WHERE reference_type IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_stock_mov_created    ON mcogs_stock_movements(created_at DESC)`,
+
+  // ── Step 89: Purchase Orders + Line Items ──────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_purchase_orders (
+     id              SERIAL PRIMARY KEY,
+     store_id        INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     vendor_id       INTEGER NOT NULL REFERENCES mcogs_vendors(id) ON DELETE RESTRICT,
+     po_number       VARCHAR(100) NOT NULL,
+     status          VARCHAR(30) NOT NULL DEFAULT 'draft'
+                     CHECK (status IN ('draft','submitted','partial','received','cancelled')),
+     order_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+     expected_date   DATE,
+     notes           TEXT,
+     template_id     INTEGER,
+     created_by      VARCHAR(200),
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_purchase_order_items (
+     id                SERIAL PRIMARY KEY,
+     po_id             INTEGER NOT NULL REFERENCES mcogs_purchase_orders(id) ON DELETE CASCADE,
+     ingredient_id     INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     quote_id          INTEGER REFERENCES mcogs_price_quotes(id) ON DELETE SET NULL,
+     qty_ordered       NUMERIC(18,4) NOT NULL,
+     qty_received      NUMERIC(18,4) NOT NULL DEFAULT 0,
+     unit_price        NUMERIC(18,4) NOT NULL,
+     purchase_unit     VARCHAR(50),
+     qty_in_base_units NUMERIC(18,8),
+     sort_order        INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_po_store  ON mcogs_purchase_orders(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_po_vendor ON mcogs_purchase_orders(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_po_status ON mcogs_purchase_orders(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_po_date   ON mcogs_purchase_orders(order_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_poi_po    ON mcogs_purchase_order_items(po_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_poi_ing   ON mcogs_purchase_order_items(ingredient_id)`,
+
+  // ── Step 90: Order Templates ───────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_order_templates (
+     id          SERIAL PRIMARY KEY,
+     store_id    INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE CASCADE,
+     vendor_id   INTEGER NOT NULL REFERENCES mcogs_vendors(id) ON DELETE RESTRICT,
+     name        VARCHAR(200) NOT NULL,
+     notes       TEXT,
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_order_template_items (
+     id            SERIAL PRIMARY KEY,
+     template_id   INTEGER NOT NULL REFERENCES mcogs_order_templates(id) ON DELETE CASCADE,
+     ingredient_id INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     quote_id      INTEGER REFERENCES mcogs_price_quotes(id) ON DELETE SET NULL,
+     default_qty   NUMERIC(18,4) NOT NULL DEFAULT 0,
+     purchase_unit VARCHAR(50),
+     sort_order    INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ot_store  ON mcogs_order_templates(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_ot_vendor ON mcogs_order_templates(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_oti_tmpl  ON mcogs_order_template_items(template_id)`,
+
+  // ── Step 91: Goods Received Notes (GRN) + Line Items ───────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_goods_received (
+     id            SERIAL PRIMARY KEY,
+     store_id      INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     po_id         INTEGER REFERENCES mcogs_purchase_orders(id) ON DELETE SET NULL,
+     vendor_id     INTEGER NOT NULL REFERENCES mcogs_vendors(id) ON DELETE RESTRICT,
+     grn_number    VARCHAR(100) NOT NULL,
+     status        VARCHAR(30) NOT NULL DEFAULT 'draft'
+                   CHECK (status IN ('draft','confirmed')),
+     received_date DATE NOT NULL DEFAULT CURRENT_DATE,
+     notes         TEXT,
+     created_by    VARCHAR(200),
+     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_goods_received_items (
+     id                SERIAL PRIMARY KEY,
+     grn_id            INTEGER NOT NULL REFERENCES mcogs_goods_received(id) ON DELETE CASCADE,
+     ingredient_id     INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     po_item_id        INTEGER REFERENCES mcogs_purchase_order_items(id) ON DELETE SET NULL,
+     qty_received      NUMERIC(18,4) NOT NULL,
+     unit_price        NUMERIC(18,4) NOT NULL,
+     purchase_unit     VARCHAR(50),
+     qty_in_base_units NUMERIC(18,8),
+     sort_order        INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_grn_store  ON mcogs_goods_received(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_grn_po     ON mcogs_goods_received(po_id) WHERE po_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_grn_vendor ON mcogs_goods_received(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_grn_date   ON mcogs_goods_received(received_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_grni_grn   ON mcogs_goods_received_items(grn_id)`,
+
+  // ── Step 92: Invoices + Line Items ─────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_invoices (
+     id             SERIAL PRIMARY KEY,
+     store_id       INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     vendor_id      INTEGER NOT NULL REFERENCES mcogs_vendors(id) ON DELETE RESTRICT,
+     grn_id         INTEGER REFERENCES mcogs_goods_received(id) ON DELETE SET NULL,
+     invoice_number VARCHAR(100) NOT NULL,
+     status         VARCHAR(30) NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','pending','approved','paid','disputed')),
+     invoice_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+     due_date       DATE,
+     subtotal       NUMERIC(18,4) NOT NULL DEFAULT 0,
+     tax_amount     NUMERIC(18,4) NOT NULL DEFAULT 0,
+     total          NUMERIC(18,4) NOT NULL DEFAULT 0,
+     currency_code  VARCHAR(10),
+     notes          TEXT,
+     created_by     VARCHAR(200),
+     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_invoice_items (
+     id            SERIAL PRIMARY KEY,
+     invoice_id    INTEGER NOT NULL REFERENCES mcogs_invoices(id) ON DELETE CASCADE,
+     ingredient_id INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+     description   VARCHAR(500),
+     quantity      NUMERIC(18,4) NOT NULL,
+     unit_price    NUMERIC(18,4) NOT NULL,
+     line_total    NUMERIC(18,4) NOT NULL DEFAULT 0,
+     sort_order    INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_store  ON mcogs_invoices(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_vendor ON mcogs_invoices(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_grn    ON mcogs_invoices(grn_id) WHERE grn_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_status ON mcogs_invoices(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_date   ON mcogs_invoices(invoice_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_invi_inv   ON mcogs_invoice_items(invoice_id)`,
+
+  // ── Step 93: Credit Notes + Line Items ─────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_credit_notes (
+     id            SERIAL PRIMARY KEY,
+     store_id      INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     vendor_id     INTEGER NOT NULL REFERENCES mcogs_vendors(id) ON DELETE RESTRICT,
+     invoice_id    INTEGER REFERENCES mcogs_invoices(id) ON DELETE SET NULL,
+     grn_id        INTEGER REFERENCES mcogs_goods_received(id) ON DELETE SET NULL,
+     credit_number VARCHAR(100) NOT NULL,
+     status        VARCHAR(30) NOT NULL DEFAULT 'draft'
+                   CHECK (status IN ('draft','submitted','approved','applied')),
+     credit_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+     reason        TEXT,
+     total         NUMERIC(18,4) NOT NULL DEFAULT 0,
+     created_by    VARCHAR(200),
+     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_credit_note_items (
+     id              SERIAL PRIMARY KEY,
+     credit_note_id  INTEGER NOT NULL REFERENCES mcogs_credit_notes(id) ON DELETE CASCADE,
+     ingredient_id   INTEGER REFERENCES mcogs_ingredients(id) ON DELETE SET NULL,
+     description     VARCHAR(500),
+     quantity        NUMERIC(18,4) NOT NULL,
+     unit_price      NUMERIC(18,4) NOT NULL,
+     line_total      NUMERIC(18,4) NOT NULL DEFAULT 0,
+     sort_order      INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cn_store  ON mcogs_credit_notes(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_cn_vendor ON mcogs_credit_notes(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_cn_inv    ON mcogs_credit_notes(invoice_id) WHERE invoice_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_cni_cn    ON mcogs_credit_note_items(credit_note_id)`,
+
+  // ── Step 94: Waste Reason Codes + Waste Log ────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_waste_reason_codes (
+     id          SERIAL PRIMARY KEY,
+     name        VARCHAR(200) NOT NULL,
+     description TEXT,
+     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+     sort_order  INTEGER NOT NULL DEFAULT 0,
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_waste_log (
+     id              SERIAL PRIMARY KEY,
+     store_id        INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     ingredient_id   INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     reason_code_id  INTEGER REFERENCES mcogs_waste_reason_codes(id) ON DELETE SET NULL,
+     quantity        NUMERIC(18,4) NOT NULL,
+     unit_cost       NUMERIC(18,4),
+     waste_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+     notes           TEXT,
+     created_by      VARCHAR(200),
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_waste_store      ON mcogs_waste_log(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_waste_ingredient ON mcogs_waste_log(ingredient_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_waste_date       ON mcogs_waste_log(waste_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_waste_reason     ON mcogs_waste_log(reason_code_id) WHERE reason_code_id IS NOT NULL`,
+
+  // ── Step 95: Stock Transfers + Line Items ──────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_stock_transfers (
+     id               SERIAL PRIMARY KEY,
+     from_store_id    INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     to_store_id      INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     transfer_number  VARCHAR(100) NOT NULL,
+     status           VARCHAR(30) NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','in_transit','confirmed','cancelled')),
+     transfer_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+     notes            TEXT,
+     created_by       VARCHAR(200),
+     confirmed_by     VARCHAR(200),
+     confirmed_at     TIMESTAMPTZ,
+     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     CHECK (from_store_id != to_store_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_stock_transfer_items (
+     id              SERIAL PRIMARY KEY,
+     transfer_id     INTEGER NOT NULL REFERENCES mcogs_stock_transfers(id) ON DELETE CASCADE,
+     ingredient_id   INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     qty_sent        NUMERIC(18,4) NOT NULL,
+     qty_received    NUMERIC(18,4),
+     sort_order      INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_xfer_from   ON mcogs_stock_transfers(from_store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_xfer_to     ON mcogs_stock_transfers(to_store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_xfer_status ON mcogs_stock_transfers(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_xfer_date   ON mcogs_stock_transfers(transfer_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_xferi_xfer  ON mcogs_stock_transfer_items(transfer_id)`,
+
+  // ── Step 96: Stocktakes + Count Items ──────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_stocktakes (
+     id              SERIAL PRIMARY KEY,
+     store_id        INTEGER NOT NULL REFERENCES mcogs_stores(id) ON DELETE RESTRICT,
+     stocktake_type  VARCHAR(30) NOT NULL DEFAULT 'full'
+                     CHECK (stocktake_type IN ('full','spot_check')),
+     status          VARCHAR(30) NOT NULL DEFAULT 'in_progress'
+                     CHECK (status IN ('in_progress','completed','approved')),
+     started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     completed_at    TIMESTAMPTZ,
+     approved_by     VARCHAR(200),
+     approved_at     TIMESTAMPTZ,
+     notes           TEXT,
+     created_by      VARCHAR(200),
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_stocktake_items (
+     id              SERIAL PRIMARY KEY,
+     stocktake_id    INTEGER NOT NULL REFERENCES mcogs_stocktakes(id) ON DELETE CASCADE,
+     ingredient_id   INTEGER NOT NULL REFERENCES mcogs_ingredients(id) ON DELETE RESTRICT,
+     expected_qty    NUMERIC(18,4),
+     counted_qty     NUMERIC(18,4),
+     variance        NUMERIC(18,4),
+     notes           TEXT,
+     counted_by      VARCHAR(200),
+     counted_at      TIMESTAMPTZ,
+     UNIQUE (stocktake_id, ingredient_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_st_store  ON mcogs_stocktakes(store_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_st_status ON mcogs_stocktakes(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_st_type   ON mcogs_stocktakes(stocktake_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_sti_st    ON mcogs_stocktake_items(stocktake_id)`,
+
+  // ── Step 97: Seed default waste reason codes ───────────────────────────────
+  `INSERT INTO mcogs_waste_reason_codes (name, sort_order) VALUES
+     ('Expired', 1), ('Damaged', 2), ('Spillage', 3),
+     ('Over-production', 4), ('Quality issue', 5), ('Staff meal', 6), ('Other', 7)
+   ON CONFLICT DO NOTHING`,
+
+  // ── Step 98: RBAC — add stock_manager feature to existing roles ────────────
+  `DO $$ DECLARE r RECORD; BEGIN
+     FOR r IN SELECT id, name FROM mcogs_roles LOOP
+       INSERT INTO mcogs_role_permissions (role_id, feature, access)
+       VALUES (r.id, 'stock_manager',
+         CASE
+           WHEN r.name = 'Admin'    THEN 'write'
+           WHEN r.name = 'Operator' THEN 'write'
+           WHEN r.name = 'Viewer'   THEN 'read'
+           ELSE 'none'
+         END
+       ) ON CONFLICT (role_id, feature) DO NOTHING;
+     END LOOP;
+   END $$`,
+
+  // ── Step 99: Number sequences for auto-generated document numbers ──────────
+  `DO $$ BEGIN
+     IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_po_number_seq')
+     THEN CREATE SEQUENCE mcogs_po_number_seq START 1001; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_grn_number_seq')
+     THEN CREATE SEQUENCE mcogs_grn_number_seq START 1001; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_inv_number_seq')
+     THEN CREATE SEQUENCE mcogs_inv_number_seq START 1001; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_cn_number_seq')
+     THEN CREATE SEQUENCE mcogs_cn_number_seq START 1001; END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname='public' AND sequencename='mcogs_xfer_number_seq')
+     THEN CREATE SEQUENCE mcogs_xfer_number_seq START 1001; END IF;
+   END $$`,
 ];
 
 async function runMigrations(pool) {

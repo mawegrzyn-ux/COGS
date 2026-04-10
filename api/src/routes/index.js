@@ -87,6 +87,18 @@ router.use('/haccp',              ...can('haccp', 'read'),       write('haccp'),
 router.use('/locations',          ...can('haccp', 'read'),       write('haccp'),       require('./locations'));
 router.use('/location-groups',    ...can('haccp', 'read'),       write('haccp'),       require('./location-groups'));
 
+// ── Stock Manager ─────────────────────────────────────────────────────────────
+router.use('/stock-stores',       ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-stores'));
+router.use('/stock-levels',       ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-levels'));
+router.use('/purchase-orders',    ...can('stock_manager', 'read'), write('stock_manager'), require('./purchase-orders'));
+router.use('/order-templates',    ...can('stock_manager', 'read'), write('stock_manager'), require('./order-templates'));
+router.use('/goods-received',     ...can('stock_manager', 'read'), write('stock_manager'), require('./goods-received'));
+router.use('/invoices',           ...can('stock_manager', 'read'), write('stock_manager'), require('./invoices'));
+router.use('/credit-notes',       ...can('stock_manager', 'read'), write('stock_manager'), require('./credit-notes'));
+router.use('/waste',              ...can('stock_manager', 'read'), write('stock_manager'), require('./waste'));
+router.use('/stock-transfers',    ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-transfers'));
+router.use('/stocktakes',         ...can('stock_manager', 'read'), write('stock_manager'), require('./stocktakes'));
+
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);
 

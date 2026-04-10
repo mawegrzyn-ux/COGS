@@ -6,7 +6,7 @@ const { requireAuth, requirePermission } = require('../middleware/auth');
 const auth  = requireAuth;
 const admin = requirePermission('users', 'write');
 
-const FEATURES = ['dashboard','inventory','recipes','menus','allergens','haccp','markets','categories','settings','import','ai_chat','users'];
+const FEATURES = ['dashboard','inventory','recipes','menus','allergens','haccp','markets','categories','settings','import','ai_chat','users','stock_manager'];
 
 // GET /api/roles — list all roles with their permissions
 router.get('/', auth, requirePermission('users', 'read'), async (req, res) => {
