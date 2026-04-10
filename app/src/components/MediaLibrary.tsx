@@ -64,7 +64,7 @@ function formatDate(iso: string): string {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function MediaLibrary({ open, onClose, onInsert, formKey, onEditImage, mode = 'modal' }: MediaLibraryProps) {
+export default function MediaLibrary({ open, onClose, onInsert, formKey, mode = 'modal' }: MediaLibraryProps) {
   const { getAccessTokenSilently } = useAuth0()
 
   // Data
