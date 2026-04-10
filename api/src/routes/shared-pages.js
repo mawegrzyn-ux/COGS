@@ -26,7 +26,14 @@ const {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const HMAC_SECRET = process.env.SHARED_PAGE_SECRET || 'mcogs-shared-page-secret-change-me';
+// SECURITY: No fallback — if the secret is missing, generate a random one at startup.
+// This means tokens won't survive a restart (users re-enter shared page passwords),
+// but it's safe. A persistent secret should be set in .env for production.
+const HMAC_SECRET = process.env.SHARED_PAGE_SECRET || (() => {
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.warn('[shared-pages] WARNING: SHARED_PAGE_SECRET not set in .env — using random secret. Shared page tokens will not survive a server restart. Set SHARED_PAGE_SECRET in your .env file for persistent tokens.');
+  return generated;
+})();
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
