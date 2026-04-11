@@ -71,7 +71,8 @@ interface CheckItem {
   basePrice: number
   selections: Selection[]   // flat list for receipt/totals
   displayLines: DisplayLine[]  // hierarchical for left panel display
-  total: number
+  total: number             // per-unit total (basePrice + addons)
+  qty: number               // aggregated count of identical items
   taxRate: number
   // Stored state for recall/editing
   _item?: CogsItem
@@ -191,7 +192,19 @@ export default function PosTesterPage() {
   /* ── check helpers ──────────────────────────────────────────────────────────── */
 
   const addToCheck = useCallback((item: CheckItem) => {
-    setCheckItems(prev => [...prev, item])
+    setCheckItems(prev => {
+      // Check if an identical item exists (same name + same selections fingerprint)
+      const fingerprint = item.name + '|' + item.selections.map(s => `${s.name}:${s.priceAddon}`).join(',')
+      const existingIdx = prev.findIndex(ci => {
+        const fp = ci.name + '|' + ci.selections.map(s => `${s.name}:${s.priceAddon}`).join(',')
+        return fp === fingerprint
+      })
+      if (existingIdx >= 0) {
+        // Aggregate — increment qty
+        return prev.map((ci, i) => i === existingIdx ? { ...ci, qty: ci.qty + 1 } : ci)
+      }
+      return [...prev, { ...item, qty: item.qty || 1 }]
+    })
   }, [])
 
   const removeFromCheck = useCallback((idx: number) => {
@@ -202,9 +215,9 @@ export default function PosTesterPage() {
 
   const sym = currencySymbol
 
-  const subtotal = useMemo(() => checkItems.reduce((s, i) => s + i.total, 0), [checkItems])
+  const subtotal = useMemo(() => checkItems.reduce((s, i) => s + i.total * i.qty, 0), [checkItems])
   const tax = useMemo(
-    () => checkItems.reduce((s, i) => s + (i.taxRate > 0 ? i.total - i.total / (1 + i.taxRate) : 0), 0),
+    () => checkItems.reduce((s, i) => { const t = i.total * i.qty; return s + (i.taxRate > 0 ? t - t / (1 + i.taxRate) : 0) }, 0),
     [checkItems],
   )
   const total = subtotal
@@ -220,6 +233,7 @@ export default function PosTesterPage() {
         selections: [],
         displayLines: [],
         total: item.sell_price_gross,
+        qty: 1,
         taxRate: item.tax_rate || 0,
       })
       return
@@ -249,6 +263,7 @@ export default function PosTesterPage() {
         selections: [],
         displayLines: [],
         total: item.sell_price_gross,
+        qty: 1,
         taxRate: item.tax_rate || 0,
       })
     }
@@ -449,6 +464,7 @@ export default function PosTesterPage() {
       selections: allSels,
       displayLines,
       total: orderFlow.item.sell_price_gross + addonTotal,
+      qty: 1,
       taxRate: orderFlow.item.tax_rate || 0,
       // Store state for recall
       _item: orderFlow.item,
@@ -618,9 +634,9 @@ export default function PosTesterPage() {
 
   /* ── receipt totals ─────────────────────────────────────────────────────────── */
 
-  const receiptSubtotal = useMemo(() => receiptData.reduce((s, i) => s + i.total, 0), [receiptData])
+  const receiptSubtotal = useMemo(() => receiptData.reduce((s, i) => s + i.total * i.qty, 0), [receiptData])
   const receiptTax = useMemo(
-    () => receiptData.reduce((s, i) => s + (i.taxRate > 0 ? i.total - i.total / (1 + i.taxRate) : 0), 0),
+    () => receiptData.reduce((s, i) => { const t = i.total * i.qty; return s + (i.taxRate > 0 ? t - t / (1 + i.taxRate) : 0) }, 0),
     [receiptData],
   )
   const receiptTotal = receiptSubtotal
@@ -999,7 +1015,7 @@ export default function PosTesterPage() {
           <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
             <div>
               <h2 className="text-sm font-bold text-gray-800">Current Order</h2>
-              <p className="text-xs text-gray-500">{checkItems.length} item{checkItems.length !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-gray-500">{checkItems.reduce((s, i) => s + i.qty, 0)} item{checkItems.reduce((s, i) => s + i.qty, 0) !== 1 ? 's' : ''}</p>
             </div>
             {checkItems.length > 0 && (
               <button onClick={clearCheck} title="Clear order"
@@ -1030,27 +1046,32 @@ export default function PosTesterPage() {
                   }
                 }}
                 className={`px-4 py-2 border-b border-gray-100 group cursor-pointer transition-colors ${editingIdx === idx ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}>
-                <div className="flex items-start justify-between">
+                <div className="flex items-start gap-2">
+                  {/* Qty controls */}
+                  <div className="flex items-center gap-1 shrink-0 pt-0.5" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => {
+                      if (item.qty <= 1) removeFromCheck(idx)
+                      else setCheckItems(prev => prev.map((ci, i) => i === idx ? { ...ci, qty: ci.qty - 1 } : ci))
+                    }}
+                      className="w-5 h-5 rounded border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 text-[10px] font-bold">−</button>
+                    <span className="w-4 text-center text-xs font-bold text-gray-700">{item.qty}</span>
+                    <button onClick={() => setCheckItems(prev => prev.map((ci, i) => i === idx ? { ...ci, qty: ci.qty + 1 } : ci))}
+                      className="w-5 h-5 rounded border border-accent/40 bg-accent/5 flex items-center justify-center text-accent text-[10px] font-bold hover:bg-accent/10">+</button>
+                  </div>
+                  {/* Name + selections */}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
                     {(item.displayLines || item.selections)?.map((line, si) => {
                       const indent = 'indent' in line ? (line as DisplayLine).indent : 0
                       return (
-                        <p key={si} className={`text-xs text-gray-500 ${indent === 0 ? 'pl-3' : 'pl-6 text-gray-400'}`}>
+                        <p key={si} className={`text-xs text-gray-500 ${indent === 0 ? 'pl-2' : 'pl-5 text-gray-400'}`}>
                           {indent === 0 ? '+ ' : '· '}{line.name}{line.priceAddon > 0 ? ` +${sym}${line.priceAddon.toFixed(2)}` : ''}
                         </p>
                       )
                     })}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 ml-2">
-                    <span className="text-sm font-mono font-semibold text-gray-800">{sym}{item.total.toFixed(2)}</span>
-                    <button onClick={() => removeFromCheck(idx)}
-                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-0.5 transition-opacity">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                      </svg>
-                    </button>
-                  </div>
+                  {/* Price */}
+                  <span className="text-sm font-mono font-semibold text-gray-800 shrink-0">{sym}{(item.total * item.qty).toFixed(2)}</span>
                 </div>
               </div>
             ))}
@@ -1230,8 +1251,8 @@ export default function PosTesterPage() {
                 {receiptData.map((item, i) => (
                   <div key={i}>
                     <div className="flex justify-between gap-2">
-                      <span className="truncate">{item.name}</span>
-                      <span className="shrink-0">{sym}{item.total.toFixed(2)}</span>
+                      <span className="truncate">{item.qty > 1 ? `${item.qty}x ` : ''}{item.name}</span>
+                      <span className="shrink-0">{sym}{(item.total * item.qty).toFixed(2)}</span>
                     </div>
                     {item.selections?.map((sel, si) => (
                       <div key={si} className="flex justify-between text-gray-500 pl-2">
