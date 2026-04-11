@@ -996,9 +996,19 @@ export default function PosTesterPage() {
 
         {/* ── LEFT: current check ───────────────────────────────────────────────── */}
         <div className="w-72 bg-white border-r border-gray-200 flex flex-col shrink-0">
-          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-            <h2 className="text-sm font-bold text-gray-800">Current Order</h2>
-            <p className="text-xs text-gray-500">{checkItems.length} item{checkItems.length !== 1 ? 's' : ''}</p>
+          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-gray-800">Current Order</h2>
+              <p className="text-xs text-gray-500">{checkItems.length} item{checkItems.length !== 1 ? 's' : ''}</p>
+            </div>
+            {checkItems.length > 0 && (
+              <button onClick={clearCheck} title="Clear order"
+                className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2"/>
+                </svg>
+              </button>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -1075,12 +1085,6 @@ export default function PosTesterPage() {
               className="w-full py-3.5 rounded-lg text-white text-lg font-bold transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed bg-accent hover:bg-accent-mid active:bg-accent-dark">
               PAY {sym}{total.toFixed(2)}
             </button>
-            {checkItems.length > 0 && (
-              <button onClick={clearCheck}
-                className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors">
-                Clear Order
-              </button>
-            )}
           </div>
         </div>
 
