@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
@@ -435,19 +436,15 @@ export default function PosTesterPage() {
 
   /* ── fullscreen ─────────────────────────────────────────────────────────────── */
 
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
-    } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
-    }
-  }
+  function toggleFullscreen() { setIsFullscreen(f => !f) }
 
+  // ESC exits fullscreen overlay
   useEffect(() => {
-    function onFs() { setIsFullscreen(!!document.fullscreenElement) }
-    document.addEventListener('fullscreenchange', onFs)
-    return () => document.removeEventListener('fullscreenchange', onFs)
-  }, [])
+    if (!isFullscreen) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setIsFullscreen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [isFullscreen])
 
   /* ── auto-advance single-choice combo steps ─────────────────────────────────── */
 
@@ -458,16 +455,29 @@ export default function PosTesterPage() {
     if (!steps?.length) return
     const step = steps[orderFlow.currentStepIdx]
     if (!step) return
-    // Auto-select and advance if single option with min=max=1
+    // Auto-select and advance if single option with min=max=1 AND no modifiers on the option
     if (step.options.length === 1 && step.min_select === 1 && step.max_select === 1) {
       const opt = step.options[0]
+      const hasModifiers = opt.modifier_groups?.length > 0
+      // Auto-select the option (even if it has modifiers — user still needs to see it selected)
       setOrderFlow(prev => {
         if (!prev) return prev
+        const alreadySelected = prev.stepSelections[step.id]?.has(opt.id)
+        if (alreadySelected && !hasModifiers) {
+          // Already selected + no modifiers → advance
+          const nextIdx = prev.currentStepIdx + 1
+          if (nextIdx < prev.subPrices.combo_steps.length) {
+            return { ...prev, currentStepIdx: nextIdx }
+          }
+          return prev
+        }
+        // Select the option but DON'T advance if it has modifiers (user needs to choose mods)
         const newStepSel = { ...prev.stepSelections, [step.id]: new Set([opt.id]) }
-        const nextIdx = prev.currentStepIdx + 1
-        const totalSteps = prev.subPrices.combo_steps.length
-        if (nextIdx < totalSteps) {
-          return { ...prev, stepSelections: newStepSel, currentStepIdx: nextIdx }
+        if (!hasModifiers) {
+          const nextIdx = prev.currentStepIdx + 1
+          if (nextIdx < prev.subPrices.combo_steps.length) {
+            return { ...prev, stepSelections: newStepSel, currentStepIdx: nextIdx }
+          }
         }
         return { ...prev, stepSelections: newStepSel }
       })
@@ -484,6 +494,113 @@ export default function PosTesterPage() {
   const receiptTotal = receiptSubtotal
 
   /* ── render: current combo step / modifier content ──────────────────────────── */
+
+  // Top block: combo step navigation + step options (compact)
+  function renderComboStepSection() {
+    if (!orderFlow || orderFlow.phase !== 'combo') return null
+    const subPrices = orderFlow.subPrices
+    const step = subPrices.combo_steps[orderFlow.currentStepIdx]
+    if (!step) return null
+    const chosen = orderFlow.stepSelections[step.id] || new Set()
+    const isRadio = step.max_select === 1
+
+    return (
+      <div>
+        {/* Step navigation pills */}
+        {subPrices.combo_steps.length > 1 && (
+          <div className="flex items-center gap-1 mb-2 flex-wrap">
+            {subPrices.combo_steps.map((s: any, idx: number) => {
+              const isActive = idx === orderFlow.currentStepIdx
+              const isCompleted = (orderFlow.stepSelections[s.id]?.size || 0) >= s.min_select
+              return (
+                <button key={s.id} onClick={() => setOrderFlow((prev: any) => prev ? { ...prev, currentStepIdx: idx } : prev)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors
+                    ${isActive ? 'bg-accent text-white' : isCompleted ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                  <span>{idx + 1} {s.display_name || s.name}</span>
+                  {isCompleted && !isActive && <span>&#10003;</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <p className="text-xs font-semibold text-gray-700 mb-1.5">
+          {step.name}
+          <span className="text-gray-400 font-normal ml-1">
+            ({isRadio ? `choose ${step.min_select}` : `${step.min_select}-${step.max_select}`})
+          </span>
+        </p>
+        <div className="space-y-1">
+          {step.options.map((opt: any) => {
+            const sel = chosen.has(opt.id)
+            const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+            return (
+              <button key={opt.id} onClick={() => toggleStepOption(step.id, opt.id, step.max_select)}
+                className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border text-left text-sm transition-all
+                  ${sel ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                <div className={`w-4 h-4 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0
+                  ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
+                  {sel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                </div>
+                <span className="flex-1 truncate">{opt.display_name || opt.name}</span>
+                {price > 0 && <span className="text-[10px] text-gray-500 shrink-0">+{sym}{price.toFixed(2)}</span>}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  // Bottom block: modifiers for selected combo step option
+  function renderComboStepModifiers() {
+    if (!orderFlow || orderFlow.phase !== 'combo') return null
+    const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
+    if (!step) return null
+    const chosen = orderFlow.stepSelections[step.id] || new Set()
+    const selectedOptIds = Array.from(chosen)
+    const selectedOption = selectedOptIds.length === 1 ? step.options.find((o: any) => o.id === selectedOptIds[0]) : null
+
+    if (!selectedOption?.modifier_groups?.length) {
+      return (
+        <div className="flex items-center justify-center h-full text-gray-300 text-xs">
+          {chosen.size === 0 ? 'Select an option above' : 'No modifiers for this option'}
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-3">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-purple-500">Modifiers</p>
+        {selectedOption.modifier_groups.map((mg: any) => (
+          <div key={mg.modifier_group_id}>
+            <p className="text-xs font-semibold text-gray-700 mb-1">
+              {mg.display_name || mg.name}
+              <span className="text-gray-400 font-normal ml-1">
+                (choose {mg.min_select === mg.max_select ? mg.min_select : `${mg.min_select}-${mg.max_select}`})
+              </span>
+            </p>
+            <div className="space-y-1">
+              {mg.options.map((opt: any) => {
+                const modKey = `${step.id}_${mg.modifier_group_id}`
+                const isSelected = orderFlow.modSelections[modKey]?.has(opt.id)
+                const priceAddon = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
+                return (
+                  <button key={opt.id}
+                    onClick={() => toggleComboStepModifier(modKey, opt.id, mg.min_select, mg.max_select)}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg border text-sm transition-colors
+                      ${isSelected ? 'border-purple-300 bg-purple-50 text-purple-800' : 'border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                    <span>{opt.display_name || opt.name}</span>
+                    <span className="text-[10px] text-gray-500">{priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}` : 'incl.'}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   function renderOrderFlowContent() {
     if (!orderFlow) return null
@@ -682,12 +799,12 @@ export default function PosTesterPage() {
 
   /* ── render ──────────────────────────────────────────────────────────────────── */
 
-  return (
-    <div className="flex flex-col h-full bg-gray-100">
+  const posContent = (
+    <div className={`flex flex-col bg-gray-100 ${isFullscreen ? 'fixed inset-0 z-[9999]' : 'h-full'}`}>
       {/* ── header bar ──────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2 bg-gray-900 text-white shrink-0">
         <div className="flex items-center gap-3">
-          <h1 className="text-sm font-bold tracking-wide">POS Tester</h1>
+          <h1 className="text-sm font-bold tracking-wide">POS Mockup</h1>
           <select
             value={selectedMenuId ?? ''}
             onChange={e => setSelectedMenuId(Number(e.target.value) || null)}
@@ -843,12 +960,11 @@ export default function PosTesterPage() {
         {/* ── RIGHT: order flow panel ───────────────────────────────────────────── */}
         {orderFlow && (
           <div className="w-80 bg-white border-l border-gray-200 flex flex-col shrink-0">
-            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+            {/* Header */}
+            <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 flex items-center justify-between shrink-0">
               <div>
                 <h3 className="text-sm font-bold text-gray-800">{orderFlow.item.display_name}</h3>
-                <p className="text-xs text-gray-500">
-                  {orderFlow.phase === 'combo' ? 'Choose your options' : 'Customise'}
-                </p>
+                <p className="text-[10px] text-gray-500">{sym}{itemRunningTotal.toFixed(2)}</p>
               </div>
               <button onClick={() => setOrderFlow(null)} className="text-gray-400 hover:text-gray-600 p-1">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -857,20 +973,51 @@ export default function PosTesterPage() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
-              {renderOrderFlowContent()}
-            </div>
-
-            <div className="px-4 py-3 border-t border-gray-200 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Item total</span>
-                <span className="font-bold text-gray-900">{sym}{itemRunningTotal.toFixed(2)}</span>
+            {/* Split content: combo steps (top, compact) + modifiers (bottom, scrollable) */}
+            {orderFlow.phase === 'combo' ? (
+              <div className="flex flex-col flex-1 min-h-0">
+                {/* Top: combo step options (compact, auto-height) */}
+                <div className="p-3 border-b border-gray-100 shrink-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
+                  {renderComboStepSection()}
+                </div>
+                {/* Bottom: modifiers for selected option (scrollable) */}
+                <div className="flex-1 overflow-y-auto p-3">
+                  {renderComboStepModifiers()}
+                </div>
               </div>
-              {/* Show "Add to Order" when in modifiers phase or no combo steps */}
-              {orderFlow.phase === 'modifiers' && (
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4">
+                {renderOrderFlowContent()}
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="px-4 py-3 border-t border-gray-200 shrink-0">
+              {orderFlow.phase === 'combo' ? (
+                <div className="flex items-center justify-between">
+                  <button disabled={orderFlow.currentStepIdx === 0}
+                    onClick={() => setOrderFlow(prev => prev ? { ...prev, currentStepIdx: prev.currentStepIdx - 1 } : prev)}
+                    className="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-30">
+                    &larr; Previous
+                  </button>
+                  <span className="text-xs text-gray-400">Step {orderFlow.currentStepIdx + 1} of {orderFlow.subPrices.combo_steps.length}</span>
+                  {orderFlow.currentStepIdx < orderFlow.subPrices.combo_steps.length - 1 ? (
+                    <button disabled={!canAdvanceStep}
+                      onClick={advanceStep}
+                      className="text-xs text-accent hover:text-accent-mid disabled:opacity-30 font-medium">
+                      Next &rarr;
+                    </button>
+                  ) : (
+                    <button onClick={advanceStep} disabled={!canAdvanceStep}
+                      className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-mid disabled:bg-gray-300 transition-colors">
+                      Continue
+                    </button>
+                  )}
+                </div>
+              ) : (
                 <button onClick={() => finalizeOrderFlow()} disabled={!allModsMet}
                   className="w-full py-3 rounded-lg bg-accent text-white font-bold text-sm hover:bg-accent-mid disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
-                  Add to Order
+                  Add to Order — {sym}{itemRunningTotal.toFixed(2)}
                 </button>
               )}
             </div>
@@ -885,7 +1032,7 @@ export default function PosTesterPage() {
             <div className="flex-1 overflow-y-auto">
               <div className="p-6 font-mono text-xs space-y-3">
                 <div className="text-center">
-                  <p className="text-sm font-bold">COGS POS Tester</p>
+                  <p className="text-sm font-bold">COGS POS Mockup</p>
                   <p className="text-gray-500">--- MOCK RECEIPT ---</p>
                   <p className="text-gray-500">{new Date().toLocaleString()}</p>
                 </div>
@@ -930,4 +1077,7 @@ export default function PosTesterPage() {
       )}
     </div>
   )
+
+  // In fullscreen mode, render via portal to cover sidebar + header
+  return isFullscreen ? createPortal(posContent, document.body) : posContent
 }

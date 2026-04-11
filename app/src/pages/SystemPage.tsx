@@ -920,7 +920,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'security',         icon: '🔒', label: 'Security' },
   { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
   { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
-  { id: 'pos-tester',       icon: '🏪', label: 'POS Tester' },
+  { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
