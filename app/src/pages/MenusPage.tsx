@@ -1201,7 +1201,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       try {
         const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
         setSubPriceData(prev => ({ ...prev, [msiId]: d }))
-      } catch { /* ignore */ } finally {
+      } catch (err) { console.error('[sub-prices] Failed to load for msiId', msiId, err) } finally {
         setLoadingSubPrices(prev => { const s = new Set(prev); s.delete(msiId); return s })
       }
     }

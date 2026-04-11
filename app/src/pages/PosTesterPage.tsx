@@ -357,8 +357,8 @@ export default function PosTesterPage() {
       if (orderFlow.subPrices.modifier_groups?.length > 0) {
         setOrderFlow({ ...orderFlow, phase: 'modifiers', resolvedSelections: merged })
       } else {
-        // No modifiers — add to check
-        finalizeOrderFlow(merged, {})
+        // No item-level modifiers — add to check (but keep combo step modifiers)
+        finalizeOrderFlow(merged)
       }
     }
   }
