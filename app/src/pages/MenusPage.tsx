@@ -2304,6 +2304,7 @@ function ScenarioTool({
 
   // ── Modals ─────────────────────────────────────────────────────────────────
   const [showWhatIf,       setShowWhatIf]       = useState(false)
+  const [showSmartScenario, setShowSmartScenario] = useState(false)
   const [showScenarioModal, setShowScenarioModal] = useState(false)
 
   // ── Reset helpers ──────────────────────────────────────────────────────────
@@ -3081,6 +3082,11 @@ ${tableHtml}
             <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
           )}
 
+          {/* Smart Scenario */}
+          {menuId && (
+            <button className="btn btn-sm btn-outline text-xs" title="AI-powered pricing changes" onClick={() => setShowSmartScenario(true)}>🧠 Smart</button>
+          )}
+
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (
             <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
@@ -3166,6 +3172,29 @@ ${tableHtml}
           <WhatIfModal
             onApply={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
             onClose={() => setShowWhatIf(false)}
+          />
+        )}
+
+        {/* ── Smart Scenario Modal ───────────────────────────────────────── */}
+        {showSmartScenario && menuId && (
+          <SmartScenarioModal
+            menuId={menuId}
+            scenarioId={savedId}
+            priceLevelId={typeof levelId === 'number' ? levelId : null}
+            currencySymbol={dispSym}
+            api={api}
+            onClose={() => setShowSmartScenario(false)}
+            onApply={(changes, prompt) => {
+              const newOv = { ...priceOverrides }
+              for (const c of changes) {
+                const key = `${c.menu_item_id}_l${c.level_id}`
+                newOv[key] = String(Math.round(c.new_price * 100) / 100)
+              }
+              setPriceOverrides(newOv)
+              addHistoryEntry('smart_scenario', `AI: ${prompt} (${changes.length} changes)`)
+              markDirty()
+              setShowSmartScenario(false)
+            }}
           />
         )}
 
@@ -4140,6 +4169,204 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
             onClick={() => { if (pN !== 0 || cN !== 0) onApply(pN, cN) }}
           >Apply</button>
         </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── SmartScenarioModal ─────────────────────────────────────────────────────────
+
+interface SmartChange {
+  menu_item_id: number
+  level_id: number
+  item_name: string
+  level_name: string
+  old_price: number
+  new_price: number
+  reason: string
+}
+
+function SmartScenarioModal({ menuId, scenarioId, priceLevelId, currencySymbol, onApply, onClose, api }: {
+  menuId: number
+  scenarioId: number | null
+  priceLevelId: number | null
+  currencySymbol: string
+  onApply: (changes: SmartChange[], prompt: string) => void
+  onClose: () => void
+  api: { post: (path: string, body?: any) => Promise<any> }
+}) {
+  const [prompt, setPrompt] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ summary: string; changes: SmartChange[] } | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+
+  const analyse = async () => {
+    if (!prompt.trim()) return
+    setLoading(true)
+    setError('')
+    setResult(null)
+    try {
+      const data = await api.post('/scenarios/smart', {
+        menu_id: menuId,
+        scenario_id: scenarioId || undefined,
+        price_level_id: priceLevelId || undefined,
+        prompt: prompt.trim(),
+      })
+      if (data.error) {
+        setError(data.error)
+        return
+      }
+      setResult(data)
+      setChecked(new Set(data.changes?.map((_: any, i: number) => i) || []))
+    } catch (err: any) {
+      setError(err.message || 'Failed to analyse scenario')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleApply = () => {
+    if (!result?.changes?.length) return
+    const selected = result.changes.filter((_: any, i: number) => checked.has(i))
+    onApply(selected, prompt)
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-surface rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div>
+            <h2 className="text-base font-bold text-text-1">Smart Scenario</h2>
+            <p className="text-xs text-text-3 mt-0.5">Describe a pricing change in plain English</p>
+          </div>
+          <button onClick={onClose} className="text-text-3 hover:text-text-1 p-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {/* Input */}
+          <div>
+            <label className="block text-sm font-semibold text-text-2 mb-1.5">What would you like to change?</label>
+            <textarea
+              className="input w-full text-sm"
+              rows={3}
+              placeholder={'e.g. Increase all chicken items by 3%\nSet all wings to 28% COGS target\nRound all prices to nearest .99'}
+              value={prompt}
+              onChange={e => setPrompt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) { e.preventDefault(); analyse() } }}
+              disabled={loading}
+              autoFocus
+            />
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-[10px] text-text-3">Only pricing changes are accepted. Pepper cannot modify recipes, ingredients, or other data.</p>
+              <button
+                className="btn-primary text-sm py-1.5 px-4 rounded"
+                disabled={!prompt.trim() || loading}
+                onClick={analyse}
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    Analysing...
+                  </span>
+                ) : 'Analyse'}
+              </button>
+            </div>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+          )}
+
+          {/* Results */}
+          {result && (
+            <div className="space-y-3">
+              <div className="p-3 bg-accent-dim rounded-lg border border-accent/20">
+                <p className="text-sm font-medium text-accent">{result.summary}</p>
+              </div>
+
+              {result.changes?.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-text-3 font-semibold uppercase tracking-wide">
+                      Proposed changes ({checked.size} of {result.changes.length} selected)
+                    </p>
+                    <div className="flex gap-2">
+                      <button className="text-xs text-accent hover:underline" onClick={() => setChecked(new Set(result.changes.map((_: any, i: number) => i)))}>Select all</button>
+                      <button className="text-xs text-text-3 hover:underline" onClick={() => setChecked(new Set())}>Deselect all</button>
+                    </div>
+                  </div>
+
+                  <div className="border border-border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
+                          <th className="px-3 py-2 w-8"></th>
+                          <th className="text-left px-3 py-2">Item</th>
+                          <th className="text-left px-3 py-2">Level</th>
+                          <th className="text-right px-3 py-2">Current</th>
+                          <th className="text-right px-3 py-2">Proposed</th>
+                          <th className="text-right px-3 py-2">Change</th>
+                          <th className="text-left px-3 py-2">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.changes.map((c: SmartChange, i: number) => {
+                          const pctChange = c.old_price > 0
+                            ? Math.round(((c.new_price - c.old_price) / c.old_price) * 1000) / 10
+                            : null
+                          return (
+                            <tr key={i} className={`border-t border-border ${checked.has(i) ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                              <td className="px-3 py-2">
+                                <input type="checkbox" checked={checked.has(i)}
+                                  onChange={() => setChecked(prev => {
+                                    const next = new Set(prev)
+                                    next.has(i) ? next.delete(i) : next.add(i)
+                                    return next
+                                  })} />
+                              </td>
+                              <td className="px-3 py-2 font-medium">{c.item_name}</td>
+                              <td className="px-3 py-2 text-text-3">{c.level_name}</td>
+                              <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_price).toFixed(2)}</td>
+                              <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_price).toFixed(2)}</td>
+                              <td className={`px-3 py-2 text-right font-mono text-xs ${pctChange && pctChange > 0 ? 'text-red-600' : pctChange && pctChange < 0 ? 'text-green-600' : 'text-text-3'}`}>
+                                {pctChange != null ? `${pctChange > 0 ? '+' : ''}${pctChange}%` : '\u2014'}
+                              </td>
+                              <td className="px-3 py-2 text-xs text-text-3">{c.reason}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-text-3 text-center py-4">No price changes proposed.</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {result?.changes?.length ? (
+          <div className="flex items-center justify-end gap-2 px-6 py-3 border-t border-border bg-surface-2">
+            <button className="btn-outline py-1.5 px-4 rounded text-sm" onClick={onClose}>Cancel</button>
+            <button
+              className="btn-primary py-1.5 px-4 rounded text-sm"
+              disabled={checked.size === 0}
+              onClick={handleApply}
+            >
+              Apply {checked.size} change{checked.size !== 1 ? 's' : ''}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>,
     document.body
