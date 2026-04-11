@@ -4,10 +4,15 @@ import Sidebar from './Sidebar'
 import AiChat, { type PepperMode } from './AiChat'
 import MediaLibrary from './MediaLibrary'
 
-const PANEL_WIDTH_KEY  = 'pepper-panel-width'
-const MIN_PANEL_WIDTH  = 280
-const MAX_PANEL_WIDTH  = 700
-const DEFAULT_PANEL_W  = 390
+const PANEL_WIDTH_KEY   = 'pepper-panel-width'
+const MIN_PANEL_WIDTH   = 280
+const MAX_PANEL_WIDTH   = 700
+const DEFAULT_PANEL_W   = 390
+
+const PANEL_HEIGHT_KEY  = 'pepper-panel-height'
+const MIN_PANEL_HEIGHT  = 200
+const MAX_PANEL_HEIGHT_PCT = 0.6   // 60% of viewport
+const DEFAULT_PANEL_H   = 300
 
 // ── Context menu types ─────────────────────────────────────────────────────────
 
@@ -168,21 +173,30 @@ function PepperContextMenu({
 
 export default function AppLayout() {
   const [ctxMenu,         setCtxMenu]         = useState<ContextMenuState | null>(null)
-  const [pepperMode,      setPepperMode]      = useState<PepperMode>(() =>
-    (localStorage.getItem('pepper-mode') as PepperMode) || 'float'
-  )
-  const [pepperFloatOpen, setPepperFloatOpen] = useState(false)
+  const [pepperMode,      setPepperMode]      = useState<PepperMode>(() => {
+    const stored = localStorage.getItem('pepper-mode')
+    // Migrate old 'float' to 'docked-right'
+    if (!stored || stored === 'float') return 'docked-right'
+    return stored as PepperMode
+  })
+  const [pepperOpen,      setPepperOpen]      = useState(false)
   const [mediaOpen,       setMediaOpen]       = useState(false)
   const [panelWidth, setPanelWidth] = useState<number>(() =>
     parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || String(DEFAULT_PANEL_W), 10)
   )
-  const panelWidthRef  = useRef(panelWidth)
-  const pepperModeRef  = useRef(pepperMode)
-  useEffect(() => { panelWidthRef.current = panelWidth },  [panelWidth])
-  useEffect(() => { pepperModeRef.current = pepperMode },  [pepperMode])
+  const [panelHeight, setPanelHeight] = useState<number>(() =>
+    parseInt(localStorage.getItem(PANEL_HEIGHT_KEY) || String(DEFAULT_PANEL_H), 10)
+  )
+  const panelWidthRef   = useRef(panelWidth)
+  const panelHeightRef  = useRef(panelHeight)
+  const pepperModeRef   = useRef(pepperMode)
+  useEffect(() => { panelWidthRef.current  = panelWidth },  [panelWidth])
+  useEffect(() => { panelHeightRef.current = panelHeight }, [panelHeight])
+  useEffect(() => { pepperModeRef.current  = pepperMode },  [pepperMode])
 
   const handleModeChange = useCallback((m: PepperMode) => {
     setPepperMode(m)
+    setPepperOpen(true)
     localStorage.setItem('pepper-mode', m)
   }, [])
 
@@ -210,6 +224,34 @@ export default function AppLayout() {
     }
 
     document.body.style.cursor     = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup',   onUp)
+  }, [])
+
+  // ── Bottom panel resize drag ────────────────────────────────────────────────
+  const startBottomResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = panelHeightRef.current
+    const maxH   = Math.floor(window.innerHeight * MAX_PANEL_HEIGHT_PCT)
+
+    function onMove(ev: MouseEvent) {
+      // Dragging up → panel grows taller
+      const dy   = startY - ev.clientY
+      const newH = Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, startH + dy))
+      panelHeightRef.current = newH
+      setPanelHeight(newH)
+    }
+    function onUp() {
+      localStorage.setItem(PANEL_HEIGHT_KEY, String(panelHeightRef.current))
+      document.body.style.cursor     = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup',   onUp)
+    }
+
+    document.body.style.cursor     = 'row-resize'
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup',   onUp)
@@ -277,74 +319,118 @@ export default function AppLayout() {
     window.dispatchEvent(new CustomEvent('pepper-screenshot', { detail: { screenshotFile } }))
   }, [captureScreenshot])
 
+  const isBottom = pepperMode === 'docked-bottom'
+  const showPepper = pepperOpen
+
+  const pepperToggle = useCallback(() => setPepperOpen(o => !o), [])
+
+  /*
+    Layout approach for preserving AiChat across mode switches (never unmount):
+
+    For docked-left / docked-right:
+      Outer flex row: sidebar | [pepper order:1] | main-col order:2 | [pepper order:3]
+      The single AiChat wrapper uses `order` to position itself before or after main.
+
+    For docked-bottom:
+      The main-col becomes a flex-col containing: <main> + <pepper-bottom-slot>.
+      The AiChat wrapper is placed inside the main-col using order:2 (below main@1).
+
+    The key: AiChat is always rendered inside one consistent wrapper div that is always
+    mounted. Only CSS properties (order, width/height, display) change — no unmount.
+  */
+
+  // Pepper wrapper position depends on mode
+  const pepperWrapperStyle: React.CSSProperties = isBottom
+    ? {
+        order:       2,       // after main inside the column
+        height:      showPepper ? panelHeight : 0,
+        width:       '100%',
+        borderColor: 'var(--border)',
+      }
+    : {
+        order:       pepperMode === 'docked-left' ? 1 : 3,
+        width:       showPepper ? panelWidth : 0,
+        borderColor: 'var(--border)',
+      }
+
+  const pepperWrapperClass = [
+    'relative flex-shrink-0 print:hidden',
+    showPepper && pepperMode === 'docked-left'  ? 'border-r' : '',
+    showPepper && pepperMode === 'docked-right' ? 'border-l' : '',
+    showPepper && isBottom                      ? 'border-t' : '',
+    !showPepper                                 ? 'overflow-hidden' : '',
+  ].filter(Boolean).join(' ')
+
   return (
     <div className="flex h-screen overflow-hidden bg-surface-2">
       <div className="print:hidden flex flex-col self-stretch">
         <Sidebar
-          pepperMode={pepperMode}
-          pepperOpen={pepperMode !== 'float' || pepperFloatOpen}
-          onPepperToggle={() => setPepperFloatOpen(o => !o)}
+          pepperOpen={pepperOpen}
+          onPepperToggle={pepperToggle}
         />
       </div>
 
-      {/* Main content — explicit order so AiChat wrapper can slot in before or after */}
-      <main className="flex-1 overflow-y-auto min-w-0" style={{ order: 2 }}>
-        <Outlet />
-      </main>
-
       {/*
-        Single always-mounted AiChat — never unmounts on mode switch so conversation
-        state (messages, sessionId, input) is preserved across dock/undock/float.
-
-        Flex order: docked-left = 1 (between sidebar@0 and main@2)
-                    docked-right / float = 3 (after main@2)
-
-        Width: panelWidth when docked, 0 when float (AiChat renders as position:fixed
-        in float mode so the zero-width wrapper doesn't affect its visual position).
+        Inner content area — flex-row for left/right modes, flex-col for bottom mode.
+        AiChat wrapper and main are always siblings; CSS order repositions them.
       */}
-      <div
-        className={`relative flex-shrink-0 print:hidden ${
-          pepperMode === 'docked-left'  ? 'border-r' :
-          pepperMode === 'docked-right' ? 'border-l' : ''
-        }`}
-        style={{
-          width:       pepperMode !== 'float' ? panelWidth : 0,
-          order:       pepperMode === 'docked-left' ? 1 : 3,
-          borderColor: 'var(--border)',
-        }}
-      >
-        <AiChat
-          mode={pepperMode}
-          onModeChange={handleModeChange}
-          floatOpen={pepperMode === 'float' ? pepperFloatOpen : undefined}
-          onFloatToggle={pepperMode === 'float' ? () => setPepperFloatOpen(o => !o) : undefined}
-        />
+      <div className={`flex flex-1 min-w-0 ${isBottom ? 'flex-col' : 'flex-row'}`}>
+        {/* Main content — order:2 in row mode (left=1, right=3), order:1 in col mode */}
+        <main className="flex-1 overflow-y-auto min-w-0" style={{ order: isBottom ? 1 : 2 }}>
+          <Outlet />
+        </main>
 
-        {/* Resize handle — right edge (docked-left) */}
-        {pepperMode === 'docked-left' && (
-          <div
-            onMouseDown={startPanelResize}
-            className="absolute top-0 right-0 h-full z-20 flex items-center justify-center group"
-            style={{ width: 6, cursor: 'col-resize' }}
-            title="Drag to resize"
-          >
-            <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ background: 'var(--accent)' }} />
-          </div>
-        )}
+        {/*
+          Single always-mounted AiChat wrapper — CSS order + width/height change position.
+          Component never unmounts on mode switch, preserving conversation state.
+        */}
+        <div className={pepperWrapperClass} style={pepperWrapperStyle}>
+          <AiChat
+            mode={pepperMode}
+            onModeChange={handleModeChange}
+            pepperOpen={pepperOpen}
+            onToggle={pepperToggle}
+          />
 
-        {/* Resize handle — left edge (docked-right) */}
-        {pepperMode === 'docked-right' && (
-          <div
-            onMouseDown={startPanelResize}
-            className="absolute top-0 left-0 h-full z-20 flex items-center justify-center group"
-            style={{ width: 6, cursor: 'col-resize' }}
-            title="Drag to resize"
-          >
-            <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ background: 'var(--accent)' }} />
-          </div>
-        )}
+          {/* Resize handle — right edge (docked-left) */}
+          {pepperMode === 'docked-left' && showPepper && (
+            <div
+              onMouseDown={startPanelResize}
+              className="absolute top-0 right-0 h-full z-20 flex items-center justify-center group"
+              style={{ width: 6, cursor: 'col-resize' }}
+              title="Drag to resize"
+            >
+              <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: 'var(--accent)' }} />
+            </div>
+          )}
+
+          {/* Resize handle — left edge (docked-right) */}
+          {pepperMode === 'docked-right' && showPepper && (
+            <div
+              onMouseDown={startPanelResize}
+              className="absolute top-0 left-0 h-full z-20 flex items-center justify-center group"
+              style={{ width: 6, cursor: 'col-resize' }}
+              title="Drag to resize"
+            >
+              <div className="w-0.5 h-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: 'var(--accent)' }} />
+            </div>
+          )}
+
+          {/* Resize handle — top edge (docked-bottom) */}
+          {isBottom && showPepper && (
+            <div
+              onMouseDown={startBottomResize}
+              className="absolute top-0 left-0 w-full z-20 flex justify-center items-center group"
+              style={{ height: 6, cursor: 'row-resize' }}
+              title="Drag to resize"
+            >
+              <div className="h-0.5 w-12 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: 'var(--accent)' }} />
+            </div>
+          )}
+        </div>
       </div>
 
       {ctxMenu && (

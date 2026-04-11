@@ -5,7 +5,6 @@ import Logo from './Logo'
 import { usePermissions } from '../hooks/usePermissions'
 import type { Feature } from '../hooks/usePermissions'
 import PwaInstallModal, { PwaInstallLink } from './PwaInstallModal'
-import type { PepperMode } from './AiChat'
 
 // A null entry renders as a divider line between groups
 // `feature` = single feature check; `features` = show if ANY has read access
@@ -29,8 +28,7 @@ const NAV_ITEMS: NavItem[] = [
 
 const STORAGE_KEY = 'mcogs_sidebar_collapsed'
 
-export default function Sidebar({ pepperMode = 'float', pepperOpen = false, onPepperToggle }: {
-  pepperMode?: PepperMode
+export default function Sidebar({ pepperOpen = false, onPepperToggle }: {
   pepperOpen?: boolean
   onPepperToggle?: () => void
 }) {
@@ -100,17 +98,16 @@ export default function Sidebar({ pepperMode = 'float', pepperOpen = false, onPe
         })}
       </nav>
 
-      {/* Pepper AI button — float mode: toggles panel; docked modes: always active */}
+      {/* Pepper AI button — toggles panel open/closed */}
       <div className={`px-2 pb-1 ${collapsed ? 'flex justify-center' : ''}`}>
         <button
-          onClick={() => pepperMode === 'float' && onPepperToggle?.()}
-          title={pepperMode !== 'float' ? 'Pepper (docked)' : pepperOpen ? 'Close Pepper' : 'Open Pepper'}
+          onClick={() => onPepperToggle?.()}
+          title={pepperOpen ? 'Close Pepper' : 'Open Pepper'}
           className={[
-            'flex items-center gap-3 rounded px-2 py-2 transition-colors text-sm font-semibold w-full',
+            'flex items-center gap-3 rounded px-2 py-2 transition-colors text-sm font-semibold w-full cursor-pointer',
             pepperOpen
               ? 'bg-accent-dim text-accent'
               : 'text-text-2 hover:bg-surface-2 hover:text-text-1',
-            pepperMode !== 'float' ? 'opacity-60 cursor-default' : 'cursor-pointer',
           ].join(' ')}
         >
           {/* Pepper cog icon — monochrome, inherits text color */}

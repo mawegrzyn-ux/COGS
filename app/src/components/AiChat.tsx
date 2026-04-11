@@ -219,13 +219,7 @@ function renderMd(text: string): string {
 const ACCEPTED_TYPES  = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 const MAX_FILE_BYTES  = 10 * 1024 * 1024   // 10 MB — must match multer limit in ai-upload.js
 
-export type PepperMode = 'float' | 'docked-left' | 'docked-right'
-
-const FLOAT_SIZE_KEY  = 'pepper-float-size'
-const MIN_FLOAT_W = 300
-const MAX_FLOAT_W = 800
-const MIN_FLOAT_H = 380
-const MAX_FLOAT_H = 900
+export type PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'
 
 // ── HistoryPanel — module-level component (stable identity across renders) ────
 
@@ -494,10 +488,9 @@ function ChatPanel({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloatToggle }: {
+export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen, onToggle }: {
   mode?: PepperMode; onModeChange?: (m: PepperMode) => void
-  /** When provided, AppLayout/Sidebar controls the float open state externally */
-  floatOpen?: boolean; onFloatToggle?: () => void
+  pepperOpen?: boolean; onToggle?: () => void
 }) {
   const { user, getAccessTokenSilently } = useAuth0()
 
@@ -512,10 +505,6 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   }, [getAccessTokenSilently])
   const location   = useLocation()
 
-  const [open,               setOpen]               = useState(false)
-  // When externally controlled (sidebar button), defer to floatOpen prop
-  const isOpen     = floatOpen !== undefined ? floatOpen : open
-  const toggleOpen = onFloatToggle ?? (() => setOpen(o => !o))
   const [view,               setView]               = useState<PanelView>('chat')
   const [messages,           setMessages]           = useState<Message[]>([])
   const [input,              setInput]              = useState('')
@@ -527,16 +516,6 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   const [sessions,           setSessions]           = useState<ChatSession[]>([])
   const [sessionsLoad,       setSessionsLoad]       = useState(false)
   const [myUsage,            setMyUsage]            = useState<MyUsage | null>(null)
-
-  const [floatSize, setFloatSize] = useState<{ w: number; h: number }>(() => {
-    try {
-      const s = localStorage.getItem(FLOAT_SIZE_KEY)
-      if (s) return JSON.parse(s)
-    } catch { /* ignore */ }
-    return { w: 390, h: 600 }
-  })
-  const floatSizeRef = useRef(floatSize)
-  useEffect(() => { floatSizeRef.current = floatSize }, [floatSize])
 
   const bottomRef    = useRef<HTMLDivElement>(null)
   const inputRef     = useRef<HTMLTextAreaElement>(null)
@@ -812,40 +791,6 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     } catch { /* silent */ }
   }, [])
 
-  // ── Float panel resize ────────────────────────────────────────────────────
-  // Panel is pinned to bottom-right, so dragging the top-left corner
-  // moves the top (height) and left (width) edges.
-
-  const startFloatResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const startX = e.clientX
-    const startY = e.clientY
-    const startW = floatSizeRef.current.w
-    const startH = floatSizeRef.current.h
-
-    function onMove(ev: MouseEvent) {
-      // Moving left → panel grows wider (right edge is fixed)
-      const w = Math.max(MIN_FLOAT_W, Math.min(MAX_FLOAT_W, startW - (ev.clientX - startX)))
-      // Moving up → panel grows taller (bottom edge is fixed)
-      const h = Math.max(MIN_FLOAT_H, Math.min(MAX_FLOAT_H, startH - (ev.clientY - startY)))
-      floatSizeRef.current = { w, h }
-      setFloatSize({ w, h })
-    }
-    function onUp() {
-      localStorage.setItem(FLOAT_SIZE_KEY, JSON.stringify(floatSizeRef.current))
-      document.body.style.cursor     = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup',   onUp)
-    }
-
-    document.body.style.cursor     = 'nw-resize'
-    document.body.style.userSelect = 'none'
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup',   onUp)
-  }, [])
-
   // Generate / revoke object URL for image previews
   useEffect(() => {
     if (attachedFile && attachedFile.type.startsWith('image/')) {
@@ -874,20 +819,20 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     function onAsk(e: Event) {
       const { message, screenshotFile } = (e as CustomEvent<{ message: string; screenshotFile?: File | null }>).detail
       if (!message) return
-      setOpen(true)
+      if (!pepperOpen) onToggle?.()
       setView('chat')
       // Small delay to ensure panel is mounted/visible before sending
       setTimeout(() => sendCore(message, screenshotFile ?? null), 80)
     }
     window.addEventListener('pepper-ask', onAsk)
     return () => window.removeEventListener('pepper-ask', onAsk)
-  }, [sendCore])
+  }, [sendCore, pepperOpen, onToggle])
 
   // ── pepper-screenshot: right-click "Screenshot & Ask" — attaches file, opens panel, user types
   useEffect(() => {
     function onScreenshot(e: Event) {
       const { screenshotFile } = (e as CustomEvent<{ screenshotFile: File | null }>).detail
-      setOpen(true)
+      if (!pepperOpen) onToggle?.()
       setView('chat')
       if (screenshotFile) setAttachedFile(screenshotFile)
       // Focus textarea so user can type their question
@@ -895,13 +840,11 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     }
     window.addEventListener('pepper-screenshot', onScreenshot)
     return () => window.removeEventListener('pepper-screenshot', onScreenshot)
-  }, [])
+  }, [pepperOpen, onToggle])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
   // ── Shared panel content ──────────────────────────────────────────────────
-
-  const docked = mode !== 'float'
 
   // Usage bar values
   const usagePct      = myUsage?.limit ? Math.min(100, Math.round((myUsage.period_tokens / myUsage.limit) * 100)) : 0
@@ -910,7 +853,7 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   const fmtTok        = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n/1_000).toFixed(0)}k` : String(n)
 
   const panelHeader = (
-    <div className={`flex-shrink-0 ${!docked ? 'rounded-t-xl' : ''}`}
+    <div className="flex-shrink-0"
       style={{ background: 'var(--accent)', color: '#fff' }}>
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2.5">
@@ -931,20 +874,20 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
               <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
             </svg>
           </button>
-          {/* Float */}
-          <button onClick={() => onModeChange?.('float')} title="Floating panel"
-            className={`p-1.5 transition-colors ${mode === 'float' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="4" y="4" width="10" height="10" rx="1.5"/>
-              <path d="M2 2h4v4H2z" fill="currentColor" stroke="none" opacity="0.5"/>
-            </svg>
-          </button>
           {/* Dock right */}
           <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
             className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
               <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
               <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+            </svg>
+          </button>
+          {/* Dock bottom */}
+          <button onClick={() => onModeChange?.('docked-bottom')} title="Dock to bottom"
+            className={`p-1.5 transition-colors ${mode === 'docked-bottom' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="1" y="10" width="14" height="5" rx="1" opacity="1"/>
+              <rect x="1" y="1" width="14" height="8" rx="1" opacity="0.4"/>
             </svg>
           </button>
         </div>
@@ -966,10 +909,10 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
         </button>
         {/* Close button — always visible */}
         <button
-          onClick={docked ? () => onModeChange?.('float') : () => setOpen(false)}
+          onClick={() => onToggle?.()}
           className="p-1.5 rounded hover:bg-white/20 transition-colors ml-0.5"
-          title={docked ? 'Close panel' : 'Close'}
-          aria-label={docked ? 'Close panel' : 'Close Pepper'}
+          title="Close panel"
+          aria-label="Close Pepper"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <path d="M18 6L6 18M6 6l12 12"/>
@@ -1027,49 +970,12 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  // Docked mode — fills the slot provided by AppLayout
-  if (docked) {
-    return (
-      <div className="pepper-ui h-full flex flex-col print:hidden"
-        style={{ background: 'var(--surface)' }}>
-        {panelHeader}
-        {panelBody}
-      </div>
-    )
-  }
-
-  // Float mode — FAB (only when not sidebar-controlled) + fixed popup
+  // All modes are docked — fills the slot provided by AppLayout
   return (
-    <>
-      {floatOpen === undefined && (
-        <button onClick={toggleOpen}
-          className="pepper-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
-          style={{ background: 'var(--accent)', color: '#fff' }}
-          title="Pepper" aria-label="Toggle AI chat">
-          {isOpen ? <span className="text-lg font-bold">✕</span> : <CogIcon size={30} color="#fff" />}
-        </button>
-      )}
-      {isOpen && (
-        <div className="pepper-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
-          style={{ width: floatSize.w, height: floatSize.h, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          {/* Resize handle — top-left corner (panel is bottom-right anchored) */}
-          <div
-            onMouseDown={startFloatResize}
-            className="absolute top-0 left-0 z-10 rounded-tl-xl"
-            style={{ width: 24, height: 24, cursor: 'nw-resize' }}
-            title="Drag to resize"
-          >
-            {/* Grip dots */}
-            <svg width="10" height="10" viewBox="0 0 10 10" className="absolute top-1.5 left-1.5 opacity-30">
-              {[1,4,7].flatMap(x => [1,4,7].map(y => (
-                <circle key={`${x}-${y}`} cx={x} cy={y} r="0.9" fill="var(--text-3)" />
-              )))}
-            </svg>
-          </div>
-          {panelHeader}
-          {panelBody}
-        </div>
-      )}
-    </>
+    <div className="pepper-ui h-full flex flex-col print:hidden"
+      style={{ background: 'var(--surface)' }}>
+      {panelHeader}
+      {panelBody}
+    </div>
   )
 }

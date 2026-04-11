@@ -247,7 +247,7 @@ router.get('/:id/price-diff', async (req, res, next) => {
 
 async function loadModifierGroupsForItem(salesItemId, msiId) {
   const { rows: mgRows } = await pool.query(
-    `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select
+    `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection
      FROM   mcogs_sales_item_modifier_groups simgj
      JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
      WHERE  simgj.sales_item_id = $1
@@ -328,7 +328,7 @@ async function loadComboStructure(comboId, msiId) {
   const optModMap = {};
   if (optIds.length) {
     const { rows: csomgRows } = await pool.query(
-      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select
+      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection
        FROM   mcogs_combo_step_option_modifier_groups csomg
        JOIN   mcogs_modifier_groups mg ON mg.id = csomg.modifier_group_id
        WHERE  csomg.combo_step_option_id = ANY($1) ORDER BY csomg.sort_order, mg.name`, [optIds]
