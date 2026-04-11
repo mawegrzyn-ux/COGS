@@ -72,6 +72,13 @@ interface CheckItem {
   selections: Selection[]
   total: number
   taxRate: number
+  // Stored state for recall/editing
+  _item?: CogsItem
+  _subPrices?: SubPriceData
+  _stepSelections?: Record<number, Set<number>>
+  _modSelections?: Record<string, Set<number>>
+  _modQty?: Record<string, Record<number, number>>
+  _resolvedSelections?: Selection[]
 }
 
 interface OrderFlow {
@@ -132,6 +139,7 @@ export default function PosTesterPage() {
 
   // ── order flow (combo/modifier config) ──
   const [orderFlow, setOrderFlow] = useState<OrderFlow | null>(null)
+  const [editingIdx, setEditingIdx] = useState<number | null>(null)  // index in checkItems being edited
 
   // ── receipt modal ──
   const [showReceipt, setShowReceipt] = useState(false)
@@ -388,13 +396,28 @@ export default function PosTesterPage() {
     const allSels = [...selections, ...modSelsArr]
     const addonTotal = allSels.reduce((s, sel) => s + sel.priceAddon, 0)
 
-    addToCheck({
+    const checkItem: CheckItem = {
       name: orderFlow.item.display_name,
       basePrice: orderFlow.item.sell_price_gross,
       selections: allSels,
       total: orderFlow.item.sell_price_gross + addonTotal,
       taxRate: orderFlow.item.tax_rate || 0,
-    })
+      // Store state for recall
+      _item: orderFlow.item,
+      _subPrices: orderFlow.subPrices,
+      _stepSelections: orderFlow.stepSelections,
+      _modSelections: orderFlow.modSelections,
+      _modQty: orderFlow.modQty,
+      _resolvedSelections: selections,
+    }
+
+    if (editingIdx !== null) {
+      // Replace existing item
+      setCheckItems(prev => prev.map((ci, i) => i === editingIdx ? checkItem : ci))
+      setEditingIdx(null)
+    } else {
+      addToCheck(checkItem)
+    }
     setOrderFlow(null)
   }
 
@@ -932,7 +955,23 @@ export default function PosTesterPage() {
 
           <div className="flex-1 overflow-y-auto">
             {checkItems.map((item, idx) => (
-              <div key={idx} className="px-4 py-2 border-b border-gray-100 group">
+              <div key={idx}
+                onClick={() => {
+                  if (item._item && item._subPrices) {
+                    setEditingIdx(idx)
+                    setOrderFlow({
+                      item: item._item,
+                      subPrices: item._subPrices,
+                      phase: (item._subPrices.combo_steps?.length) ? 'combo' : 'modifiers',
+                      currentStepIdx: 0,
+                      stepSelections: item._stepSelections || {},
+                      modSelections: item._modSelections || {},
+                      modQty: item._modQty || {},
+                      resolvedSelections: item._resolvedSelections || [],
+                    })
+                  }
+                }}
+                className={`px-4 py-2 border-b border-gray-100 group cursor-pointer transition-colors ${editingIdx === idx ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}>
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
@@ -1054,7 +1093,7 @@ export default function PosTesterPage() {
                 <h3 className="text-sm font-bold text-gray-800">{orderFlow.item.display_name}</h3>
                 <p className="text-[10px] text-gray-500">{sym}{itemRunningTotal.toFixed(2)}</p>
               </div>
-              <button onClick={() => setOrderFlow(null)} className="text-gray-400 hover:text-gray-600 p-1">
+              <button onClick={() => { setOrderFlow(null); setEditingIdx(null) }} className="text-gray-400 hover:text-gray-600 p-1">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
@@ -1104,7 +1143,7 @@ export default function PosTesterPage() {
               ) : (
                 <button onClick={() => finalizeOrderFlow()} disabled={!allModsMet}
                   className="w-full py-3 rounded-lg bg-accent text-white font-bold text-sm hover:bg-accent-mid disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
-                  Add to Order — {sym}{itemRunningTotal.toFixed(2)}
+                  {editingIdx !== null ? 'Update' : 'Add to Order'} — {sym}{itemRunningTotal.toFixed(2)}
                 </button>
               )}
             </div>
