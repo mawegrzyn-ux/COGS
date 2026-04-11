@@ -529,16 +529,16 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
 
   // Focus input when chat opens or view switches back to chat
   useEffect(() => {
-    if (open && view === 'chat') setTimeout(() => inputRef.current?.focus(), 150)
-  }, [open, view])
+    if (pepperOpen && view === 'chat') setTimeout(() => inputRef.current?.focus(), 150)
+  }, [pepperOpen, view])
 
   // Restore focus when streaming completes
   useEffect(() => {
-    if (wasStreaming.current && !streaming && open && view === 'chat') {
+    if (wasStreaming.current && !streaming && pepperOpen && view === 'chat') {
       setTimeout(() => inputRef.current?.focus(), 100)
     }
     wasStreaming.current = streaming
-  }, [streaming, open, view])
+  }, [streaming, pepperOpen, view])
 
   // Fetch monthly usage when panel opens and after each response completes
   const refreshUsage = useCallback(async () => {
@@ -549,12 +549,12 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
   }, [authHeader])
 
   useEffect(() => {
-    if (open) refreshUsage()
-  }, [open, refreshUsage])
+    if (pepperOpen) refreshUsage()
+  }, [pepperOpen, refreshUsage])
 
   useEffect(() => {
     // Refresh after each streaming turn completes
-    if (!streaming && open) refreshUsage()
+    if (!streaming && pepperOpen) refreshUsage()
   }, [streaming]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── New Chat ──────────────────────────────────────────────────────────────
