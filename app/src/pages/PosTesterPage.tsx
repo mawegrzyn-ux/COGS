@@ -78,7 +78,7 @@ interface OrderFlow {
   phase: 'combo' | 'modifiers'
   currentStepIdx: number
   stepSelections: Record<number, Set<number>>   // stepId -> set of option IDs
-  modSelections: Record<number, Set<number>>     // modGroupId -> set of option IDs
+  modSelections: Record<string, Set<number>>      // modGroupId or "stepId_mgId" -> set of option IDs
   resolvedSelections: Selection[]                // accumulated from finished combo steps
 }
 
@@ -261,7 +261,7 @@ export default function PosTesterPage() {
     })
   }
 
-  function toggleComboStepModifier(key: string, optId: number, minSel: number, maxSel: number) {
+  function toggleComboStepModifier(key: string, optId: number, _minSel: number, maxSel: number) {
     setOrderFlow(prev => {
       if (!prev) return prev
       const current = prev.modSelections[key] || new Set()
