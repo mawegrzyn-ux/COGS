@@ -404,15 +404,39 @@ export default function PosTesterPage() {
     if (!orderFlow || orderFlow.phase !== 'combo') return false
     const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
     if (!step) return false
-    const count = (orderFlow.stepSelections[step.id] || new Set()).size
-    return count >= step.min_select
+    const chosen = orderFlow.stepSelections[step.id] || new Set()
+    if (chosen.size < step.min_select) return false
+    // Also check modifier requirements on selected options
+    for (const optId of Array.from(chosen)) {
+      const opt = step.options.find((o: any) => o.id === optId)
+      if (!opt?.modifier_groups?.length) continue
+      for (const mg of opt.modifier_groups) {
+        const modKey = `${step.id}_${mg.modifier_group_id}`
+        if (mg.allow_repeat_selection) {
+          const qtyMap = orderFlow.modQty?.[modKey] || {}
+          const totalQty = Object.values(qtyMap).reduce((sum: number, q) => sum + (q as number), 0)
+          if (totalQty < mg.min_select) return false
+        } else {
+          const modCount = (orderFlow.modSelections[modKey] || new Set()).size
+          if (modCount < mg.min_select) return false
+        }
+      }
+    }
+    return true
   }, [orderFlow])
 
   const allModsMet = useMemo(() => {
     if (!orderFlow) return true
     for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
-      const count = (orderFlow.modSelections[mg.modifier_group_id] || new Set()).size
-      if (count < mg.min_select) return false
+      if (mg.allow_repeat_selection) {
+        // For repeat groups, count total qty across all options
+        const qtyMap = orderFlow.modQty?.[String(mg.modifier_group_id)] || {}
+        const totalQty = Object.values(qtyMap).reduce((sum: number, q) => sum + (q as number), 0)
+        if (totalQty < mg.min_select) return false
+      } else {
+        const count = (orderFlow.modSelections[mg.modifier_group_id] || new Set()).size
+        if (count < mg.min_select) return false
+      }
     }
     return true
   }, [orderFlow])
@@ -997,12 +1021,13 @@ export default function PosTesterPage() {
                       <div className="flex-1 border-t border-gray-200" />
                     </div>
                     {/* Item tiles */}
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2">
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-2">
                       {catItems.map(item => (
                         <button key={item.menu_sales_item_id} onClick={() => handleItemTap(item)}
-                          className="bg-white rounded-lg border border-gray-200 p-2.5 text-left hover:border-accent hover:shadow-sm transition-all active:scale-95 relative">
-                          <p className="text-sm font-medium text-gray-800 leading-tight">{item.display_name}</p>
-                          <div className="flex items-center justify-between mt-1.5">
+                          className="bg-white rounded-lg border border-gray-200 p-3 text-left hover:border-accent hover:shadow-sm transition-all active:scale-95 relative flex flex-col justify-between"
+                          style={{ minHeight: '80px' }}>
+                          <p className="text-sm font-medium text-gray-800 leading-tight line-clamp-2">{item.display_name}</p>
+                          <div className="flex items-center justify-between mt-auto pt-1.5">
                             <div className="flex gap-1">
                               {item.item_type === 'combo' && <span className="text-[9px] bg-blue-100 text-blue-700 w-4 h-4 rounded-full flex items-center justify-center font-bold">C</span>}
                               {(item.modifier_group_count || 0) > 0 && item.item_type !== 'combo' && <span className="text-[9px] bg-purple-100 text-purple-700 w-4 h-4 rounded-full flex items-center justify-center font-bold">M</span>}
@@ -1019,9 +1044,10 @@ export default function PosTesterPage() {
           </div>
         </div>
 
-        {/* ── RIGHT: order flow panel ───────────────────────────────────────────── */}
-        {orderFlow && (
-          <div className="w-80 bg-white border-l border-gray-200 flex flex-col shrink-0">
+        {/* ── RIGHT: order flow panel (always visible) ──────────────────────────── */}
+        <div className="w-80 bg-white border-l border-gray-200 flex flex-col shrink-0">
+          {orderFlow ? (
+            <>
             {/* Header */}
             <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 flex items-center justify-between shrink-0">
               <div>
@@ -1056,22 +1082,21 @@ export default function PosTesterPage() {
             {/* Footer */}
             <div className="px-4 py-3 border-t border-gray-200 shrink-0">
               {orderFlow.phase === 'combo' ? (
-                <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <button disabled={orderFlow.currentStepIdx === 0}
                     onClick={() => setOrderFlow(prev => prev ? { ...prev, currentStepIdx: prev.currentStepIdx - 1 } : prev)}
-                    className="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-30">
+                    className="flex-1 py-3 rounded-lg border-2 border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-20 disabled:hover:bg-transparent active:scale-95 transition-all">
                     &larr; Previous
                   </button>
-                  <span className="text-xs text-gray-400">Step {orderFlow.currentStepIdx + 1} of {orderFlow.subPrices.combo_steps.length}</span>
                   {orderFlow.currentStepIdx < orderFlow.subPrices.combo_steps.length - 1 ? (
                     <button disabled={!canAdvanceStep}
                       onClick={advanceStep}
-                      className="text-xs text-accent hover:text-accent-mid disabled:opacity-30 font-medium">
+                      className="flex-1 py-3 rounded-lg bg-accent text-white text-sm font-bold hover:bg-accent-mid disabled:bg-gray-300 active:scale-95 transition-all">
                       Next &rarr;
                     </button>
                   ) : (
                     <button onClick={advanceStep} disabled={!canAdvanceStep}
-                      className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-mid disabled:bg-gray-300 transition-colors">
+                      className="flex-1 py-3 rounded-lg bg-accent text-white text-sm font-bold hover:bg-accent-mid disabled:bg-gray-300 active:scale-95 transition-all">
                       Continue
                     </button>
                   )}
@@ -1083,8 +1108,17 @@ export default function PosTesterPage() {
                 </button>
               )}
             </div>
-          </div>
-        )}
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-300 px-6 text-center">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" className="mb-3">
+                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+              </svg>
+              <p className="text-sm font-medium">Order Details</p>
+              <p className="text-xs mt-1">Tap a combo or item with modifiers to configure</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── receipt modal ───────────────────────────────────────────────────────── */}
