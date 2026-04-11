@@ -328,10 +328,13 @@ router.post('/smart', async (req, res) => {
     const { rows: items } = await pool.query(`
       SELECT msi.id AS menu_item_id, si.name, si.item_type,
              COALESCE(si.display_name, si.name) AS display_name,
-             cat.name AS category
+             cat.name AS category,
+             si.recipe_id, si.ingredient_id, si.manual_cost,
+             r.yield_qty
       FROM mcogs_menu_sales_items msi
       JOIN mcogs_sales_items si ON si.id = msi.sales_item_id
       LEFT JOIN mcogs_categories cat ON cat.id = si.category_id
+      LEFT JOIN mcogs_recipes r ON r.id = si.recipe_id
       WHERE msi.menu_id = $1
       ORDER BY msi.sort_order, msi.id
     `, [menu_id]);
@@ -366,7 +369,21 @@ router.post('/smart', async (req, res) => {
       };
     }
 
+    // Load cost data via COGS module
     const exchangeRate = Number(menu.exchange_rate) || 1;
+    const recipeIds = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
+    let quoteLookup = {}, recipeItemsMap = {};
+    try {
+      const { loadAllRecipeItemsDeep } = require('./cogs');
+      [quoteLookup, recipeItemsMap] = await Promise.all([
+        loadQuoteLookup(),
+        loadAllRecipeItemsDeep(recipeIds),
+      ]);
+    } catch { /* silent — costs will be 0 */ }
+
+    // NOTE: sell_price in mcogs_menu_sales_item_prices is stored in the menu's
+    // local currency context (not USD). Do NOT multiply by exchange_rate.
+    // The dispRate conversion is handled by the frontend when displaying.
     const menuData = {
       menu_name: menu.name,
       currency: menu.currency_code,
@@ -378,34 +395,52 @@ router.post('/smart', async (req, res) => {
         for (const [lid, data] of Object.entries(itemPrices)) {
           const ovKey = `${item.menu_item_id}_l${lid}`;
           const ovPrice = scenarioOverrides[ovKey];
-          const displayPrice = ovPrice != null
-            ? Number(ovPrice) * exchangeRate
-            : data.sell_price * exchangeRate;
+          const currentPrice = ovPrice != null ? Number(ovPrice) : data.sell_price;
           perLevel[lid] = {
             level_name: data.level_name,
-            current_price: Math.round(displayPrice * 100) / 100,
+            current_price: Math.round(currentPrice * 100) / 100,
             is_overridden: ovPrice != null,
           };
         }
+        // Calculate cost per portion in local currency
+        let costLocal = 0;
+        try {
+          if (item.item_type === 'recipe' && item.recipe_id) {
+            const rItems = recipeItemsMap[item.recipe_id] || [];
+            const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
+            const { cost } = calcRecipeCost(recipe, rItems, menu.country_id, quoteLookup, {}, recipeItemsMap);
+            costLocal = Math.round(cost * exchangeRate * 100) / 100;
+          } else if (item.item_type === 'ingredient' && item.ingredient_id) {
+            const q = quoteLookup[item.ingredient_id]?.[menu.country_id];
+            if (q) costLocal = Math.round(q.price_per_base_unit * exchangeRate * 100) / 100;
+          } else if (item.item_type === 'manual') {
+            costLocal = Math.round(Number(item.manual_cost || 0) * exchangeRate * 100) / 100;
+          }
+        } catch { /* silent */ }
+
         return {
           menu_item_id: item.menu_item_id,
           name: item.display_name || item.name,
           category: item.category || 'Uncategorised',
           item_type: item.item_type,
+          cost: costLocal,
           prices: perLevel,
         };
       }),
     };
 
     // 5. Build restricted system prompt
-    const systemPrompt = `You are a menu pricing analyst for "${menu.name}" (${menu.currency_code}). You can ONLY propose sell price changes to menu items.
+    const systemPrompt = `You are a menu pricing analyst for "${menu.name}" (${menu.currency_code}). You can propose changes to sell prices AND cost assumptions for menu items.
 
 STRICT RULES:
-- You can ONLY suggest changes to sell prices for the items listed below
+- You can ONLY suggest changes to sell prices or cost assumptions for the items listed below
 - You CANNOT modify price quotes, ingredients, recipes, vendors, stock, or any other data
-- You CANNOT perform searches, file operations, or any actions outside pricing analysis
-- If the user asks for anything other than pricing scenario analysis, respond ONLY with: {"error": "I can only help with menu pricing scenarios. Try asking something like: increase all prices by 5%, or set wings to 28% COGS target."}
+- You CANNOT perform searches, file operations, or any actions outside scenario analysis
+- If the user asks for anything other than pricing/cost scenario analysis, respond ONLY with: {"error": "I can only help with menu pricing scenarios. Try asking something like: increase all prices by 5%, increase chicken cost by 3%, or set wings to 28% COGS target."}
 - You MUST respond with ONLY valid JSON — no markdown, no explanation outside the JSON
+- All values are in ${menu.currency_code}
+- Each item has a "cost" field (current cost per portion) and per-level "current_price" fields
+- COGS% = cost / (price / (1 + tax_rate)) × 100. When targeting a COGS%, solve for price.
 
 Response format:
 {
@@ -414,14 +449,18 @@ Response format:
     {
       "menu_item_id": 123,
       "level_id": 1,
+      "field": "price",
       "item_name": "Chicken Wings",
       "level_name": "Dine In",
-      "old_price": 10.50,
-      "new_price": 10.82,
+      "old_value": 10.50,
+      "new_value": 10.82,
       "reason": "3% increase applied"
     }
   ]
 }
+
+The "field" must be "price" (for sell price changes) or "cost" (for cost assumption changes).
+For cost changes, use level_id: null and omit level_name.
 
 If no changes are needed: {"summary": "No changes needed", "changes": []}
 
