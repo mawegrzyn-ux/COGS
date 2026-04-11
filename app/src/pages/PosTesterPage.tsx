@@ -312,7 +312,7 @@ export default function PosTesterPage() {
     }
   }
 
-  function finalizeOrderFlow(sels?: Selection[], modSels?: Record<number, Set<number>>) {
+  function finalizeOrderFlow(sels?: Selection[], modSels?: Record<string, Set<number>>) {
     if (!orderFlow) return
     const selections = sels || orderFlow.resolvedSelections
     const modSelections = modSels || orderFlow.modSelections
