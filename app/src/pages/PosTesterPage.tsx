@@ -29,6 +29,7 @@ interface SubPriceData {
 interface ComboStep {
   id: number
   name: string
+  display_name: string | null
   min_select: number
   max_select: number
   auto_select: boolean
@@ -117,15 +118,10 @@ export default function PosTesterPage() {
   const [currencySymbol, setCurrencySymbol] = useState('$')
   const [loading, setLoading] = useState(false)
 
-  // ── category filter ──
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
+  // ── categories (for grouped display) ──
   const categories = useMemo(
-    () => [...new Set(menuItems.map(i => i.category).filter(Boolean))].sort(),
+    () => [...new Set(menuItems.map(i => i.category || 'Other'))].sort(),
     [menuItems],
-  )
-  const filteredItems = useMemo(
-    () => categoryFilter ? menuItems.filter(i => i.category === categoryFilter) : menuItems,
-    [menuItems, categoryFilter],
   )
 
   // ── check (order) ──
@@ -160,7 +156,6 @@ export default function PosTesterPage() {
   const loadMenu = useCallback(async () => {
     if (!selectedMenuId) return
     setLoading(true)
-    setCategoryFilter(null)
     try {
       const lvlParam = selectedLevelId ? `?price_level_id=${selectedLevelId}` : ''
       const data = await api.get(`/cogs/menu-sales/${selectedMenuId}${lvlParam}`)
@@ -266,6 +261,26 @@ export default function PosTesterPage() {
     })
   }
 
+  function toggleComboStepModifier(key: string, optId: number, minSel: number, maxSel: number) {
+    setOrderFlow(prev => {
+      if (!prev) return prev
+      const current = prev.modSelections[key] || new Set()
+      const next = new Set(current)
+      if (next.has(optId)) {
+        next.delete(optId)
+      } else {
+        if (maxSel === 1) {
+          // Radio: replace
+          next.clear()
+          next.add(optId)
+        } else if (next.size < maxSel) {
+          next.add(optId)
+        }
+      }
+      return { ...prev, modSelections: { ...prev.modSelections, [key]: next } }
+    })
+  }
+
   function advanceStep() {
     if (!orderFlow) return
     const steps = orderFlow.subPrices.combo_steps
@@ -302,7 +317,7 @@ export default function PosTesterPage() {
     const selections = sels || orderFlow.resolvedSelections
     const modSelections = modSels || orderFlow.modSelections
 
-    // Resolve modifier selections
+    // Resolve item-level modifier selections
     const modSelsArr: Selection[] = []
     for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
       const chosen = modSelections[mg.modifier_group_id] || new Set()
@@ -310,6 +325,24 @@ export default function PosTesterPage() {
         if (chosen.has(opt.id)) {
           const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
           modSelsArr.push({ name: opt.display_name || opt.name, priceAddon: price })
+        }
+      }
+    }
+
+    // Resolve combo step option modifier selections (keys: "stepId_mgId")
+    for (const step of (orderFlow.subPrices.combo_steps || [])) {
+      const selectedOptIds = orderFlow.stepSelections[step.id] || new Set()
+      for (const stepOpt of step.options) {
+        if (!selectedOptIds.has(stepOpt.id)) continue
+        for (const mg of (stepOpt.modifier_groups || [])) {
+          const modKey = `${step.id}_${mg.modifier_group_id}`
+          const chosen = modSelections[modKey] || new Set()
+          for (const opt of mg.options) {
+            if (chosen.has(opt.id)) {
+              const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+              modSelsArr.push({ name: opt.display_name || opt.name, priceAddon: price })
+            }
+          }
         }
       }
     }
@@ -365,12 +398,28 @@ export default function PosTesterPage() {
         }
       }
     }
-    // Modifier selections
+    // Item-level modifier selections
     for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
       const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
       for (const opt of mg.options) {
         if (chosen.has(opt.id)) {
           total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+        }
+      }
+    }
+    // Combo step option modifier selections
+    for (const step of (orderFlow.subPrices.combo_steps || [])) {
+      const selectedOptIds = orderFlow.stepSelections[step.id] || new Set()
+      for (const stepOpt of step.options) {
+        if (!selectedOptIds.has(stepOpt.id)) continue
+        for (const mg of (stepOpt.modifier_groups || [])) {
+          const modKey = `${step.id}_${mg.modifier_group_id}`
+          const chosen = orderFlow.modSelections[modKey] || new Set()
+          for (const opt of mg.options) {
+            if (chosen.has(opt.id)) {
+              total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+            }
+          }
         }
       }
     }
@@ -400,6 +449,31 @@ export default function PosTesterPage() {
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
 
+  /* ── auto-advance single-choice combo steps ─────────────────────────────────── */
+
+  useEffect(() => {
+    if (!orderFlow) return
+    if (orderFlow.phase !== 'combo') return
+    const steps = orderFlow.subPrices.combo_steps
+    if (!steps?.length) return
+    const step = steps[orderFlow.currentStepIdx]
+    if (!step) return
+    // Auto-select and advance if single option with min=max=1
+    if (step.options.length === 1 && step.min_select === 1 && step.max_select === 1) {
+      const opt = step.options[0]
+      setOrderFlow(prev => {
+        if (!prev) return prev
+        const newStepSel = { ...prev.stepSelections, [step.id]: new Set([opt.id]) }
+        const nextIdx = prev.currentStepIdx + 1
+        const totalSteps = prev.subPrices.combo_steps.length
+        if (nextIdx < totalSteps) {
+          return { ...prev, stepSelections: newStepSel, currentStepIdx: nextIdx }
+        }
+        return { ...prev, stepSelections: newStepSel }
+      })
+    }
+  }, [orderFlow?.currentStepIdx, orderFlow?.phase])
+
   /* ── receipt totals ─────────────────────────────────────────────────────────── */
 
   const receiptSubtotal = useMemo(() => receiptData.reduce((s, i) => s + i.total, 0), [receiptData])
@@ -415,13 +489,41 @@ export default function PosTesterPage() {
     if (!orderFlow) return null
 
     if (orderFlow.phase === 'combo') {
-      const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
+      const subPrices = orderFlow.subPrices
+      const step = subPrices.combo_steps[orderFlow.currentStepIdx]
       if (!step) return null
       const chosen = orderFlow.stepSelections[step.id] || new Set()
       const isRadio = step.max_select === 1
 
+      // Find the selected option for this step (to show its modifiers)
+      const selectedOptIds = Array.from(chosen)
+      const selectedOption = selectedOptIds.length === 1
+        ? step.options.find(o => o.id === selectedOptIds[0]) || null
+        : null
+
+      const isStepComplete = chosen.size >= step.min_select
+
       return (
         <div>
+          {/* Step navigation dots/tabs */}
+          {subPrices.combo_steps.length > 1 && (
+            <div className="flex items-center gap-1 mb-3 flex-wrap">
+              {subPrices.combo_steps.map((s, idx) => {
+                const isActive = idx === orderFlow.currentStepIdx
+                const isCompleted = (orderFlow.stepSelections[s.id]?.size || 0) >= s.min_select
+                return (
+                  <button key={s.id} onClick={() => setOrderFlow(prev => prev ? { ...prev, currentStepIdx: idx } : prev)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors
+                      ${isActive ? 'bg-accent text-white' : isCompleted ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    <span>{idx + 1}</span>
+                    <span className="hidden sm:inline truncate max-w-[80px]">{s.display_name || s.name}</span>
+                    {isCompleted && !isActive && <span className="ml-0.5">&#10003;</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
           <div className="mb-3">
             <p className="text-sm font-bold text-gray-800">{step.name}</p>
             <p className="text-xs text-gray-500">
@@ -459,14 +561,60 @@ export default function PosTesterPage() {
             })}
           </div>
 
+          {/* Modifiers for selected option (within combo step) */}
+          {selectedOption?.modifier_groups && selectedOption.modifier_groups.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-purple-500 mb-2">Modifiers</p>
+              {selectedOption.modifier_groups.map(mg => (
+                <div key={mg.modifier_group_id} className="mb-3">
+                  <p className="text-xs font-semibold text-gray-700 mb-1">
+                    {mg.display_name || mg.name}
+                    <span className="text-gray-400 font-normal ml-1">
+                      (choose {mg.min_select === mg.max_select ? mg.min_select : `${mg.min_select}-${mg.max_select}`})
+                    </span>
+                  </p>
+                  <div className="space-y-1">
+                    {mg.options.map(opt => {
+                      const modKey = `${step.id}_${mg.modifier_group_id}`
+                      const isSelected = orderFlow.modSelections[modKey]?.has(opt.id)
+                      const priceAddon = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
+                      return (
+                        <button key={opt.id}
+                          onClick={() => toggleComboStepModifier(modKey, opt.id, mg.min_select, mg.max_select)}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm transition-colors
+                            ${isSelected ? 'border-purple-300 bg-purple-50 text-purple-800' : 'border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                          <span>{opt.display_name || opt.name}</span>
+                          <span className="text-xs text-gray-500">
+                            {priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}` : 'incl.'}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center justify-between mt-4">
-            <span className="text-xs text-gray-400">
-              Step {orderFlow.currentStepIdx + 1} of {orderFlow.subPrices.combo_steps.length}
-            </span>
-            <button onClick={advanceStep} disabled={!canAdvanceStep}
-              className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-mid disabled:bg-gray-300 transition-colors">
-              {orderFlow.currentStepIdx + 1 < orderFlow.subPrices.combo_steps.length ? 'Next Step' : 'Continue'}
+            <button disabled={orderFlow.currentStepIdx === 0}
+              onClick={() => setOrderFlow(prev => prev ? { ...prev, currentStepIdx: prev.currentStepIdx - 1 } : prev)}
+              className="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-30">
+              &larr; Previous
             </button>
+            <span className="text-xs text-gray-400">Step {orderFlow.currentStepIdx + 1} of {subPrices.combo_steps.length}</span>
+            {orderFlow.currentStepIdx < subPrices.combo_steps.length - 1 ? (
+              <button disabled={!isStepComplete}
+                onClick={advanceStep}
+                className="text-xs text-accent hover:text-accent-mid disabled:opacity-30 font-medium">
+                Next &rarr;
+              </button>
+            ) : (
+              <button onClick={advanceStep} disabled={!canAdvanceStep}
+                className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-mid disabled:bg-gray-300 transition-colors">
+                Continue
+              </button>
+            )}
           </div>
         </div>
       )
@@ -645,23 +793,7 @@ export default function PosTesterPage() {
 
         {/* ── CENTRE: menu grid ─────────────────────────────────────────────────── */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* category tabs */}
-          <div className="flex flex-wrap gap-1 px-3 py-2 bg-white border-b border-gray-200 shrink-0">
-            <button onClick={() => setCategoryFilter(null)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-                ${!categoryFilter ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-              All
-            </button>
-            {categories.map(cat => (
-              <button key={cat} onClick={() => setCategoryFilter(cat)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-                  ${categoryFilter === cat ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          {/* items grid */}
+          {/* Items grouped by category */}
           <div className="flex-1 overflow-y-auto p-3">
             {loading ? (
               <div className="flex items-center justify-center h-40 text-gray-400">
@@ -670,33 +802,40 @@ export default function PosTesterPage() {
                   <p className="text-sm">Loading menu...</p>
                 </div>
               </div>
-            ) : filteredItems.length === 0 ? (
+            ) : menuItems.length === 0 ? (
               <div className="flex items-center justify-center h-40 text-gray-400">
-                <p className="text-sm">{menuItems.length === 0 ? 'No items in this menu' : 'No items in this category'}</p>
+                <p className="text-sm">No items in this menu</p>
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
-                {filteredItems.map(item => (
-                  <button key={item.menu_sales_item_id} onClick={() => handleItemTap(item)}
-                    className="bg-white rounded-lg border border-gray-200 p-3 text-left hover:border-accent hover:shadow-sm transition-all active:scale-[0.97]">
-                    <p className="text-sm font-medium text-gray-800 leading-tight line-clamp-2">{item.display_name}</p>
-                    <div className="flex items-center justify-between mt-2">
-                      <span className="text-[10px] text-gray-400 uppercase tracking-wide">{item.item_type}</span>
-                      <span className="text-sm font-bold text-accent">{sym}{item.sell_price_gross.toFixed(2)}</span>
+              categories.map(cat => {
+                const catItems = menuItems.filter(i => (i.category || 'Other') === cat)
+                if (!catItems.length) return null
+                return (
+                  <div key={cat} className="mb-4">
+                    {/* Category divider */}
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{cat}</span>
+                      <div className="flex-1 border-t border-gray-200" />
                     </div>
-                    {(item.item_type === 'combo' || (item.modifier_group_count && item.modifier_group_count > 0)) && (
-                      <div className="mt-1.5 flex gap-1 flex-wrap">
-                        {item.item_type === 'combo' && (
-                          <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-medium">Combo</span>
-                        )}
-                        {item.modifier_group_count > 0 && (
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Mods</span>
-                        )}
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
+                    {/* Item tiles */}
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2">
+                      {catItems.map(item => (
+                        <button key={item.menu_sales_item_id} onClick={() => handleItemTap(item)}
+                          className="bg-white rounded-lg border border-gray-200 p-2.5 text-left hover:border-accent hover:shadow-sm transition-all active:scale-95 relative">
+                          <p className="text-sm font-medium text-gray-800 leading-tight">{item.display_name}</p>
+                          <div className="flex items-center justify-between mt-1.5">
+                            <div className="flex gap-1">
+                              {item.item_type === 'combo' && <span className="text-[9px] bg-blue-100 text-blue-700 w-4 h-4 rounded-full flex items-center justify-center font-bold">C</span>}
+                              {(item.modifier_group_count || 0) > 0 && item.item_type !== 'combo' && <span className="text-[9px] bg-purple-100 text-purple-700 w-4 h-4 rounded-full flex items-center justify-center font-bold">M</span>}
+                            </div>
+                            <span className="text-sm font-bold text-accent">{sym}{item.sell_price_gross?.toFixed(2)}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })
             )}
           </div>
         </div>
