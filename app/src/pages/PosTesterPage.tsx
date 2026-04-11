@@ -285,12 +285,19 @@ export default function PosTesterPage() {
     })
   }
 
-  function adjustModQty(key: string, optId: number, delta: number) {
+  function adjustModQty(key: string, optId: number, delta: number, maxSelect: number) {
     setOrderFlow(prev => {
       if (!prev) return prev
       const existing = prev.modQty?.[key] || {}
       const current = existing[optId] || 0
       const next = Math.max(0, current + delta)
+
+      // Enforce max_select: total count across all options in this group must not exceed max
+      if (delta > 0 && maxSelect > 0) {
+        const totalOthers = Object.entries(existing).reduce((sum, [id, q]) => sum + (String(id) === String(optId) ? 0 : (q as number)), 0)
+        if (totalOthers + next > maxSelect) return prev
+      }
+
       const newQty = { ...prev.modQty, [key]: { ...existing, [optId]: next } }
 
       // Keep modSelections in sync for validation
@@ -566,9 +573,9 @@ export default function PosTesterPage() {
             const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
             return (
               <button key={opt.id} onClick={() => toggleStepOption(step.id, opt.id, step.max_select)}
-                className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border text-left text-sm transition-all
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg border text-left text-base transition-all active:scale-[0.98]
                   ${sel ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
-                <div className={`w-4 h-4 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0
+                <div className={`w-5 h-5 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0
                   ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
                   {sel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
                 </div>
@@ -617,20 +624,20 @@ export default function PosTesterPage() {
                 const priceAddon = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
                 const qty = orderFlow.modQty?.[modKey]?.[opt.id] || 0
                 return mg.allow_repeat_selection ? (
-                  <div key={opt.id} className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-gray-200">
-                    <button onClick={() => adjustModQty(modKey, opt.id, -1)} disabled={qty === 0}
-                      className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-xs font-bold shrink-0">−</button>
-                    <span className={`w-5 text-center text-sm font-bold shrink-0 ${qty > 0 ? 'text-purple-700' : 'text-gray-300'}`}>{qty}</span>
-                    <button onClick={() => adjustModQty(modKey, opt.id, 1)}
-                      className="flex-1 text-left text-sm text-gray-800 hover:text-purple-700 transition-colors">
+                  <div key={opt.id} className={`flex items-center gap-2 px-3 py-3 rounded-lg border ${qty > 0 ? 'border-purple-300 bg-purple-50/50' : 'border-gray-200'}`}>
+                    <button onClick={() => adjustModQty(modKey, opt.id, -1, mg.max_select)} disabled={qty === 0}
+                      className="w-9 h-9 rounded-full border-2 border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-base font-bold shrink-0 active:scale-95">−</button>
+                    <span className={`w-6 text-center text-base font-bold shrink-0 ${qty > 0 ? 'text-purple-700' : 'text-gray-300'}`}>{qty}</span>
+                    <button onClick={() => adjustModQty(modKey, opt.id, 1, mg.max_select)}
+                      className="flex-1 text-left text-base text-gray-800 hover:text-purple-700 transition-colors py-1">
                       {opt.display_name || opt.name}
                     </button>
-                    <span className="text-[10px] text-gray-400 shrink-0">{priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}/ea` : 'incl.'}</span>
+                    <span className="text-xs text-gray-400 shrink-0">{priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}/ea` : 'incl.'}</span>
                   </div>
                 ) : (
                   <button key={opt.id}
                     onClick={() => toggleComboStepModifier(modKey, opt.id, mg.min_select, mg.max_select)}
-                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg border text-sm transition-colors
+                    className={`w-full flex items-center justify-between px-3 py-3 rounded-lg border text-sm transition-colors
                       ${isSelected ? 'border-purple-300 bg-purple-50 text-purple-800' : 'border-gray-200 text-gray-700 hover:border-gray-300'}`}>
                     <span>{opt.display_name || opt.name}</span>
                     <span className="text-[10px] text-gray-500">{priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}` : 'incl.'}</span>
@@ -813,23 +820,23 @@ export default function PosTesterPage() {
                   const modKey = String(mg.modifier_group_id)
                   const qty = orderFlow.modQty?.[modKey]?.[opt.id] || 0
                   return mg.allow_repeat_selection ? (
-                    <div key={opt.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${qty > 0 ? 'border-accent bg-accent/5' : 'border-gray-200'}`}>
-                      <button onClick={() => adjustModQty(modKey, opt.id, -1)} disabled={qty === 0}
-                        className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-xs font-bold shrink-0">−</button>
-                      <span className={`w-5 text-center text-sm font-bold shrink-0 ${qty > 0 ? 'text-accent' : 'text-gray-300'}`}>{qty}</span>
-                      <button onClick={() => adjustModQty(modKey, opt.id, 1)}
-                        className="flex-1 text-left text-sm text-gray-800 hover:text-accent transition-colors truncate">
+                    <div key={opt.id} className={`flex items-center gap-2 px-3 py-3 rounded-lg border transition-colors ${qty > 0 ? 'border-accent bg-accent/5' : 'border-gray-200'}`}>
+                      <button onClick={() => adjustModQty(modKey, opt.id, -1, mg.max_select)} disabled={qty === 0}
+                        className="w-9 h-9 rounded-full border-2 border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-base font-bold shrink-0 active:scale-95">−</button>
+                      <span className={`w-6 text-center text-base font-bold shrink-0 ${qty > 0 ? 'text-accent' : 'text-gray-300'}`}>{qty}</span>
+                      <button onClick={() => adjustModQty(modKey, opt.id, 1, mg.max_select)}
+                        className="flex-1 text-left text-base text-gray-800 hover:text-accent transition-colors truncate py-1">
                         {opt.display_name || opt.name}
                       </button>
-                      <span className="text-[10px] text-gray-400 shrink-0">{price > 0 ? `+${sym}${price.toFixed(2)}/ea` : 'incl.'}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{price > 0 ? `+${sym}${price.toFixed(2)}/ea` : 'incl.'}</span>
                     </div>
                   ) : (
                     <button key={opt.id} onClick={() => toggleModOption(mg.modifier_group_id, opt.id, mg.max_select)}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-all
+                      className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg border text-left text-base transition-all active:scale-[0.98]
                         ${sel
                           ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
                           : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
-                      <div className={`w-4 h-4 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0 transition-colors
+                      <div className={`w-5 h-5 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0 transition-colors
                         ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
                         {sel && (
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round">
