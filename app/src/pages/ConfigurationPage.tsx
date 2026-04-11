@@ -14,7 +14,6 @@ import { Field, Spinner } from '../components/ui'
 type Section =
   | 'global-config'
   | 'location-structure'
-  | 'centres'
   | 'categories'
   | 'units'
   | 'price-levels'
@@ -35,7 +34,6 @@ interface SectionDef {
 const SECTIONS: SectionDef[] = [
   { id: 'global-config',      icon: '⚙️', label: 'Global Config',      feature: 'settings'   },
   { id: 'location-structure', icon: '🌍', label: 'Location Structure', feature: 'markets'    },
-  { id: 'centres',            icon: '🏪', label: 'Centres',             feature: 'stock_overview' },
   { id: 'categories',         icon: '🏷️', label: 'Categories',         feature: 'categories' },
   { id: 'units',              icon: '📐', label: 'Base Units',          feature: 'settings'   },
   { id: 'price-levels',       icon: '💰', label: 'Price Levels',        feature: 'settings'   },
@@ -263,12 +261,13 @@ function GlobalConfigSection() {
   )
 }
 
-// ── Centres section (wraps StoresTab from StockManagerPage) ──────────────────
+// ── Location Structure section (Locations + Centres sub-tabs) ────────────────
 
-function CentresSection() {
+function LocationStructureSection() {
   const api = useApi()
   const { can } = usePermissions()
-  const canWrite = can('stock_overview', 'write')
+  const canWriteCentres = can('stock_overview', 'write')
+  const [subTab, setSubTab] = useState<'locations' | 'centres'>('locations')
   const [locations, setLocations] = useState<{ id: number; name: string; country_name?: string; is_active: boolean }[]>([])
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
 
@@ -288,12 +287,31 @@ function CentresSection() {
 
   return (
     <div className="flex flex-col h-full">
-      <StoresTab api={api} locations={locations} canWrite={canWrite} showToast={showToast} onStoresChange={loadLocations} />
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-semibold text-white ${toast.type === 'success' ? 'bg-accent' : 'bg-red-600'}`}>
-          {toast.msg}
-        </div>
-      )}
+      {/* Sub-tab bar */}
+      <div className="flex gap-1 px-6 pt-4 border-b border-border bg-white shrink-0">
+        {(['locations', 'centres'] as const).map(t => (
+          <button key={t} onClick={() => setSubTab(t)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors capitalize
+              ${subTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {subTab === 'locations' && <MarketsPage />}
+        {subTab === 'centres' && (
+          <>
+            <StoresTab api={api} locations={locations} canWrite={canWriteCentres} showToast={showToast} onStoresChange={loadLocations} />
+            {toast && (
+              <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-semibold text-white ${toast.type === 'success' ? 'bg-accent' : 'bg-red-600'}`}>
+                {toast.msg}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -460,8 +478,7 @@ export default function ConfigurationPage() {
   function renderContent() {
     switch (effectiveActive) {
       case 'global-config':      return <GlobalConfigSection />
-      case 'location-structure': return <MarketsPage />
-      case 'centres':            return <CentresSection />
+      case 'location-structure': return <LocationStructureSection />
       case 'categories':         return <CategoriesPage />
       case 'units':              return <SettingsPage embedded initialTab="units" />
       case 'price-levels':       return <SettingsPage embedded initialTab="price-levels" />

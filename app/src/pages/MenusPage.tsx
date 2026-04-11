@@ -981,7 +981,7 @@ export default function MenusPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── SubPriceRow — inline editable price row for combo options / modifier options
-function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSave }: {
+function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, borderClass, marginLeft, onSave }: {
   msiId: number
   kind: 'combo' | 'modifier'
   option: { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
@@ -989,6 +989,8 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
   sym: string
   colCount: number
   indent: number
+  borderClass?: string
+  marginLeft?: string
   onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
 }) {
   const existing = levelId && option.prices[levelId] != null ? option.prices[levelId] : null
@@ -1011,7 +1013,7 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
   return (
     <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
-        <div className="flex items-center gap-1.5">
+        <div className={`flex items-center gap-1.5 ${borderClass ? `${borderClass} pl-2` : ''}`} style={marginLeft ? { marginLeft } : undefined}>
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
           <span className="text-xs text-text-2">{option.display_name || option.name}</span>
         </div>
@@ -1037,9 +1039,9 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
           <span
             className={`${levelId ? 'cursor-pointer hover:text-accent' : ''} ${existing != null ? 'text-text-1' : 'text-text-3 italic'}`}
             onClick={startEdit}
-            title={levelId ? `Click to set price (${sym})` : 'Select a price level first'}
+            title={levelId ? `Click to set extra charge (${sym})` : 'Select a price level first'}
           >
-            {existing != null ? `${sym}${existing.toFixed(2)}` : levelId ? 'set price' : '—'}
+            {existing != null ? `${sym}${existing.toFixed(2)}` : levelId ? 'extra charge' : '—'}
           </span>
         )}
       </td>
@@ -1118,9 +1120,9 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
                 <span
                   className={`cursor-pointer hover:text-accent ${existing != null ? 'text-text-1 font-mono' : 'text-text-3 italic'}`}
                   onClick={() => startEdit(level.id)}
-                  title={`Click to set ${level.name} price (${sym})`}
+                  title={`Click to set ${level.name} extra charge (${sym})`}
                 >
-                  {existing != null ? `${sym}${existing.toFixed(2)}` : 'set price'}
+                  {existing != null ? `${sym}${existing.toFixed(2)}` : 'extra charge'}
                 </span>
               )}
             </td>
@@ -1182,6 +1184,11 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   const [expandedSubItems, setExpandedSubItems] = useState<Set<number>>(new Set())
   const [subPriceData, setSubPriceData] = useState<Record<number, SubPriceData>>({})
   const [loadingSubPrices, setLoadingSubPrices] = useState<Set<number>>(new Set())
+  // Track which combo steps and modifier groups are expanded (keyed by "msiId-step-stepId" or "msiId-mg-mgId" or "msiId-cmg-optId-mgId")
+  const [expandedSubSections, setExpandedSubSections] = useState<Set<string>>(new Set())
+  const toggleSubSection = (key: string) => {
+    setExpandedSubSections(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next })
+  }
 
   const toggleSubExpand = async (msiId: number) => {
     setExpandedSubItems(prev => {
@@ -1357,48 +1364,72 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
         ) : subData ? (
           <Fragment key={`${msiId}-sub`}>
             {/* Combo: steps → options */}
-            {subData.combo_steps.map(step => (
-              <Fragment key={`${msiId}-step-${step.id}`}>
+            {subData.combo_steps.map(step => {
+              const stepKey = `${msiId}-step-${step.id}`
+              const stepExpanded = expandedSubSections.has(stepKey)
+              return (
+              <Fragment key={stepKey}>
                 <tr className="bg-surface-2 border-b border-border">
-                  <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
-                    <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
-                    {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                  <td colSpan={colCount + 1} className="py-1.5" style={{ paddingLeft: '1.5rem' }}>
+                    <div className="flex items-center border-l-2 border-gray-200 pl-2" style={{ marginLeft: '0.5rem' }}>
+                      <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(stepKey)}>{stepExpanded ? '▼' : '▶'}</button>
+                      <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
+                      <span className="text-xs text-text-3 ml-2">(choose {step.min_select}{step.min_select !== step.max_select ? `–${step.max_select}` : ''})</span>
+                      {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto</span>}
+                    </div>
                   </td>
                 </tr>
-                {step.options.map(opt => (
+                {stepExpanded && step.options.map(opt => {
+                  const cmgKeys = opt.modifier_groups.map(mg => `${msiId}-cmg-${opt.id}-${mg.modifier_group_id}`)
+                  return (
                   <Fragment key={`${msiId}-copt-${opt.id}`}>
-                    <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
-                    {opt.modifier_groups.map(mg => (
-                      <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
+                    <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={12} borderClass="border-l-2 border-blue-200" marginLeft="2rem" onSave={saveSubOptionPrice} />
+                    {opt.modifier_groups.map((mg, mgIdx) => {
+                      const cmgKey = cmgKeys[mgIdx]
+                      const cmgExpanded = expandedSubSections.has(cmgKey)
+                      return (
+                      <Fragment key={cmgKey}>
                         <tr className="bg-accent-dim/10 border-b border-border">
-                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3.5rem' }}>
-                            <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3rem' }}>
+                            <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '1.5rem' }}>
+                              <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(cmgKey)}>{cmgExpanded ? '▼' : '▶'}</button>
+                              <span className="text-purple-600 text-xs font-medium">Modifier:</span>
+                              <span className="text-xs text-text-2 ml-1">{mg.display_name || mg.name}</span>
+                              <span className="text-xs text-text-3 ml-1">(choose {mg.min_select}{mg.min_select !== mg.max_select ? `–${mg.max_select}` : ''})</span>
+                            </div>
                           </td>
                         </tr>
-                        {mg.options.map(mopt => (
-                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={14} onSave={saveSubOptionPrice} />
+                        {cmgExpanded && mg.options.map(mopt => (
+                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={16} borderClass="border-l-2 border-purple-100" marginLeft="3rem" onSave={saveSubOptionPrice} />
                         ))}
                       </Fragment>
-                    ))}
+                    )})}
                   </Fragment>
-                ))}
+                )})}
               </Fragment>
-            ))}
+            )})}
             {/* Sales item modifiers */}
-            {subData.modifier_groups.map(mg => (
-              <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
+            {subData.modifier_groups.map(mg => {
+              const mgKey = `${msiId}-mg-${mg.modifier_group_id}`
+              const mgExpanded = expandedSubSections.has(mgKey)
+              return (
+              <Fragment key={mgKey}>
                 <tr className="bg-surface-2 border-b border-border">
-                  <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
-                    <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                  <td colSpan={colCount + 1} className="py-1.5" style={{ paddingLeft: '1.5rem' }}>
+                    <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '0.5rem' }}>
+                      <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(mgKey)}>{mgExpanded ? '▼' : '▶'}</button>
+                      <span className="text-purple-600 text-xs font-medium">Modifier:</span>
+                      <span className="text-xs font-semibold text-text-2 ml-1">{mg.display_name || mg.name}</span>
+                      <span className="text-xs text-text-3 ml-1">(choose {mg.min_select}{mg.min_select !== mg.max_select ? `–${mg.max_select}` : ''})</span>
+                    </div>
                   </td>
                 </tr>
-                {mg.options.map(opt => (
-                  <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
+                {mgExpanded && mg.options.map(opt => (
+                  <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={12} borderClass="border-l-2 border-purple-100" marginLeft="2rem" onSave={saveSubOptionPrice} />
                 ))}
               </Fragment>
-            ))}
+            )})}
+
           {/* Empty state — no steps/modifiers configured */}
           {subData.combo_steps.length === 0 && subData.modifier_groups.length === 0 && (
             <tr className="bg-surface-2/50 border-b border-border">
