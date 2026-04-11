@@ -52,6 +52,7 @@ interface ModGroup {
   display_name: string | null
   min_select: number
   max_select: number
+  allow_repeat_selection?: boolean
   options: ModOption[]
 }
 
@@ -80,6 +81,7 @@ interface OrderFlow {
   currentStepIdx: number
   stepSelections: Record<number, Set<number>>   // stepId -> set of option IDs
   modSelections: Record<string, Set<number>>      // modGroupId or "stepId_mgId" -> set of option IDs
+  modQty: Record<string, Record<number, number>>  // key -> { optionId: qty } for allow_repeat_selection groups
   resolvedSelections: Selection[]                // accumulated from finished combo steps
 }
 
@@ -220,6 +222,7 @@ export default function PosTesterPage() {
         currentStepIdx: 0,
         stepSelections: {},
         modSelections: {},
+        modQty: {},
         resolvedSelections: [],
       })
     } catch {
@@ -282,6 +285,29 @@ export default function PosTesterPage() {
     })
   }
 
+  function adjustModQty(key: string, optId: number, delta: number) {
+    setOrderFlow(prev => {
+      if (!prev) return prev
+      const existing = prev.modQty?.[key] || {}
+      const current = existing[optId] || 0
+      const next = Math.max(0, current + delta)
+      const newQty = { ...prev.modQty, [key]: { ...existing, [optId]: next } }
+
+      // Keep modSelections in sync for validation
+      const newSel = { ...prev.modSelections }
+      if (!newSel[key]) newSel[key] = new Set()
+      if (next > 0) {
+        newSel[key] = new Set([...newSel[key], optId])
+      } else {
+        const s = new Set(newSel[key])
+        s.delete(optId)
+        newSel[key] = s
+      }
+
+      return { ...prev, modQty: newQty, modSelections: newSel }
+    })
+  }
+
   function advanceStep() {
     if (!orderFlow) return
     const steps = orderFlow.subPrices.combo_steps
@@ -318,14 +344,17 @@ export default function PosTesterPage() {
     const selections = sels || orderFlow.resolvedSelections
     const modSelections = modSels || orderFlow.modSelections
 
-    // Resolve item-level modifier selections
+    // Resolve item-level modifier selections (with repeat qty support)
     const modSelsArr: Selection[] = []
+    const qtyMap = orderFlow.modQty || {}
     for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const mgKey = String(mg.modifier_group_id)
       const chosen = modSelections[mg.modifier_group_id] || new Set()
       for (const opt of mg.options) {
-        if (chosen.has(opt.id)) {
+        const qty = mg.allow_repeat_selection ? (qtyMap[mgKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+        if (qty > 0) {
           const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
-          modSelsArr.push({ name: opt.display_name || opt.name, priceAddon: price })
+          modSelsArr.push({ name: qty > 1 ? `${opt.display_name || opt.name} x${qty}` : (opt.display_name || opt.name), priceAddon: price * qty })
         }
       }
     }
@@ -339,9 +368,10 @@ export default function PosTesterPage() {
           const modKey = `${step.id}_${mg.modifier_group_id}`
           const chosen = modSelections[modKey] || new Set()
           for (const opt of mg.options) {
-            if (chosen.has(opt.id)) {
+            const qty = mg.allow_repeat_selection ? (qtyMap[modKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+            if (qty > 0) {
               const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
-              modSelsArr.push({ name: opt.display_name || opt.name, priceAddon: price })
+              modSelsArr.push({ name: qty > 1 ? `${opt.display_name || opt.name} x${qty}` : (opt.display_name || opt.name), priceAddon: price * qty })
             }
           }
         }
@@ -399,16 +429,17 @@ export default function PosTesterPage() {
         }
       }
     }
-    // Item-level modifier selections
+    // Item-level modifier selections (with repeat qty)
+    const qtyMap = orderFlow.modQty || {}
     for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const mgKey = String(mg.modifier_group_id)
       const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
       for (const opt of mg.options) {
-        if (chosen.has(opt.id)) {
-          total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
-        }
+        const qty = mg.allow_repeat_selection ? (qtyMap[mgKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+        if (qty > 0) total += (selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0) * qty
       }
     }
-    // Combo step option modifier selections
+    // Combo step option modifier selections (with repeat qty)
     for (const step of (orderFlow.subPrices.combo_steps || [])) {
       const selectedOptIds = orderFlow.stepSelections[step.id] || new Set()
       for (const stepOpt of step.options) {
@@ -417,9 +448,8 @@ export default function PosTesterPage() {
           const modKey = `${step.id}_${mg.modifier_group_id}`
           const chosen = orderFlow.modSelections[modKey] || new Set()
           for (const opt of mg.options) {
-            if (chosen.has(opt.id)) {
-              total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
-            }
+            const qty = mg.allow_repeat_selection ? (qtyMap[modKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+            if (qty > 0) total += (selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0) * qty
           }
         }
       }
@@ -585,7 +615,19 @@ export default function PosTesterPage() {
                 const modKey = `${step.id}_${mg.modifier_group_id}`
                 const isSelected = orderFlow.modSelections[modKey]?.has(opt.id)
                 const priceAddon = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
-                return (
+                const qty = orderFlow.modQty?.[modKey]?.[opt.id] || 0
+                return mg.allow_repeat_selection ? (
+                  <div key={opt.id} className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-gray-200">
+                    <button onClick={() => adjustModQty(modKey, opt.id, -1)} disabled={qty === 0}
+                      className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-xs font-bold shrink-0">−</button>
+                    <span className={`w-5 text-center text-sm font-bold shrink-0 ${qty > 0 ? 'text-purple-700' : 'text-gray-300'}`}>{qty}</span>
+                    <button onClick={() => adjustModQty(modKey, opt.id, 1)}
+                      className="flex-1 text-left text-sm text-gray-800 hover:text-purple-700 transition-colors">
+                      {opt.display_name || opt.name}
+                    </button>
+                    <span className="text-[10px] text-gray-400 shrink-0">{priceAddon > 0 ? `+${sym}${priceAddon.toFixed(2)}/ea` : 'incl.'}</span>
+                  </div>
+                ) : (
                   <button key={opt.id}
                     onClick={() => toggleComboStepModifier(modKey, opt.id, mg.min_select, mg.max_select)}
                     className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg border text-sm transition-colors
@@ -768,7 +810,20 @@ export default function PosTesterPage() {
                 {mg.options.map(opt => {
                   const sel = chosen.has(opt.id)
                   const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
-                  return (
+                  const modKey = String(mg.modifier_group_id)
+                  const qty = orderFlow.modQty?.[modKey]?.[opt.id] || 0
+                  return mg.allow_repeat_selection ? (
+                    <div key={opt.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${qty > 0 ? 'border-accent bg-accent/5' : 'border-gray-200'}`}>
+                      <button onClick={() => adjustModQty(modKey, opt.id, -1)} disabled={qty === 0}
+                        className="w-6 h-6 rounded-full border border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-xs font-bold shrink-0">−</button>
+                      <span className={`w-5 text-center text-sm font-bold shrink-0 ${qty > 0 ? 'text-accent' : 'text-gray-300'}`}>{qty}</span>
+                      <button onClick={() => adjustModQty(modKey, opt.id, 1)}
+                        className="flex-1 text-left text-sm text-gray-800 hover:text-accent transition-colors truncate">
+                        {opt.display_name || opt.name}
+                      </button>
+                      <span className="text-[10px] text-gray-400 shrink-0">{price > 0 ? `+${sym}${price.toFixed(2)}/ea` : 'incl.'}</span>
+                    </div>
+                  ) : (
                     <button key={opt.id} onClick={() => toggleModOption(mg.modifier_group_id, opt.id, mg.max_select)}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-all
                         ${sel

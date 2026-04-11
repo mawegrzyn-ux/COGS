@@ -22,7 +22,7 @@ interface ModifierOption {
 }
 interface ModifierGroup {
   id: number; name: string; display_name?: string | null; description: string | null
-  min_select: number; max_select: number; option_count?: number
+  min_select: number; max_select: number; allow_repeat_selection?: boolean; option_count?: number
   options?: ModifierOption[]
 }
 interface ComboStepOption {
@@ -734,13 +734,13 @@ export default function SalesItemsPage() {
   // ── Modifiers tab ──────────────────────────────────────────────────────────
   const [expandedMgId,    setExpandedMgId]    = useState<number | null>(null)
   const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
-  const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1 })
+  const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false })
   const [mgSaving,        setMgSaving]        = useState(false)
   const [showNewMgModal,  setShowNewMgModal]  = useState(false)
   const [mgEditTarget,    setMgEditTarget]    = useState<MgEditTarget>(null)
   const [mgPanelWidth,    setMgPanelWidth]    = useState(360)
   const [mgPanelSaving,   setMgPanelSaving]   = useState(false)
-  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number } | null>(null)
+  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number; allow_repeat_selection: boolean } | null>(null)
   const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number; image_url: string | null } | null>(null)
   const [mpOptRecipeSearch, setMpOptRecipeSearch] = useState('')
   const [mpOptIngSearch,    setMpOptIngSearch]    = useState('')
@@ -762,7 +762,7 @@ export default function SalesItemsPage() {
     try {
       const created = await api.post('/modifier-groups', { ...newMgForm, display_name: newMgForm.display_name || null })
       setModifierGroups(prev => [...prev, { ...created, option_count: 0 }])
-      setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 })
+      setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false })
     } catch { showToast('Failed') } finally { setMgSaving(false) }
   }
 
@@ -796,7 +796,7 @@ export default function SalesItemsPage() {
     if (!mgEditTarget) { setMpGroupForm(null); setMpOptForm(null); return }
     if (mgEditTarget.type === 'group') {
       const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
-      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select })
+      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select, allow_repeat_selection: g.allow_repeat_selection ?? false })
       setMpOptForm(null)
     } else {
       const { opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
@@ -2095,6 +2095,14 @@ export default function SalesItemsPage() {
                           onChange={e => setMpGroupForm(f => f ? { ...f, max_select: Number(e.target.value) } : f)} />
                       </div>
                     </div>
+                    <label className="flex items-center gap-2 mt-1 p-2 bg-surface-2 rounded-lg border border-border cursor-pointer">
+                      <input type="checkbox" checked={mpGroupForm.allow_repeat_selection}
+                        onChange={e => setMpGroupForm(f => f ? { ...f, allow_repeat_selection: e.target.checked } : f)} className="rounded" />
+                      <div>
+                        <span className="text-xs font-medium text-text-1">Allow repeat selection</span>
+                        <p className="text-[10px] text-text-3">Same option can be selected multiple times (e.g. extra toppings)</p>
+                      </div>
+                    </label>
                   </>
                 )}
 

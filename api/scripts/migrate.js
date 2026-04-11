@@ -1491,6 +1491,9 @@ const migrations = [
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_user_profiles_sub ON mcogs_user_profiles(user_sub)`,
+
+  // ── Step 104: Allow repeat selection on modifier groups ─────────────────────
+  `ALTER TABLE mcogs_modifier_groups ADD COLUMN IF NOT EXISTS allow_repeat_selection BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
 async function runMigrations(pool) {
