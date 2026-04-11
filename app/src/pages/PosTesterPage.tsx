@@ -69,7 +69,8 @@ interface Selection { name: string; priceAddon: number }
 interface CheckItem {
   name: string
   basePrice: number
-  selections: Selection[]
+  selections: Selection[]   // flat list for receipt/totals
+  displayLines: DisplayLine[]  // hierarchical for left panel display
   total: number
   taxRate: number
   // Stored state for recall/editing
@@ -79,6 +80,12 @@ interface CheckItem {
   _modSelections?: Record<string, Set<number>>
   _modQty?: Record<string, Record<number, number>>
   _resolvedSelections?: Selection[]
+}
+
+interface DisplayLine {
+  name: string
+  priceAddon: number
+  indent: number       // 0 = step/option, 1 = modifier under step
 }
 
 interface OrderFlow {
@@ -211,6 +218,7 @@ export default function PosTesterPage() {
         name: item.display_name,
         basePrice: item.sell_price_gross,
         selections: [],
+        displayLines: [],
         total: item.sell_price_gross,
         taxRate: item.tax_rate || 0,
       })
@@ -239,6 +247,7 @@ export default function PosTesterPage() {
         name: item.display_name,
         basePrice: item.sell_price_gross,
         selections: [],
+        displayLines: [],
         total: item.sell_price_gross,
         taxRate: item.tax_rate || 0,
       })
@@ -396,10 +405,49 @@ export default function PosTesterPage() {
     const allSels = [...selections, ...modSelsArr]
     const addonTotal = allSels.reduce((s, sel) => s + sel.priceAddon, 0)
 
+    // Build hierarchical display lines: step options with their modifiers nested below
+    const displayLines: DisplayLine[] = []
+
+    // Combo step selections with their modifiers
+    for (const step of (orderFlow.subPrices.combo_steps || [])) {
+      const selectedOptIds = orderFlow.stepSelections[step.id] || new Set()
+      for (const stepOpt of step.options) {
+        if (!selectedOptIds.has(stepOpt.id)) continue
+        const optPrice = selectedLevelId ? (stepOpt.prices?.[selectedLevelId] || 0) : 0
+        displayLines.push({ name: stepOpt.display_name || stepOpt.name, priceAddon: optPrice, indent: 0 })
+        // Modifiers for this step option
+        for (const mg of (stepOpt.modifier_groups || [])) {
+          const modKey = `${step.id}_${mg.modifier_group_id}`
+          const chosen = modSelections[modKey] || new Set()
+          for (const opt of mg.options) {
+            const qty = mg.allow_repeat_selection ? (qtyMap[modKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+            if (qty > 0) {
+              const price = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
+              displayLines.push({ name: qty > 1 ? `${opt.display_name || opt.name} x${qty}` : (opt.display_name || opt.name), priceAddon: price * qty, indent: 1 })
+            }
+          }
+        }
+      }
+    }
+
+    // Item-level modifier selections
+    for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const mgKey = String(mg.modifier_group_id)
+      const chosen = modSelections[mg.modifier_group_id] || new Set()
+      for (const opt of mg.options) {
+        const qty = mg.allow_repeat_selection ? (qtyMap[mgKey]?.[opt.id] || 0) : (chosen.has(opt.id) ? 1 : 0)
+        if (qty > 0) {
+          const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+          displayLines.push({ name: qty > 1 ? `${opt.display_name || opt.name} x${qty}` : (opt.display_name || opt.name), priceAddon: price * qty, indent: 0 })
+        }
+      }
+    }
+
     const checkItem: CheckItem = {
       name: orderFlow.item.display_name,
       basePrice: orderFlow.item.sell_price_gross,
       selections: allSels,
+      displayLines,
       total: orderFlow.item.sell_price_gross + addonTotal,
       taxRate: orderFlow.item.tax_rate || 0,
       // Store state for recall
@@ -975,11 +1023,14 @@ export default function PosTesterPage() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
-                    {item.selections?.map((sel, si) => (
-                      <p key={si} className="text-xs text-gray-500 pl-3">
-                        + {sel.name}{sel.priceAddon > 0 ? ` +${sym}${sel.priceAddon.toFixed(2)}` : ''}
-                      </p>
-                    ))}
+                    {(item.displayLines || item.selections)?.map((line, si) => {
+                      const indent = 'indent' in line ? (line as DisplayLine).indent : 0
+                      return (
+                        <p key={si} className={`text-xs text-gray-500 ${indent === 0 ? 'pl-3' : 'pl-6 text-gray-400'}`}>
+                          {indent === 0 ? '+ ' : '· '}{line.name}{line.priceAddon > 0 ? ` +${sym}${line.priceAddon.toFixed(2)}` : ''}
+                        </p>
+                      )
+                    })}
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-sm font-mono font-semibold text-gray-800">{sym}{item.total.toFixed(2)}</span>
