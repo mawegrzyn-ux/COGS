@@ -291,6 +291,7 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
     display_name: mg.display_name || null,
     min_select: mg.min_select,
     max_select: mg.max_select,
+    allow_repeat_selection: mg.allow_repeat_selection || false,
     options: optByMg[mg.modifier_group_id] || [],
   }));
 }
@@ -363,7 +364,7 @@ async function loadComboStructure(comboId, msiId) {
         if (!optModMap[r.combo_step_option_id]) optModMap[r.combo_step_option_id] = [];
         optModMap[r.combo_step_option_id].push({
           modifier_group_id: r.modifier_group_id, name: r.name, display_name: r.display_name || null,
-          min_select: r.min_select, max_select: r.max_select,
+          min_select: r.min_select, max_select: r.max_select, allow_repeat_selection: r.allow_repeat_selection || false,
           options: modOptByMg[r.modifier_group_id] || [],
         });
       }
