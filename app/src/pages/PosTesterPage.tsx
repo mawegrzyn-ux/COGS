@@ -458,7 +458,7 @@ export default function PosTesterPage() {
     // Auto-select and advance if single option with min=max=1 AND no modifiers on the option
     if (step.options.length === 1 && step.min_select === 1 && step.max_select === 1) {
       const opt = step.options[0]
-      const hasModifiers = opt.modifier_groups?.length > 0
+      const hasModifiers = (opt.modifier_groups?.length ?? 0) > 0
       // Auto-select the option (even if it has modifiers — user still needs to see it selected)
       setOrderFlow(prev => {
         if (!prev) return prev
