@@ -1145,7 +1145,7 @@ export default function MarketsPage() {
         </div>
       ) : (
         /* ── Centres tab ── */
-        <CentresPanel api={api} locations={locations} onRefresh={load} />
+        <CentresPanel api={api} locations={locations} onRefresh={loadAll} />
       )}
 
       {/* ── Modals ── */}
