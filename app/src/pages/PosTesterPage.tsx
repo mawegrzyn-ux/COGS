@@ -1,0 +1,794 @@
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useApi } from '../hooks/useApi'
+
+/* ── types ──────────────────────────────────────────────────────────────────── */
+
+interface Menu   { id: number; name: string; country_name?: string }
+interface PLevel { id: number; name: string }
+
+interface CogsItem {
+  menu_item_id: number
+  menu_sales_item_id: number
+  sales_item_id: number
+  item_type: string
+  modifier_group_count: number
+  display_name: string
+  category: string
+  sell_price_gross: number
+  sell_price_net: number
+  tax_rate: number
+  cost_per_portion: number
+}
+
+interface SubPriceData {
+  item_type: string
+  combo_steps: ComboStep[]
+  modifier_groups: ModGroup[]
+}
+
+interface ComboStep {
+  id: number
+  name: string
+  min_select: number
+  max_select: number
+  auto_select: boolean
+  options: ComboOption[]
+}
+
+interface ComboOption {
+  id: number
+  name: string
+  display_name: string | null
+  item_type: string
+  prices: Record<number, number>
+  modifier_groups?: ModGroup[]
+}
+
+interface ModGroup {
+  modifier_group_id: number
+  name: string
+  display_name: string | null
+  min_select: number
+  max_select: number
+  options: ModOption[]
+}
+
+interface ModOption {
+  id: number
+  name: string
+  display_name: string | null
+  item_type: string
+  prices: Record<number, number>
+}
+
+interface Selection { name: string; priceAddon: number }
+
+interface CheckItem {
+  name: string
+  basePrice: number
+  selections: Selection[]
+  total: number
+  taxRate: number
+}
+
+interface OrderFlow {
+  item: CogsItem
+  subPrices: SubPriceData
+  phase: 'combo' | 'modifiers'
+  currentStepIdx: number
+  stepSelections: Record<number, Set<number>>   // stepId -> set of option IDs
+  modSelections: Record<number, Set<number>>     // modGroupId -> set of option IDs
+  resolvedSelections: Selection[]                // accumulated from finished combo steps
+}
+
+/* ── icons ──────────────────────────────────────────────────────────────────── */
+
+function ExpandIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+      <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>
+  )
+}
+
+function ShrinkIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+      <line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>
+  )
+}
+
+/* ── main component ─────────────────────────────────────────────────────────── */
+
+export default function PosTesterPage() {
+  const api = useApi()
+
+  // ── menu / level selectors ──
+  const [menus, setMenus] = useState<Menu[]>([])
+  const [levels, setLevels] = useState<PLevel[]>([])
+  const [selectedMenuId, setSelectedMenuId] = useState<number | null>(null)
+  const [selectedLevelId, setSelectedLevelId] = useState<number | null>(null)
+
+  // ── menu data ──
+  const [menuItems, setMenuItems] = useState<CogsItem[]>([])
+  const [currencySymbol, setCurrencySymbol] = useState('$')
+  const [loading, setLoading] = useState(false)
+
+  // ── category filter ──
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
+  const categories = useMemo(
+    () => [...new Set(menuItems.map(i => i.category).filter(Boolean))].sort(),
+    [menuItems],
+  )
+  const filteredItems = useMemo(
+    () => categoryFilter ? menuItems.filter(i => i.category === categoryFilter) : menuItems,
+    [menuItems, categoryFilter],
+  )
+
+  // ── check (order) ──
+  const [checkItems, setCheckItems] = useState<CheckItem[]>([])
+
+  // ── order flow (combo/modifier config) ──
+  const [orderFlow, setOrderFlow] = useState<OrderFlow | null>(null)
+
+  // ── receipt modal ──
+  const [showReceipt, setShowReceipt] = useState(false)
+  const [receiptData, setReceiptData] = useState<CheckItem[]>([])
+
+  // ── fullscreen ──
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  /* ── load menus + levels on mount ──────────────────────────────────────────── */
+
+  const loadInit = useCallback(async () => {
+    try {
+      const [m, l] = await Promise.all([api.get('/menus'), api.get('/price-levels')])
+      setMenus(m || [])
+      setLevels(l || [])
+      if (m?.length) setSelectedMenuId(m[0].id)
+      if (l?.length) setSelectedLevelId(l[0].id)
+    } catch { /* silent */ }
+  }, [api])
+
+  useEffect(() => { loadInit() }, [loadInit])
+
+  /* ── load menu items when menu/level change ────────────────────────────────── */
+
+  const loadMenu = useCallback(async () => {
+    if (!selectedMenuId) return
+    setLoading(true)
+    setCategoryFilter(null)
+    try {
+      const lvlParam = selectedLevelId ? `?price_level_id=${selectedLevelId}` : ''
+      const data = await api.get(`/cogs/menu-sales/${selectedMenuId}${lvlParam}`)
+      setMenuItems(data?.items || [])
+      setCurrencySymbol(data?.currency_symbol || '$')
+    } catch {
+      setMenuItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [api, selectedMenuId, selectedLevelId])
+
+  useEffect(() => { loadMenu() }, [loadMenu])
+
+  /* ── check helpers ──────────────────────────────────────────────────────────── */
+
+  const addToCheck = useCallback((item: CheckItem) => {
+    setCheckItems(prev => [...prev, item])
+  }, [])
+
+  const removeFromCheck = useCallback((idx: number) => {
+    setCheckItems(prev => prev.filter((_, i) => i !== idx))
+  }, [])
+
+  const clearCheck = useCallback(() => setCheckItems([]), [])
+
+  const sym = currencySymbol
+
+  const subtotal = useMemo(() => checkItems.reduce((s, i) => s + i.total, 0), [checkItems])
+  const tax = useMemo(
+    () => checkItems.reduce((s, i) => s + (i.taxRate > 0 ? i.total - i.total / (1 + i.taxRate) : 0), 0),
+    [checkItems],
+  )
+  const total = subtotal
+
+  /* ── item tap ───────────────────────────────────────────────────────────────── */
+
+  const handleItemTap = useCallback(async (item: CogsItem) => {
+    // Simple item — add directly
+    if (item.item_type !== 'combo' && (!item.modifier_group_count || item.modifier_group_count === 0)) {
+      addToCheck({
+        name: item.display_name,
+        basePrice: item.sell_price_gross,
+        selections: [],
+        total: item.sell_price_gross,
+        taxRate: item.tax_rate || 0,
+      })
+      return
+    }
+
+    // Complex item — load sub-prices
+    try {
+      const subPrices: SubPriceData = await api.get(
+        `/menu-sales-items/${item.menu_sales_item_id}/sub-prices`,
+      )
+      const isCombo = item.item_type === 'combo' && subPrices.combo_steps?.length > 0
+      setOrderFlow({
+        item,
+        subPrices,
+        phase: isCombo ? 'combo' : 'modifiers',
+        currentStepIdx: 0,
+        stepSelections: {},
+        modSelections: {},
+        resolvedSelections: [],
+      })
+    } catch {
+      // fallback — add as simple
+      addToCheck({
+        name: item.display_name,
+        basePrice: item.sell_price_gross,
+        selections: [],
+        total: item.sell_price_gross,
+        taxRate: item.tax_rate || 0,
+      })
+    }
+  }, [api, addToCheck])
+
+  /* ── order flow helpers ─────────────────────────────────────────────────────── */
+
+  function toggleStepOption(stepId: number, optId: number, maxSelect: number) {
+    setOrderFlow(prev => {
+      if (!prev) return prev
+      const cur = new Set(prev.stepSelections[stepId] || [])
+      if (cur.has(optId)) { cur.delete(optId) }
+      else {
+        if (maxSelect === 1) cur.clear()
+        if (cur.size < maxSelect) cur.add(optId)
+      }
+      return { ...prev, stepSelections: { ...prev.stepSelections, [stepId]: cur } }
+    })
+  }
+
+  function toggleModOption(mgId: number, optId: number, maxSelect: number) {
+    setOrderFlow(prev => {
+      if (!prev) return prev
+      const cur = new Set(prev.modSelections[mgId] || [])
+      if (cur.has(optId)) { cur.delete(optId) }
+      else {
+        if (maxSelect === 1) cur.clear()
+        if (cur.size < maxSelect) cur.add(optId)
+      }
+      return { ...prev, modSelections: { ...prev.modSelections, [mgId]: cur } }
+    })
+  }
+
+  function advanceStep() {
+    if (!orderFlow) return
+    const steps = orderFlow.subPrices.combo_steps
+    const step = steps[orderFlow.currentStepIdx]
+    if (!step) return
+
+    // Resolve selections for this step
+    const selectedIds = orderFlow.stepSelections[step.id] || new Set()
+    const newSels: Selection[] = []
+    for (const opt of step.options) {
+      if (selectedIds.has(opt.id)) {
+        const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+        newSels.push({ name: opt.display_name || opt.name, priceAddon: price })
+      }
+    }
+    const merged = [...orderFlow.resolvedSelections, ...newSels]
+
+    const nextIdx = orderFlow.currentStepIdx + 1
+    if (nextIdx < steps.length) {
+      setOrderFlow({ ...orderFlow, currentStepIdx: nextIdx, resolvedSelections: merged })
+    } else {
+      // Done with combo steps — move to modifiers (item-level)
+      if (orderFlow.subPrices.modifier_groups?.length > 0) {
+        setOrderFlow({ ...orderFlow, phase: 'modifiers', resolvedSelections: merged })
+      } else {
+        // No modifiers — add to check
+        finalizeOrderFlow(merged, {})
+      }
+    }
+  }
+
+  function finalizeOrderFlow(sels?: Selection[], modSels?: Record<number, Set<number>>) {
+    if (!orderFlow) return
+    const selections = sels || orderFlow.resolvedSelections
+    const modSelections = modSels || orderFlow.modSelections
+
+    // Resolve modifier selections
+    const modSelsArr: Selection[] = []
+    for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const chosen = modSelections[mg.modifier_group_id] || new Set()
+      for (const opt of mg.options) {
+        if (chosen.has(opt.id)) {
+          const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+          modSelsArr.push({ name: opt.display_name || opt.name, priceAddon: price })
+        }
+      }
+    }
+
+    const allSels = [...selections, ...modSelsArr]
+    const addonTotal = allSels.reduce((s, sel) => s + sel.priceAddon, 0)
+
+    addToCheck({
+      name: orderFlow.item.display_name,
+      basePrice: orderFlow.item.sell_price_gross,
+      selections: allSels,
+      total: orderFlow.item.sell_price_gross + addonTotal,
+      taxRate: orderFlow.item.tax_rate || 0,
+    })
+    setOrderFlow(null)
+  }
+
+  /* ── order flow validation ──────────────────────────────────────────────────── */
+
+  const canAdvanceStep = useMemo(() => {
+    if (!orderFlow || orderFlow.phase !== 'combo') return false
+    const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
+    if (!step) return false
+    const count = (orderFlow.stepSelections[step.id] || new Set()).size
+    return count >= step.min_select
+  }, [orderFlow])
+
+  const allModsMet = useMemo(() => {
+    if (!orderFlow) return true
+    for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const count = (orderFlow.modSelections[mg.modifier_group_id] || new Set()).size
+      if (count < mg.min_select) return false
+    }
+    return true
+  }, [orderFlow])
+
+  /* ── order flow running total ───────────────────────────────────────────────── */
+
+  const itemRunningTotal = useMemo(() => {
+    if (!orderFlow) return 0
+    let total = orderFlow.item.sell_price_gross
+    // Combo step selections
+    for (const sel of orderFlow.resolvedSelections) total += sel.priceAddon
+    // Current step (combo)
+    if (orderFlow.phase === 'combo') {
+      const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
+      if (step) {
+        const chosen = orderFlow.stepSelections[step.id] || new Set()
+        for (const opt of step.options) {
+          if (chosen.has(opt.id)) {
+            total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+          }
+        }
+      }
+    }
+    // Modifier selections
+    for (const mg of (orderFlow.subPrices.modifier_groups || [])) {
+      const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
+      for (const opt of mg.options) {
+        if (chosen.has(opt.id)) {
+          total += selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+        }
+      }
+    }
+    return total
+  }, [orderFlow, selectedLevelId])
+
+  /* ── pay / receipt ──────────────────────────────────────────────────────────── */
+
+  function handlePay() {
+    setReceiptData([...checkItems])
+    setShowReceipt(true)
+  }
+
+  /* ── fullscreen ─────────────────────────────────────────────────────────────── */
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {})
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    function onFs() { setIsFullscreen(!!document.fullscreenElement) }
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
+
+  /* ── receipt totals ─────────────────────────────────────────────────────────── */
+
+  const receiptSubtotal = useMemo(() => receiptData.reduce((s, i) => s + i.total, 0), [receiptData])
+  const receiptTax = useMemo(
+    () => receiptData.reduce((s, i) => s + (i.taxRate > 0 ? i.total - i.total / (1 + i.taxRate) : 0), 0),
+    [receiptData],
+  )
+  const receiptTotal = receiptSubtotal
+
+  /* ── render: current combo step / modifier content ──────────────────────────── */
+
+  function renderOrderFlowContent() {
+    if (!orderFlow) return null
+
+    if (orderFlow.phase === 'combo') {
+      const step = orderFlow.subPrices.combo_steps[orderFlow.currentStepIdx]
+      if (!step) return null
+      const chosen = orderFlow.stepSelections[step.id] || new Set()
+      const isRadio = step.max_select === 1
+
+      return (
+        <div>
+          <div className="mb-3">
+            <p className="text-sm font-bold text-gray-800">{step.name}</p>
+            <p className="text-xs text-gray-500">
+              {isRadio
+                ? `Choose ${step.min_select}`
+                : `Select ${step.min_select}${step.max_select > step.min_select ? ` to ${step.max_select}` : ''}`}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            {step.options.map(opt => {
+              const sel = chosen.has(opt.id)
+              const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+              return (
+                <button key={opt.id} onClick={() => toggleStepOption(step.id, opt.id, step.max_select)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all
+                    ${sel
+                      ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                  <div className={`w-5 h-5 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0 transition-colors
+                    ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
+                    {sel && (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{opt.display_name || opt.name}</p>
+                  </div>
+                  {price > 0 && (
+                    <span className="text-xs font-medium text-gray-500 shrink-0">+{sym}{price.toFixed(2)}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex items-center justify-between mt-4">
+            <span className="text-xs text-gray-400">
+              Step {orderFlow.currentStepIdx + 1} of {orderFlow.subPrices.combo_steps.length}
+            </span>
+            <button onClick={advanceStep} disabled={!canAdvanceStep}
+              className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-mid disabled:bg-gray-300 transition-colors">
+              {orderFlow.currentStepIdx + 1 < orderFlow.subPrices.combo_steps.length ? 'Next Step' : 'Continue'}
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    // Modifiers phase
+    return (
+      <div className="space-y-5">
+        {orderFlow.subPrices.modifier_groups.map(mg => {
+          const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
+          const isRadio = mg.max_select === 1
+          const metMin = chosen.size >= mg.min_select
+
+          return (
+            <div key={mg.modifier_group_id}>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="text-sm font-bold text-gray-800">{mg.display_name || mg.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {mg.min_select === 0
+                      ? `Optional (up to ${mg.max_select})`
+                      : isRadio
+                        ? `Choose ${mg.min_select}`
+                        : `Select ${mg.min_select} to ${mg.max_select}`}
+                  </p>
+                </div>
+                {metMin && (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#146A34" strokeWidth="2.5" strokeLinecap="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                )}
+              </div>
+              <div className="space-y-1">
+                {mg.options.map(opt => {
+                  const sel = chosen.has(opt.id)
+                  const price = selectedLevelId ? (opt.prices[selectedLevelId] || 0) : 0
+                  return (
+                    <button key={opt.id} onClick={() => toggleModOption(mg.modifier_group_id, opt.id, mg.max_select)}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg border text-left transition-all
+                        ${sel
+                          ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
+                          : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                      <div className={`w-4 h-4 rounded-${isRadio ? 'full' : 'md'} border-2 flex items-center justify-center shrink-0 transition-colors
+                        ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
+                        {sel && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                        )}
+                      </div>
+                      <span className="flex-1 text-sm text-gray-800 truncate">{opt.display_name || opt.name}</span>
+                      {price > 0 && (
+                        <span className="text-xs font-medium text-gray-500 shrink-0">+{sym}{price.toFixed(2)}</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  /* ── render ──────────────────────────────────────────────────────────────────── */
+
+  return (
+    <div className="flex flex-col h-full bg-gray-100">
+      {/* ── header bar ──────────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2 bg-gray-900 text-white shrink-0">
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-bold tracking-wide">POS Tester</h1>
+          <select
+            value={selectedMenuId ?? ''}
+            onChange={e => setSelectedMenuId(Number(e.target.value) || null)}
+            className="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-gray-500"
+          >
+            {menus.map(m => (
+              <option key={m.id} value={m.id}>{m.name}{m.country_name ? ` (${m.country_name})` : ''}</option>
+            ))}
+          </select>
+          <select
+            value={selectedLevelId ?? ''}
+            onChange={e => setSelectedLevelId(Number(e.target.value) || null)}
+            className="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-gray-500"
+          >
+            {levels.map(l => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={toggleFullscreen} className="text-gray-400 hover:text-white p-1" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            {isFullscreen ? <ShrinkIcon /> : <ExpandIcon />}
+          </button>
+          <button onClick={() => window.history.back()} className="text-gray-400 hover:text-white text-xs px-2 py-1">
+            &larr; Back
+          </button>
+        </div>
+      </div>
+
+      {/* ── main panels ─────────────────────────────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0">
+
+        {/* ── LEFT: current check ───────────────────────────────────────────────── */}
+        <div className="w-72 bg-white border-r border-gray-200 flex flex-col shrink-0">
+          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+            <h2 className="text-sm font-bold text-gray-800">Current Order</h2>
+            <p className="text-xs text-gray-500">{checkItems.length} item{checkItems.length !== 1 ? 's' : ''}</p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {checkItems.map((item, idx) => (
+              <div key={idx} className="px-4 py-2 border-b border-gray-100 group">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
+                    {item.selections?.map((sel, si) => (
+                      <p key={si} className="text-xs text-gray-500 pl-3">
+                        + {sel.name}{sel.priceAddon > 0 ? ` +${sym}${sel.priceAddon.toFixed(2)}` : ''}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <span className="text-sm font-mono font-semibold text-gray-800">{sym}{item.total.toFixed(2)}</span>
+                    <button onClick={() => removeFromCheck(idx)}
+                      className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 p-0.5 transition-opacity">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {checkItems.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-40 text-gray-400">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="mb-2 opacity-40">
+                  <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/>
+                  <path d="M16 10a4 4 0 01-8 0"/>
+                </svg>
+                <p className="text-sm">No items yet</p>
+                <p className="text-xs mt-1">Tap menu items to add</p>
+              </div>
+            )}
+          </div>
+
+          {/* totals */}
+          <div className="border-t-2 border-gray-300 px-4 py-3 bg-gray-50 space-y-1">
+            <div className="flex justify-between text-xs text-gray-600">
+              <span>Subtotal</span><span>{sym}{subtotal.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-xs text-gray-600">
+              <span>Tax (incl.)</span><span>{sym}{tax.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-base font-bold text-gray-900 pt-1 border-t border-gray-200">
+              <span>TOTAL</span><span>{sym}{total.toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* buttons */}
+          <div className="px-3 pb-3 space-y-2">
+            <button onClick={handlePay} disabled={checkItems.length === 0}
+              className="w-full py-3.5 rounded-lg text-white text-lg font-bold transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed bg-accent hover:bg-accent-mid active:bg-accent-dark">
+              PAY {sym}{total.toFixed(2)}
+            </button>
+            {checkItems.length > 0 && (
+              <button onClick={clearCheck}
+                className="w-full py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors">
+                Clear Order
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ── CENTRE: menu grid ─────────────────────────────────────────────────── */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* category tabs */}
+          <div className="flex flex-wrap gap-1 px-3 py-2 bg-white border-b border-gray-200 shrink-0">
+            <button onClick={() => setCategoryFilter(null)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                ${!categoryFilter ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+              All
+            </button>
+            {categories.map(cat => (
+              <button key={cat} onClick={() => setCategoryFilter(cat)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                  ${categoryFilter === cat ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          {/* items grid */}
+          <div className="flex-1 overflow-y-auto p-3">
+            {loading ? (
+              <div className="flex items-center justify-center h-40 text-gray-400">
+                <div className="flex flex-col items-center gap-2">
+                  <div className="w-8 h-8 border-2 border-gray-300 border-t-accent rounded-full animate-spin" />
+                  <p className="text-sm">Loading menu...</p>
+                </div>
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div className="flex items-center justify-center h-40 text-gray-400">
+                <p className="text-sm">{menuItems.length === 0 ? 'No items in this menu' : 'No items in this category'}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
+                {filteredItems.map(item => (
+                  <button key={item.menu_sales_item_id} onClick={() => handleItemTap(item)}
+                    className="bg-white rounded-lg border border-gray-200 p-3 text-left hover:border-accent hover:shadow-sm transition-all active:scale-[0.97]">
+                    <p className="text-sm font-medium text-gray-800 leading-tight line-clamp-2">{item.display_name}</p>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-[10px] text-gray-400 uppercase tracking-wide">{item.item_type}</span>
+                      <span className="text-sm font-bold text-accent">{sym}{item.sell_price_gross.toFixed(2)}</span>
+                    </div>
+                    {(item.item_type === 'combo' || (item.modifier_group_count && item.modifier_group_count > 0)) && (
+                      <div className="mt-1.5 flex gap-1 flex-wrap">
+                        {item.item_type === 'combo' && (
+                          <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-medium">Combo</span>
+                        )}
+                        {item.modifier_group_count > 0 && (
+                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Mods</span>
+                        )}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT: order flow panel ───────────────────────────────────────────── */}
+        {orderFlow && (
+          <div className="w-80 bg-white border-l border-gray-200 flex flex-col shrink-0">
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">{orderFlow.item.display_name}</h3>
+                <p className="text-xs text-gray-500">
+                  {orderFlow.phase === 'combo' ? 'Choose your options' : 'Customise'}
+                </p>
+              </div>
+              <button onClick={() => setOrderFlow(null)} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {renderOrderFlowContent()}
+            </div>
+
+            <div className="px-4 py-3 border-t border-gray-200 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Item total</span>
+                <span className="font-bold text-gray-900">{sym}{itemRunningTotal.toFixed(2)}</span>
+              </div>
+              {/* Show "Add to Order" when in modifiers phase or no combo steps */}
+              {orderFlow.phase === 'modifiers' && (
+                <button onClick={() => finalizeOrderFlow()} disabled={!allModsMet}
+                  className="w-full py-3 rounded-lg bg-accent text-white font-bold text-sm hover:bg-accent-mid disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                  Add to Order
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── receipt modal ───────────────────────────────────────────────────────── */}
+      {showReceipt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-2xl w-80 max-h-[80vh] flex flex-col">
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-6 font-mono text-xs space-y-3">
+                <div className="text-center">
+                  <p className="text-sm font-bold">COGS POS Tester</p>
+                  <p className="text-gray-500">--- MOCK RECEIPT ---</p>
+                  <p className="text-gray-500">{new Date().toLocaleString()}</p>
+                </div>
+                <hr className="border-dashed border-gray-300" />
+                {receiptData.map((item, i) => (
+                  <div key={i}>
+                    <div className="flex justify-between gap-2">
+                      <span className="truncate">{item.name}</span>
+                      <span className="shrink-0">{sym}{item.total.toFixed(2)}</span>
+                    </div>
+                    {item.selections?.map((sel, si) => (
+                      <div key={si} className="flex justify-between text-gray-500 pl-2">
+                        <span className="truncate">+ {sel.name}</span>
+                        {sel.priceAddon > 0 && <span className="shrink-0">+{sym}{sel.priceAddon.toFixed(2)}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <hr className="border-dashed border-gray-300" />
+                <div className="flex justify-between"><span>Subtotal</span><span>{sym}{receiptSubtotal.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span>Tax (incl.)</span><span>{sym}{receiptTax.toFixed(2)}</span></div>
+                <div className="flex justify-between text-sm font-bold pt-1 border-t border-dashed border-gray-300">
+                  <span>TOTAL</span><span>{sym}{receiptTotal.toFixed(2)}</span>
+                </div>
+                <hr className="border-dashed border-gray-300" />
+                <p className="text-center text-gray-500">Thank you!</p>
+                <p className="text-center text-gray-400 text-[10px]">This is a test receipt -- no transaction recorded</p>
+              </div>
+            </div>
+            <div className="flex gap-2 p-4 border-t border-gray-200 shrink-0">
+              <button onClick={() => { setShowReceipt(false); clearCheck() }}
+                className="flex-1 py-2 rounded-lg bg-accent text-white font-medium text-sm hover:bg-accent-mid transition-colors">
+                New Order
+              </button>
+              <button onClick={() => setShowReceipt(false)}
+                className="flex-1 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium text-sm hover:bg-gray-50 transition-colors">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

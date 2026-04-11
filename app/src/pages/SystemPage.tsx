@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import SettingsPage from './SettingsPage'
+import PosTesterPage from './PosTesterPage'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 
@@ -898,6 +899,7 @@ type Section =
   | 'security'
   | 'troubleshooting'
   | 'domain-migration'
+  | 'pos-tester'
 
 interface SectionDef {
   id:        Section
@@ -918,6 +920,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'security',         icon: '🔒', label: 'Security' },
   { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
   { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
+  { id: 'pos-tester',       icon: '🏪', label: 'POS Tester' },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
@@ -965,6 +968,7 @@ export default function SystemPage() {
       case 'security':         return <SecuritySection />
       case 'troubleshooting':  return <TroubleshootingSection />
       case 'domain-migration': return <DomainMigrationSection />
+      case 'pos-tester':       return <PosTesterPage />
       default:                 return null
     }
   }

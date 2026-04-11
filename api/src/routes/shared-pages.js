@@ -402,12 +402,26 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
     );
     const oldValue = oldRow ? Number(oldRow.sell_price) : null;
 
+    const roundedPrice = Math.round(sell_price * 10000) / 10000;
+
     await pool.query(`
       INSERT INTO mcogs_menu_sales_item_prices (menu_sales_item_id, price_level_id, sell_price)
       VALUES ($1, $2, $3)
       ON CONFLICT (menu_sales_item_id, price_level_id)
       DO UPDATE SET sell_price = EXCLUDED.sell_price
-    `, [menu_item_id, price_level_id, Math.round(sell_price * 10000) / 10000]);
+    `, [menu_item_id, price_level_id, roundedPrice]);
+
+    // If the shared page is pinned to a scenario, also update the scenario's
+    // price_overrides so the new price is reflected on next data load
+    // (scenario overrides take priority over the live price table).
+    if (page.scenario_id) {
+      const ovKey = `${menu_item_id}_l${price_level_id}`;
+      await pool.query(`
+        UPDATE mcogs_menu_scenarios
+        SET    price_overrides = COALESCE(price_overrides, '{}'::jsonb) || $2::jsonb
+        WHERE  id = $1
+      `, [page.scenario_id, JSON.stringify({ [ovKey]: roundedPrice })]);
+    }
 
     // Log the change
     const { rows: [miRow] } = await pool.query(`
@@ -430,7 +444,7 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
       miRow?.display_name || null,
       miRow?.level_name   || null,
       oldValue,
-      Math.round(sell_price * 10000) / 10000,
+      roundedPrice,
     ]);
 
     res.json({ saved: true });

@@ -15,6 +15,7 @@ import HelpPage             from './pages/HelpPage'
 import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
+import PosTesterPage        from './pages/PosTesterPage'
 import SharedMenuPage       from './pages/SharedMenuPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="stock-manager" element={<StockManagerPage />} />
             <Route path="media"         element={<MediaLibraryPage />} />
             <Route path="help"          element={<HelpPage />} />
+            <Route path="pos-tester"   element={<PosTesterPage />} />
             <Route path="import"        element={<Navigate to="/configuration" replace />} />
           </Route>
 

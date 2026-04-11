@@ -3,7 +3,7 @@
 // URL: /share/:slug
 // =============================================================================
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -291,13 +291,18 @@ export default function SharedMenuPage() {
 
   // ── Inline price save ────────────────────────────────────────────────────────
 
+  const commitInFlight = useRef(false)
+
   async function commitEdit() {
     if (!editCell || !token || !slug) return
+    // Prevent double-fire from onBlur + onKeyDown both calling commitEdit
+    if (commitInFlight.current) return
     const gross = parseFloat(editCell.value)
     if (isNaN(gross) || gross < 0) { setEditCell(null); return }
     // No-op guard — bail without saving if value hasn't changed
     if (parseFloat(editCell.value) === parseFloat(editCell.originalValue)) { setEditCell(null); return }
 
+    commitInFlight.current = true
     setSaving(true)
     setSaveError('')
     setSaveOk(null)
@@ -321,6 +326,7 @@ export default function SharedMenuPage() {
     } finally {
       setSaving(false)
       setEditCell(null)
+      commitInFlight.current = false
     }
   }
 

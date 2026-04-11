@@ -1899,6 +1899,100 @@ Three interconnected features that extend the menu builder towards a full POS ba
 
 **Note:** The data model, DB tables, API routes, and frontend components for Sales Items, Combos, Modifier Groups, and Combo Step Options are already built. The POS_MENU_FEATURES.md doc describes the full original specification. The remaining work is deeper POS-workflow features (kitchen display, order flows, etc.).
 
+### Smart Scenario — Ingredient-Level Cost Overrides
+
+**Current state:** The Smart Scenario feature (🧠 Smart button in Menu Engineer) accepts natural language prompts and proposes price or cost changes at the **menu item** level. Cost overrides apply to the total recipe cost (`costOverrides[nat_key]`).
+
+**Desired enhancement:** Allow the AI to increase the cost of a **specific ingredient within recipes**. For example, "increase bone-in wings cost by 5%" should:
+1. Identify which recipes contain the "bone-in wings" ingredient
+2. Increase only that ingredient's cost assumption (not the total recipe cost)
+3. Recalculate each affected recipe's cost bottom-up from the new ingredient cost
+4. Flow the new costs up to menu item COGS%
+
+**Why it's complex (estimated 2-3 days):**
+
+| Challenge | Detail |
+|---|---|
+| **Ingredient identification** | AI needs full recipe → ingredient breakdown loaded into context. Requires `mcogs_recipe_items` for every recipe on the menu. |
+| **Cost override granularity** | Current `costOverrides` keys are recipe-level (`r_5`). Need a new key format: `r_5_i_12` (recipe 5, ingredient 12) for ingredient-level overrides. |
+| **COGS recalculation** | `calcRecipeCost()` in `cogs.js` reads costs from `quoteLookup`. Would need to accept ingredient-level override map and substitute values during calculation. |
+| **Cascade** | One ingredient appears in multiple recipes → multiple menu items. AI must trace the full dependency tree. |
+| **Sub-recipes** | If the ingredient is in a sub-recipe, the override must propagate through the recipe hierarchy. |
+| **Scenario storage** | `mcogs_menu_scenarios.cost_overrides` JSONB would need the new key format. |
+
+**Architecture when built:**
+1. Extend `POST /scenarios/smart` to load recipe → ingredient data into the AI context
+2. Add `field: "ingredient_cost"` change type with `ingredient_id` and list of affected `recipe_ids`
+3. Extend `calcRecipeCost()` to accept an `ingredientCostOverrides` map: `{ ingredient_id: overridden_cost_per_base_unit }`
+4. Frontend applies ingredient overrides → recalculates recipe costs → updates grid
+
+**Do not build until explicitly requested.**
+
+### POS Functional Mockup (Menu Tester)
+
+**Purpose:** A functional POS simulator within System menu for testing menu structure, combos, modifiers, and pricing flow without a real POS backend. No transactions saved to DB — purely for menu validation and staff training.
+
+**Location:** System → POS Tester (gated by `settings:read` or `menus:read`)
+
+**Layout (three panels, full-window mode):**
+
+```
+┌──────────────────┬────────────────────────────┬──────────────────────┐
+│   CURRENT CHECK  │      MENU (by category)    │   ORDER FLOW         │
+│                  │                            │   (steps/modifiers)  │
+│  Item 1    ₹550  │  [Wings] [Combos] [Drinks] │                      │
+│  Item 2    ₹450  │                            │  Step 1: Choose size │
+│    + Mod   ₹ 50  │  ┌─────┐ ┌─────┐ ┌─────┐  │  ○ 8pc  ● 10pc      │
+│                  │  │Wing8│ │Bone │ │Combo│  │                      │
+│                  │  │ ₹500│ │₹550 │ │₹450 │  │  Step 2: Flavours   │
+│                  │  └─────┘ └─────┘ └─────┘  │  ☑ Spicy Korean     │
+│                  │                            │  ☑ Atomic           │
+│                  │  ┌─────┐ ┌─────┐           │  ○ Lemon Pepper     │
+│                  │  │Tikka│ │Plain│           │                      │
+│                  │  │ ₹500│ │₹400 │           │  [Add to Order]      │
+│                  │  └─────┘ └─────┘           │                      │
+│──────────────────│                            │──────────────────────│
+│  Subtotal  ₹1050 │                            │                      │
+│  Tax 5%    ₹ 52  │                            │                      │
+│  TOTAL     ₹1102 │                            │                      │
+│                  │                            │                      │
+│  [  PAY  ]       │                            │                      │
+└──────────────────┴────────────────────────────┴──────────────────────┘
+```
+
+**Features:**
+- **Full window mode** — button to toggle fullscreen (hides sidebar, header). ESC to exit.
+- **Menu selector** — dropdown to pick which menu to load. Loads via `/cogs/menu-sales/:id`.
+- **Category tabs** — all categories on one page as tab buttons across the top of the middle panel. No sub-menus. Items shown as tile grid within the selected category.
+- **Item tiles** — show name, price, type badge (recipe/combo/manual). Click to add to check (simple items) or enter order flow (combos/items with modifiers).
+- **Order flow (right panel)** — activated when an item has combo steps or modifier groups:
+  - Combo: walks through each step sequentially. Shows options as selectable tiles. Enforces min/max selection per step. "Next Step" advances.
+  - Modifiers: shows modifier groups with min/max. Checkboxes for multi-select, radio for single-select.
+  - Price add-ons displayed per option.
+  - "Add to Order" button (disabled until all required steps complete).
+- **Current check (left panel):**
+  - Line items with name, modifiers as indented sub-lines, price
+  - Qty adjustment (+/- buttons) and remove (X)
+  - Subtotal, tax (from menu's country tax rate), total
+  - Running item count
+- **PAY button** — closes the check, shows a mock receipt modal:
+  - Receipt styled like a thermal printer (monospace font, narrow width)
+  - Lists all items, modifiers, subtotal, tax, total
+  - "Print" button (window.print() on the modal) and "New Order" button (clears check)
+- **No data persistence** — nothing saved to DB. This is a stateless mock.
+
+**Data source:** Uses existing menu COGS data (`/cogs/menu-sales/:id`) which already includes items, categories, prices per level, combo steps, modifier groups.
+
+**Implementation notes:**
+- Single page component: `app/src/pages/PosTesterPage.tsx`
+- Route: `/system/pos-tester` (nested under System) or standalone `/pos-tester`
+- No new API endpoints — reads existing COGS + menu data
+- No new DB tables
+- Estimated effort: 1.5-2 days
+- Price level selector in header (Dine In / Takeout / Delivery)
+
+**Do not build until explicitly requested.**
+
 ### Lightsail Upgrade
 
 Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. For production with real franchise operators, upgrade to $20/mo (4GB RAM, 2 vCPU). Take a Lightsail snapshot before upgrading.
