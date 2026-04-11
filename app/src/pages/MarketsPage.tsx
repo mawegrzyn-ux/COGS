@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
+import { usePermissions } from '../hooks/usePermissions'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { StoresTab } from './StockManagerPage'
 
 // ── World Countries (predefined list with ISO alpha-2 codes) ──────────────────
 
@@ -271,7 +273,7 @@ function CountryPicker({ value, onChange, error }: CountryPickerProps) {
 
 export default function MarketsPage() {
   const api = useApi()
-  const [activeTab, setActiveTab]   = useState<'Brand Partners' | 'Markets' | 'Locations'>('Brand Partners')
+  const [activeTab, setActiveTab]   = useState<'Brand Partners' | 'Markets' | 'Locations' | 'Centres'>('Brand Partners')
   const [markets,       setMarkets]       = useState<Market[]>([])
   const [taxRates,      setTaxRates]      = useState<TaxRate[]>([])
   const [priceLevels,   setPriceLevels]   = useState<PriceLevel[]>([])
@@ -781,7 +783,7 @@ export default function MarketsPage() {
 
       {/* Tab bar */}
       <div className="flex border-b border-border bg-surface px-6">
-        {(['Brand Partners', 'Markets', 'Locations'] as const).map(tab => (
+        {(['Brand Partners', 'Markets', 'Locations', 'Centres'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setSearch('') }}
@@ -953,7 +955,7 @@ export default function MarketsPage() {
             )}
           </div>
         </>
-      ) : (
+      ) : activeTab === 'Locations' ? (
         /* ── Locations tab — 2-panel layout ── */
         <div className="flex-1 overflow-y-auto p-6">
           <div className="flex gap-6 items-start">
@@ -1141,6 +1143,9 @@ export default function MarketsPage() {
 
           </div>
         </div>
+      ) : (
+        /* ── Centres tab ── */
+        <CentresPanel api={api} locations={locations} onRefresh={load} />
       )}
 
       {/* ── Modals ── */}
@@ -1455,6 +1460,34 @@ export default function MarketsPage() {
       )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Centres Panel (wraps StoresTab from StockManagerPage) ─────────────────────
+
+function CentresPanel({ api, locations, onRefresh }: {
+  api: ReturnType<typeof useApi>
+  locations: { id: number; name: string; country_name?: string; is_active: boolean }[]
+  onRefresh: () => void
+}) {
+  const { can } = usePermissions()
+  const canWrite = can('stock_overview', 'write')
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+
+  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }, [])
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <StoresTab api={api} locations={locations} canWrite={canWrite} showToast={showToast} onStoresChange={onRefresh} />
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-semibold text-white ${toast.type === 'success' ? 'bg-accent' : 'bg-red-600'}`}>
+          {toast.msg}
+        </div>
+      )}
     </div>
   )
 }

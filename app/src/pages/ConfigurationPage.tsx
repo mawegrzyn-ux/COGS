@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
 import SettingsPage   from './SettingsPage'
-import { StoresTab }  from './StockManagerPage'
+
 import MediaLibrary   from '../components/MediaLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
@@ -261,60 +261,6 @@ function GlobalConfigSection() {
   )
 }
 
-// ── Location Structure section (Locations + Centres sub-tabs) ────────────────
-
-function LocationStructureSection() {
-  const api = useApi()
-  const { can } = usePermissions()
-  const canWriteCentres = can('stock_overview', 'write')
-  const [subTab, setSubTab] = useState<'locations' | 'centres'>('locations')
-  const [locations, setLocations] = useState<{ id: number; name: string; country_name?: string; is_active: boolean }[]>([])
-  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
-
-  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3000)
-  }, [])
-
-  const loadLocations = useCallback(async () => {
-    try {
-      const data = await api.get('/locations?active=true')
-      setLocations(data || [])
-    } catch { /* silent */ }
-  }, [api])
-
-  useEffect(() => { loadLocations() }, [loadLocations])
-
-  return (
-    <div className="flex flex-col h-full">
-      {/* Sub-tab bar */}
-      <div className="flex gap-1 px-6 pt-4 border-b border-border bg-white shrink-0">
-        {(['locations', 'centres'] as const).map(t => (
-          <button key={t} onClick={() => setSubTab(t)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors capitalize
-              ${subTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {subTab === 'locations' && <MarketsPage />}
-        {subTab === 'centres' && (
-          <>
-            <StoresTab api={api} locations={locations} canWrite={canWriteCentres} showToast={showToast} onStoresChange={loadLocations} />
-            {toast && (
-              <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-semibold text-white ${toast.type === 'success' ? 'bg-accent' : 'bg-red-600'}`}>
-                {toast.msg}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // ── Stock Config section ──────────────────────────────────────────────────────
 
@@ -478,7 +424,7 @@ export default function ConfigurationPage() {
   function renderContent() {
     switch (effectiveActive) {
       case 'global-config':      return <GlobalConfigSection />
-      case 'location-structure': return <LocationStructureSection />
+      case 'location-structure': return <MarketsPage />
       case 'categories':         return <CategoriesPage />
       case 'units':              return <SettingsPage embedded initialTab="units" />
       case 'price-levels':       return <SettingsPage embedded initialTab="price-levels" />
