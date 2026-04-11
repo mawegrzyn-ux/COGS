@@ -2848,7 +2848,6 @@ export default function StockManagerPage() {
   const [activeStoreId, setActiveStoreId] = useState<number | null>(null)
 
   // Reference data
-  const [locations, setLocations] = useState<Location[]>([])
   const [ingredients, setIngredients] = useState<IngredientRef[]>([])
   const [vendors, setVendors] = useState<VendorRef[]>([])
 
@@ -2862,14 +2861,12 @@ export default function StockManagerPage() {
   // Load reference data on mount
   const loadRefData = useCallback(async () => {
     try {
-      const [s, l, i, v] = await Promise.all([
+      const [s, i, v] = await Promise.all([
         api.get('/stock-stores'),
-        api.get('/locations?active=true'),
         api.get('/ingredients'),
         api.get('/vendors'),
       ])
       setStores(s || [])
-      setLocations(l || [])
       setIngredients(i || [])
       setVendors(v || [])
     } catch { /* silently ignore */ }
