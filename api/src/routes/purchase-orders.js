@@ -305,6 +305,7 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/items', async (req, res) => {
   const { ingredient_id, quote_id, qty_ordered, unit_price, purchase_unit, qty_in_base_units, store_id } = req.body;
   if (!ingredient_id) return res.status(400).json({ error: { message: 'ingredient_id is required' } });
+  if (qty_ordered !== undefined && Number(qty_ordered) <= 0) return res.status(400).json({ error: { message: 'qty_ordered must be positive' } });
 
   try {
     const { rows: [po] } = await pool.query(
@@ -436,6 +437,7 @@ router.post('/:id/cancel', async (req, res) => {
     );
     if (!existing) return res.status(404).json({ error: { message: 'Purchase order not found' } });
     if (existing.status === 'cancelled') return res.status(409).json({ error: { message: 'Purchase order is already cancelled' } });
+    if (existing.status === 'received') return res.status(409).json({ error: { message: 'Cannot cancel a fully received purchase order' } });
 
     const { rows: [po] } = await pool.query(`
       UPDATE mcogs_purchase_orders

@@ -184,10 +184,14 @@ router.post('/:id/items', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { rows: [existing] } = await client.query('SELECT id FROM mcogs_credit_notes WHERE id=$1', [req.params.id]);
+    const { rows: [existing] } = await client.query('SELECT id, status FROM mcogs_credit_notes WHERE id=$1', [req.params.id]);
     if (!existing) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'Credit note not found' } });
+    }
+    if (existing.status !== 'draft') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'Can only add items to draft credit notes' } });
     }
 
     const { rows: [{ max_sort }] } = await client.query(
@@ -223,6 +227,10 @@ router.put('/:id/items/:itemId', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const { rows: [cn] } = await client.query('SELECT status FROM mcogs_credit_notes WHERE id=$1', [req.params.id]);
+    if (!cn) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Credit note not found' } }); }
+    if (cn.status !== 'draft') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'Can only edit items on draft credit notes' } }); }
+
     const { rows: [item] } = await client.query(`
       UPDATE mcogs_credit_note_items
       SET    ingredient_id=$1, description=$2, quantity=$3, unit_price=$4,
@@ -253,6 +261,10 @@ router.delete('/:id/items/:itemId', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const { rows: [cn] } = await client.query('SELECT status FROM mcogs_credit_notes WHERE id=$1', [req.params.id]);
+    if (!cn) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Credit note not found' } }); }
+    if (cn.status !== 'draft') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'Can only remove items from draft credit notes' } }); }
 
     const { rowCount } = await client.query(
       'DELETE FROM mcogs_credit_note_items WHERE id=$1 AND credit_note_id=$2',

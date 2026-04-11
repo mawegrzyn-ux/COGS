@@ -100,7 +100,10 @@ router.use('/stock-transfers',    ...can('stock_transfers', 'read'),         wri
 router.use('/stocktakes',         ...can('stock_stocktake', 'read'),         write('stock_stocktake'),         require('./stocktakes'));
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────
-router.use('/audit',              auth,                                               require('./audit'));
+router.use('/audit',              ...can('settings', 'read'),                          require('./audit'));
+
+// ── Pepper Memory (pinned notes + user profile) ──────────────────────────────
+router.use('/memory',             auth,                                               require('./memory'));
 
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);

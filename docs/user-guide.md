@@ -980,6 +980,14 @@ Pepper has 87 tools covering every data operation in the app.
 |---|---|
 | export_to_excel | Generates a multi-sheet .xlsx workbook (ingredients, price quotes, recipes, menus, or a full export) filtered to your market scope. Triggers an automatic browser download. |
 
+**Memory (3 tools):**
+
+| Tool | What it does |
+|---|---|
+| save_memory_note | Saves a pinned note that persists across sessions (e.g. "remember that I prefer GBP") |
+| list_memory_notes | Lists all pinned notes for the current user |
+| delete_memory_note | Deletes a specific note by ID (e.g. "forget the note about GBP") |
+
 ### Safety Rules for Write Operations
 
 Pepper always confirms before making any change to your data:
@@ -1294,6 +1302,20 @@ The import engine auto-resolved an unrecognised unit string to a base unit. Chec
 **Exchange rate sync fails**
 
 The Frankfurter API is a free external service (api.frankfurter.app) that requires no API key. If the sync fails, check your server's outbound internet access. You can also set exchange rates manually in Markets.
+
+---
+
+## Pepper Memory
+
+Pepper now remembers things across sessions. You can tell Pepper to remember facts, preferences, or instructions:
+
+- **"Remember that I always want UK prices in GBP"** — saves a pinned note
+- **"What do you remember?"** — shows all saved notes
+- **"Forget the note about GBP"** — removes a specific note
+
+Pinned notes are loaded into every conversation, so Pepper always has your preferences available. You can also view and manage your notes via the API at `/api/memory/notes`.
+
+Your user profile (preferred name, primary markets, response preferences) is also loaded into each session and can be updated at `/api/memory/profile`.
 
 **Menu tiles on the Dashboard show no COGS%**
 

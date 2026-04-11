@@ -1316,7 +1316,7 @@ const migrations = [
   // ── Step 94: Waste Reason Codes + Waste Log ────────────────────────────────
   `CREATE TABLE IF NOT EXISTS mcogs_waste_reason_codes (
      id          SERIAL PRIMARY KEY,
-     name        VARCHAR(200) NOT NULL,
+     name        VARCHAR(200) NOT NULL UNIQUE,
      description TEXT,
      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
      sort_order  INTEGER NOT NULL DEFAULT 0,
@@ -1470,6 +1470,27 @@ const migrations = [
   // ── Step 101: Add store_id to PO items for per-item location assignment ────
   `ALTER TABLE mcogs_purchase_order_items ADD COLUMN IF NOT EXISTS store_id INTEGER REFERENCES mcogs_stores(id) ON DELETE SET NULL`,
   `CREATE INDEX IF NOT EXISTS idx_poi_store ON mcogs_purchase_order_items(store_id) WHERE store_id IS NOT NULL`,
+
+  // ── Step 102: User notes (Pepper memory — pinned notes) ────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_user_notes (
+    id          SERIAL PRIMARY KEY,
+    user_sub    VARCHAR(200) NOT NULL,
+    note        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_notes_sub ON mcogs_user_notes(user_sub)`,
+
+  // ── Step 103: User profiles (Pepper memory — long-term profile) ────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_user_profiles (
+    id                  SERIAL PRIMARY KEY,
+    user_sub            VARCHAR(200) NOT NULL UNIQUE,
+    display_name        VARCHAR(200),
+    profile_json        JSONB NOT NULL DEFAULT '{}',
+    long_term_summary   TEXT,
+    profile_updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_profiles_sub ON mcogs_user_profiles(user_sub)`,
 ];
 
 async function runMigrations(pool) {

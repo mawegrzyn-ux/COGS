@@ -235,7 +235,10 @@ router.post('/', (req, res, next) => {
     conciseMode = sRows[0]?.v === 'true';
   } catch (_) {}
 
-  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode);
+  // Inject userSub into context so buildSystemPrompt can load memory
+  context.userSub = context.userSub || userSub || req.user?.sub;
+
+  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode);
 
   // Build the user content array
   const userContent = [];

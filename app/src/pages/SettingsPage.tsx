@@ -3217,8 +3217,9 @@ function RolesTab() {
                       </td>
                     )
                   })}
-                </tr>)
-              ))}
+                </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

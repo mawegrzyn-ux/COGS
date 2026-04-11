@@ -180,6 +180,7 @@ router.post('/:id/items', async (req, res) => {
 
     const { ingredient_id, qty_sent, sort_order } = req.body;
     if (!ingredient_id) return res.status(400).json({ error: { message: 'ingredient_id is required' } });
+    if (qty_sent !== undefined && Number(qty_sent) <= 0) return res.status(400).json({ error: { message: 'qty_sent must be positive' } });
 
     const { rows } = await pool.query(`
       INSERT INTO mcogs_stock_transfer_items (transfer_id, ingredient_id, qty_sent, sort_order)

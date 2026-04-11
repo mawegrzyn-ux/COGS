@@ -205,6 +205,7 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/items', async (req, res) => {
   const { ingredient_id, po_item_id, qty_received, unit_price, purchase_unit, qty_in_base_units } = req.body;
   if (!ingredient_id) return res.status(400).json({ error: { message: 'ingredient_id is required' } });
+  if (qty_received !== undefined && Number(qty_received) <= 0) return res.status(400).json({ error: { message: 'qty_received must be positive' } });
 
   try {
     const { rows: [grn] } = await pool.query(

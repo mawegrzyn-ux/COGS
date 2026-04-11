@@ -1267,6 +1267,20 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
   }, [selected, loadItems])
 
   const [newGRN, setNewGRN] = useState({ store_id: '', vendor_id: '', po_id: '', notes: '', received_date: new Date().toISOString().slice(0, 10) })
+  const [availablePOs, setAvailablePOs] = useState<PurchaseOrder[]>([])
+
+  // Fetch submitted/partial POs when vendor changes in New GRN modal
+  useEffect(() => {
+    if (!newGRN.vendor_id) { setAvailablePOs([]); return }
+    let cancelled = false
+    Promise.all([
+      api.get(`/purchase-orders?vendor_id=${newGRN.vendor_id}&status=submitted`),
+      api.get(`/purchase-orders?vendor_id=${newGRN.vendor_id}&status=partial`),
+    ]).then(([submitted, partial]) => {
+      if (!cancelled) setAvailablePOs([...(submitted || []), ...(partial || [])])
+    }).catch(() => { if (!cancelled) setAvailablePOs([]) })
+    return () => { cancelled = true }
+  }, [api, newGRN.vendor_id])
 
   const handleCreate = async () => {
     if (!newGRN.store_id || !newGRN.vendor_id) return
@@ -1288,7 +1302,7 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
 
   const handleConfirm = async (grn: GoodsReceived) => {
     try {
-      await api.patch(`/goods-received/${grn.id}`, { status: 'confirmed' })
+      await api.post(`/goods-received/${grn.id}/confirm`, {})
       showToast(`GRN ${grn.grn_number} confirmed - stock updated`)
       load()
       if (selected?.id === grn.id) setSelected({ ...grn, status: 'confirmed' })
@@ -1333,7 +1347,7 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
 
   const handleBulkConfirm = async () => {
     try {
-      await Promise.all([...checked].map(id => api.patch(`/goods-received/${id}`, { status: 'confirmed' })))
+      await Promise.all([...checked].map(id => api.post(`/goods-received/${id}/confirm`, {})))
       showToast(`${checked.size} GRN(s) confirmed`)
       setChecked(new Set())
       load()
@@ -1484,12 +1498,12 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
               renderSecondary={(i: IngredientRef) => i.base_unit_abbr || null} />
           </Field>
           <Field label="Qty Received *">
-            <input type="number" step="0.01" min="0" className="input w-full" value={itemForm.qty_received}
-              onChange={e => setItemForm(f => ({ ...f, qty_received: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.qty_received}
+              onChange={v => setItemForm(f => ({ ...f, qty_received: v }))} />
           </Field>
           <Field label="Unit Price">
-            <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.unit_price}
-              onChange={e => setItemForm(f => ({ ...f, unit_price: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.unit_price}
+              onChange={v => setItemForm(f => ({ ...f, unit_price: v }))} />
           </Field>
           <Field label="Purchase Unit">
             <input className="input w-full" value={itemForm.purchase_unit} placeholder="e.g. case, bag"
@@ -1515,9 +1529,15 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
               </select>
             </Field>
             <Field label="Vendor *">
-              <select className="input w-full" value={newGRN.vendor_id} onChange={e => setNewGRN(f => ({ ...f, vendor_id: e.target.value }))}>
+              <select className="input w-full" value={newGRN.vendor_id} onChange={e => setNewGRN(f => ({ ...f, vendor_id: e.target.value, po_id: '' }))}>
                 <option value="">Select vendor...</option>
                 {vendors.map(v => <option key={v.id} value={String(v.id)}>{v.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Link to PO" hint="Optional — items will be pre-populated from the PO">
+              <select className="input w-full" value={newGRN.po_id} onChange={e => setNewGRN(f => ({ ...f, po_id: e.target.value }))}>
+                <option value="">No PO (ad-hoc delivery)</option>
+                {availablePOs.map(po => <option key={po.id} value={String(po.id)}>{po.po_number} — {po.vendor_name}</option>)}
               </select>
             </Field>
             <Field label="Received Date">
@@ -1604,7 +1624,13 @@ function InvoicesTab({ api, stores, vendors, ingredients, storeId, canWrite, sho
 
   const handleStatusChange = async (inv: Invoice, newStatus: string) => {
     try {
-      await api.patch(`/invoices/${inv.id}`, { status: newStatus })
+      const endpoint = newStatus === 'pending' ? 'submit'
+        : newStatus === 'approved' ? 'approve'
+        : newStatus === 'paid' ? 'mark-paid'
+        : newStatus === 'disputed' ? 'dispute'
+        : null
+      if (!endpoint) return
+      await api.post(`/invoices/${inv.id}/${endpoint}`, {})
       showToast(`Invoice ${inv.invoice_number} updated to ${newStatus}`)
       load()
       if (selected?.id === inv.id) setSelected({ ...inv, status: newStatus as Invoice['status'] })
@@ -1728,8 +1754,11 @@ function InvoicesTab({ api, stores, vendors, ingredients, storeId, canWrite, sho
                 </div>
                 <div className="flex items-center gap-2">
                   <StatusBadge status={selected.status} />
+                  {canWrite && selected.status === 'draft' && (
+                    <button className="btn-primary text-xs py-1.5 px-3 rounded font-medium" onClick={() => handleStatusChange(selected, 'pending')}>Submit</button>
+                  )}
                   {canWrite && selected.status === 'pending' && (
-                    <button className="btn btn-sm btn-primary text-xs" onClick={() => handleStatusChange(selected, 'approved')}>Approve</button>
+                    <button className="btn-primary text-xs py-1.5 px-3 rounded font-medium" onClick={() => handleStatusChange(selected, 'approved')}>Approve</button>
                   )}
                   {canWrite && selected.status === 'approved' && (
                     <button className="btn btn-sm btn-primary text-xs" onClick={() => handleStatusChange(selected, 'paid')}>Mark Paid</button>
@@ -1834,12 +1863,12 @@ function InvoicesTab({ api, stores, vendors, ingredients, storeId, canWrite, sho
               onChange={e => setItemForm(f => ({ ...f, description: e.target.value }))} />
           </Field>
           <Field label="Quantity *">
-            <input type="number" step="0.01" min="0" className="input w-full" value={itemForm.quantity}
-              onChange={e => setItemForm(f => ({ ...f, quantity: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.quantity}
+              onChange={v => setItemForm(f => ({ ...f, quantity: v }))} />
           </Field>
           <Field label="Unit Price *">
-            <input type="number" step="0.0001" min="0" className="input w-full" value={itemForm.unit_price}
-              onChange={e => setItemForm(f => ({ ...f, unit_price: e.target.value }))} />
+            <CalcInput className="input w-full" value={itemForm.unit_price}
+              onChange={v => setItemForm(f => ({ ...f, unit_price: v }))} />
           </Field>
           {itemForm.quantity && itemForm.unit_price && (
             <div className="text-sm text-text-3">Line total: <span className="font-medium text-text-1">{fmtNum(Number(itemForm.quantity) * Number(itemForm.unit_price))}</span></div>
@@ -2161,9 +2190,9 @@ function WasteTab({ api, stores, ingredients, storeId, canWrite, showToast }: {
 // ════════════════════════════════════════════════════════════════════════════════
 // TransfersTab
 // ════════════════════════════════════════════════════════════════════════════════
-function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
+function TransfersTab({ api, stores, ingredients, storeId, canWrite, showToast }: {
   api: ApiType; stores: Store[]; ingredients: IngredientRef[]
-  canWrite: boolean; showToast: (msg: string, type?: 'success' | 'error') => void
+  storeId: number | null; canWrite: boolean; showToast: (msg: string, type?: 'success' | 'error') => void
 }) {
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [loading, setLoading] = useState(true)
@@ -2178,16 +2207,17 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api.get('/transfers')
+      const q = storeId ? `?from_store_id=${storeId}` : ''
+      const data = await api.get(`/stock-transfers${q}`)
       setTransfers(data || [])
     } finally { setLoading(false) }
-  }, [api])
+  }, [api, storeId])
 
   useEffect(() => { load() }, [load])
 
   const loadItems = useCallback(async (transferId: number) => {
     try {
-      const data = await api.get(`/transfers/${transferId}/items`)
+      const data = await api.get(`/stock-transfers/${transferId}/items`)
       setItems(data || [])
     } catch { setItems([]) }
   }, [api])
@@ -2203,7 +2233,7 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
     if (!newTransfer.from_store_id || !newTransfer.to_store_id || newTransfer.from_store_id === newTransfer.to_store_id) return
     setSaving(true)
     try {
-      const created = await api.post('/transfers', {
+      const created = await api.post('/stock-transfers', {
         from_store_id: Number(newTransfer.from_store_id),
         to_store_id: Number(newTransfer.to_store_id),
         notes: newTransfer.notes.trim() || null,
@@ -2218,7 +2248,12 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
 
   const handleStatusChange = async (t: Transfer, newStatus: string) => {
     try {
-      await api.patch(`/transfers/${t.id}`, { status: newStatus })
+      const endpoint = newStatus === 'in_transit' ? 'dispatch'
+        : newStatus === 'confirmed' ? 'confirm'
+        : newStatus === 'cancelled' ? 'cancel'
+        : null
+      if (!endpoint) return
+      await api.post(`/stock-transfers/${t.id}/${endpoint}`, {})
       showToast(`Transfer ${t.transfer_number} updated to ${newStatus.replace(/_/g, ' ')}`)
       load()
       if (selected?.id === t.id) setSelected({ ...t, status: newStatus as Transfer['status'] })
@@ -2237,10 +2272,10 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
         qty_received: itemForm.qty_received ? Number(itemForm.qty_received) : null,
       }
       if (editItem) {
-        await api.put(`/transfers/${selected.id}/items/${editItem.id}`, payload)
+        await api.put(`/stock-transfers/${selected.id}/items/${editItem.id}`, payload)
         showToast('Item updated')
       } else {
-        await api.post(`/transfers/${selected.id}/items`, payload)
+        await api.post(`/stock-transfers/${selected.id}/items`, payload)
         showToast('Item added')
       }
       setShowItemForm(false)
@@ -2254,7 +2289,7 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
   const handleDeleteItem = async (item: TransferItem) => {
     if (!selected) return
     try {
-      await api.delete(`/transfers/${selected.id}/items/${item.id}`)
+      await api.delete(`/stock-transfers/${selected.id}/items/${item.id}`)
       showToast('Item removed')
       loadItems(selected.id)
     } catch (err: any) { showToast(err.message || 'Failed to remove item', 'error') }
@@ -2262,7 +2297,7 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
 
   const handleBulkCancel = async () => {
     try {
-      await Promise.all([...checked].map(id => api.patch(`/transfers/${id}`, { status: 'cancelled' })))
+      await Promise.all([...checked].map(id => api.post(`/stock-transfers/${id}/cancel`, {})))
       showToast(`${checked.size} transfer(s) cancelled`)
       setChecked(new Set())
       load()
@@ -2693,7 +2728,10 @@ function StocktakeTab({ api, stores, ingredients, storeId, canWrite, showToast }
                                 const val = e.target.value === '' ? null : Number(e.target.value)
                                 setItems(prev => prev.map(i => i.id === item.id ? { ...i, counted_qty: val } : i))
                               }}
-                              onBlur={() => handleUpdateCount(item, items.find(i => i.id === item.id)?.counted_qty ?? null)}
+                              onBlur={e => {
+                                const val = e.target.value.trim()
+                                handleUpdateCount(item, val === '' ? null : parseFloat(val))
+                              }}
                             />
                           ) : (
                             item.counted_qty != null ? fmtNum(item.counted_qty) : '-'
@@ -2893,7 +2931,7 @@ export default function StockManagerPage() {
         {activeTab === 'goods-in' && perms.goodsIn.read && <GoodsInTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.goodsIn.write} showToast={showToast} />}
         {activeTab === 'invoices' && perms.invoices.read && <InvoicesTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.invoices.write} showToast={showToast} />}
         {activeTab === 'waste' && perms.waste.read && <WasteTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.waste.write} showToast={showToast} />}
-        {activeTab === 'transfers' && perms.transfers.read && <TransfersTab api={api} stores={stores} ingredients={ingredients} canWrite={perms.transfers.write} showToast={showToast} />}
+        {activeTab === 'transfers' && perms.transfers.read && <TransfersTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.transfers.write} showToast={showToast} />}
         {activeTab === 'stocktake' && perms.stocktake.read && <StocktakeTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.stocktake.write} showToast={showToast} />}
       </div>
 

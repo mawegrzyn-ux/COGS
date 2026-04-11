@@ -422,6 +422,8 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 47 | `mcogs_stocktakes` | Stocktake sessions: full or spot_check. in_progress → completed → approved |
 | 48 | `mcogs_stocktake_items` | Count items with expected/counted/variance. UNIQUE(stocktake_id, ingredient_id) |
 | 49 | `mcogs_audit_log` | Central audit trail: action, entity, field_changes JSONB, context JSONB, related_entities JSONB |
+| 50 | `mcogs_user_notes` | Pepper memory: pinned notes per user (user_sub, content TEXT, created_at). Migration step 102 |
+| 51 | `mcogs_user_profiles` | Pepper memory: user profile per user (user_sub UNIQUE, display_name, profile_json JSONB, long_term_summary TEXT). Migration step 103 |
 
 ### Key Schema Details
 
@@ -552,7 +554,7 @@ All routes registered in `api/src/routes/index.js`.
 | `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 87 tools (includes web search, GitHub, and Excel export) |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
-| `GET/POST/PUT/DELETE /api/stock-stores` | `stock-stores.js` | ✅ Active — requires `stock_manager:read` / `stock_manager:write` |
+| `GET/POST/PUT/DELETE /api/stock-stores` | `stock-stores.js` | ✅ Active — requires `stock_overview:read` / `stock_overview:write` |
 | `GET/PUT/POST /api/stock-levels` | `stock-levels.js` | ✅ Active — stock on hand, adjustments, movements query |
 | `GET/POST/PUT/DELETE /api/purchase-orders` | `purchase-orders.js` | ✅ Active — PO lifecycle + line items + quote-lookup |
 | `GET/POST/PUT/DELETE /api/order-templates` | `order-templates.js` | ✅ Active — saved PO templates |
@@ -563,6 +565,8 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/stock-transfers` | `stock-transfers.js` | ✅ Active — two-step transfer lifecycle |
 | `GET/POST/PUT/DELETE /api/stocktakes` | `stocktakes.js` | ✅ Active — stocktake lifecycle + populate + approve |
 | `GET /api/audit` | `audit.js` | ✅ Active — central audit log query (entity, field, stats) |
+| `GET/POST/DELETE /api/memory/notes` | `memory.js` | ✅ Active — pinned notes for Pepper memory |
+| `GET/PUT /api/memory/profile` | `memory.js` | ✅ Active — user profile for Pepper memory |
 
 ### Exchange Rate Sync
 
@@ -1018,7 +1022,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appea
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'float' | 'docked-left' | 'docked-right'` — persisted in `localStorage('pepper-mode')`. Docked modes render as a full-height flex column in `AppLayout`; float is fixed-position popup
 
-### Tool Count: 89
+### Tool Count: 92
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1070,6 +1074,20 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appea
 
 **Excel Export (1):**
 `export_to_excel` — generates a multi-sheet `.xlsx` workbook (ingredients, price quotes, recipes, menus, or full export) filtered to the user's market scope; triggers a browser download automatically
+
+**Memory (3):**
+`save_memory_note` — saves a pinned note that persists across sessions (user says "remember X")
+`list_memory_notes` — lists all pinned notes for the current user
+`delete_memory_note` — deletes a specific note by ID (user says "forget X")
+
+### Memory System
+
+Pepper has a persistent memory system that survives across sessions. Two storage mechanisms:
+
+1. **Pinned Notes** (`mcogs_user_notes`) — short facts, preferences, or instructions saved per user. User can say "remember that I always want UK prices in GBP" and Pepper calls `save_memory_note`. "What do you remember?" lists all notes via `list_memory_notes`. "Forget the note about GBP" deletes via `delete_memory_note`.
+2. **User Profile** (`mcogs_user_profiles`) — `display_name`, `profile_json` (JSONB for structured preferences like primary markets, response style), and `long_term_summary` (TEXT for evolving context). Managed via `GET/PUT /api/memory/profile`.
+
+Both are loaded into the system prompt at the start of every conversation (~100 tokens per note). If memory loading fails, chat works normally without it (graceful degradation). The memory API is at `/api/memory/notes` and `/api/memory/profile`.
 
 ### GitHub Integration
 
@@ -1147,9 +1165,11 @@ Three system roles are seeded automatically and cannot be deleted:
 
 Custom roles can be created in Settings → Roles and assigned any combination.
 
-### Features (13)
+### Features (19)
 
-`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_manager`
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake`
+
+> **Note:** The original single `stock_manager` feature was replaced by 7 granular stock features to allow per-tab RBAC control within the Stock Manager module.
 
 ### User Lifecycle
 
@@ -1566,6 +1586,42 @@ Tab resets to Details whenever a different sales item is selected. Delete button
 
 ---
 
+### Fix 21 — TransfersTab Wrong API Path
+
+**Symptom:** Entire Transfers tab returned 404 on all operations.
+
+**Root Cause:** Frontend called `/transfers` but API route is registered as `/stock-transfers`.
+
+**Fix:** Replace all `/transfers` references with `/stock-transfers` in StockManagerPage.tsx TransfersTab.
+
+**File:** `app/src/pages/StockManagerPage.tsx`
+
+---
+
+### Fix 22 — Invoice/Transfer/GRN Status Changes Used Wrong HTTP Method
+
+**Symptom:** Status transitions (submit, approve, confirm, cancel) failed silently.
+
+**Root Cause:** Frontend used `api.patch()` with `{ status: 'newStatus' }` but backend has dedicated POST endpoints (`/:id/submit`, `/:id/approve`, `/:id/confirm`, etc.).
+
+**Fix:** Changed all status change handlers to use `api.post()` calling the dedicated endpoint.
+
+**Files:** `app/src/pages/StockManagerPage.tsx` (InvoicesTab, TransfersTab, GoodsInTab)
+
+---
+
+### Fix 23 — Invoice From-GRN Created Items With Zero Values
+
+**Symptom:** Creating an invoice from a confirmed GRN produced line items with zero quantity and price.
+
+**Root Cause:** `invoices.js` from-grn endpoint referenced `gi.quantity_received` and `gi.unit_cost` but the actual columns are `qty_received` and `unit_price`.
+
+**Fix:** Changed to correct column names.
+
+**File:** `api/src/routes/invoices.js`
+
+---
+
 ## 17. Critical Gotchas & Lessons Learned
 
 ### Server User Context
@@ -1779,6 +1835,25 @@ The Media Library (`app/src/components/MediaLibrary.tsx`) uses a **focus-vs-sele
 
 **Critical:** Do not change this selection logic without understanding the mode transitions. The `fromCheckbox` parameter (not `toggle`) is the key discriminator.
 
+### Express Route Ordering — Named Routes Before Wildcards
+
+When a router has both named routes (e.g. `/quote-lookup`, `/config`) and parameterized routes (e.g. `/:id`), the named routes MUST be defined FIRST. Express matches routes in order — if `/:id` comes first, it will match `quote-lookup` as an ID parameter and the request will fail with a type error when the SQL tries to use a string as an integer.
+
+**Pattern:**
+```javascript
+// CORRECT — named routes first
+router.get('/config', ...)
+router.get('/quote-lookup', ...)
+router.get('/:id', ...)
+
+// WRONG — /:id catches everything
+router.get('/:id', ...)
+router.get('/config', ...)     // never reached
+router.get('/quote-lookup', ...) // never reached
+```
+
+**Affected file:** `api/src/routes/purchase-orders.js` — was the cause of 500 errors on quote lookup.
+
 ---
 
 ## 18. Backlog
@@ -1925,7 +2000,9 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 ### Architecture
 
-The Stock Manager is a self-contained inventory management module at `/stock-manager`. It has its own RBAC feature (`stock_manager`) and creates only new database tables — no modifications to existing tables.
+The Stock Manager is a self-contained inventory management module at `/stock-manager`. It uses 7 granular RBAC features (one per tab: `stock_overview`, `stock_purchase_orders`, `stock_goods_in`, `stock_invoices`, `stock_waste`, `stock_transfers`, `stock_stocktake`) and creates only new database tables — no modifications to existing tables.
+
+> **UI naming:** Stores are called **Centres** in the UI (database tables remain `mcogs_stores`). Centre management has moved to **Configuration page → Locations** tab rather than a dedicated Stock Manager tab.
 
 **Key design principle:** Every stock-changing operation writes to both `mcogs_stock_movements` (immutable audit ledger) and `mcogs_stock_levels` (materialized balance) in a single transaction. Movements are the source of truth; levels can be rebuilt from movements.
 
@@ -2016,13 +2093,13 @@ Audit logging is integrated into:
 
 ### UI
 
-System → Audit Log (admin-only, gated by `settings:write`). Features:
+System → Audit Log (admin-only, gated by `settings:read`). Features:
 - Filter bar: search, action dropdown, entity type dropdown, user input, date range
 - Paginated table (30 per page)
 - Expandable rows showing field changes (old→new with color coding), context, related entities, metadata
 
 ---
 
-*README last updated: April 2026 (session: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files (stock-stores, stock-levels, purchase-orders, order-templates, goods-received, invoices, credit-notes, waste, stock-transfers, stocktakes, audit), StockManagerPage.tsx with 8 tabs (Overview/Stores/POs/GRN/Invoices/Waste/Transfers/Stocktake), stock_manager RBAC feature added (13 features total), audit helper (api/src/helpers/audit.js) with logAudit() + diffFields(), audit logging wired into ingredients/recipes/price-quotes/purchase-orders/goods-received/stock-levels/waste/stocktakes routes, auto-generated PO/GRN/INV/CN/TRF numbers via PostgreSQL sequences, dual-write stock consistency (mcogs_stock_movements + mcogs_stock_levels in single transaction), PO smart item form with quote-lookup auto-populate; CLAUDE.md sections 21 (Stock Manager Module) and 22 (Audit Log) added, sections 3/8/9/10/12/15 updated)*
+*README last updated: April 2026 (session: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (mcogs_user_notes + mcogs_user_profiles, migration steps 102-103), 3 new Pepper tools (save_memory_note, list_memory_notes, delete_memory_note), /api/memory routes (memory.js), system prompt injection of notes + profile; RBAC expanded from 13 to 19 features (stock_manager split into 7 granular features: stock_overview/stock_purchase_orders/stock_goods_in/stock_invoices/stock_waste/stock_transfers/stock_stocktake); Stores renamed to Centres in UI, Centres management moved to Configuration → Locations; UAT bug fixes: Fix 21 TransfersTab wrong API path (/transfers → /stock-transfers), Fix 22 status changes wrong HTTP method (patch → post to dedicated endpoints), Fix 23 invoice from-GRN wrong column names (quantity_received/unit_cost → qty_received/unit_price); Express route ordering gotcha documented; Audit Log gate updated settings:write → settings:read; tool count 89→92)*
 
-*README previous session: Domain migrated to cogs.macaroonie.com; RBAC system built — mcogs_roles/mcogs_role_permissions/mcogs_users/mcogs_user_brand_partners tables, requireAuth middleware via Auth0 /userinfo with 5-min cache, requirePermission factory, Settings → Users tab (approve/disable/delete/role/scope), Settings → Roles tab (feature×role matrix, click-to-cycle instant save), Sidebar permission filtering, PermissionsProvider + usePermissions hook, PendingPage, Pepper AiChat.tsx auth header fix; Roles tab redesigned as matrix; section 15 RBAC added to CLAUDE.md; HelpPage User Management section added, Security section updated; GitHub integration for Pepper built — GITHUB_PAT + GITHUB_REPO keys in aiConfig + ai-config route, api/src/helpers/github.js helper, 8 github_* tools added to ai-chat.js TOOLS + executeTool (list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr), Settings → AI GitHub fields, tool count 74→86; CLAUDE.md section 14 updated, HelpPage AI section updated with GitHub tools + key table; Dev flag added — is_dev BOOLEAN on mcogs_users (migrate.js ALTER), exposed on req.user/me.js/users.js, isDev in PermissionsContextValue + PermissionsProvider, </> toggle in Settings → Users, Test Data tab gated behind isDev with DEV badge, RBAC section 15 updated, HelpPage User Management updated; Markdown rendering added to Pepper — full inline parser (tables, code blocks, headings, lists, bold, italic, inline code, HTML-escaped before formatting); Menu filter added to Inventory Ingredients + Price Quotes tabs — resolves ingredient IDs via menu-items + recipes chain; Monthly token allowance — ai_monthly_token_limit in mcogs_settings, billing period 25th→24th, checkTokenAllowance() helper exported from ai-chat.js/imported by ai-upload.js, 429 JSON before SSE headers, usage bar in Pepper header, GET /ai-chat/my-usage endpoint, Settings → AI limit field + per-user period stats table; tool count 86→87 (export_to_excel); Bug fixes: Fix 12 AI chat focus loss (ChatPanel/HistoryPanel to module level + streaming→focus restore useEffect), Fix 13 sidebar height (h-full → flex flex-col self-stretch), Fix 14 Anthropic 400 error (input_str destructured off content blocks in agenticStream.js before pushing to assistantContent))*
+*README previous session: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*

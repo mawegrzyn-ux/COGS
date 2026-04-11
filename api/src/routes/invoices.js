@@ -137,7 +137,7 @@ router.post('/', async (req, res) => {
 
 // PUT /invoices/:id
 router.put('/:id', async (req, res) => {
-  const { store_id, vendor_id, grn_id, invoice_date, due_date, tax_amount, currency_code, notes, status } = req.body;
+  const { store_id, vendor_id, grn_id, invoice_date, due_date, tax_amount, currency_code, notes } = req.body;
   try {
     const { rows: [existing] } = await pool.query('SELECT status FROM mcogs_invoices WHERE id=$1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: { message: 'Invoice not found' } });
@@ -149,14 +149,13 @@ router.put('/:id', async (req, res) => {
       UPDATE mcogs_invoices
       SET    store_id=$1, vendor_id=$2, grn_id=$3, invoice_date=$4, due_date=$5,
              tax_amount=COALESCE($6, tax_amount), currency_code=$7, notes=$8,
-             status=COALESCE($9, status),
              total=subtotal+COALESCE($6, tax_amount), updated_at=NOW()
-      WHERE  id=$10
+      WHERE  id=$9
       RETURNING *
     `, [
       store_id, vendor_id, grn_id || null, invoice_date, due_date || null,
       tax_amount ?? null, currency_code || null, notes?.trim() || null,
-      status || null, req.params.id
+      req.params.id
     ]);
     res.json(row);
   } catch (err) {
@@ -192,10 +191,14 @@ router.post('/:id/items', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { rows: [existing] } = await client.query('SELECT id FROM mcogs_invoices WHERE id=$1', [req.params.id]);
+    const { rows: [existing] } = await client.query('SELECT id, status FROM mcogs_invoices WHERE id=$1', [req.params.id]);
     if (!existing) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'Invoice not found' } });
+    }
+    if (existing.status !== 'draft' && existing.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: { message: 'Can only add items to draft or pending invoices' } });
     }
 
     // Get next sort_order
@@ -232,6 +235,10 @@ router.put('/:id/items/:itemId', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const { rows: [inv] } = await client.query('SELECT status FROM mcogs_invoices WHERE id=$1', [req.params.id]);
+    if (!inv) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Invoice not found' } }); }
+    if (inv.status !== 'draft' && inv.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'Can only edit items on draft or pending invoices' } }); }
+
     const { rows: [item] } = await client.query(`
       UPDATE mcogs_invoice_items
       SET    ingredient_id=$1, description=$2, quantity=$3, unit_price=$4,
@@ -263,6 +270,10 @@ router.delete('/:id/items/:itemId', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const { rows: [inv] } = await client.query('SELECT status FROM mcogs_invoices WHERE id=$1', [req.params.id]);
+    if (!inv) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Invoice not found' } }); }
+    if (inv.status !== 'draft' && inv.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ error: { message: 'Can only remove items from draft or pending invoices' } }); }
+
     const { rowCount } = await client.query(
       'DELETE FROM mcogs_invoice_items WHERE id=$1 AND invoice_id=$2',
       [req.params.itemId, req.params.id]
@@ -285,6 +296,22 @@ router.delete('/:id/items/:itemId', async (req, res) => {
 });
 
 // ── Status Transitions ──────────────────────────────────────────────────────
+
+// POST /invoices/:id/submit — draft → pending
+router.post('/:id/submit', async (req, res) => {
+  try {
+    const { rows: [row] } = await pool.query(`
+      UPDATE mcogs_invoices SET status='pending', updated_at=NOW()
+      WHERE  id=$1 AND status='draft'
+      RETURNING *
+    `, [req.params.id]);
+    if (!row) return res.status(400).json({ error: { message: 'Invoice not found or not in draft status' } });
+    res.json(row);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to submit invoice' } });
+  }
+});
 
 // POST /invoices/:id/approve — pending → approved
 router.post('/:id/approve', async (req, res) => {
@@ -382,12 +409,12 @@ router.post('/from-grn/:grnId', async (req, res) => {
 
     let sort = 0;
     for (const gi of grnItems) {
-      const lineTotal = (parseFloat(gi.quantity_received) || 0) * (parseFloat(gi.unit_cost) || 0);
+      const lineTotal = (parseFloat(gi.qty_received) || 0) * (parseFloat(gi.unit_price) || 0);
       await client.query(`
         INSERT INTO mcogs_invoice_items
           (invoice_id, ingredient_id, description, quantity, unit_price, line_total, sort_order)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [inv.id, gi.ingredient_id || null, gi.description || null, gi.quantity_received || 0, gi.unit_cost || 0, lineTotal, sort++]);
+      `, [inv.id, gi.ingredient_id || null, gi.description || null, gi.qty_received || 0, gi.unit_price || 0, lineTotal, sort++]);
     }
 
     await recalcTotals(client, inv.id);

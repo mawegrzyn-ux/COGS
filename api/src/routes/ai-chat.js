@@ -1339,6 +1339,35 @@ Returns items with their urls and metadata.`,
       },
     },
   },
+
+  // ── Memory tools ────────────────────────────────────────────────────────────
+  {
+    name: 'save_memory_note',
+    description: 'Save a note that will persist across all future conversations. Use when the user says "remember this", "always do X", "note that...", or similar requests to store a preference or fact.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'The note to save. Should be a concise, self-contained statement.' },
+      },
+      required: ['note'],
+    },
+  },
+  {
+    name: 'list_memory_notes',
+    description: 'List all pinned memory notes for the current user. Use when the user asks "what do you remember?" or "show my notes".',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'delete_memory_note',
+    description: 'Delete a specific pinned memory note by ID. Use when the user asks to forget something or remove a note.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        note_id: { type: 'integer', description: 'The ID of the note to delete' },
+      },
+      required: ['note_id'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3185,6 +3214,52 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       }
     }
 
+    // ── Memory tools ──────────────────────────────────────────────────────────
+
+    case 'save_memory_note': {
+      const { note } = input;
+      if (!note?.trim()) return 'Error: note text is required';
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rows: [created] } = await pool.query(
+          'INSERT INTO mcogs_user_notes (user_sub, note) VALUES ($1, $2) RETURNING id, note, created_at',
+          [sub, note.trim()]
+        );
+        return `Saved note #${created.id}: "${created.note}"`;
+      } catch (err) {
+        return `Error saving note: ${err.message}`;
+      }
+    }
+    case 'list_memory_notes': {
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rows } = await pool.query(
+          'SELECT id, note, created_at FROM mcogs_user_notes WHERE user_sub = $1 ORDER BY created_at ASC',
+          [sub]
+        );
+        if (!rows.length) return 'No pinned notes found.';
+        return rows.map(n => `#${n.id}: "${n.note}" (saved ${new Date(n.created_at).toLocaleDateString()})`).join('\n');
+      } catch (err) {
+        return `Error listing notes: ${err.message}`;
+      }
+    }
+    case 'delete_memory_note': {
+      const { note_id } = input;
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rowCount } = await pool.query(
+          'DELETE FROM mcogs_user_notes WHERE id = $1 AND user_sub = $2',
+          [note_id, sub]
+        );
+        return rowCount ? `Deleted note #${note_id}` : `Note #${note_id} not found`;
+      } catch (err) {
+        return `Error deleting note: ${err.message}`;
+      }
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -3192,11 +3267,73 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false) {
+async function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false) {
   const page = context?.currentPage || 'unknown';
+
+  // ── Memory context (pinned notes + profile) ──────────────────────────────
+  let memoryBlock = '';
+  try {
+    const userSub = context?.userSub;
+    if (userSub) {
+      const [notesRes, profileRes] = await Promise.all([
+        pool.query(
+          'SELECT note, created_at FROM mcogs_user_notes WHERE user_sub = $1 ORDER BY created_at ASC',
+          [userSub]
+        ),
+        pool.query(
+          'SELECT display_name, profile_json, long_term_summary FROM mcogs_user_profiles WHERE user_sub = $1',
+          [userSub]
+        ),
+      ]);
+      const notes   = notesRes.rows;
+      const profile = profileRes.rows[0];
+
+      if (notes.length || profile) {
+        memoryBlock = '\n\n## Memory\n';
+
+        if (profile?.display_name) {
+          memoryBlock += `The user\'s preferred name is "${profile.display_name}".\n`;
+        }
+        if (profile?.long_term_summary) {
+          memoryBlock += `\nUser summary: ${profile.long_term_summary}\n`;
+        }
+        if (profile?.profile_json && typeof profile.profile_json === 'object' && Object.keys(profile.profile_json).length > 0) {
+          const pj = profile.profile_json;
+          if (pj.primary_markets) memoryBlock += `Primary markets: ${Array.isArray(pj.primary_markets) ? pj.primary_markets.join(', ') : pj.primary_markets}.\n`;
+          if (pj.response_preference) memoryBlock += `Response preference: ${pj.response_preference}.\n`;
+          if (pj.recurring_focus) memoryBlock += `Recurring focus areas: ${Array.isArray(pj.recurring_focus) ? pj.recurring_focus.join(', ') : pj.recurring_focus}.\n`;
+        }
+
+        if (notes.length) {
+          memoryBlock += '\nPinned notes (the user asked Pepper to remember these):\n';
+          for (const n of notes) {
+            memoryBlock += `- ${n.note}\n`;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[memory] Failed to load memory context:', err.message);
+    // Graceful degradation — chat works without memory
+  }
+
   return `You are Pepper — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
 Your name is Pepper. When users greet you or ask your name, introduce yourself as Pepper.
+${memoryBlock}
+## Memory Tools
+
+You have persistent memory across conversations via pinned notes. When the user says things like:
+- "Remember that I always want prices in GBP"
+- "Note that our UK supplier is Farm Fresh"
+- "Always use concise format for reports"
+
+Call the save_memory_note tool to save this as a pinned note. These notes are loaded into every future conversation.
+
+When the user asks "what do you remember?" or "show my notes", call list_memory_notes.
+When the user asks to forget something, call delete_memory_note.
+
+Your pinned notes (if any) are shown in the Memory section above. Use them to personalize your responses.
 
 ## CRITICAL: ACCURACY RULES
 - NEVER invent page names, tab names, feature names, or field names that are not explicitly documented in your context or the sections below.
@@ -3323,7 +3460,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 89 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), and **export_to_excel** (generates an Excel download filtered to the user's market scope).
+You have 92 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), and **Memory** (save_memory_note, list_memory_notes, delete_memory_note).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
@@ -3424,7 +3561,10 @@ router.post('/', async (req, res) => {
     conciseMode = sRows[0]?.v === 'true';
   } catch (_) {}
 
-  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false);
+  // Inject userSub into context so buildSystemPrompt can load memory
+  context.userSub = context.userSub || userSub || req.user?.sub;
+
+  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false);
 
   // Build messages array (enforce max 20 history items)
   const messages = [
