@@ -272,7 +272,7 @@ function OverviewTab({ storeId, api, stores }: { storeId: number | null; api: Ap
           <div className="text-2xl font-bold text-red-600 mt-1">{outOfStock.length}</div>
         </div>
         <div className="card p-4">
-          <div className="text-xs text-text-3 font-medium uppercase tracking-wide">Stores</div>
+          <div className="text-xs text-text-3 font-medium uppercase tracking-wide">Centres</div>
           <div className="text-2xl font-bold text-text-1 mt-1">{stores.filter(s => s.is_active).length}</div>
         </div>
       </div>
@@ -307,7 +307,7 @@ function OverviewTab({ storeId, api, stores }: { storeId: number | null; api: Ap
 
       {/* Stock levels grid */}
       <div className="card p-4">
-        <h3 className="text-sm font-bold text-text-1 mb-3">Stock Levels {storeId ? `- ${stores.find(s => s.id === storeId)?.name || ''}` : '- All Stores'}</h3>
+        <h3 className="text-sm font-bold text-text-1 mb-3">Stock Levels {storeId ? `- ${stores.find(s => s.id === storeId)?.name || ''}` : '- All Centres'}</h3>
         {levels.length === 0 ? (
           <p className="text-sm text-text-3 py-4 text-center">No stock levels recorded yet.</p>
         ) : (
@@ -348,7 +348,7 @@ function OverviewTab({ storeId, api, stores }: { storeId: number | null; api: Ap
               <thead><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
                 <th className="pb-2 pr-4">Date</th><th className="pb-2 pr-4">Ingredient</th>
                 <th className="pb-2 pr-4">Type</th><th className="pb-2 pr-4 text-right">Qty</th>
-                <th className="pb-2 pr-4">Store</th><th className="pb-2">Notes</th>
+                <th className="pb-2 pr-4">Centre</th><th className="pb-2">Notes</th>
               </tr></thead>
               <tbody>
                 {movements.map(m => (
@@ -373,7 +373,7 @@ function OverviewTab({ storeId, api, stores }: { storeId: number | null; api: Ap
 // ════════════════════════════════════════════════════════════════════════════════
 // StoresTab
 // ════════════════════════════════════════════════════════════════════════════════
-function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
+export function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
   api: ApiType; locations: Location[]; canWrite: boolean
   showToast: (msg: string, type?: 'success' | 'error') => void; onStoresChange: () => void
 }) {
@@ -441,16 +441,16 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
       }
       if (editStore) {
         await api.put(`/stock-stores/${editStore.id}`, payload)
-        showToast('Store updated')
+        showToast('Centre updated')
       } else {
         await api.post('/stock-stores', payload)
-        showToast('Store created')
+        showToast('Centre created')
       }
       setShowModal(false)
       load()
       onStoresChange()
     } catch (err: any) {
-      showToast(err.message || 'Failed to save store', 'error')
+      showToast(err.message || 'Failed to save centre', 'error')
     } finally { setSaving(false) }
   }
 
@@ -458,7 +458,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
     if (!deleting) return
     try {
       await api.delete(`/stock-stores/${deleting.id}`)
-      showToast('Store deleted')
+      showToast('Centre deleted')
       if (selectedStore?.id === deleting.id) setSelectedStore(null)
       setDeleting(null)
       load()
@@ -470,7 +470,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
     if (checked.size === 0) return
     try {
       await Promise.all([...checked].map(id => api.delete(`/stock-stores/${id}`)))
-      showToast(`${checked.size} store(s) deleted`)
+      showToast(`${checked.size} centre(s) deleted`)
       setChecked(new Set())
       load()
       onStoresChange()
@@ -509,7 +509,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface shrink-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-sm font-bold text-text-1">Stores</h3>
+            <h3 className="text-sm font-bold text-text-1">Centres</h3>
             <span className="text-xs text-text-3">({visibleStores.length})</span>
           </div>
           <div className="flex items-center gap-2">
@@ -519,13 +519,13 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
               </button>
             )}
             {canWrite && (
-              <button className="btn btn-sm btn-primary" onClick={openNew}>+ New Store</button>
+              <button className="btn btn-sm btn-primary" onClick={openNew}>+ New Centre</button>
             )}
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {visibleStores.length === 0 ? (
-            <EmptyPanel message="No stores found." action={canWrite ? <button className="btn btn-sm btn-primary" onClick={openNew}>+ New Store</button> : undefined} />
+            <EmptyPanel message="No centres found." action={canWrite ? <button className="btn btn-sm btn-primary" onClick={openNew}>+ New Centre</button> : undefined} />
           ) : (
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white z-10"><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
@@ -581,7 +581,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
               <div><span className="text-text-3">Type:</span> <span className="font-medium">{selectedStore.store_type || '-'}</span></div>
               <div><span className="text-text-3">Location:</span> <span className="font-medium">{selectedStore.location_name || '-'}</span></div>
               <div><span className="text-text-3">Country:</span> <span className="font-medium">{selectedStore.country_name || '-'}</span></div>
-              <div><span className="text-text-3">Is Store Itself:</span> <span className="font-medium">{selectedStore.is_store_itself ? 'Yes' : 'No'}</span></div>
+              <div><span className="text-text-3">Is Centre Itself:</span> <span className="font-medium">{selectedStore.is_store_itself ? 'Yes' : 'No'}</span></div>
               <div><span className="text-text-3">Active:</span> <span className="font-medium">{selectedStore.is_active ? 'Yes' : 'No'}</span></div>
               {selectedStore.notes && <div><span className="text-text-3">Notes:</span><p className="text-text-2 mt-1">{selectedStore.notes}</p></div>}
             </div>
@@ -593,13 +593,13 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
             )}
           </div>
         ) : (
-          <EmptyPanel message="Select a store to view details." />
+          <EmptyPanel message="Select a centre to view details." />
         )}
       </div>
 
       {/* Create/Edit modal */}
       {showModal && (
-        <Modal title={editStore ? 'Edit Store' : 'New Store'} onClose={() => setShowModal(false)}>
+        <Modal title={editStore ? 'Edit Centre' : 'New Centre'} onClose={() => setShowModal(false)}>
           <div className="space-y-3">
             <Field label="Location *">
               <select className="input w-full" value={form.location_id} onChange={e => setForm(f => ({ ...f, location_id: e.target.value }))}>
@@ -607,13 +607,13 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
                 {locations.map(l => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
               </select>
             </Field>
-            <Field label="Store Name *">
+            <Field label="Centre Name *">
               <input className="input w-full" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus />
             </Field>
             <Field label="Code">
               <input className="input w-full" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="e.g. WH-01" />
             </Field>
-            <Field label="Store Type">
+            <Field label="Centre Type">
               <select className="input w-full" value={form.store_type} onChange={e => setForm(f => ({ ...f, store_type: e.target.value }))}>
                 <option value="">None</option>
                 <option value="dry">Dry Storage</option>
@@ -626,7 +626,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
             <Field label="">
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={form.is_store_itself} onChange={e => setForm(f => ({ ...f, is_store_itself: e.target.checked }))} />
-                Is store itself (this store represents the entire location)
+                Is centre itself (this centre represents the entire location)
               </label>
             </Field>
             <Field label="">
@@ -651,7 +651,7 @@ function StoresTab({ api, locations, canWrite, showToast, onStoresChange }: {
       {/* Delete confirm */}
       {deleting && (
         <ConfirmDialog
-          message={`Delete "${deleting.name}"? This will also remove all stock levels and movements for this store.`}
+          message={`Delete "${deleting.name}"? This will also remove all stock levels and movements for this centre.`}
           onConfirm={handleDelete}
           onCancel={() => setDeleting(null)}
         />
@@ -948,7 +948,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                   <h3 className="text-sm font-bold text-text-1">{selected.po_number}</h3>
                   <div className="text-xs text-text-3 mt-0.5">
                     {selected.vendor_name}
-                    {selected.store_name ? ` · ${selected.store_name}` : ' · No store assigned'}
+                    {selected.store_name ? ` · ${selected.store_name}` : ' · No centre assigned'}
                     {' · '}{fmtDate(selected.order_date)}
                   </div>
                 </div>
@@ -984,7 +984,7 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
                 <table className="w-full text-sm">
                   <thead><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
                     <th className="pb-2 pr-3">Ingredient</th>
-                    <th className="pb-2 pr-3">Store</th>
+                    <th className="pb-2 pr-3">Centre</th>
                     <th className="pb-2 pr-3 text-right">Qty</th>
                     <th className="pb-2 pr-3 text-right">Received</th>
                     <th className="pb-2 pr-3 text-right">Price</th>
@@ -1093,10 +1093,10 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
             <div className="flex items-center gap-2 text-xs text-text-3 p-2"><Spinner /> Looking up quote...</div>
           )}
 
-          <Field label="Store" hint="Defaults to PO store. Override per item if needed.">
+          <Field label="Centre" hint="Defaults to PO centre. Override per item if needed.">
             <select className="input w-full text-sm" value={itemForm.store_id}
               onChange={e => setItemForm(f => ({ ...f, store_id: e.target.value }))}>
-              <option value="">{selected.store_id ? 'Use PO default store' : 'Select store...'}</option>
+              <option value="">{selected.store_id ? 'Use PO default centre' : 'Select centre...'}</option>
               {activeStores.map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
             </select>
           </Field>
@@ -1187,9 +1187,9 @@ function PurchaseOrdersTab({ api, stores, vendors, ingredients, storeId, canWrit
       {showModal && (
         <Modal title="New Purchase Order" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="Store" hint="Optional. When set, new items default to this store.">
+            <Field label="Centre" hint="Optional. When set, new items default to this centre.">
               <select className="input w-full" value={newPO.store_id} onChange={e => setNewPO(f => ({ ...f, store_id: e.target.value }))}>
-                <option value="">No default store</option>
+                <option value="">No default centre</option>
                 {activeStores.map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
@@ -1508,9 +1508,9 @@ function GoodsInTab({ api, stores, vendors, ingredients, storeId, canWrite, show
       {showModal && (
         <Modal title="New Goods Received Note" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="Store *">
+            <Field label="Centre *">
               <select className="input w-full" value={newGRN.store_id} onChange={e => setNewGRN(f => ({ ...f, store_id: e.target.value }))}>
-                <option value="">Select store...</option>
+                <option value="">Select centre...</option>
                 {stores.filter(s => s.is_active).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
@@ -1857,9 +1857,9 @@ function InvoicesTab({ api, stores, vendors, ingredients, storeId, canWrite, sho
       {showModal && (
         <Modal title="New Invoice" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="Store *">
+            <Field label="Centre *">
               <select className="input w-full" value={newInv.store_id} onChange={e => setNewInv(f => ({ ...f, store_id: e.target.value }))}>
-                <option value="">Select store...</option>
+                <option value="">Select centre...</option>
                 {stores.filter(s => s.is_active).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
@@ -2018,7 +2018,7 @@ function WasteTab({ api, stores, ingredients, storeId, canWrite, showToast }: {
               <table className="w-full text-sm">
                 <thead><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
                   <th className="pb-2 pr-2">Ingredient</th><th className="pb-2 pr-2 w-24">Qty</th>
-                  <th className="pb-2 pr-2">Reason</th><th className="pb-2 pr-2">Store</th>
+                  <th className="pb-2 pr-2">Reason</th><th className="pb-2 pr-2">Centre</th>
                   <th className="pb-2 pr-2">Notes</th><th className="pb-2 w-8"></th>
                 </tr></thead>
                 <tbody>
@@ -2074,7 +2074,7 @@ function WasteTab({ api, stores, ingredients, storeId, canWrite, showToast }: {
                 <thead className="sticky top-0 bg-white z-10"><tr className="text-left text-xs text-text-3 uppercase tracking-wide border-b border-border">
                   <th className="pb-2 pr-3">Date</th><th className="pb-2 pr-3">Ingredient</th>
                   <th className="pb-2 pr-3 text-right">Qty</th><th className="pb-2 pr-3">Reason</th>
-                  <th className="pb-2 pr-3">Store</th><th className="pb-2 pr-3 text-right">Unit Cost</th>
+                  <th className="pb-2 pr-3">Centre</th><th className="pb-2 pr-3 text-right">Unit Cost</th>
                   <th className="pb-2">Notes</th>
                 </tr></thead>
                 <tbody>
@@ -2434,15 +2434,15 @@ function TransfersTab({ api, stores, ingredients, canWrite, showToast }: {
       {showModal && (
         <Modal title="New Transfer" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="From Store *">
+            <Field label="From Centre *">
               <select className="input w-full" value={newTransfer.from_store_id} onChange={e => setNewTransfer(f => ({ ...f, from_store_id: e.target.value }))}>
-                <option value="">Select store...</option>
+                <option value="">Select centre...</option>
                 {stores.filter(s => s.is_active).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
-            <Field label="To Store *">
+            <Field label="To Centre *">
               <select className="input w-full" value={newTransfer.to_store_id} onChange={e => setNewTransfer(f => ({ ...f, to_store_id: e.target.value }))}>
-                <option value="">Select store...</option>
+                <option value="">Select centre...</option>
                 {stores.filter(s => s.is_active && String(s.id) !== newTransfer.from_store_id).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
@@ -2751,9 +2751,9 @@ function StocktakeTab({ api, stores, ingredients, storeId, canWrite, showToast }
       {showModal && (
         <Modal title="New Stocktake" onClose={() => setShowModal(false)}>
           <div className="space-y-3">
-            <Field label="Store *">
+            <Field label="Centre *">
               <select className="input w-full" value={newST.store_id} onChange={e => setNewST(f => ({ ...f, store_id: e.target.value }))}>
-                <option value="">Select store...</option>
+                <option value="">Select centre...</option>
                 {stores.filter(s => s.is_active).map(s => <option key={s.id} value={String(s.id)}>{s.name} ({s.location_name})</option>)}
               </select>
             </Field>
@@ -2790,7 +2790,17 @@ type Tab = 'overview' | 'stores' | 'purchase-orders' | 'goods-in' | 'invoices' |
 export default function StockManagerPage() {
   const api = useApi()
   const { can } = usePermissions()
-  const canWrite = can('stock_manager', 'write')
+  // Granular stock permissions — each tab has its own feature
+  const perms = {
+    overview:        { read: can('stock_overview', 'read'),          write: can('stock_overview', 'write') },
+    stores:          { read: can('stock_overview', 'read'),          write: can('stock_overview', 'write') },
+    purchaseOrders:  { read: can('stock_purchase_orders', 'read'),   write: can('stock_purchase_orders', 'write') },
+    goodsIn:         { read: can('stock_goods_in', 'read'),          write: can('stock_goods_in', 'write') },
+    invoices:        { read: can('stock_invoices', 'read'),          write: can('stock_invoices', 'write') },
+    waste:           { read: can('stock_waste', 'read'),             write: can('stock_waste', 'write') },
+    transfers:       { read: can('stock_transfers', 'read'),         write: can('stock_transfers', 'write') },
+    stocktake:       { read: can('stock_stocktake', 'read'),         write: can('stock_stocktake', 'write') },
+  }
   const canWriteInventory = can('inventory', 'write')  // needed for quote creation from POs
 
   const [activeTab, setActiveTab] = useState<Tab>('overview')
@@ -2845,7 +2855,7 @@ export default function StockManagerPage() {
               onChange={e => setActiveStoreId(e.target.value ? Number(e.target.value) : null)}
               className="input text-sm py-1.5 w-56"
             >
-              <option value="">All stores</option>
+              <option value="">All centres</option>
               {stores.filter(s => s.is_active).map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.location_name})</option>
               ))}
@@ -2853,18 +2863,17 @@ export default function StockManagerPage() {
           </div>
         </div>
 
-        {/* Tab bar */}
+        {/* Tab bar — only show tabs the user has read access to */}
         <div className="flex gap-1 -mb-px overflow-x-auto">
           {([
-            { key: 'overview' as Tab, label: 'Overview' },
-            { key: 'stores' as Tab, label: 'Stores' },
-            { key: 'purchase-orders' as Tab, label: 'Purchase Orders' },
-            { key: 'goods-in' as Tab, label: 'Goods In' },
-            { key: 'invoices' as Tab, label: 'Invoices' },
-            { key: 'waste' as Tab, label: 'Waste' },
-            { key: 'transfers' as Tab, label: 'Transfers' },
-            { key: 'stocktake' as Tab, label: 'Stocktake' },
-          ]).map(t => (
+            { key: 'overview' as Tab, label: 'Overview', show: perms.overview.read },
+            { key: 'purchase-orders' as Tab, label: 'Purchase Orders', show: perms.purchaseOrders.read },
+            { key: 'goods-in' as Tab, label: 'Goods In', show: perms.goodsIn.read },
+            { key: 'invoices' as Tab, label: 'Invoices', show: perms.invoices.read },
+            { key: 'waste' as Tab, label: 'Waste', show: perms.waste.read },
+            { key: 'transfers' as Tab, label: 'Transfers', show: perms.transfers.read },
+            { key: 'stocktake' as Tab, label: 'Stocktake', show: perms.stocktake.read },
+          ]).filter(t => t.show).map(t => (
             <button
               key={t.key}
               onClick={() => setActiveTab(t.key)}
@@ -2877,16 +2886,15 @@ export default function StockManagerPage() {
         </div>
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — each tab gets its own canWrite from granular permissions */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {activeTab === 'overview' && <OverviewTab storeId={activeStoreId} api={api} stores={stores} />}
-        {activeTab === 'stores' && <StoresTab api={api} locations={locations} canWrite={canWrite} showToast={showToast} onStoresChange={loadRefData} />}
-        {activeTab === 'purchase-orders' && <PurchaseOrdersTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} canWriteInventory={canWriteInventory} showToast={showToast} />}
-        {activeTab === 'goods-in' && <GoodsInTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
-        {activeTab === 'invoices' && <InvoicesTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
-        {activeTab === 'waste' && <WasteTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
-        {activeTab === 'transfers' && <TransfersTab api={api} stores={stores} ingredients={ingredients} canWrite={canWrite} showToast={showToast} />}
-        {activeTab === 'stocktake' && <StocktakeTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={canWrite} showToast={showToast} />}
+        {activeTab === 'overview' && perms.overview.read && <OverviewTab storeId={activeStoreId} api={api} stores={stores} />}
+        {activeTab === 'purchase-orders' && perms.purchaseOrders.read && <PurchaseOrdersTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.purchaseOrders.write} canWriteInventory={canWriteInventory} showToast={showToast} />}
+        {activeTab === 'goods-in' && perms.goodsIn.read && <GoodsInTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.goodsIn.write} showToast={showToast} />}
+        {activeTab === 'invoices' && perms.invoices.read && <InvoicesTab api={api} stores={stores} vendors={vendors} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.invoices.write} showToast={showToast} />}
+        {activeTab === 'waste' && perms.waste.read && <WasteTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.waste.write} showToast={showToast} />}
+        {activeTab === 'transfers' && perms.transfers.read && <TransfersTab api={api} stores={stores} ingredients={ingredients} canWrite={perms.transfers.write} showToast={showToast} />}
+        {activeTab === 'stocktake' && perms.stocktake.read && <StocktakeTab api={api} stores={stores} ingredients={ingredients} storeId={activeStoreId} canWrite={perms.stocktake.write} showToast={showToast} />}
       </div>
 
       {/* Toast */}

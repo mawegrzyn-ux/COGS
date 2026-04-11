@@ -1410,18 +1410,20 @@ const migrations = [
      ('Over-production', 4), ('Quality issue', 5), ('Staff meal', 6), ('Other', 7)
    ON CONFLICT DO NOTHING`,
 
-  // ── Step 98: RBAC — add stock_manager feature to existing roles ────────────
-  `DO $$ DECLARE r RECORD; BEGIN
+  // ── Step 98: RBAC — add granular stock features to existing roles ───────────
+  `DO $$ DECLARE r RECORD; feat TEXT; BEGIN
      FOR r IN SELECT id, name FROM mcogs_roles LOOP
-       INSERT INTO mcogs_role_permissions (role_id, feature, access)
-       VALUES (r.id, 'stock_manager',
-         CASE
-           WHEN r.name = 'Admin'    THEN 'write'
-           WHEN r.name = 'Operator' THEN 'write'
-           WHEN r.name = 'Viewer'   THEN 'read'
-           ELSE 'none'
-         END
-       ) ON CONFLICT (role_id, feature) DO NOTHING;
+       FOREACH feat IN ARRAY ARRAY['stock_overview','stock_purchase_orders','stock_goods_in','stock_invoices','stock_waste','stock_transfers','stock_stocktake'] LOOP
+         INSERT INTO mcogs_role_permissions (role_id, feature, access)
+         VALUES (r.id, feat,
+           CASE
+             WHEN r.name = 'Admin'    THEN 'write'
+             WHEN r.name = 'Operator' THEN 'write'
+             WHEN r.name = 'Viewer'   THEN 'read'
+             ELSE 'none'
+           END
+         ) ON CONFLICT (role_id, feature) DO NOTHING;
+       END LOOP;
      END LOOP;
    END $$`,
 

@@ -87,17 +87,17 @@ router.use('/haccp',              ...can('haccp', 'read'),       write('haccp'),
 router.use('/locations',          ...can('haccp', 'read'),       write('haccp'),       require('./locations'));
 router.use('/location-groups',    ...can('haccp', 'read'),       write('haccp'),       require('./location-groups'));
 
-// ── Stock Manager ─────────────────────────────────────────────────────────────
-router.use('/stock-stores',       ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-stores'));
-router.use('/stock-levels',       ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-levels'));
-router.use('/purchase-orders',    ...can('stock_manager', 'read'), write('stock_manager'), require('./purchase-orders'));
-router.use('/order-templates',    ...can('stock_manager', 'read'), write('stock_manager'), require('./order-templates'));
-router.use('/goods-received',     ...can('stock_manager', 'read'), write('stock_manager'), require('./goods-received'));
-router.use('/invoices',           ...can('stock_manager', 'read'), write('stock_manager'), require('./invoices'));
-router.use('/credit-notes',       ...can('stock_manager', 'read'), write('stock_manager'), require('./credit-notes'));
-router.use('/waste',              ...can('stock_manager', 'read'), write('stock_manager'), require('./waste'));
-router.use('/stock-transfers',    ...can('stock_manager', 'read'), write('stock_manager'), require('./stock-transfers'));
-router.use('/stocktakes',         ...can('stock_manager', 'read'), write('stock_manager'), require('./stocktakes'));
+// ── Stock Manager (granular permissions per function) ─────────────────────────
+router.use('/stock-stores',       ...can('stock_overview', 'read'),          write('stock_overview'),          require('./stock-stores'));
+router.use('/stock-levels',       ...can('stock_overview', 'read'),          write('stock_overview'),          require('./stock-levels'));
+router.use('/purchase-orders',    ...can('stock_purchase_orders', 'read'),   write('stock_purchase_orders'),   require('./purchase-orders'));
+router.use('/order-templates',    ...can('stock_purchase_orders', 'read'),   write('stock_purchase_orders'),   require('./order-templates'));
+router.use('/goods-received',     ...can('stock_goods_in', 'read'),          write('stock_goods_in'),          require('./goods-received'));
+router.use('/invoices',           ...can('stock_invoices', 'read'),          write('stock_invoices'),          require('./invoices'));
+router.use('/credit-notes',       ...can('stock_invoices', 'read'),          write('stock_invoices'),          require('./credit-notes'));
+router.use('/waste',              ...can('stock_waste', 'read'),             write('stock_waste'),             require('./waste'));
+router.use('/stock-transfers',    ...can('stock_transfers', 'read'),         write('stock_transfers'),         require('./stock-transfers'));
+router.use('/stocktakes',         ...can('stock_stocktake', 'read'),         write('stock_stocktake'),         require('./stocktakes'));
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────
 router.use('/audit',              auth,                                               require('./audit'));

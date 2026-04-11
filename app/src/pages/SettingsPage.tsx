@@ -2962,19 +2962,27 @@ function UsersTab() {
 
 // ── Roles Tab ─────────────────────────────────────────────────────────────────
 
-const FEATURES_LIST: { key: Feature; label: string }[] = [
-  { key: 'dashboard',  label: 'Dashboard'  },
-  { key: 'inventory',  label: 'Inventory'  },
-  { key: 'recipes',    label: 'Recipes'    },
-  { key: 'menus',      label: 'Menus'      },
-  { key: 'allergens',  label: 'Allergens'  },
-  { key: 'haccp',      label: 'HACCP'      },
-  { key: 'markets',    label: 'Markets'    },
-  { key: 'categories', label: 'Categories' },
-  { key: 'settings',   label: 'Settings'   },
-  { key: 'import',     label: 'Import'     },
-  { key: 'ai_chat',    label: 'AI Chat'    },
-  { key: 'users',      label: 'Users'      },
+const FEATURES_LIST: { key: Feature | null; label: string; group?: boolean }[] = [
+  { key: 'dashboard',              label: 'Dashboard'        },
+  { key: 'inventory',              label: 'Inventory'        },
+  { key: 'recipes',                label: 'Recipes'          },
+  { key: 'menus',                  label: 'Menus'            },
+  { key: 'allergens',              label: 'Allergens'        },
+  { key: 'haccp',                  label: 'HACCP'            },
+  { key: 'markets',                label: 'Markets'          },
+  { key: 'categories',             label: 'Categories'       },
+  { key: 'settings',               label: 'Settings'         },
+  { key: 'import',                 label: 'Import'           },
+  { key: 'ai_chat',                label: 'AI Chat'          },
+  { key: 'users',                  label: 'Users'            },
+  { key: null,                     label: 'Stock Manager', group: true },
+  { key: 'stock_overview',         label: 'Overview & Centres'},
+  { key: 'stock_purchase_orders',  label: 'Purchase Orders'  },
+  { key: 'stock_goods_in',         label: 'Goods In'         },
+  { key: 'stock_invoices',         label: 'Invoices'         },
+  { key: 'stock_waste',            label: 'Waste'            },
+  { key: 'stock_transfers',        label: 'Transfers'        },
+  { key: 'stock_stocktake',        label: 'Stocktake'        },
 ]
 
 const ACCESS_CYCLE: AccessLevel[] = ['none', 'read', 'write']
@@ -3161,10 +3169,23 @@ function RolesTab() {
               </tr>
             </thead>
             <tbody>
-              {FEATURES_LIST.map(({ key, label }, rowIdx) => (
+              {FEATURES_LIST.map(({ key, label, group }, rowIdx) => {
+                // Group header row (visual separator)
+                if (group) return (
+                  <tr key={`group-${label}`} className="bg-gray-100">
+                    <td className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider text-text-3 border-r border-border sticky left-0 z-10 bg-gray-100" colSpan={1}>
+                      {label}
+                    </td>
+                    {roles.map(role => (
+                      <td key={role.id} className="border-r border-border last:border-r-0" />
+                    ))}
+                  </tr>
+                )
+                if (!key) return null
+                return (
                 <tr key={key} className={rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}>
                   {/* Feature label — sticky */}
-                  <td className={`px-4 py-2 font-medium text-text-1 text-xs border-r border-border sticky left-0 z-10 ${rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}`}>
+                  <td className={`px-4 py-2 font-medium text-text-1 text-xs border-r border-border sticky left-0 z-10 ${key.startsWith('stock_') ? 'pl-7' : ''} ${rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}`}>
                     {label}
                   </td>
                   {/* Permission cell per role */}
@@ -3196,7 +3217,7 @@ function RolesTab() {
                       </td>
                     )
                   })}
-                </tr>
+                </tr>)
               ))}
             </tbody>
           </table>

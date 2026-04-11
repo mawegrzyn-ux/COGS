@@ -5,7 +5,8 @@ export type Feature =
   | 'dashboard' | 'inventory' | 'recipes' | 'menus'
   | 'allergens' | 'haccp' | 'markets' | 'categories'
   | 'settings' | 'import' | 'ai_chat' | 'users'
-  | 'stock_manager'
+  | 'stock_overview' | 'stock_purchase_orders' | 'stock_goods_in'
+  | 'stock_invoices' | 'stock_waste' | 'stock_transfers' | 'stock_stocktake'
 
 export interface MeUser {
   id:              number

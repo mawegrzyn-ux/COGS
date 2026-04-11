@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
 import SettingsPage   from './SettingsPage'
+import { StoresTab }  from './StockManagerPage'
 import MediaLibrary   from '../components/MediaLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
@@ -13,6 +14,7 @@ import { Field, Spinner } from '../components/ui'
 type Section =
   | 'global-config'
   | 'location-structure'
+  | 'centres'
   | 'categories'
   | 'units'
   | 'price-levels'
@@ -33,6 +35,7 @@ interface SectionDef {
 const SECTIONS: SectionDef[] = [
   { id: 'global-config',      icon: '⚙️', label: 'Global Config',      feature: 'settings'   },
   { id: 'location-structure', icon: '🌍', label: 'Location Structure', feature: 'markets'    },
+  { id: 'centres',            icon: '🏪', label: 'Centres',             feature: 'stock_overview' },
   { id: 'categories',         icon: '🏷️', label: 'Categories',         feature: 'categories' },
   { id: 'units',              icon: '📐', label: 'Base Units',          feature: 'settings'   },
   { id: 'price-levels',       icon: '💰', label: 'Price Levels',        feature: 'settings'   },
@@ -41,7 +44,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
-  { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'stock_manager' },
+  { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'settings' },
 ]
 
 // ── Global Config section ─────────────────────────────────────────────────────
@@ -260,6 +263,41 @@ function GlobalConfigSection() {
   )
 }
 
+// ── Centres section (wraps StoresTab from StockManagerPage) ──────────────────
+
+function CentresSection() {
+  const api = useApi()
+  const { can } = usePermissions()
+  const canWrite = can('stock_overview', 'write')
+  const [locations, setLocations] = useState<{ id: number; name: string; country_name?: string; is_active: boolean }[]>([])
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+
+  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }, [])
+
+  const loadLocations = useCallback(async () => {
+    try {
+      const data = await api.get('/locations?active=true')
+      setLocations(data || [])
+    } catch { /* silent */ }
+  }, [api])
+
+  useEffect(() => { loadLocations() }, [loadLocations])
+
+  return (
+    <div className="flex flex-col h-full">
+      <StoresTab api={api} locations={locations} canWrite={canWrite} showToast={showToast} onStoresChange={loadLocations} />
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-semibold text-white ${toast.type === 'success' ? 'bg-accent' : 'bg-red-600'}`}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Stock Config section ──────────────────────────────────────────────────────
 
 function StockConfigSection() {
@@ -423,6 +461,7 @@ export default function ConfigurationPage() {
     switch (effectiveActive) {
       case 'global-config':      return <GlobalConfigSection />
       case 'location-structure': return <MarketsPage />
+      case 'centres':            return <CentresSection />
       case 'categories':         return <CategoriesPage />
       case 'units':              return <SettingsPage embedded initialTab="units" />
       case 'price-levels':       return <SettingsPage embedded initialTab="price-levels" />
