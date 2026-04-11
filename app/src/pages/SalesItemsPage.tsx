@@ -2254,7 +2254,7 @@ export default function SalesItemsPage() {
           <div className="flex gap-2 justify-end pt-4 mt-2 border-t border-border">
             <button className="btn btn-ghost" onClick={() => setShowNewMgModal(false)}>Cancel</button>
             <button className="btn btn-primary" disabled={!newMgForm.name.trim() || mgSaving}
-              onClick={() => createMg().then(() => { setShowNewMgModal(false); setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 }) })}>
+              onClick={() => createMg().then(() => { setShowNewMgModal(false); setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false }) })}>
               {mgSaving ? 'Creating…' : '+ Create Group'}
             </button>
           </div>

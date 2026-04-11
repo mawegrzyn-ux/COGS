@@ -1032,7 +1032,7 @@ export default function PosTesterPage() {
             {orderFlow.phase === 'combo' ? (
               <div className="flex flex-col flex-1 min-h-0">
                 {/* Top: combo step options (compact, auto-height) */}
-                <div className="p-3 border-b border-gray-100 shrink-0 overflow-y-auto" style={{ maxHeight: '45%' }}>
+                <div className="p-3 border-b border-gray-100 overflow-y-auto" style={{ height: '30%', minHeight: '30%', maxHeight: '30%' }}>
                   {renderComboStepSection()}
                 </div>
                 {/* Bottom: modifiers for selected option (scrollable) */}
