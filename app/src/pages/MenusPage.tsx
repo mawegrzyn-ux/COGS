@@ -3185,12 +3185,22 @@ ${tableHtml}
             api={api}
             onClose={() => setShowSmartScenario(false)}
             onApply={(changes, prompt) => {
-              const newOv = { ...priceOverrides }
+              const newPriceOv = { ...priceOverrides }
+              const newCostOv = { ...costOverrides }
               for (const c of changes) {
-                const key = `${c.menu_item_id}_l${c.level_id}`
-                newOv[key] = String(Math.round(c.new_price * 100) / 100)
+                if (c.field === 'price' && c.level_id) {
+                  const key = `${c.menu_item_id}_l${c.level_id}`
+                  newPriceOv[key] = String(Math.round(c.new_value * 100) / 100)
+                } else if (c.field === 'cost') {
+                  // Cost overrides use nat_key — find it from allLevelRows
+                  const row = allLevelRows.find(r => r.menu_item_id === c.menu_item_id)
+                  if (row?.nat_key) {
+                    newCostOv[row.nat_key] = String(Math.round(c.new_value * 100) / 100)
+                  }
+                }
               }
-              setPriceOverrides(newOv)
+              setPriceOverrides(newPriceOv)
+              setCostOverrides(newCostOv)
               addHistoryEntry('smart_scenario', `AI: ${prompt} (${changes.length} changes)`)
               markDirty()
               setShowSmartScenario(false)
@@ -4179,11 +4189,12 @@ function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: 
 
 interface SmartChange {
   menu_item_id: number
-  level_id: number
+  level_id: number | null
+  field: 'price' | 'cost'
   item_name: string
-  level_name: string
-  old_price: number
-  new_price: number
+  level_name?: string
+  old_value: number
+  new_value: number
   reason: string
 }
 
@@ -4310,6 +4321,7 @@ function SmartScenarioModal({ menuId, scenarioId, priceLevelId, currencySymbol, 
                         <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
                           <th className="px-3 py-2 w-8"></th>
                           <th className="text-left px-3 py-2">Item</th>
+                          <th className="text-left px-3 py-2">Type</th>
                           <th className="text-left px-3 py-2">Level</th>
                           <th className="text-right px-3 py-2">Current</th>
                           <th className="text-right px-3 py-2">Proposed</th>
@@ -4319,8 +4331,8 @@ function SmartScenarioModal({ menuId, scenarioId, priceLevelId, currencySymbol, 
                       </thead>
                       <tbody>
                         {result.changes.map((c: SmartChange, i: number) => {
-                          const pctChange = c.old_price > 0
-                            ? Math.round(((c.new_price - c.old_price) / c.old_price) * 1000) / 10
+                          const pctChange = c.old_value > 0
+                            ? Math.round(((c.new_value - c.old_value) / c.old_value) * 1000) / 10
                             : null
                           return (
                             <tr key={i} className={`border-t border-border ${checked.has(i) ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
@@ -4333,9 +4345,14 @@ function SmartScenarioModal({ menuId, scenarioId, priceLevelId, currencySymbol, 
                                   })} />
                               </td>
                               <td className="px-3 py-2 font-medium">{c.item_name}</td>
-                              <td className="px-3 py-2 text-text-3">{c.level_name}</td>
-                              <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_price).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_price).toFixed(2)}</td>
+                              <td className="px-3 py-2">
+                                <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${c.field === 'cost' ? 'bg-orange-50 text-orange-700' : 'bg-blue-50 text-blue-700'}`}>
+                                  {c.field}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-text-3">{c.level_name || '—'}</td>
+                              <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_value).toFixed(2)}</td>
+                              <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_value).toFixed(2)}</td>
                               <td className={`px-3 py-2 text-right font-mono text-xs ${pctChange && pctChange > 0 ? 'text-red-600' : pctChange && pctChange < 0 ? 'text-green-600' : 'text-text-3'}`}>
                                 {pctChange != null ? `${pctChange > 0 ? '+' : ''}${pctChange}%` : '\u2014'}
                               </td>
