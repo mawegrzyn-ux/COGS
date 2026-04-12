@@ -1584,6 +1584,177 @@ const migrations = [
        ) ON CONFLICT (role_id, feature) DO NOTHING;
      END LOOP;
    END $$`,
+
+  // ── Step 108: Seed Known Bugs Fixed + Backlog from CLAUDE.md ────────────
+  // Idempotent — ON CONFLICT (key) DO NOTHING.  Sequences are bumped past
+  // the highest seeded key so that future manual entries start above.
+
+  `DO $$ BEGIN
+    -- ── Bugs (known fixes, all resolved) ─────────────────────────────────
+    INSERT INTO mcogs_bugs (key, summary, description, priority, severity, status, labels, page, resolution) VALUES
+      ('BUG-1001', 'Mixed Content Error (HTTP vs HTTPS)',
+       'deploy.yml was hardcoding http:// when constructing VITE_API_URL at build time. 1,252+ blocked network requests.',
+       'highest', 'critical', 'resolved', '["from-claude-md","ci-cd"]'::jsonb, 'CI/CD',
+       'Use the GitHub secret reference directly instead of hardcoding http:// prefix.'),
+
+      ('BUG-1002', 'Infinite useEffect Loop',
+       'useApi() returned a new object literal on every render, causing useCallback/useEffect to re-fire infinitely. Thousands of API requests per second.',
+       'highest', 'critical', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'All Pages',
+       'Wrap useApi return object in useMemo.'),
+
+      ('BUG-1003', 'Express Trust Proxy Error',
+       'express-rate-limit throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request. API errors preventing any POST requests.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'API',
+       'Added app.set(''trust proxy'', 1) in index.js.'),
+
+      ('BUG-1004', 'ColumnHeader Dropdown Clipping',
+       'Filter/sort dropdown in column headers clipped inside overflow-x-auto table wrapper.',
+       'medium', 'minor', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'DataGrid',
+       'Changed to fixed positioning calculated from getBoundingClientRect().'),
+
+      ('BUG-1005', 'TypeScript Build Failure (ImportPage)',
+       'CI/CD failed at Vite build: PageHeader called with description prop (should be subtitle), TD self-closing without optional children.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Import',
+       'Renamed prop to subtitle, made TD children optional.'),
+
+      ('BUG-1006', 'import.js Router Export Shape',
+       'Express threw Router.use() requires a middleware function after extracting stageFileContent. Route registration broke.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'Import',
+       'Changed index.js to require(''./import'').router.'),
+
+      ('BUG-1007', 'Recipe Import Silently Failing (Wrong Column Names)',
+       'Recipes never appeared in DB after import. insert used qty instead of prep_qty, and included non-existent sort_order column.',
+       'highest', 'critical', 'resolved', '["from-claude-md","api"]'::jsonb, 'Import',
+       'Corrected to prep_qty, removed sort_order from INSERT.'),
+
+      ('BUG-1008', 'Shared View Comment Count Mismatch',
+       'Comments badge showed 9 but only 3 comments visible. Badge counted all change types instead of only comment type.',
+       'medium', 'minor', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Menus',
+       'Filter badge count to change_type = comment only. Price changes moved to History tab.'),
+
+      ('BUG-1009', 'Shared View Reply Posted to Wrong Shared Page',
+       'Reply from ME always posted to shared view A (active[0]) regardless of originating view. Multi-shared-view replies misrouted.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Menus',
+       'Tag each change row with shared_page_id; pass replyTo.shared_page_id when posting.'),
+
+      ('BUG-1010', 'Pepper Conversation Lost on Panel Mode Switch',
+       'Switching Pepper between float, docked-left, and docked-right cleared conversation history. Three conditional branches each remounted AiChat.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Pepper AI',
+       'Render single always-mounted AiChat, control position via CSS order.'),
+
+      ('BUG-1011', 'AI Chat Focus Loss on Every Keystroke',
+       'Typing in Pepper chat textarea lost focus after each character. ChatPanel/HistoryPanel defined inside AiChat body created unstable component identities.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Pepper AI',
+       'Moved ChatPanel and HistoryPanel to module level. Added useEffect to restore focus after streaming.'),
+
+      ('BUG-1012', 'Sidebar Does Not Span Full Viewport Height',
+       'Sidebar green border stopped short of bottom of screen. Wrapper div used h-full which does not always resolve inside flex.',
+       'low', 'minor', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Layout',
+       'Changed wrapper from h-full to flex flex-col self-stretch.'),
+
+      ('BUG-1013', 'Anthropic 400 Error (input_str Extra Field)',
+       'messages.N.content.0.text.input_str: Extra inputs are not permitted — 400 error on 9th+ message in multi-turn tool conversations.',
+       'highest', 'critical', 'resolved', '["from-claude-md","api"]'::jsonb, 'Pepper AI',
+       'Destructure input_str off block before pushing to assistantContent.'),
+
+      ('BUG-1014', 'category-groups.js PM2 Crash (Wrong require Path)',
+       'PM2 crashed on startup with Cannot find module ../db from category-groups.js.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'API',
+       'Changed require(''../db'') to require(''../db/pool'').'),
+
+      ('BUG-1015', 'Migration Crash: CREATE INDEX on Already-Dropped category Column',
+       'npm run migrate failed with column category does not exist. Early CREATE INDEX on column that was dropped by later FK migration.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'Migration',
+       'Wrapped old index creations in DO blocks that check column existence first.'),
+
+      ('BUG-1016', 'Combo Step Option Modal Missing Recipe/Ingredient Selector',
+       'Add/Edit Option modal for combo step options had no recipe or ingredient search field. Only manual_cost field rendered.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Sales Items',
+       'Added recipe and ingredient combobox selectors to ComboOptionForm.'),
+
+      ('BUG-1017', 'Allergen Matrix Showed UNCATEGORISED for Combo/Manual Items',
+       'Combo-type and manual-type sales items showed UNCATEGORISED in Category column even when category was assigned.',
+       'medium', 'minor', 'resolved', '["from-claude-md","api"]'::jsonb, 'Allergens',
+       'Added LEFT JOIN on si.category_id and updated category resolution per item type.'),
+
+      ('BUG-1018', 'Sales Items Edit Panel Markets/Modifiers Stacked in Details Form',
+       'All fields, market checkboxes, AND modifier badges scrolled together in one long form. Panel was cluttered.',
+       'medium', 'minor', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Sales Items',
+       'Introduced panelTab state with Details/Markets/Modifiers tabs.'),
+
+      ('BUG-1019', 'Combos Tab Inconsistent Delete Icons',
+       'Combo step options used x text buttons for deletion instead of SVG trash icons. Separate cogwheel button was redundant.',
+       'low', 'trivial', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Sales Items',
+       'Replaced with SVG trash icons. Step header click now expands AND opens side panel.'),
+
+      ('BUG-1020', 'Modifiers Tab Inline Edit Forms Cluttered',
+       'Three separate inline forms resulted in cluttered hard-to-use UI inconsistent with Combos tab.',
+       'medium', 'minor', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Sales Items',
+       'Full refactor to match Combos tab side-panel pattern. Added qty field and sort arrows.'),
+
+      ('BUG-1021', 'TransfersTab Wrong API Path',
+       'Entire Transfers tab returned 404 on all operations. Frontend called /transfers but API route is /stock-transfers.',
+       'high', 'major', 'resolved', '["from-claude-md","frontend"]'::jsonb, 'Stock Manager',
+       'Replaced all /transfers references with /stock-transfers.'),
+
+      ('BUG-1022', 'Invoice/Transfer/GRN Status Changes Used Wrong HTTP Method',
+       'Status transitions failed silently. Frontend used api.patch() but backend has dedicated POST endpoints.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'Stock Manager',
+       'Changed all status change handlers to use api.post() with dedicated endpoints.'),
+
+      ('BUG-1023', 'Invoice From-GRN Created Items With Zero Values',
+       'Creating invoice from confirmed GRN produced line items with zero quantity and price. Wrong column names in query.',
+       'high', 'major', 'resolved', '["from-claude-md","api"]'::jsonb, 'Stock Manager',
+       'Changed to correct column names: qty_received and unit_price.')
+
+    ON CONFLICT (key) DO NOTHING;
+
+    -- Bump bug sequence past highest seeded key
+    PERFORM setval('mcogs_bug_number_seq', GREATEST(nextval('mcogs_bug_number_seq'), 1024));
+
+    -- ── Backlog items ────────────────────────────────────────────────────────
+    INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+      ('BACK-1001', 'Category Groups cleanup — drop group_name VARCHAR',
+       'mcogs_category_groups table is live. group_id FK is canonical. Old group_name VARCHAR column on mcogs_categories should be dropped once all consumers are confirmed to use group_id.',
+       'task', 'low', 'backlog', '["from-claude-md","cleanup"]'::jsonb, 1),
+
+      ('BACK-1002', 'Missing Price Quotes Report',
+       'Report that surfaces ingredients used in menu recipes that have no preferred vendor quote for a selected market/country. Useful for identifying pricing gaps before costing a menu in a new region.',
+       'story', 'medium', 'backlog', '["from-claude-md","reports"]'::jsonb, 2),
+
+      ('BACK-1003', 'Auth0 API Audience — JWT validation',
+       'Add proper API-level JWT validation. Create Auth0 API, get audience identifier, add VITE_AUTH0_AUDIENCE secret, pass audience in authorizationParams, add JWT verification middleware.',
+       'task', 'medium', 'backlog', '["from-claude-md","auth"]'::jsonb, 3),
+
+      ('BACK-1004', 'Smart Scenario — Ingredient-Level Cost Overrides',
+       'Allow AI to increase cost of a specific ingredient within recipes. Requires ingredient identification, cost override granularity (r_5_i_12 key format), COGS recalculation, cascade through sub-recipes. Estimated 2-3 days.',
+       'epic', 'medium', 'backlog', '["from-claude-md","menus","ai"]'::jsonb, 4),
+
+      ('BACK-1005', 'Voice Interface for Pepper (Tier 1 — Browser APIs)',
+       'Push-to-talk mic button with SpeechRecognition API, voice output via speechSynthesis. Browser-only, zero cost, ~2 days. Chromium-only for input.',
+       'story', 'low', 'backlog', '["from-claude-md","ai","pepper"]'::jsonb, 5),
+
+      ('BACK-1006', 'Voice Interface for Pepper (Tier 2 — External APIs)',
+       'Whisper/Deepgram for transcription, OpenAI TTS/ElevenLabs for playback. Requires new API key fields, server-side proxy endpoint, streaming audio queue manager. ~$15-50/mo.',
+       'story', 'lowest', 'backlog', '["from-claude-md","ai","pepper"]'::jsonb, 6),
+
+      ('BACK-1007', 'Lightsail Upgrade to $20/mo',
+       'Current $10/mo instance (2GB RAM, 1 vCPU) is dev/staging tier. Upgrade to $20/mo (4GB RAM, 2 vCPU) for production. Take Lightsail snapshot before upgrading.',
+       'task', 'medium', 'backlog', '["from-claude-md","infrastructure"]'::jsonb, 7),
+
+      ('BACK-1008', 'Reports Page',
+       'Missing price quotes report; cross-market COGS comparison. Route TBD, medium priority.',
+       'story', 'medium', 'backlog', '["from-claude-md","reports"]'::jsonb, 8),
+
+      ('BACK-1009', 'AI Chat get_menu_cogs does not return price-level prices',
+       'Pepper get_menu_cogs tool queries legacy mcogs_menu_items.sell_price instead of mcogs_menu_sales_item_prices per price level. Also list_markets does not return default_price_level_id.',
+       'task', 'high', 'todo', '["ai","pepper","bug-adjacent"]'::jsonb, 9)
+
+    ON CONFLICT (key) DO NOTHING;
+
+    -- Bump backlog sequence past highest seeded key
+    PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1010));
+  END $$`,
 ];
 
 async function runMigrations(pool) {

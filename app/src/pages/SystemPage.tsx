@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import SettingsPage from './SettingsPage'
 import PosTesterPage from './PosTesterPage'
+import BugsBacklogPage from './BugsBacklogPage'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 
@@ -1076,6 +1077,7 @@ function ClaudeDocSection() {
 
 type Section =
   | 'ai'
+  | 'bugs-backlog'   // Bugs & Backlog tracker
   | 'audit-log'      // Central audit trail — admin-only
   | 'storage'        // Media storage config (local vs S3) — admin-only
   | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
@@ -1098,6 +1100,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { id: 'ai',               icon: '🤖', label: 'AI' },
+  { id: 'bugs-backlog',     icon: '🐛', label: 'Bugs & Backlog' },
   { id: 'audit-log',        icon: '📋', label: 'Audit Log',        gate: 'admin' },
   { id: 'storage',          icon: '☁️', label: 'Storage',           gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
@@ -1139,6 +1142,7 @@ export default function SystemPage() {
   function renderContent() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
+      case 'bugs-backlog':     return <BugsBacklogPage embedded />
       case 'audit-log':        return canManageSettings
                                   ? <AuditLogSection />
                                   : <GatedFallback reason="admin" />

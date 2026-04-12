@@ -86,7 +86,7 @@ function fmtDate(iso: string) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-export default function BugsBacklogPage() {
+export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {}) {
   const api = useApi()
   const { can, isDev } = usePermissions()
 
@@ -236,8 +236,8 @@ export default function BugsBacklogPage() {
   ]
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-4">
-      <PageHeader title="Bugs & Backlog" subtitle="Track issues and manage the development backlog" />
+    <div className={`${embedded ? 'p-4' : 'p-6'} max-w-[1400px] mx-auto space-y-4`}>
+      {!embedded && <PageHeader title="Bugs & Backlog" subtitle="Track issues and manage the development backlog" />}
 
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-border">
