@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 25 tables (all prefixed `mcogs_`) |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 78 tables (all prefixed `mcogs_`), 107 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -93,30 +93,44 @@ COGS/
 │       │   ├── useApi.ts           # Auth0-aware API fetch hook ← CRITICAL
 │       │   └── useSortFilter.ts    # Sort + multi-select filter hook
 │       ├── components/
-│       │   ├── AppLayout.tsx       # Main layout shell (sidebar + outlet)
+│       │   ├── AppLayout.tsx       # Main layout shell (sidebar + outlet + Pepper dock)
 │       │   ├── Sidebar.tsx         # Collapsible left nav
 │       │   ├── Logo.tsx            # SVG logo component
 │       │   ├── LoadingScreen.tsx   # Auth0 loading spinner
 │       │   ├── DataGrid.tsx        # Generic sortable/filterable grid
 │       │   ├── ColumnHeader.tsx    # Sort + multi-select filter dropdown
-│       │   ├── AiChat.tsx          # Pepper AI chat panel (SSE streaming)
+│       │   ├── AiChat.tsx          # Pepper AI chat panel (SSE streaming, dockable)
+│       │   ├── PermissionsProvider.tsx  # RBAC context provider (loads /me)
+│       │   ├── MediaLibrary.tsx    # Reusable media library browser
+│       │   ├── ImageUpload.tsx     # Image upload component
+│       │   ├── ImageEditor.tsx     # Image crop/resize editor
+│       │   ├── PwaInstallModal.tsx # PWA install prompt
 │       │   └── ui.tsx              # Shared UI: PageHeader, Modal, Field,
 │       │                           #   EmptyState, Spinner, ConfirmDialog,
-│       │                           #   Toast, Badge
+│       │                           #   Toast, Badge, CalcInput, PepperHelpButton
 │       └── pages/
 │           ├── LoginPage.tsx
-│           ├── DashboardPage.tsx   # KPI tiles, coverage, recent quotes
-│           ├── SettingsPage.tsx    # Units, Price Levels, Exchange Rates
-│           ├── CountriesPage.tsx   # Countries + currencies + tax rates
-│           ├── CategoriesPage.tsx  # Ingredient/recipe categories
+│           ├── PendingPage.tsx     # Shown when user status is 'pending'
+│           ├── DashboardPage.tsx   # KPI tiles, coverage, menu tiles
+│           ├── ConfigurationPage.tsx   # Unified config hub (replaces Settings/Markets/Categories/Import)
+│           ├── SystemPage.tsx      # System info, architecture docs, DB management, audit log
+│           ├── SettingsPage.tsx    # Legacy — embedded by ConfigurationPage/SystemPage
+│           ├── CountriesPage.tsx   # Legacy — redirects to /configuration
+│           ├── CategoriesPage.tsx  # Legacy — redirects to /configuration
+│           ├── MarketsPage.tsx     # Legacy — redirects to /configuration
+│           ├── LocationsPage.tsx   # Legacy — redirects to /configuration
+│           ├── ImportPage.tsx      # AI-powered data import wizard
 │           ├── InventoryPage.tsx   # Ingredients, vendors, price quotes
 │           ├── RecipesPage.tsx     # Recipe builder with COGS calculation
+│           ├── SalesItemsPage.tsx  # Sales item catalog (recipe/ingredient/manual/combo)
 │           ├── MenusPage.tsx       # Menu builder (Menus/Menu Engineer/Shared Links tabs)
-│           ├── ImportPage.tsx      # AI-powered data import wizard
 │           ├── AllergenMatrixPage.tsx  # Allergen matrix (EU/UK FIC 14)
 │           ├── HACCPPage.tsx       # HACCP temp logs & CCP logs
-│           ├── MarketsPage.tsx     # Markets (countries) + brand partners
-│           ├── StockManagerPage.tsx # Stock Manager (8 tabs: Overview/Stores/POs/GRN/Invoices/Waste/Transfers/Stocktake)
+│           ├── StockManagerPage.tsx # Stock Manager (8 tabs)
+│           ├── BugsBacklogPage.tsx # Bug tracker + feature backlog
+│           ├── MediaLibraryPage.tsx # Media library manager (images, S3/local)
+│           ├── PosTesterPage.tsx   # POS functional mockup (System → POS Mockup)
+│           ├── SharedMenuPage.tsx  # Public shared menu page (no auth, /share/:slug)
 │           └── HelpPage.tsx        # Help & documentation
 │
 ├── api/                            # Node.js/Express API
@@ -124,12 +138,21 @@ COGS/
 │   ├── .env                        # NOT in git — see env vars section
 │   └── src/
 │       ├── index.js                # Express entry point
+│       ├── db/
+│       │   ├── pool.js             # PostgreSQL connection pool (supports local + standalone)
+│       │   └── config.js           # DB mode detection, pool config builder
+│       ├── middleware/
+│       │   └── auth.js             # requireAuth, requirePermission, applyMarketScope
 │       ├── helpers/
 │       │   ├── agenticStream.js    # Shared SSE agentic loop (ai-chat + ai-upload)
-│       │   └── audit.js            # Audit logger: logAudit() + diffFields()
+│       │   ├── audit.js            # Audit logger: logAudit() + diffFields()
+│       │   └── github.js           # GitHub REST API wrapper (PAT-based)
 │       └── routes/
-│           ├── index.js            # Route registry
+│           ├── index.js            # Route registry (53+ routes)
 │           ├── health.js
+│           ├── me.js               # Current user profile + permissions
+│           ├── users.js            # User management (approve/disable/role)
+│           ├── roles.js            # RBAC role + permission matrix
 │           ├── settings.js
 │           ├── units.js
 │           ├── price-levels.js
@@ -138,6 +161,7 @@ COGS/
 │           ├── tax-rates.js
 │           ├── country-level-tax.js
 │           ├── categories.js
+│           ├── category-groups.js  # Category groups CRUD
 │           ├── vendors.js
 │           ├── brand-partners.js   # Brand partners CRUD
 │           ├── ingredients.js
@@ -145,20 +169,38 @@ COGS/
 │           ├── preferred-vendors.js
 │           ├── recipes.js
 │           ├── menus.js
+│           ├── scenarios.js        # Menu scenarios (qty/price/cost overrides, smart scenario)
 │           ├── menu-items.js
 │           ├── menu-item-prices.js
-│           ├── cogs.js
+│           ├── shared-pages.js     # Shared menu engineer pages (public + auth)
+│           ├── sales-items.js      # Sales item catalog CRUD
+│           ├── combos.js           # Standalone combos CRUD
+│           ├── combo-templates.js  # Combo templates CRUD
+│           ├── modifier-groups.js  # Modifier groups + options CRUD
+│           ├── menu-sales-items.js # Menu ↔ sales items link
+│           ├── cogs.js             # COGS calculation engine
 │           ├── allergens.js
 │           ├── nutrition.js        # USDA nutrition proxy
 │           ├── haccp.js
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # Pepper AI chat (87 tools)
+│           ├── ai-chat.js          # Pepper AI chat (92 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
+│           ├── db-config.js        # Database management (local ↔ standalone switch)
+│           ├── memory.js           # Pepper memory (pinned notes + user profile)
+│           ├── media.js            # Media library CRUD (local disk + S3)
+│           ├── media-file.js       # Public media file serving (no auth)
+│           ├── upload.js           # Generic image upload (local/S3)
+│           ├── docs.js             # CLAUDE.md viewer API
 │           ├── feedback.js
 │           ├── internal-feedback.js
+│           ├── bugs.js             # Bug tracker CRUD
+│           ├── backlog.js          # Feature backlog CRUD
+│           ├── internal-bugs.js    # Internal bug submission (no auth)
+│           ├── internal-backlog.js # Internal backlog submission (no auth)
+│           ├── seed.js             # Test data seeder (admin only)
 │           ├── stock-stores.js         # Stock stores CRUD (sub-locations)
 │           ├── stock-levels.js         # Stock on hand, adjustments, movements
 │           ├── purchase-orders.js      # Purchase order lifecycle
@@ -233,7 +275,17 @@ DB_USER=mcogs
 DB_PASSWORD=<generated strong password — check server>
 NODE_ENV=production
 PORT=3001
+CONFIG_STORE_SECRET=<64-char hex key for AES-256-GCM encryption — see below>
 ```
+
+### Two-Database Architecture (Config Store)
+
+The API uses a **two-database system**:
+
+1. **`mcogs_config`** (always local) — stores encrypted DB connection settings and API keys via AES-256-GCM. Never moves to a remote host.
+2. **`mcogs`** (local OR standalone) — all transactional/application data.
+
+`CONFIG_STORE_SECRET` is a 64-character hex key used to encrypt sensitive values in the config store. Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
 The API also supports **standalone mode** for running PostgreSQL on a
 separate host (e.g. AWS RDS). Set `DB_MODE=standalone`, point `DB_HOST` at
@@ -244,6 +296,19 @@ the current database into a new target in one click — from the UI at
 [`docs/DATABASE.md`](./docs/DATABASE.md) and
 [`api/.env.example`](./api/.env.example) for the full variable reference,
 the Migrate Data & Switch walkthrough, and the AWS RDS setup steps.
+
+### Database Management API (`/api/db-config`)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/db-config` | Current stored + active config (password masked) |
+| `POST /api/db-config/test` | Dry-run candidate config |
+| `PUT /api/db-config` | Save & validate new config |
+| `POST /api/db-config/restart` | Graceful exit for PM2 respawn |
+| `POST /api/db-config/migrate` | Schema migrations on active pool |
+| `POST /api/db-config/probe` | Ping current pool |
+| `POST /api/db-config/migrate-preview` | Count rows on source vs target |
+| `POST /api/db-config/migrate-data` | Copy schema + all data, then save |
 
 ---
 
@@ -373,59 +438,86 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 
 ### Tables
 
-| # | Table | Purpose |
-|---|---|---|
-| 1 | `mcogs_units` | Measurement units (kg, litre, each, etc.) |
-| 2 | `mcogs_price_levels` | Price levels (Eat-in, Takeout, Delivery) |
-| 3 | `mcogs_countries` | Countries with currency codes, symbols, exchange rates, default price level |
-| 4 | `mcogs_country_tax_rates` | Tax rates per country (e.g. UK VAT 20%) |
-| 5 | `mcogs_country_level_tax` | Junction: which tax rate applies to which price level per country |
-| 6 | `mcogs_categories` | Ingredient/recipe/sales-item categories with `group_id` FK → `mcogs_category_groups` and scope flags (`for_ingredients`, `for_recipes`, `for_sales_items`) |
-| 7 | `mcogs_vendors` | Suppliers/vendors, linked to a country |
-| 8 | `mcogs_ingredients` | Ingredient master list with base unit, waste %, prep conversion |
-| 9 | `mcogs_price_quotes` | Vendor pricing per ingredient: purchase price, qty, unit, active flag |
-| 10 | `mcogs_ingredient_preferred_vendor` | Per ingredient+country: which vendor+quote is preferred |
-| 11 | `mcogs_recipes` | Recipe definitions with yield qty and yield unit |
-| 12 | `mcogs_recipe_items` | Recipe line items: ingredient or sub-recipe, `prep_qty`, prep unit, conversion |
-| 13 | `mcogs_menus` | Menu definitions, linked to a country |
-| 14 | `mcogs_menu_items` | Menu line items: recipe or ingredient, display name, sort order, allergen_notes |
-| 15 | `mcogs_menu_item_prices` | Sell prices per menu item per price level, with tax rate |
-| 16 | `mcogs_locations` | Physical store locations — linked to market, optional group, address, contact details |
-| 17 | `mcogs_location_groups` | Clusters of locations (e.g. "London Central") — optional grouping |
-| 18 | `mcogs_allergens` | EU/UK FIC reference allergens (14 regulated) |
-| 19 | `mcogs_ingredient_allergens` | Junction: allergen status per ingredient (contains/may_contain/free_from) |
-| 20 | `mcogs_equipment` | HACCP equipment register — linked to location |
-| 21 | `mcogs_equipment_temp_logs` | Temperature readings per equipment |
-| 22 | `mcogs_ccp_logs` | CCP logs (cooking/cooling/delivery) — linked to location |
-| 23 | `mcogs_brand_partners` | Brand/franchise partners (e.g. "McDonald's UK") — linked to markets |
-| 24 | `mcogs_import_jobs` | AI import staging jobs: raw AI output, enriched rows, status, created_by |
-| 25 | `mcogs_ai_chat_log` | Pepper AI conversation log: messages, tools_called, token counts, context JSONB |
-| 26 | `mcogs_roles` | RBAC roles (Admin/Operator/Viewer + custom). `is_system` protects built-in roles |
-| 27 | `mcogs_role_permissions` | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
-| 28 | `mcogs_users` | App users mapped from Auth0 sub. Stores status (`pending`/`active`/`disabled`), role, `is_dev` flag, last login |
-| 29 | `mcogs_user_brand_partners` | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
-| 30 | `mcogs_stores` | Sub-locations within a location (kitchen, bar, walk-in). `is_store_itself` flag. UNIQUE(location_id, name) |
-| 31 | `mcogs_stock_levels` | Materialized stock on hand per store per ingredient. UNIQUE(store_id, ingredient_id) |
-| 32 | `mcogs_stock_movements` | Immutable audit ledger of all stock changes. Types: goods_in, waste, transfer_out/in, stocktake_adjust, etc. |
-| 33 | `mcogs_purchase_orders` | PO lifecycle: draft → submitted → partial → received → cancelled |
-| 34 | `mcogs_purchase_order_items` | PO line items with per-item store_id, quote_id link |
-| 35 | `mcogs_order_templates` | Saved PO templates for recurring vendor orders |
-| 36 | `mcogs_order_template_items` | Template line items |
-| 37 | `mcogs_goods_received` | GRN lifecycle: draft → confirmed. On confirm: updates stock |
-| 38 | `mcogs_goods_received_items` | GRN line items |
-| 39 | `mcogs_invoices` | Invoice lifecycle: draft → pending → approved → paid → disputed |
-| 40 | `mcogs_invoice_items` | Invoice line items (ingredient optional — supports non-ingredient charges) |
-| 41 | `mcogs_credit_notes` | Credit note lifecycle: draft → submitted → approved → applied |
-| 42 | `mcogs_credit_note_items` | Credit note line items |
-| 43 | `mcogs_waste_reason_codes` | Configurable waste reason codes (Expired, Damaged, Spillage, etc.) |
-| 44 | `mcogs_waste_log` | Waste events with quantity, cost, reason code |
-| 45 | `mcogs_stock_transfers` | Two-step transfers: pending → in_transit → confirmed. CHECK(from != to) |
-| 46 | `mcogs_stock_transfer_items` | Transfer line items with qty_sent and qty_received |
-| 47 | `mcogs_stocktakes` | Stocktake sessions: full or spot_check. in_progress → completed → approved |
-| 48 | `mcogs_stocktake_items` | Count items with expected/counted/variance. UNIQUE(stocktake_id, ingredient_id) |
-| 49 | `mcogs_audit_log` | Central audit trail: action, entity, field_changes JSONB, context JSONB, related_entities JSONB |
-| 50 | `mcogs_user_notes` | Pepper memory: pinned notes per user (user_sub, content TEXT, created_at). Migration step 102 |
-| 51 | `mcogs_user_profiles` | Pepper memory: user profile per user (user_sub UNIQUE, display_name, profile_json JSONB, long_term_summary TEXT). Migration step 103 |
+| # | Table | Step | Purpose |
+|---|---|---|---|
+| 1 | `mcogs_units` | 1 | Measurement units (kg, litre, each, etc.) |
+| 2 | `mcogs_price_levels` | 2 | Price levels (Dine In, Delivery) |
+| 3 | `mcogs_countries` | 3 | Countries with currency codes, symbols, exchange rates, default price level |
+| 4 | `mcogs_country_tax_rates` | 4 | Tax rates per country (e.g. UK VAT 20%) |
+| 5 | `mcogs_country_level_tax` | 5 | Junction: which tax rate applies to which price level per country |
+| 6 | `mcogs_categories` | 6 | Categories with `group_id` FK → `mcogs_category_groups` and scope flags (`for_ingredients`, `for_recipes`, `for_sales_items`) |
+| 7 | `mcogs_vendors` | 7 | Suppliers/vendors, linked to a country |
+| 8 | `mcogs_ingredients` | 8 | Ingredient master list with base unit, waste %, prep conversion |
+| 9 | `mcogs_price_quotes` | 9 | Vendor pricing per ingredient: purchase price, qty, unit, active flag |
+| 10 | `mcogs_ingredient_preferred_vendor` | 10 | Per ingredient+country: which vendor+quote is preferred |
+| 11 | `mcogs_recipes` | 11 | Recipe definitions with yield qty and yield unit |
+| 12 | `mcogs_recipe_items` | 12 | Recipe line items: ingredient or sub-recipe, `prep_qty`, prep unit, conversion |
+| 13 | `mcogs_menus` | 13 | Menu definitions, linked to a country |
+| 14 | `mcogs_menu_items` | 14 | Legacy menu line items (superseded by `mcogs_menu_sales_items`) |
+| 15 | `mcogs_menu_item_prices` | 15 | Sell prices per menu item per price level, with tax rate |
+| 16 | `mcogs_locations` | 16 | Physical store locations — linked to market, optional group, address, contact details |
+| 17 | `mcogs_location_groups` | 22 | Clusters of locations (e.g. "London Central") — optional grouping |
+| 18 | `mcogs_allergens` | 17 | EU/UK FIC reference allergens (14 regulated) |
+| 19 | `mcogs_ingredient_allergens` | 18 | Junction: allergen status per ingredient (contains/may_contain/free_from) |
+| 20 | `mcogs_equipment` | 19 | HACCP equipment register — linked to location |
+| 21 | `mcogs_equipment_temp_logs` | 20 | Temperature readings per equipment |
+| 22 | `mcogs_ccp_logs` | 21 | CCP logs (cooking/cooling/delivery) — linked to location |
+| 23 | `mcogs_brand_partners` | 23 | Brand/franchise partners — linked to markets |
+| 24 | `mcogs_feedback` | 24 | User feedback submissions |
+| 25 | `mcogs_ai_chat_log` | 25 | Pepper AI conversation log: messages, tools_called, token counts, context JSONB |
+| 26 | `mcogs_import_jobs` | 26 | AI import staging jobs: raw AI output, enriched rows, status, created_by |
+| 27 | `mcogs_menu_scenarios` | 27-28 | Saved scenarios with qty_data, price_overrides, cost_overrides, history JSONB |
+| 28 | `mcogs_shared_pages` | 29 | Shared menu engineer pages (slug, password, mode, expiry) |
+| 29 | `mcogs_shared_page_changes` | 30 | Change log for shared page edits (price changes, comments) |
+| 30 | `mcogs_recipe_pl_variations` | 31-32 | Recipe price-level and market+PL variations |
+| 31 | `mcogs_roles` | 33 | RBAC roles (Admin/Operator/Viewer + custom). `is_system` protects built-in roles |
+| 32 | `mcogs_role_permissions` | 34 | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
+| 33 | `mcogs_users` | 35 | App users mapped from Auth0 sub. Stores status, role, `is_dev` flag, last login |
+| 34 | `mcogs_user_brand_partners` | 36 | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
+| 35 | `mcogs_sales_items` | 39 | Sales item catalog (item_type: recipe/ingredient/manual/combo, category_id, image_url) |
+| 36 | `mcogs_sales_item_markets` | 40 | Per-item market visibility + `is_active` flag |
+| 37 | `mcogs_sales_item_prices` | 41 | Default sell prices per item per price level |
+| 38 | `mcogs_modifier_groups` | 42 | Reusable modifier group definitions (name, min/max_select, allow_repeat_selection, default_auto_show) |
+| 39 | `mcogs_modifier_options` | 43 | Options within a modifier group (item_type, recipe/ingredient/manual, price_addon, qty) |
+| 40 | `mcogs_sales_item_modifier_groups` | 44 | Junction: sales_items ↔ modifier_groups (auto_show nullable) |
+| 41 | `mcogs_combo_steps` | 45 | Steps within a combo (linked via combo_id) |
+| 42 | `mcogs_combo_step_options` | 46 | Options per combo step (item_type, recipe/ingredient/manual, price_addon) |
+| 43 | `mcogs_combo_step_option_modifier_groups` | 47 | Junction: combo step options ↔ modifier_groups (auto_show nullable) |
+| 44 | `mcogs_menu_sales_items` | 48 | Menu ↔ sales_items link (sort_order, allergen_notes, qty) |
+| 45 | `mcogs_menu_sales_item_prices` | 49 | Per-menu price overrides per sales item per price level |
+| 46 | `mcogs_category_groups` | 50 | Unified category groups (name, sort_order) — canonical grouping mechanism |
+| 47 | `mcogs_combos` | 68 | Standalone combos table (name, description, image_url) |
+| 48 | `mcogs_combo_templates` | 74 | Combo templates (reusable combo configurations) |
+| 49 | `mcogs_combo_template_steps` | 75 | Template steps |
+| 50 | `mcogs_combo_template_step_options` | 76 | Template step options |
+| 51 | `mcogs_media_categories` | 83 | Media library categories (name, sort_order) |
+| 52 | `mcogs_media_items` | 84 | Media items (original + thumb + web variants, local/S3, scope/form_key) |
+| 53 | `mcogs_menu_combo_option_prices` | — | Menu-level combo step option price overrides per price level |
+| 54 | `mcogs_menu_modifier_option_prices` | — | Menu-level modifier option price overrides per price level |
+| 55 | `mcogs_stores` | 86 | Sub-locations within a location (kitchen, bar, walk-in). `is_store_itself` flag |
+| 56 | `mcogs_stock_levels` | 87 | Materialized stock on hand per store per ingredient. UNIQUE(store_id, ingredient_id) |
+| 57 | `mcogs_stock_movements` | 88 | Immutable audit ledger of all stock changes |
+| 58 | `mcogs_purchase_orders` | 89 | PO lifecycle: draft → submitted → partial → received → cancelled |
+| 59 | `mcogs_purchase_order_items` | 89 | PO line items with per-item store_id, quote_id link |
+| 60 | `mcogs_order_templates` | 90 | Saved PO templates for recurring vendor orders |
+| 61 | `mcogs_order_template_items` | 90 | Template line items |
+| 62 | `mcogs_goods_received` | 91 | GRN lifecycle: draft → confirmed. On confirm: updates stock |
+| 63 | `mcogs_goods_received_items` | 91 | GRN line items |
+| 64 | `mcogs_invoices` | 92 | Invoice lifecycle: draft → pending → approved → paid → disputed |
+| 65 | `mcogs_invoice_items` | 92 | Invoice line items (ingredient optional — supports non-ingredient charges) |
+| 66 | `mcogs_credit_notes` | 93 | Credit note lifecycle: draft → submitted → approved → applied |
+| 67 | `mcogs_credit_note_items` | 93 | Credit note line items |
+| 68 | `mcogs_waste_reason_codes` | 94 | Configurable waste reason codes (Expired, Damaged, Spillage, etc.) |
+| 69 | `mcogs_waste_log` | 94 | Waste events with quantity, cost, reason code |
+| 70 | `mcogs_stock_transfers` | 95 | Two-step transfers: pending → in_transit → confirmed. CHECK(from != to) |
+| 71 | `mcogs_stock_transfer_items` | 95 | Transfer line items with qty_sent and qty_received |
+| 72 | `mcogs_stocktakes` | 96 | Stocktake sessions: full or spot_check. in_progress → completed → approved |
+| 73 | `mcogs_stocktake_items` | 96 | Count items with expected/counted/variance. UNIQUE(stocktake_id, ingredient_id) |
+| 74 | `mcogs_audit_log` | 100 | Central audit trail: action, entity, field_changes JSONB, context JSONB, related_entities JSONB |
+| 75 | `mcogs_user_notes` | 102 | Pepper memory: pinned notes per user (user_sub, note TEXT, created_at) |
+| 76 | `mcogs_user_profiles` | 103 | Pepper memory: user profile (user_sub UNIQUE, display_name, profile_json JSONB, long_term_summary TEXT) |
+| 77 | `mcogs_bugs` | 107 | Bug tracker (key, summary, priority, status, severity, labels JSONB) |
+| 78 | `mcogs_backlog` | 107 | Feature backlog (key, summary, item_type, priority, status, story_points) |
 
 ### Key Schema Details
 
@@ -534,8 +626,19 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/preferred-vendors` | `preferred-vendors.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/recipes` | `recipes.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/menus` | `menus.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/scenarios` | `scenarios.js` | ✅ Active — menu scenarios (qty/price/cost overrides, history, smart scenario) |
+| `POST /api/scenarios/push-prices` | `scenarios.js` | ✅ Active — push scenario price overrides to live menu |
+| `POST /api/scenarios/smart` | `scenarios.js` | ✅ Active — Claude Haiku-powered price/cost change proposals |
+| `POST /api/scenarios/analysis` | `scenarios.js` | ✅ Active — menu items with base cost, effective cost, price per level |
 | `GET/POST/PUT/DELETE /api/menu-items` | `menu-items.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/menu-item-prices` | `menu-item-prices.js` | ✅ Active |
+| `GET/POST/PUT/DELETE /api/shared-pages` | `shared-pages.js` | ✅ Active — shared menu engineer pages (auth routes) |
+| `GET/POST /api/public/share/:slug` | `shared-pages.js` | ✅ Active — public shared pages (no auth) |
+| `GET/POST/PUT/DELETE /api/sales-items` | `sales-items.js` | ✅ Active — sales item catalog (recipe/ingredient/manual/combo) |
+| `GET/POST/PUT/DELETE /api/combos` | `combos.js` | ✅ Active — standalone combos + steps + options |
+| `GET/POST/PUT/DELETE /api/combo-templates` | `combo-templates.js` | ✅ Active — reusable combo templates |
+| `GET/POST/PUT/DELETE /api/modifier-groups` | `modifier-groups.js` | ✅ Active — modifier groups + options CRUD |
+| `GET/POST/PUT/DELETE /api/menu-sales-items` | `menu-sales-items.js` | ✅ Active — menu ↔ sales items link + per-menu prices |
 | `GET /api/cogs` | `cogs.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/allergens` | `allergens.js` | ✅ Active |
 | `PATCH /api/allergens/ingredient/:id/notes` | `allergens.js` | ✅ Active — saves allergen_notes to mcogs_ingredients |
@@ -553,9 +656,11 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
 | `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by Pepper) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 87 tools (includes web search, GitHub, and Excel export) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 92 tools (includes web search, GitHub, and Excel export) |
+| `GET /api/ai-chat/my-usage` | `ai-chat.js` | ✅ Active — current period token usage stats |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
+| `GET/POST/PUT/DELETE /api/db-config` | `db-config.js` | ✅ Active — database management (local ↔ standalone switch, migrate data) |
 | `GET/POST/PUT/DELETE /api/stock-stores` | `stock-stores.js` | ✅ Active — requires `stock_overview:read` / `stock_overview:write` |
 | `GET/PUT/POST /api/stock-levels` | `stock-levels.js` | ✅ Active — stock on hand, adjustments, movements query |
 | `GET/POST/PUT/DELETE /api/purchase-orders` | `purchase-orders.js` | ✅ Active — PO lifecycle + line items + quote-lookup |
@@ -569,6 +674,16 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/audit` | `audit.js` | ✅ Active — central audit log query (entity, field, stats) |
 | `GET/POST/DELETE /api/memory/notes` | `memory.js` | ✅ Active — pinned notes for Pepper memory |
 | `GET/PUT /api/memory/profile` | `memory.js` | ✅ Active — user profile for Pepper memory |
+| `GET/POST/PUT/DELETE /api/media` | `media.js` | ✅ Active — media library CRUD (upload, categorize, bulk ops) |
+| `POST /api/media/migrate-to-s3` | `media.js` | ✅ Active — SSE migration from local to S3 |
+| `GET /api/media/img/:filename` | `media-file.js` | ✅ Active — public media file serving (no auth) |
+| `POST /api/upload` | `upload.js` | ✅ Active — generic image upload (local disk or S3) |
+| `GET /api/docs/claude-md` | `docs.js` | ✅ Active — CLAUDE.md raw content viewer |
+| `POST /api/seed` | `seed.js` | ✅ Active — test data seeder (admin only) |
+| `GET/POST /api/feedback` | `feedback.js` | ✅ Active — user feedback |
+| `GET/POST/PUT/DELETE /api/bugs` | `bugs.js` | ✅ Active — bug tracker CRUD |
+| `GET/POST/PUT/DELETE /api/backlog` | `backlog.js` | ✅ Active — feature backlog CRUD |
+| `GET/POST /api/category-groups` | `category-groups.js` | ✅ Active — category groups CRUD |
 
 ### Exchange Rate Sync
 
@@ -637,21 +752,47 @@ Generic data grid with:
 
 ```tsx
 /login            → LoginPage (public)
+/share/:slug      → SharedMenuPage (public, no auth)
 /                 → ProtectedRoute → AppLayout (Outlet)
   /dashboard      → DashboardPage
-  /settings       → SettingsPage
-  /markets        → MarketsPage        (countries/currencies/brand partners)
-  /categories     → CategoriesPage
-  /inventory      → InventoryPage
+  /configuration  → ConfigurationPage   (unified config hub)
+  /system         → SystemPage          (architecture, DB management, audit log)
+  /inventory      �� InventoryPage
   /recipes        → RecipesPage
+  /sales-items    → SalesItemsPage
   /menus          → MenusPage
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
-  /import         → ImportPage
   /stock-manager  → StockManagerPage
+  /bugs-backlog   → BugsBacklogPage
+  /media          → MediaLibraryPage
   /help           → HelpPage
-  /countries      → redirects to /markets
-  /locations      → redirects to /markets
+  /pos-tester     → PosTesterPage
+  /settings       → redirects to /configuration
+  /markets        → redirects to /configuration
+  /countries      → redirects to /configuration
+  /locations      → redirects to /configuration
+  /categories     → redirects to /configuration
+  /import         → redirects to /configuration
+```
+
+### Sidebar Navigation
+
+```
+Dashboard          feature: dashboard
+Inventory          feature: inventory
+Recipes            feature: recipes
+Sales Items        feature: menus
+Menus              feature: menus
+─────────────────
+Allergens          feature: allergens
+HACCP              feature: haccp
+Stock Manager      features: stock_overview + 6 granular stock features
+─────────────────
+Bugs & Backlog     feature: bugs
+Configuration      feature: settings
+System             feature: null (always visible)
+Help               feature: null (always visible)
 ```
 
 To activate a new page route:
@@ -748,17 +889,34 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 
 ## 12. Pages Built
 
-### ✅ Settings Page (`/settings`)
+### ✅ Configuration Page (`/configuration`)
 
-**Tabs:** Units | Price Levels | Exchange Rates | System | COGS Thresholds | AI | Import | Users | Roles
+Unified configuration hub that replaced the separate Settings, Markets, Categories, and Import pages. All legacy routes (`/settings`, `/markets`, `/countries`, `/locations`, `/categories`, `/import`) redirect here.
+
+**Sections:** Global Config | Location Structure | Categories | Base Units | Price Levels | Currency | COGS Thresholds | Users & Roles | Import | Media Library | Stock Config
 
 - Full CRUD for Units (`mcogs_units`) and Price Levels (`mcogs_price_levels`)
-- Exchange Rates tab syncs from Frankfurter API — no key needed
-- System tab: database info, future admin tools
+- Exchange Rates syncs from Frankfurter API — no key needed
 - COGS Thresholds: configure green/amber/red target percentages
-- AI tab: API keys (Anthropic, Voyage, Brave, GitHub PAT + Repo), Concise Mode toggle, Claude Code key generator, **Monthly Token Allowance** (per-user monthly cap, billing period 25th→24th, reset each 25th), token usage stats with per-user period progress bars
+- Users & Roles: user management (approve/disable/role/dev flag), RBAC permission matrix
+- Import: AI-powered data import wizard (embedded from ImportPage)
+- Media Library: media library settings and category management
+- Stock Config: stock manager global settings
 
-### ✅ Countries Page (`/countries`)
+### ✅ System Page (`/system`)
+
+System administration and documentation hub.
+
+**Sections:** AI | Database | Test Data | CLAUDE.md | Architecture | API Reference | Security | Troubleshooting | Domain Migration | Audit Log | POS Mockup
+
+- **AI** — Embeds Settings → AI (API keys, token usage, concise mode)
+- **Database** — DB connection mode (local vs standalone/RDS), test/save/migrate/switch. Gated by `settings:write` (amber ADMIN badge)
+- **Test Data** — Load Test / Load Small / Clear / Load Defaults. Gated by `is_dev` (purple DEV badge). All destructive actions behind `DateConfirmDialog` (ddmmyyyy)
+- **CLAUDE.md** — Project documentation viewer. Gated by `is_dev` (purple DEV badge)
+- **Audit Log** — Central audit trail viewer with filters and expandable rows
+- **POS Mockup** — Embedded POS functional tester
+
+### ✅ Countries Page (`/countries`) — Legacy, redirects to /configuration
 
 - CRUD for countries with currency code, symbol, exchange rate
 - Per-country tax rates (supports multiple rates per country with `is_default` flag)
@@ -986,13 +1144,51 @@ Full inventory management module with 8 tabs. Requires `stock_manager` RBAC perm
 
 **Tab 8: Stocktake** — Three-panel: session list → count entry grid → item detail. Full count: "Populate All" from stock_levels. Spot check: add specific items. Variance calculation on complete. Approve adjusts stock to counted quantities.
 
+### ✅ Bugs & Backlog Page (`/bugs-backlog`)
+
+Two-tab interface for tracking bugs and feature backlog items.
+
+- **Bugs tab** — CRUD for bug reports with key (BUG-1001+), summary, priority, severity, status (open/in_progress/resolved/closed/wont_fix), labels JSONB, assignee, page reference, steps to reproduce
+- **Backlog tab** — CRUD for feature requests with key (BL-1001+), summary, item_type (story/task/epic/improvement), priority, status (backlog/todo/in_progress/in_review/done/wont_do), story points, sprint, acceptance criteria
+- RBAC: `bugs` feature (everyone write), `backlog` feature (admin write, others read)
+
+### ✅ Media Library Page (`/media`)
+
+Image management with local disk and S3 storage support.
+
+- Upload images with automatic variant generation (original, _thumb 300px, _web 1200px)
+- Category organization, scope filtering (shared/form-specific)
+- Grid and list view with focus-vs-select model (single mode: click=focus, checkbox=add; multi mode: click anywhere=toggle)
+- Bulk operations: move to category, bulk delete
+- S3 migration via SSE progress stream
+- Tables: `mcogs_media_categories`, `mcogs_media_items` (migration steps 83-85)
+
+### ✅ POS Tester Page (`/pos-tester`)
+
+POS functional mockup accessible via System → POS Mockup.
+
+- Three-panel layout: check (order summary) | menu grid (category tiles) | order flow
+- Combo step walker with auto-advance for single-choice steps
+- Modifier groups with repeat selection (+/- stepper) and auto_show (inline vs popup)
+- Fullscreen portal overlay, mock receipt modal with print
+- Category-grouped tile grid, price level selector
+- No DB tables — reads from `/cogs/menu-sales/:id`
+
+### ✅ Shared Menu Page (`/share/:slug`)
+
+Public password-protected page for external reviewers (no auth required).
+
+- Mode: `view` (read-only) or `edit` (recipient can change sell prices)
+- Optional: pin to specific scenario, expiry date, enable/disable
+- Price changes logged and surfaced in Menu Engineer History tab
+- Comments posted via shared links appear in Menu Engineer Comments tab
+
 ---
 
 ## 13. Pages Remaining to Build
 
 | Page | Route | Priority | Notes |
 |---|---|---|---|
-| **System Admin** | `/settings` → System tab | Medium | DB migration runner, import/export, health info |
 | **Reports** | TBD | Medium | Missing price quotes report; cross-market COGS comparison |
 
 ### Adding a New Page — Checklist
@@ -1010,7 +1206,7 @@ Full inventory management module with 8 tabs. Requires `stock_manager` RBAC perm
 
 > **Full AI documentation:** [`docs/AI.md`](docs/AI.md) — covers current implementation, memory system design, voice interface scope, all DB tables, API routes, and cost estimates.
 
-Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appears as a floating chat panel (bottom-right) or can be docked to the left or right side of the screen. It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
+Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can be docked to the left, right, or bottom of the screen (no float mode). It uses server-sent events (SSE) for streaming responses and supports an agentic loop where Claude can call tools to read and write data.
 
 ### Architecture
 
@@ -1023,7 +1219,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It appea
 - **Web search config:** `BRAVE_SEARCH_API_KEY` stored via `GET/PUT /api/ai-config` — if set, `search_web` tool uses Brave Search; otherwise DuckDuckGo instant answer fallback
 - **GitHub config:** `GITHUB_PAT` and `GITHUB_REPO` stored via `GET/PUT /api/ai-config` — enables 8 GitHub tools when set. Helper: `api/src/helpers/github.js`
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
-- **Panel mode:** `PepperMode = 'float' | 'docked-left' | 'docked-right'` — persisted in `localStorage('pepper-mode')`. Docked modes render as a full-height flex column in `AppLayout`; float is fixed-position popup
+- **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
 ### Tool Count: 92
 
@@ -1166,13 +1362,13 @@ Three system roles are seeded automatically and cannot be deleted:
 | **Operator** | `write` on most features; `read` on settings; `none` on users |
 | **Viewer** | `read` on all features except settings/import/users (`none`) |
 
-Custom roles can be created in Settings → Roles and assigned any combination.
+Custom roles can be created in Configuration → Users & Roles and assigned any combination.
 
-### Features (19)
+### Features (21)
 
-`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake`
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake` · `bugs` · `backlog`
 
-> **Note:** The original single `stock_manager` feature was replaced by 7 granular stock features to allow per-tab RBAC control within the Stock Manager module.
+> **Note:** The original single `stock_manager` feature was replaced by 7 granular stock features to allow per-tab RBAC control within the Stock Manager module. `bugs` and `backlog` were added in migration step 107b.
 
 ### User Lifecycle
 
@@ -1184,7 +1380,7 @@ Disabled         → 403 on every request, shown disabled message
 
 ### Developer Flag (`is_dev`)
 
-Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOLEAN DEFAULT FALSE`). This is toggled per-user by an Admin in Settings → Users via the `</>` button in the Actions column.
+Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOLEAN DEFAULT FALSE`). This is toggled per-user by an Admin in Configuration → Users & Roles via the `</>` button in the Actions column.
 
 **What `is_dev` unlocks:**
 
@@ -1192,7 +1388,7 @@ Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOL
 |---|---|---|
 | **System → Test Data** section | Hidden | Visible (marked purple DEV badge) |
 | **System → CLAUDE.md** section | Hidden | Visible (marked purple DEV badge) |
-| **Settings → Test Data** tab | Hidden | Visible (marked purple DEV badge) |
+| **System → Test Data** section | Hidden | Visible (marked purple DEV badge) |
 
 The flag is separate from roles — a Viewer or Operator can be granted dev access independently of their COGS permissions.
 
@@ -1237,8 +1433,8 @@ mcogs_user_brand_partners → mcogs_brand_partners → mcogs_countries
 - **`app/src/components/PermissionsProvider.tsx`** — loads `/api/me` on auth change, provides `can(feature, level)`, `isDev`, and `allowedCountries`
 - **`app/src/pages/PendingPage.tsx`** — shown when `user.status === 'pending'`
 - **Sidebar** — hides nav items where `can(feature, 'read')` is false
-- **Settings → Users tab** — list/approve/disable/delete users, change role, assign BP scope, toggle `is_dev` (the `</>` button)
-- **Settings → Roles tab** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
+- **Configuration → Users & Roles** — list/approve/disable/delete users, change role, assign BP scope, toggle `is_dev` (the `</>` button)
+- **Configuration → Users & Roles** — permission matrix (features × roles), click cell to cycle `— → R → W`, saves instantly
 - **System → Database** — only visible when `can('settings', 'write')`; marked with an amber `ADMIN` badge. Embeds `SettingsPage initialTab="database"` — the DB connection config (local vs standalone/RDS), test/save/migrate/switch flow.
 - **System → Test Data** — only visible when `isDev`; marked with a purple `DEV` badge. Embeds `SettingsPage initialTab="test-data"`. All destructive actions (Load Test Data, Load Small, Clear Database, Load Defaults) are gated behind the `DateConfirmDialog` — the user must type today's date as `ddmmyyyy` before the confirm button activates.
 
@@ -2142,8 +2338,10 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 
 ---
 
-*README last updated: April 2026 (session: POS Mockup + Smart Scenario + CalcInput + Pepper docking redesign + modifier enhancements — POS Mockup built (PosTesterPage.tsx, three-panel POS simulator with combo step walker, modifier groups, receipt modal, fullscreen portal, category-grouped tiles); Smart Scenario built (POST /scenarios/smart, Claude Haiku prompt, SmartScenarioModal with price/cost change proposals and checkboxes); CalcInput math expression evaluator component (ui.tsx, wired into PO item form + Inventory conversion/waste fields); Pepper docking redesigned (removed float mode, added docked-bottom with resizable panel 200px-60vh, three modes: left/right/bottom, conversation preserved across switches); allow_repeat_selection flag on modifier groups (migration step 104, +/- stepper UI in POS, SalesItems checkbox); auto_show flag on modifier junction tables (migration step 105, eye toggle in SalesItems, POS splits inline vs popup modifiers); PO improvements (3 lots: per-item store + quote lookup + save-as-quote, configurable prefixes + backdated toggle, global quote creation toggle + per-role override); security fixes (SHARED_PAGE_SECRET crypto.randomBytes, deploy.yml domain parameterised, negative qty validation); 20+ bug fixes (transfers API path, status change HTTP methods, invoice from-GRN columns, Smart Scenario price calc, POS combo auto-advance, media library selection logic, various TS build errors); docs created: SECURITY_AUDIT.md, AI_MEMORY_REVIEW.md)*
+*README last updated: April 2026 (session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects. Removed System Admin from Pages Remaining (now built). Added two-database architecture docs.)*
 
-*README previous session: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (migration steps 102-103), 3 new Pepper tools, /api/memory routes, RBAC expanded 13→19 features, Stores→Centres rename, Audit Log, 3 UAT bug fixes*
+*README previous session: POS Mockup + Smart Scenario + CalcInput + Pepper docking redesign + modifier enhancements — POS Mockup built, Smart Scenario built, CalcInput component, Pepper docking (left/right/bottom), allow_repeat_selection + auto_show modifier flags, PO improvements, security fixes, 20+ bug fixes, docs: SECURITY_AUDIT.md, AI_MEMORY_REVIEW.md*
 
-*README two sessions ago: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*
+*README two sessions ago: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (migration steps 102-103), 3 new Pepper tools, /api/memory routes, RBAC expanded 13→19 features, Stores→Centres rename, Audit Log, 3 UAT bug fixes*
+
+*README three sessions ago: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*
