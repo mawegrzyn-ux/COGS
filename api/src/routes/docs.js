@@ -7,9 +7,10 @@ router.get('/claude-md', async (req, res) => {
   try {
     // Try multiple possible locations for CLAUDE.md
     const candidates = [
-      path.resolve(__dirname, '..', '..', '..', 'CLAUDE.md'),   // repo root (local dev)
-      path.resolve(process.cwd(), 'CLAUDE.md'),                  // CWD (if run from api/)
-      path.resolve(process.cwd(), '..', 'CLAUDE.md'),            // CWD parent (if CWD is api/src)
+      path.resolve(__dirname, '..', '..', '..', 'CLAUDE.md'),   // repo root (from api/src/routes/)
+      path.resolve(process.cwd(), 'CLAUDE.md'),                  // CWD (if run from repo root)
+      path.resolve(process.cwd(), '..', 'CLAUDE.md'),            // CWD parent (if CWD is api/)
+      '/var/www/menu-cogs/CLAUDE.md',                             // absolute production path
     ];
 
     let content = null;

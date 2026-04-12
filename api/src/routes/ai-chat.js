@@ -1631,7 +1631,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       // Call the full COGS calculation endpoint internally
       const port = process.env.PORT || 3001;
       const qs   = effectivePlId ? `?price_level_id=${effectivePlId}` : '';
-      const resp = await fetch(`http://localhost:${port}/api/cogs/menu/${menu_id}${qs}`, {
+      const resp = await fetch(`http://localhost:${port}/api/cogs/menu-sales/${menu_id}${qs}`, {
         headers: { 'x-internal-service': INTERNAL_SERVICE_KEY },
       });
       if (!resp.ok) return { error: `COGS endpoint returned ${resp.status}` };
