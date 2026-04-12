@@ -106,7 +106,7 @@ function ArchitectureSection() {
             ['Frontend',      'React 18 + Vite + TypeScript',        'SPA, no SSR. Auth0 SPA SDK.'],
             ['Styling',       'Tailwind CSS 3 + CSS variables',       'Custom design tokens in tailwind.config.js'],
             ['API',           'Node.js 20 + Express 4',               'REST API on port 3001. Helmet, Morgan, rate-limit.'],
-            ['Database',      'PostgreSQL 16',                        '26 tables, all prefixed mcogs_'],
+            ['Database',      'PostgreSQL 16',                        '78 tables, all prefixed mcogs_'],
             ['Auth',          'Auth0 (obscurekitty.uk.auth0.com)',     'Username/password + Google OAuth — tenant fixed, app domain separate'],
             ['Web Server',    'Nginx',                                 'Reverse proxy + SSL termination'],
             ['Process Mgr',  'PM2 (ubuntu user)',                     'Auto-restart + log rotation'],
@@ -128,7 +128,7 @@ function ArchitectureSection() {
         <div className="text-[#6B7F74]">{'// Single AWS Lightsail instance — all services on one box'}</div>
         <div className="mt-2">
           <span className="text-[#E8F5ED]">Browser</span>
-          <span className="text-[#6B7F74]"> (React SPA — https://cogs.flavorconnect.tech)</span>
+          <span className="text-[#6B7F74]"> (React SPA — https://cogs.macaroonie.com)</span>
         </div>
         <div className="text-[#1E8A44] ml-4">↕ HTTPS :443</div>
         <div><span className="text-[#E8F5ED]">Nginx</span><span className="text-[#6B7F74]"> (reverse proxy + Let's Encrypt SSL)</span></div>
@@ -236,7 +236,7 @@ function ApiReferenceSection() {
     <div className="p-6 max-w-4xl">
       <H2 icon="📡" title="API Reference" />
       <p className="text-sm text-[#2D4A38] mb-1">
-        Production base URL: <Mono>https://cogs.flavorconnect.tech/api</Mono>
+        Production base URL: <Mono>https://cogs.macaroonie.com/api</Mono>
       </p>
       <p className="text-sm text-[#2D4A38] mb-3">
         Local dev base URL: <Mono>http://localhost:3001/api</Mono>
@@ -246,104 +246,88 @@ function ApiReferenceSection() {
         The server verifies it by calling Auth0's <Mono>/userinfo</Mono> endpoint (5-min cache).
       </InfoBox>
 
+      <p className="text-xs text-[#6B7F74] mb-2">53+ routes across all modules. Key groups shown below — full reference in CLAUDE.md section 9.</p>
       <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
         <thead><tr><Th>Method</Th><Th>Endpoint</Th><Th>Description</Th></tr></thead>
         <tbody>
           {([
-            ['GET',    '/health',                          'Health check — {"status":"ok"} if DB is reachable'],
-            ['GET',    '/settings',                        'Retrieve system settings (JSONB blob)'],
-            ['PUT',    '/settings',                        'Replace system settings'],
-            ['PATCH',  '/settings',                        'Partial update system settings'],
-            ['GET',    '/units',                           'List all units of measurement'],
-            ['POST',   '/units',                           'Create a unit'],
-            ['PUT',    '/units/:id',                       'Update a unit'],
-            ['DELETE', '/units/:id',                       'Delete a unit'],
-            ['GET',    '/price-levels',                    'List all price levels'],
-            ['POST',   '/price-levels',                    'Create a price level'],
-            ['PUT',    '/price-levels/:id',                'Update a price level'],
-            ['DELETE', '/price-levels/:id',                'Delete a price level'],
-            ['POST',   '/sync-exchange-rates',             'Sync exchange rates from Frankfurter API'],
-            ['GET',    '/countries',                       'List all markets/countries'],
-            ['POST',   '/countries',                       'Create a market'],
-            ['PUT',    '/countries/:id',                   'Update a market'],
-            ['DELETE', '/countries/:id',                   'Delete a market'],
-            ['GET',    '/tax-rates',                       'List tax rates (filterable by ?country_id=)'],
-            ['POST',   '/tax-rates',                       'Create a tax rate'],
-            ['PUT',    '/tax-rates/:id',                   'Update a tax rate'],
-            ['DELETE', '/tax-rates/:id',                   'Delete a tax rate'],
-            ['GET',    '/country-level-tax',               'List country-level tax mappings'],
-            ['POST',   '/country-level-tax',               'Create a mapping (country × price level × tax rate)'],
-            ['DELETE', '/country-level-tax/:id',           'Delete a mapping'],
-            ['GET',    '/categories',                      'List categories (?type=ingredient|recipe)'],
-            ['POST',   '/categories',                      'Create a category'],
-            ['PUT',    '/categories/:id',                  'Update a category'],
-            ['DELETE', '/categories/:id',                  'Delete a category'],
-            ['GET',    '/vendors',                         'List vendors'],
-            ['POST',   '/vendors',                         'Create a vendor'],
-            ['PUT',    '/vendors/:id',                     'Update a vendor'],
-            ['DELETE', '/vendors/:id',                     'Delete a vendor'],
-            ['GET',    '/ingredients',                     'List all ingredients'],
-            ['POST',   '/ingredients',                     'Create an ingredient'],
-            ['PUT',    '/ingredients/:id',                 'Update an ingredient'],
-            ['DELETE', '/ingredients/:id',                 'Delete an ingredient'],
-            ['GET',    '/price-quotes',                    'List price quotes (?ingredient_id=)'],
-            ['POST',   '/price-quotes',                    'Create a price quote'],
-            ['PUT',    '/price-quotes/:id',                'Update a quote'],
-            ['DELETE', '/price-quotes/:id',                'Delete a quote'],
-            ['GET',    '/preferred-vendors',               'List preferred vendor assignments'],
-            ['POST',   '/preferred-vendors',               'Set a preferred vendor for ingredient+country'],
-            ['DELETE', '/preferred-vendors/:id',           'Remove an assignment'],
-            ['GET',    '/recipes',                         'List all recipes'],
-            ['POST',   '/recipes',                         'Create a recipe'],
-            ['PUT',    '/recipes/:id',                     'Update recipe header (name, yield, category)'],
-            ['DELETE', '/recipes/:id',                     'Delete a recipe'],
-            ['GET',    '/menus',                           'List menus (?country_id=)'],
-            ['POST',   '/menus',                           'Create a menu for a market'],
-            ['PUT',    '/menus/:id',                       'Update a menu'],
-            ['DELETE', '/menus/:id',                       'Delete a menu'],
-            ['GET',    '/menu-items',                      'List menu items (?menu_id=)'],
-            ['POST',   '/menu-items',                      'Add item to a menu'],
-            ['PUT',    '/menu-items/:id',                  'Update menu item (display name, sort order)'],
-            ['DELETE', '/menu-items/:id',                  'Remove item from menu'],
-            ['GET',    '/menu-item-prices',                'List sell prices (?menu_item_id= or ?menu_id=)'],
-            ['POST',   '/menu-item-prices',                'Set a sell price for item × price level'],
-            ['PUT',    '/menu-item-prices/:id',            'Update sell price'],
-            ['DELETE', '/menu-item-prices/:id',            'Delete sell price record'],
-            ['GET',    '/cogs/menu/:id',                   'Calculate COGS for all items on a menu'],
-            ['GET',    '/allergens',                       'List all 14 EU FIC allergens'],
-            ['GET',    '/allergens/ingredient/:id',        'Get allergen statuses for an ingredient'],
-            ['PUT',    '/allergens/ingredient/:id',        'Set (bulk replace) allergen statuses'],
-            ['PATCH',  '/allergens/ingredient/:id/notes',  'Save allergen_notes text for an ingredient'],
+            ['GET',    '/health',                          'Health check — returns {"status":"ok"}'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/settings',                        'System settings (JSONB blob)'],
+            ['CRUD',   '/units',                           'Units of measurement'],
+            ['CRUD',   '/price-levels',                    'Price levels (Dine In, Delivery, etc.)'],
+            ['POST',   '/sync-exchange-rates',             'Sync rates from Frankfurter API (free, no key)'],
+            ['CRUD',   '/countries',                       'Markets/countries with currency + exchange rate'],
+            ['CRUD',   '/tax-rates',                       'Tax rates per country'],
+            ['CRUD',   '/country-level-tax',               'Country × price level × tax rate mappings'],
+            ['CRUD',   '/categories',                      'Categories (?for_ingredients=true / ?for_recipes=true)'],
+            ['CRUD',   '/category-groups',                 'Category groups'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/vendors',                         'Supplier/vendor records'],
+            ['CRUD',   '/ingredients',                     'Ingredient master list'],
+            ['GET',    '/ingredients/stats',               'Lightweight counts for header badges'],
+            ['CRUD',   '/price-quotes',                    'Vendor pricing per ingredient'],
+            ['CRUD',   '/preferred-vendors',               'Preferred vendor per ingredient × country'],
+            ['CRUD',   '/recipes',                         'Recipe definitions + items'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/sales-items',                     'Sales item catalog (recipe/ingredient/manual/combo)'],
+            ['CRUD',   '/combos',                          'Standalone combos + steps + options'],
+            ['CRUD',   '/combo-templates',                 'Reusable combo templates'],
+            ['CRUD',   '/modifier-groups',                 'Modifier groups + options'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/menus',                           'Menu definitions per market'],
+            ['CRUD',   '/menu-sales-items',                'Menu ↔ sales items link + per-menu prices'],
+            ['CRUD',   '/scenarios',                       'Menu scenarios (qty/price/cost overrides)'],
+            ['POST',   '/scenarios/push-prices',           'Push scenario price overrides to live menu'],
+            ['POST',   '/scenarios/smart',                 'AI-powered price/cost proposals'],
+            ['CRUD',   '/shared-pages',                    'Shared menu engineer pages (password-protected)'],
+            ['GET',    '/cogs/menu-sales/:id',             'Calculate COGS for menu via sales items'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/allergens',                       'EU/UK FIC 14 allergens + per-ingredient statuses'],
             ['GET',    '/allergens/menu/:id',              'Allergen matrix for a full menu'],
-            ['PATCH',  '/allergens/menu-item/:id/notes',   'Save allergen_notes for a menu item'],
-            ['GET',    '/nutrition/search',                'USDA + Open Food Facts nutrition search (?q=)'],
-            ['GET',    '/haccp/equipment',                 'List equipment (?location_id=)'],
-            ['POST',   '/haccp/equipment',                 'Register a piece of equipment'],
-            ['PUT',    '/haccp/equipment/:id',             'Update equipment record'],
-            ['DELETE', '/haccp/equipment/:id',             'Delete equipment'],
-            ['GET',    '/haccp/equipment/:id/logs',        'List temperature logs for equipment'],
-            ['POST',   '/haccp/equipment/:id/logs',        'Log a temperature reading'],
-            ['GET',    '/haccp/ccp-logs',                  'List CCP logs (?location_id=)'],
-            ['POST',   '/haccp/ccp-logs',                  'Create a CCP log entry'],
-            ['DELETE', '/haccp/ccp-logs/:id',              'Delete a CCP log'],
-            ['GET',    '/locations',                       'List locations (?market_id=&group_id=&active=)'],
-            ['POST',   '/locations',                       'Create a location'],
-            ['PUT',    '/locations/:id',                   'Update a location'],
-            ['DELETE', '/locations/:id',                   'Delete a location'],
-            ['GET',    '/location-groups',                 'List location groups'],
-            ['POST',   '/location-groups',                 'Create a location group'],
-            ['POST',   '/ai-chat',                         'SSE streaming AI chat — body: {messages, conversationId?}'],
+            ['GET',    '/nutrition/search',                'USDA nutrition proxy (?q=)'],
+            ['CRUD',   '/haccp/*',                         'Equipment, temp logs, CCP logs'],
+            ['CRUD',   '/locations',                       'Physical store locations'],
+            ['CRUD',   '/location-groups',                 'Location groupings'],
+            ['CRUD',   '/brand-partners',                  'Brand/franchise partners'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/stock-stores',                    'Sub-locations within locations (centres)'],
+            ['CRUD',   '/stock-levels',                    'Stock on hand, adjustments, movements'],
+            ['CRUD',   '/purchase-orders',                 'PO lifecycle + line items'],
+            ['CRUD',   '/goods-received',                  'GRN lifecycle → stock updates on confirm'],
+            ['CRUD',   '/invoices',                        'Invoice lifecycle'],
+            ['CRUD',   '/credit-notes',                    'Credit note lifecycle'],
+            ['CRUD',   '/waste',                           'Waste logging + reason codes'],
+            ['CRUD',   '/stock-transfers',                 'Inter-store stock transfers'],
+            ['CRUD',   '/stocktakes',                      'Stocktake sessions + counts'],
+            ['—',      '',                                 ''],
+            ['CRUD',   '/bugs',                            'Bug tracker + comments'],
+            ['CRUD',   '/backlog',                         'Feature backlog + comments'],
+            ['GET',    '/audit',                           'Central audit log (filters, stats, field history)'],
+            ['—',      '',                                 ''],
+            ['POST',   '/ai-chat',                         'SSE streaming AI chat (92+ tools)'],
             ['POST',   '/ai-upload',                       'Multipart file + AI chat — SSE streaming'],
-            ['GET',    '/ai-chat/my-usage',                'Current period token usage for signed-in user'],
-            ['GET',    '/ai-config',                       'Returns {anthropic_key_set: bool, …}'],
-            ['PUT',    '/ai-config',                       'Save AI API keys'],
-            ['POST',   '/feedback',                        'Submit feedback {title, type, description, page}'],
-          ] as [string, string, string][]).map(([method, path, desc]) => (
-            <tr key={method + path} className="hover:bg-[#F7F9F8]">
-              <Td><MethodBadge method={method} /></Td>
-              <Td mono>{`/api${path}`}</Td>
-              <Td>{desc}</Td>
-            </tr>
+            ['GET',    '/ai-chat/my-usage',                'Current period token usage'],
+            ['CRUD',   '/ai-config',                       'AI feature flag / API key config'],
+            ['CRUD',   '/memory/notes',                    'Pepper memory — pinned notes'],
+            ['CRUD',   '/memory/profile',                  'Pepper memory — user profile'],
+            ['—',      '',                                 ''],
+            ['POST',   '/import',                          'AI-powered data import (multipart)'],
+            ['CRUD',   '/media',                           'Media library (local disk + S3)'],
+            ['CRUD',   '/db-config',                       'Database management (local ↔ standalone)'],
+            ['CRUD',   '/users',                           'User management (approve/disable/role)'],
+            ['CRUD',   '/roles',                           'RBAC role + permission matrix'],
+            ['POST',   '/feedback',                        'User feedback submissions'],
+          ] as [string, string, string][]).map(([method, path, desc], idx) => (
+            method === '—' ? (
+              <tr key={`sep-${idx}`}><td colSpan={3} className="h-1 bg-[#F7F9F8]" /></tr>
+            ) : (
+              <tr key={method + path} className="hover:bg-[#F7F9F8]">
+                <Td><MethodBadge method={method} /></Td>
+                <Td mono>{path ? `/api${path}` : ''}</Td>
+                <Td>{desc}</Td>
+              </tr>
+            )
           ))}
         </tbody>
       </table>
@@ -358,7 +342,7 @@ function SecuritySection() {
 
       <H3>Auth0 Authentication Flow</H3>
       <ProcessFlow steps={[
-        { label: 'User visits',        sub: 'cogs.flavorconnect.tech' },
+        { label: 'User visits',        sub: 'cogs.macaroonie.com' },
         { label: 'Auth0 check',        sub: 'Token valid?' },
         { label: 'Redirect to Auth0',  sub: 'If not authenticated' },
         { label: 'Login',              sub: 'Password or Google' },
@@ -429,12 +413,14 @@ function TroubleshootingSection() {
       <div className="space-y-2">
         {[
           { q: "Why are my recipe COGS calculations showing £0.00?",       a: "An ingredient in the recipe has no active price quote for the selected market. Go to Inventory → Price Quotes, add an active quote, then optionally set a Preferred Vendor." },
-          { q: "Menu sell prices show wrong currency or amount.",           a: "Check the market's exchange rate in Markets. Use Settings → Exchange Rates → Sync to fetch live rates. All prices are stored in USD and converted to local currency using the exchange rate." },
+          { q: "Menu sell prices show wrong currency or amount.",           a: "Check the market's exchange rate in Configuration → Currency. Use the Sync button to fetch live rates from Frankfurter API. All prices are stored in USD and converted to local currency using the exchange rate." },
           { q: 'The AI assistant says "API key not configured".',          a: 'Go to System → AI and enter your Anthropic API key (starts with sk-ant-…). Get one at console.anthropic.com.' },
-          { q: 'Auth0 login is failing with a "callback URL mismatch".',   a: 'In Auth0 dashboard → Applications → Settings, ensure both https://cogs.flavorconnect.tech and http://localhost:5173 are in Allowed Callback URLs, Logout URLs, and Web Origins.' },
+          { q: 'Auth0 login is failing with a "callback URL mismatch".',   a: 'In Auth0 dashboard → Applications → Settings, ensure both https://cogs.macaroonie.com and http://localhost:5173 are in Allowed Callback URLs, Logout URLs, and Web Origins.' },
+          { q: "I can't edit a bug or backlog item I created.",            a: "Only the original author or a developer can edit items. If you're the author but still blocked, check that your Auth0 user sub matches the reported_by / requested_by field. Ask an admin to check in Configuration → Users & Roles." },
           { q: 'The CI/CD deploy is failing at the health check step.',    a: 'SSH in and check: (1) pm2 status (2) curl http://localhost:3001/api/health (3) pm2 logs menu-cogs-api --lines 50 for startup errors.' },
           { q: 'Exchange rate sync is failing.',                           a: 'Test from the server: curl https://api.frankfurter.app/latest. If blocked, check AWS Lightsail outbound networking rules for port 443.' },
           { q: 'PM2 is not running. How do I restart it?',                 a: 'SSH as ubuntu. Run: cd /var/www/menu-cogs/api && pm2 start src/index.js --name menu-cogs-api. Then pm2 save to persist across reboots.' },
+          { q: 'How do I run database migrations?',                        a: 'SSH as ubuntu. Run: cd /var/www/menu-cogs/api && npm run migrate. Migrations are idempotent (CREATE IF NOT EXISTS) — safe to run multiple times.' },
         ].map(({ q, a }) => (
           <details key={q} className="border border-[#D8E6DD] rounded-lg group">
             <summary className="px-4 py-3 cursor-pointer text-sm font-semibold text-[#0F1F17] hover:bg-[#F7F9F8] rounded-lg list-none flex items-center justify-between gap-2">
@@ -469,7 +455,7 @@ function TroubleshootingSection() {
         <p className="text-white">sudo certbot renew --dry-run</p>
         <p className="text-[#6B7F74] ml-4"># Test Let's Encrypt renewal</p>
         <p className="text-[#1E8A44] font-bold mt-2"># Health check</p>
-        <p className="text-white">curl https://cogs.flavorconnect.tech/api/health</p>
+        <p className="text-white">curl https://cogs.macaroonie.com/api/health</p>
         <p className="text-[#6B7F74] ml-4"># Should return: {"{"}"status":"ok"{"}"}</p>
       </div>
     </div>
@@ -481,7 +467,7 @@ function DomainMigrationSection() {
     <div className="p-6 max-w-4xl">
       <H2 icon="🌐" title="Domain Migration" />
       <p className="text-sm text-[#2D4A38] leading-relaxed mb-3">
-        The app currently runs at <Mono>cogs.flavorconnect.tech</Mono> (migrated from <Mono>obscurekitty.com</Mono> in April 2026).
+        The app currently runs at <Mono>cogs.macaroonie.com</Mono> (migrated from <Mono>obscurekitty.com</Mono> in April 2026).
         Follow these steps if you ever need to change the domain or subdomain again.
         Full reference also in <Mono>docs/DOMAIN_MIGRATION.md</Mono>.
       </p>
@@ -495,7 +481,7 @@ function DomainMigrationSection() {
       <H3>Step-by-Step Process</H3>
       <div className="space-y-3 my-3">
         {[
-          { n: '1', title: 'Add DNS A record',         cmd: 'nslookup cogs.flavorconnect.tech',                                                                                                                 detail: 'In the Lightsail DNS zone for your apex domain, add an A record: subdomain → server IP 13.135.158.196. Wait for propagation (1–5 min), then verify:' },
+          { n: '1', title: 'Add DNS A record',         cmd: 'nslookup cogs.macaroonie.com',                                                                                                                 detail: 'In the Lightsail DNS zone for your apex domain, add an A record: subdomain → server IP 13.135.158.196. Wait for propagation (1–5 min), then verify:' },
           { n: '2', title: 'Update Nginx server_name', cmd: 'sudo nano /etc/nginx/sites-available/menu-cogs\n# change: server_name <new-domain>;\nsudo nginx -t && sudo nginx -s reload',                      detail: 'SSH into the server. Edit the Nginx site config and replace the server_name value. Test the config before reloading.' },
           { n: '3', title: 'Issue SSL certificate',    cmd: 'sudo certbot --nginx -d <new-domain>',                                                                                                             detail: "Certbot automatically issues the Let's Encrypt cert and patches Nginx. Requires DNS A record to be live first." },
           { n: '4', title: 'Update Auth0 URLs',        cmd: 'manage.auth0.com → Applications → Settings',                                                                                                      detail: 'Add the new domain to: Allowed Callback URLs, Allowed Logout URLs, Allowed Web Origins. Keep existing localhost entries until confirmed working. Auth0 tenant name does NOT change.' },
@@ -524,7 +510,7 @@ function DomainMigrationSection() {
       </InfoBox>
 
       <InfoBox type="warning" title="Subdomain vs apex domain">
-        Using a subdomain (e.g. <Mono>cogs.flavorconnect.tech</Mono>) is strongly recommended — it requires only an A record
+        Using a subdomain (e.g. <Mono>cogs.macaroonie.com</Mono>) is strongly recommended — it requires only an A record
         in the existing DNS zone. Moving to a different apex domain requires updating nameservers at the registrar.
       </InfoBox>
     </div>
@@ -1209,13 +1195,13 @@ function GatedFallback({ reason }: { reason: 'admin' | 'dev' }) {
   const copy = reason === 'dev'
     ? {
         title:   'Developer access required',
-        body:    'This section is only visible to users with the dev flag enabled. An administrator can toggle it from Settings → Users.',
+        body:    'This section is only visible to users with the dev flag enabled. An administrator can toggle it from Configuration → Users & Roles.',
         ring:    'bg-purple-100',
         stroke:  '#7e22ce',
       }
     : {
         title:   'Admin access required',
-        body:    'This section is only available to users with settings:write permission. Ask an administrator to grant your role the permission from Settings → Roles.',
+        body:    'This section is only available to users with settings:write permission. Ask an administrator to grant your role the permission from Configuration → Users & Roles.',
         ring:    'bg-amber-100',
         stroke:  '#b45309',
       }

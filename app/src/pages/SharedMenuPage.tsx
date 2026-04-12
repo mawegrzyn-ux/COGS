@@ -912,25 +912,56 @@ export default function SharedMenuPage() {
                 />
               </>
             ) : (
-              <>
-                <KpiTile
-                  label="Avg COGS"
-                  value={`${fmt2(summary.avgCogs)}%`}
-                  sub="all price levels"
-                  colour={
-                    summary.avgCogs === null ? 'gray'
-                    : summary.avgCogs <= 28  ? 'green'
-                    : summary.avgCogs <= 35  ? 'amber'
-                    : 'red'
-                  }
-                />
-                <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
-                <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
-                <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
-              </>
+              <KpiTile
+                label="Avg COGS"
+                value={`${fmt2(summary.avgCogs)}%`}
+                sub="all price levels"
+                colour={
+                  summary.avgCogs === null ? 'gray'
+                  : summary.avgCogs <= 28  ? 'green'
+                  : summary.avgCogs <= 35  ? 'amber'
+                  : 'red'
+                }
+              />
             )}
 
-            {/* Category chart */}
+            {/* Category mix tile */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sales Mix by Category</h3>
+              {summary.catBreakdown.length > 0 ? (
+                <div className="space-y-2">
+                  {summary.catBreakdown.slice(0, 6).map(cat => (
+                    <div key={cat.name} className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 truncate w-20 flex-shrink-0">{cat.name}</span>
+                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`} style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                      </div>
+                      <span className="text-[11px] font-semibold text-gray-700 tabular-nums w-10 text-right">{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-gray-400">No data</p>}
+            </div>
+
+            {/* Price level mix tile */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sales Mix by Price Level</h3>
+              {summary.levelBreakdown.length > 0 ? (
+                <div className="space-y-2">
+                  {summary.levelBreakdown.map(lvl => (
+                    <div key={lvl.id} className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 truncate w-20 flex-shrink-0">{lvl.name}</span>
+                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${cogsBarCls(lvl.avgCogs)}`} style={{ width: `${Math.max(2, lvl.revPct)}%` }} />
+                      </div>
+                      <span className="text-[11px] font-semibold text-gray-700 tabular-nums w-10 text-right">{lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-gray-400">No data</p>}
+            </div>
+
+            {/* Category chart (detailed) */}
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Rev &amp; COGS by Category</h3>
               <div className="space-y-2.5">
@@ -1020,27 +1051,44 @@ export default function SharedMenuPage() {
                             colour={summary.weightedCogs === null ? 'gray' : summary.weightedCogs <= 28 ? 'green' : summary.weightedCogs <= 35 ? 'amber' : 'red'} />
                         </>
                       ) : (
-                        <>
-                          <KpiTile label="Avg COGS" value={`${fmt2(summary.avgCogs)}%`} sub="all levels"
-                            colour={summary.avgCogs === null ? 'gray' : summary.avgCogs <= 28 ? 'green' : summary.avgCogs <= 35 ? 'amber' : 'red'} />
-                          <KpiTile label="Items"    value={String(data!.items.length)} sub="on menu" colour="blue" />
-                        </>
+                        <KpiTile label="Avg COGS" value={`${fmt2(summary.avgCogs)}%`} sub="all levels"
+                          colour={summary.avgCogs === null ? 'gray' : summary.avgCogs <= 28 ? 'green' : summary.avgCogs <= 35 ? 'amber' : 'red'} />
                       )}
                     </div>
+                    {/* Category mix */}
                     {summary.catBreakdown.length > 0 && (
-                      <div className="mt-3 space-y-1.5">
-                        {summary.catBreakdown.slice(0, 5).map(cat => (
-                          <div key={cat.name} className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500 truncate w-24 flex-shrink-0">{cat.name}</span>
-                            <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`}
-                                style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                      <div className="mt-3">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Category Mix</p>
+                        <div className="space-y-1.5">
+                          {summary.catBreakdown.slice(0, 5).map(cat => (
+                            <div key={cat.name} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 truncate w-20 flex-shrink-0">{cat.name}</span>
+                              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`}
+                                  style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                              </div>
+                              <span className="text-[11px] font-semibold text-gray-600 tabular-nums w-9 text-right">{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%</span>
                             </div>
-                            {cat.cogsPct !== null && (
-                              <span className={`text-xs flex-shrink-0 tabular-nums ${cogsCls(cat.cogsPct)}`}>{fmt2(cat.cogsPct)}%</span>
-                            )}
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* Price level mix */}
+                    {summary.levelBreakdown.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Price Level Mix</p>
+                        <div className="space-y-1.5">
+                          {summary.levelBreakdown.map(lvl => (
+                            <div key={lvl.id} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 truncate w-20 flex-shrink-0">{lvl.name}</span>
+                              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${cogsBarCls(lvl.avgCogs)}`}
+                                  style={{ width: `${Math.max(2, lvl.revPct)}%` }} />
+                              </div>
+                              <span className="text-[11px] font-semibold text-gray-600 tabular-nums w-9 text-right">{lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1076,22 +1124,17 @@ export default function SharedMenuPage() {
                   />
                 </>
               ) : (
-                <>
-                  <KpiTile
-                    label="Avg COGS"
-                    value={`${fmt2(summary.avgCogs)}%`}
-                    sub="all price levels"
-                    colour={
-                      summary.avgCogs === null ? 'gray'
-                      : summary.avgCogs <= 28  ? 'green'
-                      : summary.avgCogs <= 35  ? 'amber'
-                      : 'red'
-                    }
-                  />
-                  <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
-                  <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
-                  <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
-                </>
+                <KpiTile
+                  label="Avg COGS"
+                  value={`${fmt2(summary.avgCogs)}%`}
+                  sub="all price levels"
+                  colour={
+                    summary.avgCogs === null ? 'gray'
+                    : summary.avgCogs <= 28  ? 'green'
+                    : summary.avgCogs <= 35  ? 'amber'
+                    : 'red'
+                  }
+                />
               )}
             </div>
             )}  {/* end tilesLayout === 'top' KPI tiles */}
