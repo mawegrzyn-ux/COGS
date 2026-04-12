@@ -43,7 +43,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Origin** | WordPress plugin v3.3.0 — migrated to React/Node/PostgreSQL |
 | **Server** | AWS Lightsail instance "WRI" — Ubuntu 24.04, $10/mo, 2GB RAM, 1 vCPU |
 | **IP** | `13.135.158.196` (static) |
-| **Domain** | `cogs.flavorconnect.tech` |
+| **Domain** | `cogs.macaroonie.com` |
 | **SSL** | Let's Encrypt via Certbot — auto-renews |
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
@@ -217,7 +217,7 @@ psql -U mcogs -d mcogs              # Connect to PostgreSQL
 | `/var/www/menu-cogs/api/.env` | API environment variables (DB password etc.) |
 | `/var/www/menu-cogs/frontend/` | React build output (served by Nginx) |
 | `/etc/nginx/sites-available/menu-cogs` | Nginx site config |
-| `/etc/letsencrypt/live/cogs.flavorconnect.tech/` | SSL certificate files |
+| `/etc/letsencrypt/live/cogs.macaroonie.com/` | SSL certificate files |
 | `~/.ssh/id_ed25519_cogs` | Deploy SSH key (read-only pull from GitHub) |
 | `~/.ssh/config` | SSH config (routes `github.com` to the correct key) |
 
@@ -308,7 +308,7 @@ cd app && npm run dev
 
 Open `http://localhost:5173` — Auth0 login will redirect to `localhost` callback.
 
-> **Note:** Auth0 requires the callback URL `http://localhost:5173` to be in the **Allowed Callback URLs** list in the Auth0 dashboard. Add it alongside `https://cogs.flavorconnect.tech`.
+> **Note:** Auth0 requires the callback URL `http://localhost:5173` to be in the **Allowed Callback URLs** list in the Auth0 dashboard. Add it alongside `https://cogs.macaroonie.com`.
 
 ---
 
@@ -323,16 +323,16 @@ Every push to `main` triggers `.github/workflows/deploy.yml` automatically.
 3. Build React app with Vite — env vars baked in from GitHub Secrets
 4. SCP `app/dist/` to `/var/www/menu-cogs/frontend/` on server
 5. SSH into server: `git pull` → `npm install` → `pm2 restart` → `nginx reload`
-6. Health check: `GET https://cogs.flavorconnect.tech/api/health` must return `{"status":"ok"}`
+6. Health check: `GET https://cogs.macaroonie.com/api/health` must return `{"status":"ok"}`
 
 ### GitHub Secrets Required
 
 | Secret | Value |
 |---|---|
-| `LIGHTSAIL_HOST` | `cogs.flavorconnect.tech` |
+| `LIGHTSAIL_HOST` | `cogs.macaroonie.com` |
 | `LIGHTSAIL_USER` | `ubuntu` |
 | `LIGHTSAIL_SSH_KEY` | Full private SSH key content (including `-----BEGIN OPENSSH PRIVATE KEY-----`) |
-| `VITE_API_URL` | `https://cogs.flavorconnect.tech/api` |
+| `VITE_API_URL` | `https://cogs.macaroonie.com/api` |
 | `VITE_AUTH0_DOMAIN` | `obscurekitty.uk.auth0.com` |
 | `VITE_AUTH0_CLIENT_ID` | `B7JlaVzsljdFDCX7BkbofYYA2bCsTc69` |
 
@@ -351,9 +351,9 @@ Every push to `main` triggers `.github/workflows/deploy.yml` automatically.
 | **Tenant** | `obscurekitty.uk.auth0.com` |
 | **Application type** | Single Page Application (SPA) |
 | **Client ID** | `B7JlaVzsljdFDCX7BkbofYYA2bCsTc69` |
-| **Allowed Callback URLs** | `https://cogs.flavorconnect.tech`, `http://localhost:5173` |
-| **Allowed Logout URLs** | `https://cogs.flavorconnect.tech/login`, `http://localhost:5173/login` |
-| **Allowed Web Origins** | `https://cogs.flavorconnect.tech`, `http://localhost:5173` |
+| **Allowed Callback URLs** | `https://cogs.macaroonie.com`, `http://localhost:5173` |
+| **Allowed Logout URLs** | `https://cogs.macaroonie.com/login`, `http://localhost:5173/login` |
+| **Allowed Web Origins** | `https://cogs.macaroonie.com`, `http://localhost:5173` |
 | **Audience** | Empty — add later if API token validation is needed |
 | **Login methods** | Username/password + Google OAuth |
 
@@ -1992,17 +1992,17 @@ Pepper's response arrives as SSE text chunks, not complete sentences. For real-t
 
 ## 19. Domain Migration Log
 
-### April 2026 — `obscurekitty.com` → `cogs.flavorconnect.tech`
+### April 2026 — `obscurekitty.com` → `cogs.macaroonie.com`
 
-Migrated from the original throwaway domain to a branded subdomain under `flavorconnect.tech`.
+Migrated from the original throwaway domain to a branded subdomain under `macaroonie.com`.
 
 **What was changed:**
 
 | Component | Change |
 |---|---|
-| DNS | A record `cogs` → `13.135.158.196` added to Lightsail DNS zone for `flavorconnect.tech` |
+| DNS | A record `cogs` → `13.135.158.196` added to Lightsail DNS zone for `macaroonie.com` |
 | Nginx | `server_name` updated in `/etc/nginx/sites-available/menu-cogs` |
-| SSL | New Let's Encrypt cert issued via `sudo certbot --nginx -d cogs.flavorconnect.tech` |
+| SSL | New Let's Encrypt cert issued via `sudo certbot --nginx -d cogs.macaroonie.com` |
 | Auth0 | Callback / Logout / Web Origins updated in Auth0 dashboard |
 | GitHub Secrets | `LIGHTSAIL_HOST` and `VITE_API_URL` updated |
 | CI/CD | Deploy triggered via empty commit — health check passed |
@@ -2028,7 +2028,7 @@ Migrated from the original throwaway domain to a branded subdomain under `flavor
 
 | Resource | URL/Value |
 |---|---|
-| **Production App** | https://cogs.flavorconnect.tech |
+| **Production App** | https://cogs.macaroonie.com |
 | **GitHub Repo** | https://github.com/mawegrzyn-ux/COGS |
 | **Auth0 Dashboard** | https://manage.auth0.com → tenant: `obscurekitty.uk.auth0.com` |
 | **AWS Lightsail Console** | https://lightsail.aws.amazon.com |
