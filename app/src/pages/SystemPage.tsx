@@ -886,6 +886,194 @@ function AuditRow({ entry: e, expanded, onToggle, actionColor, formatDate }: {
   )
 }
 
+// ── CLAUDE.md viewer ──────────────────────────────────────────────────────────
+
+function ClaudeDocSection() {
+  const api = useApi()
+  const [md, setMd]         = useState('')
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get('/docs/claude-md')
+        if (!cancelled) setMd((res as any)?.content ?? '')
+      } catch { if (!cancelled) setMd('Failed to load CLAUDE.md') }
+      finally   { if (!cancelled) setLoading(false) }
+    })()
+    return () => { cancelled = true }
+  }, [api])
+
+  // Simple markdown → JSX renderer
+  const rendered = useMemo(() => {
+    if (!md) return null
+    let lines = md.split('\n')
+
+    // Optional search filter: show only sections containing search term
+    if (search.trim()) {
+      const term = search.toLowerCase()
+      // Group lines by h2 sections, keep sections that match
+      const sections: string[][] = []
+      let cur: string[] = []
+      for (const line of lines) {
+        if (line.startsWith('## ') && cur.length) { sections.push(cur); cur = [] }
+        cur.push(line)
+      }
+      if (cur.length) sections.push(cur)
+      const matched = sections.filter(s => s.some(l => l.toLowerCase().includes(term)))
+      lines = matched.flat()
+    }
+
+    const elements: React.ReactNode[] = []
+    let i = 0
+    let inCode = false
+    let codeBuf: string[] = []
+    let codeLang = ''
+
+    const inlineFormat = (text: string) => {
+      // Bold, inline code, links
+      return text
+        .replace(/`([^`]+)`/g, '<code class="bg-[#F7F9F8] border border-[#D8E6DD] rounded px-1 py-0.5 text-[11px] font-mono text-[#2D4A38]">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-accent underline">$1</a>')
+    }
+
+    while (i < lines.length) {
+      const line = lines[i]
+
+      // Fenced code block
+      if (line.startsWith('```')) {
+        if (!inCode) {
+          inCode = true
+          codeLang = line.slice(3).trim()
+          codeBuf = []
+          i++; continue
+        } else {
+          inCode = false
+          elements.push(
+            <pre key={i} className="bg-[#1a1a2e] text-green-300 text-xs font-mono rounded-lg p-4 my-3 overflow-x-auto whitespace-pre">
+              {codeBuf.join('\n')}
+            </pre>
+          )
+          i++; continue
+        }
+      }
+      if (inCode) { codeBuf.push(line); i++; continue }
+
+      // Headings
+      if (line.startsWith('### ')) {
+        elements.push(<h3 key={i} className="font-bold text-[#0F1F17] mt-5 mb-2 text-sm">{line.slice(4)}</h3>)
+        i++; continue
+      }
+      if (line.startsWith('## ')) {
+        elements.push(
+          <h2 key={i} className="text-lg font-bold text-[#0F1F17] mt-8 mb-3 pb-2 border-b-2 border-[#146A34]/20">
+            {line.slice(3)}
+          </h2>
+        )
+        i++; continue
+      }
+      if (line.startsWith('# ')) {
+        elements.push(<h1 key={i} className="text-xl font-bold text-[#0F1F17] mt-6 mb-4">{line.slice(2)}</h1>)
+        i++; continue
+      }
+
+      // Table (pipe-delimited)
+      if (line.includes('|') && line.trim().startsWith('|')) {
+        const tableRows: string[][] = []
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim().startsWith('|')) {
+          const cells = lines[i].split('|').slice(1, -1).map(c => c.trim())
+          // Skip separator rows (---|---)
+          if (!cells.every(c => /^[-:]+$/.test(c))) tableRows.push(cells)
+          i++
+        }
+        if (tableRows.length) {
+          const [header, ...body] = tableRows
+          elements.push(
+            <div key={i} className="overflow-x-auto my-3">
+              <table className="w-full text-sm border-collapse border border-[#D8E6DD] rounded">
+                <thead>
+                  <tr>{header.map((h, j) => <th key={j} className="py-2 px-3 text-xs font-bold text-[#6B7F74] text-left bg-[#F7F9F8] border-b border-[#D8E6DD]">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {body.map((row, ri) => (
+                    <tr key={ri} className={ri % 2 ? 'bg-[#F7F9F8]' : ''}>
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="py-2 px-3 border-b border-[#D8E6DD]/50 text-sm text-[#2D4A38]"
+                            dangerouslySetInnerHTML={{ __html: inlineFormat(cell) }} />
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+        continue
+      }
+
+      // Unordered list
+      if (/^[-*] /.test(line.trim())) {
+        const items: string[] = []
+        while (i < lines.length && /^[-*] /.test(lines[i].trim())) {
+          items.push(lines[i].trim().slice(2))
+          i++
+        }
+        elements.push(
+          <ul key={i} className="list-disc list-inside my-2 space-y-1 text-sm text-[#2D4A38]">
+            {items.map((item, j) => <li key={j} dangerouslySetInnerHTML={{ __html: inlineFormat(item) }} />)}
+          </ul>
+        )
+        continue
+      }
+
+      // Blank line
+      if (!line.trim()) { i++; continue }
+
+      // Paragraph
+      elements.push(
+        <p key={i} className="text-sm text-[#2D4A38] my-2 leading-relaxed"
+           dangerouslySetInnerHTML={{ __html: inlineFormat(line) }} />
+      )
+      i++
+    }
+    return elements
+  }, [md, search])
+
+  return (
+    <div className="p-6 max-w-5xl">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-bold text-[#0F1F17] flex items-center gap-2">
+            <span>CLAUDE.md</span>
+            <span className="text-xs font-normal text-text-3">Project documentation</span>
+          </h2>
+        </div>
+        <input
+          type="text"
+          placeholder="Search sections..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="input w-64 text-sm"
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-12 justify-center text-text-3">
+          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          Loading...
+        </div>
+      ) : (
+        <div className="bg-white border border-[#D8E6DD] rounded-xl p-6 shadow-sm">
+          {rendered}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Section definitions ────────────────────────────────────────────────────────
 
 type Section =
@@ -900,6 +1088,7 @@ type Section =
   | 'troubleshooting'
   | 'domain-migration'
   | 'pos-tester'
+  | 'claude-doc'
 
 interface SectionDef {
   id:        Section
@@ -921,6 +1110,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
   { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
+  { id: 'claude-doc',       icon: '📄', label: 'CLAUDE.md',       gate: 'admin' },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
@@ -969,6 +1159,9 @@ export default function SystemPage() {
       case 'troubleshooting':  return <TroubleshootingSection />
       case 'domain-migration': return <DomainMigrationSection />
       case 'pos-tester':       return <PosTesterPage />
+      case 'claude-doc':       return canManageSettings
+                                  ? <ClaudeDocSection />
+                                  : <GatedFallback reason="admin" />
       default:                 return null
     }
   }

@@ -2124,7 +2124,7 @@ export default function SalesItemsPage() {
                         <p className="text-[10px] text-text-3">Same option can be selected multiple times (e.g. extra toppings)</p>
                       </div>
                     </label>
-                    {mpGroupForm.min_select === 0 && (
+                    {Number(mpGroupForm.min_select) === 0 && (
                       <label className="flex items-center gap-2 mt-1 p-2 bg-surface-2 rounded-lg border border-border cursor-pointer">
                         <input type="checkbox" checked={mpGroupForm.default_auto_show ?? true}
                           onChange={e => setMpGroupForm(f => f ? { ...f, default_auto_show: e.target.checked } : f)} className="rounded" />

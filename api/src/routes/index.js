@@ -127,6 +127,9 @@ router.use('/upload',             auth,                                         
 // ── Media library ──────────────────────────────────────────────────────────────
 router.use('/media',              auth,                                               require('./media'));
 
+// ── Docs (CLAUDE.md viewer — admin read) ─────────────────────────────────────
+router.use('/docs',               ...can('settings', 'read'),                         require('./docs'));
+
 // ── Misc / internal ────────────────────────────────────────────────────────────
 router.use('/seed',               ...can('settings', 'write'),                        require('./seed'));
 router.use('/feedback',           auth,                                               require('./feedback'));
