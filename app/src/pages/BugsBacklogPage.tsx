@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
 import { PageHeader, Modal, Field, Spinner, Toast, Badge, ConfirmDialog } from '../components/ui'
@@ -217,6 +217,42 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     loadBacklog()
   }
 
+  // ── Drag-and-drop reorder ─────────────────────────────────────────────
+  const dragIdRef    = useRef<number | null>(null)
+  const dragOverRef  = useRef<number | null>(null)
+
+  function handleDragStart(id: number) { dragIdRef.current = id }
+
+  function handleDragOver(e: React.DragEvent, id: number) {
+    e.preventDefault()
+    dragOverRef.current = id
+  }
+
+  async function handleDrop() {
+    const fromId = dragIdRef.current
+    const toId   = dragOverRef.current
+    dragIdRef.current = null
+    dragOverRef.current = null
+    if (fromId == null || toId == null || fromId === toId) return
+    const fromIdx = backlog.findIndex(b => b.id === fromId)
+    const toIdx   = backlog.findIndex(b => b.id === toId)
+    if (fromIdx < 0 || toIdx < 0) return
+
+    // Optimistic reorder in state
+    const next = [...backlog]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    setBacklog(next)
+
+    // Persist new sort_order for all items (simple sequential numbering)
+    const items = next.map((b, i) => ({ id: b.id, sort_order: i + 1 }))
+    try {
+      await api.put('/backlog/reorder', { items })
+    } catch {
+      loadBacklog() // rollback on failure
+    }
+  }
+
   async function exportJira(type: 'bugs' | 'backlog') {
     const data = await api.get(`/${type}/export/jira`)
     if (!data?.length) { setToast({ message: 'Nothing to export', type: 'error' }); return }
@@ -359,7 +395,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs text-text-3 border-b border-border">
-                    {can('backlog', 'write') && <th className="px-2 py-2 w-16">Order</th>}
+                    {can('backlog', 'write') && <th className="px-2 py-2 w-10" title="Drag to reorder" />}
                     <th className="px-3 py-2 w-28">Key</th>
                     <th className="px-3 py-2">Summary</th>
                     <th className="px-3 py-2 w-24">Type</th>
@@ -371,17 +407,21 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   </tr>
                 </thead>
                 <tbody>
-                  {backlog.map((b, i) => (
-                    <tr key={b.id} className="border-b border-border/50 hover:bg-surface-2 cursor-pointer"
+                  {backlog.map((b) => (
+                    <tr key={b.id}
+                      className="border-b border-border/50 hover:bg-surface-2 cursor-pointer"
+                      draggable={can('backlog', 'write') || false}
+                      onDragStart={() => handleDragStart(b.id)}
+                      onDragOver={e => handleDragOver(e, b.id)}
+                      onDrop={handleDrop}
                       onClick={() => setBacklogDetail(b)}>
                       {can('backlog', 'write') && (
-                        <td className="px-2 py-2 text-center" onClick={e => e.stopPropagation()}>
-                          <div className="flex gap-0.5 justify-center">
-                            <button className="text-text-3 hover:text-text-1 disabled:opacity-30" disabled={i === 0}
-                              onClick={() => moveBacklog(b.id, -1)}>▲</button>
-                            <button className="text-text-3 hover:text-text-1 disabled:opacity-30" disabled={i === backlog.length - 1}
-                              onClick={() => moveBacklog(b.id, 1)}>▼</button>
-                          </div>
+                        <td className="px-2 py-2 text-center cursor-grab active:cursor-grabbing" onClick={e => e.stopPropagation()}>
+                          <svg className="w-4 h-4 text-text-3 mx-auto" fill="currentColor" viewBox="0 0 24 24">
+                            <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
+                            <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
+                            <circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
+                          </svg>
                         </td>
                       )}
                       <td className="px-3 py-2 font-mono text-xs text-accent">{b.key}</td>

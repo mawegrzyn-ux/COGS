@@ -1031,18 +1031,34 @@ If no Voyage AI key is configured in Settings → AI, the system falls back to k
 
 ## System
 
-The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Database, Test Data, Architecture, API Reference, Security, Troubleshooting, and Domain Migration. Most sections are documentation; three (AI, Database, Test Data) embed live controls from the Settings page.
+The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Bugs & Backlog, Audit Log, Database, Test Data, Architecture, API Reference, Security, Troubleshooting, Domain Migration, POS Mockup, and CLAUDE.md. Most sections are documentation; some embed live controls.
 
-Two sections are permission-gated:
+Three sections are permission-gated:
 
-- **Database** requires `settings:write` (admin). It is marked with an amber **ADMIN** badge in the sidebar. This section controls which PostgreSQL instance the API talks to and is admin-only because switching databases affects every user on the system.
-- **Test Data** requires the **developer flag** (`is_dev` on `mcogs_users`). It is marked with a purple **DEV** badge. This section exposes destructive seed/clear actions that wipe operational data, so it's restricted to users with dev access. An Admin toggles the `is_dev` flag per-user from Settings → Users via the `</>` button.
+- **Audit Log** requires `settings:write` (admin). Marked with an amber **ADMIN** badge.
+- **Database** requires `settings:write` (admin). Marked with an amber **ADMIN** badge. This section controls which PostgreSQL instance the API talks to and is admin-only because switching databases affects every user on the system.
+- **Test Data** requires the **developer flag** (`is_dev` on `mcogs_users`). Marked with a purple **DEV** badge. This section exposes destructive seed/clear actions that wipe operational data, so it's restricted to users with dev access.
+- **CLAUDE.md** requires the **developer flag**. Marked with a purple **DEV** badge. Shows the raw project documentation.
 
 Users who don't meet a section's gate simply don't see the entry in the sidebar. If a user loses permission mid-session (e.g. their role changes or their dev flag is revoked) they are automatically bounced back to AI, and a fallback "Admin access required" or "Developer access required" message is shown as defence-in-depth if they somehow route into the section directly.
 
 ### AI Section
 
 Embeds the Settings → AI tab inside the System layout. Shows the same Anthropic/Voyage/Brave/Concise Mode/Monthly Token Allowance/Claude Code fields as Settings → AI. Changes made here persist to the same backend and affect Pepper immediately.
+
+### Bugs & Backlog Section
+
+Two-tab interface for tracking bugs and feature backlog items. Previously a standalone page at `/bugs-backlog`, now embedded in the System page. The old URL redirects here automatically.
+
+**Bugs tab** — CRUD for bug reports with auto-generated key (BUG-1001+), summary, priority (highest/high/medium/low/lowest), severity (critical/major/minor/trivial), status (open/in_progress/resolved/closed/wont_fix), page reference, steps to reproduce, and resolution notes. Anyone can create bugs; only developers can change status.
+
+**Backlog tab** — CRUD for feature requests with auto-generated key (BACK-1001+), summary, item type (story/task/epic/improvement), priority, status (backlog/todo/in_progress/in_review/done/wont_do), story points, and acceptance criteria. Admins have write access; operators and viewers have read access. Only developers can change status.
+
+**Pepper integration** — The AI assistant can query and create bugs/backlog items via chat. Status changes through Pepper respect the same RBAC rules: `bugs:write` / `backlog:write` permission required, plus the developer flag.
+
+### Audit Log Section (admin only)
+
+Central audit trail viewer with filters (entity type, action, user, date range) and expandable rows showing field-level change history (old → new values with colour coding).
 
 ### Database Section (admin only)
 

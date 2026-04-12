@@ -764,7 +764,7 @@ Generic data grid with:
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
   /stock-manager  → StockManagerPage
-  /bugs-backlog   → BugsBacklogPage
+  /bugs-backlog   → redirects to /system (Bugs & Backlog embedded in SystemPage)
   /media          → MediaLibraryPage
   /help           → HelpPage
   /pos-tester     → PosTesterPage
@@ -789,9 +789,8 @@ Allergens          feature: allergens
 HACCP              feature: haccp
 Stock Manager      features: stock_overview + 6 granular stock features
 ─────────────────
-Bugs & Backlog     feature: bugs
 Configuration      feature: settings
-System             feature: null (always visible)
+System             feature: null (always visible)  ← includes Bugs & Backlog section
 Help               feature: null (always visible)
 ```
 
@@ -907,14 +906,16 @@ Unified configuration hub that replaced the separate Settings, Markets, Categori
 
 System administration and documentation hub.
 
-**Sections:** AI | Database | Test Data | CLAUDE.md | Architecture | API Reference | Security | Troubleshooting | Domain Migration | Audit Log | POS Mockup
+**Sections:** AI | Bugs & Backlog | Audit Log | Storage | Database | Test Data | Architecture | API Reference | Security | Troubleshooting | Domain Migration | POS Mockup | CLAUDE.md
 
 - **AI** — Embeds Settings → AI (API keys, token usage, concise mode)
+- **Bugs & Backlog** — Embedded `BugsBacklogPage` (previously standalone at `/bugs-backlog`, now redirects here). Two-tab tracker: bugs (BUG-1001+) and feature backlog (BACK-1001+). Visible to all users. Migration step 108 seeds known bugs and backlog items from CLAUDE.md
+- **Audit Log** — Central audit trail viewer with filters and expandable rows. Gated by `settings:write` (amber ADMIN badge)
+- **Storage** — Media storage config (local vs S3). Gated by `settings:write` (amber ADMIN badge)
 - **Database** — DB connection mode (local vs standalone/RDS), test/save/migrate/switch. Gated by `settings:write` (amber ADMIN badge)
 - **Test Data** — Load Test / Load Small / Clear / Load Defaults. Gated by `is_dev` (purple DEV badge). All destructive actions behind `DateConfirmDialog` (ddmmyyyy)
-- **CLAUDE.md** — Project documentation viewer. Gated by `is_dev` (purple DEV badge)
-- **Audit Log** — Central audit trail viewer with filters and expandable rows
 - **POS Mockup** — Embedded POS functional tester
+- **CLAUDE.md** — Project documentation viewer. Gated by `is_dev` (purple DEV badge)
 
 ### ✅ Countries Page (`/countries`) — Legacy, redirects to /configuration
 
@@ -1144,13 +1145,15 @@ Full inventory management module with 8 tabs. Requires `stock_manager` RBAC perm
 
 **Tab 8: Stocktake** — Three-panel: session list → count entry grid → item detail. Full count: "Populate All" from stock_levels. Spot check: add specific items. Variance calculation on complete. Approve adjusts stock to counted quantities.
 
-### ✅ Bugs & Backlog Page (`/bugs-backlog`)
+### ✅ Bugs & Backlog (embedded in System page)
 
-Two-tab interface for tracking bugs and feature backlog items.
+Two-tab interface for tracking bugs and feature backlog items. Previously a standalone page at `/bugs-backlog` — now embedded as a section in the System page. The old route redirects to `/system`.
 
 - **Bugs tab** — CRUD for bug reports with key (BUG-1001+), summary, priority, severity, status (open/in_progress/resolved/closed/wont_fix), labels JSONB, assignee, page reference, steps to reproduce
-- **Backlog tab** — CRUD for feature requests with key (BL-1001+), summary, item_type (story/task/epic/improvement), priority, status (backlog/todo/in_progress/in_review/done/wont_do), story points, sprint, acceptance criteria
+- **Backlog tab** — CRUD for feature requests with key (BACK-1001+), summary, item_type (story/task/epic/improvement), priority, status (backlog/todo/in_progress/in_review/done/wont_do), story points, sprint, acceptance criteria
 - RBAC: `bugs` feature (everyone write), `backlog` feature (admin write, others read)
+- **Seeded data** — Migration step 108 inserts all 23 known bug fixes from CLAUDE.md section 16 (status: resolved) and 9 backlog items from section 18. Idempotent via `ON CONFLICT (key) DO NOTHING`
+- **Pepper RBAC** — AI chat tools `update_bug_status` and `update_backlog_status` check `bugs:write` / `backlog:write` permission + `is_dev` flag before allowing changes
 
 ### ✅ Media Library Page (`/media`)
 
