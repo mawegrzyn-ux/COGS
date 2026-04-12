@@ -94,8 +94,8 @@ function fmtTime(iso: string) {
   return new Date(iso).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-function CommentSection({ entityType, entityId, comments, commentsLoading, commentText, setCommentText, replyTo, setReplyTo, replyText, setReplyText, postingComment, onPost, onDelete, userSub, isDev }: {
-  entityType: 'bug' | 'backlog'; entityId: number; comments: ItemComment[]
+function CommentSection({ comments, commentsLoading, commentText, setCommentText, replyTo, setReplyTo, replyText, setReplyText, postingComment, onPost, onDelete, userSub, isDev }: {
+  comments: ItemComment[]
   commentsLoading: boolean; commentText: string; setCommentText: (v: string) => void
   replyTo: number | null; setReplyTo: (v: number | null) => void
   replyText: string; setReplyText: (v: string) => void; postingComment: boolean
@@ -316,19 +316,6 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     setDeleteBacklog(null)
     setBacklogDetail(null)
     setToast({ message: `${deleteBacklog.key} deleted`, type: 'success' })
-    loadBacklog()
-  }
-
-  async function moveBacklog(id: number, dir: -1 | 1) {
-    const idx = backlog.findIndex(b => b.id === id)
-    if (idx < 0) return
-    const swapIdx = idx + dir
-    if (swapIdx < 0 || swapIdx >= backlog.length) return
-    const items = [
-      { id: backlog[idx].id, sort_order: backlog[swapIdx].sort_order },
-      { id: backlog[swapIdx].id, sort_order: backlog[idx].sort_order },
-    ]
-    await api.put('/backlog/reorder', { items })
     loadBacklog()
   }
 
@@ -782,8 +769,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
             )}
 
             {/* Comments */}
-            <CommentSection entityType="bug" entityId={bugDetail.id}
-              comments={comments} commentsLoading={commentsLoading}
+            <CommentSection comments={comments} commentsLoading={commentsLoading}
               commentText={commentText} setCommentText={setCommentText}
               replyTo={replyTo} setReplyTo={setReplyTo}
               replyText={replyText} setReplyText={setReplyText}
@@ -916,8 +902,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
             )}
 
             {/* Comments */}
-            <CommentSection entityType="backlog" entityId={backlogDetail.id}
-              comments={comments} commentsLoading={commentsLoading}
+            <CommentSection comments={comments} commentsLoading={commentsLoading}
               commentText={commentText} setCommentText={setCommentText}
               replyTo={replyTo} setReplyTo={setReplyTo}
               replyText={replyText} setReplyText={setReplyText}
