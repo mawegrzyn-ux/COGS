@@ -5,12 +5,19 @@ const path   = require('path');
 // GET /api/docs/claude-md  — returns raw CLAUDE.md content (dev-only on frontend)
 router.get('/claude-md', async (req, res) => {
   try {
-    // Try multiple possible locations for CLAUDE.md
+    // Try multiple possible locations and case variants (Linux is case-sensitive)
+    const repoRoot = path.resolve(__dirname, '..', '..', '..');
+    const cwdRoot  = process.cwd();
+    const cwdParent = path.resolve(cwdRoot, '..');
     const candidates = [
-      path.resolve(__dirname, '..', '..', '..', 'CLAUDE.md'),   // repo root (from api/src/routes/)
-      path.resolve(process.cwd(), 'CLAUDE.md'),                  // CWD (if run from repo root)
-      path.resolve(process.cwd(), '..', 'CLAUDE.md'),            // CWD parent (if CWD is api/)
-      '/var/www/menu-cogs/CLAUDE.md',                             // absolute production path
+      path.join(repoRoot,  'CLAUDE.md'),
+      path.join(repoRoot,  'claude.md'),
+      path.join(cwdRoot,   'CLAUDE.md'),
+      path.join(cwdRoot,   'claude.md'),
+      path.join(cwdParent, 'CLAUDE.md'),
+      path.join(cwdParent, 'claude.md'),
+      '/var/www/menu-cogs/CLAUDE.md',
+      '/var/www/menu-cogs/claude.md',
     ];
 
     let content = null;
@@ -22,8 +29,11 @@ router.get('/claude-md', async (req, res) => {
     }
 
     if (!content) {
-      console.error('[docs] CLAUDE.md not found. Tried:', candidates);
-      return res.status(404).json({ error: { message: 'CLAUDE.md not found on server' } });
+      console.error('[docs] CLAUDE.md not found. __dirname:', __dirname, 'cwd:', process.cwd(), 'Tried:', candidates);
+      return res.status(404).json({
+        error: { message: 'CLAUDE.md not found on server' },
+        debug: { __dirname, cwd: process.cwd(), candidates },
+      });
     }
 
     res.json({ content });
