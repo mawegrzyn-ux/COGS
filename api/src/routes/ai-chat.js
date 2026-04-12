@@ -1837,7 +1837,9 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'update_bug_status': {
       const { id, status, resolution } = input;
-      if (!userCtx.is_dev) return { error: 'Only developers can change bug status' };
+      const bugAccess = userCtx.permissions?.bugs || 'none';
+      if (bugAccess !== 'write') return { error: 'You need bugs:write permission to update bugs.' };
+      if (!userCtx.is_dev) return { error: 'Only developers can change bug status.' };
       const sets = [`status = $1`, `updated_at = NOW()`];
       const vals = [status];
       if (resolution) { sets.push(`resolution = $${vals.push(resolution.trim())}`); }
@@ -1883,7 +1885,9 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'update_backlog_status': {
       const { id, status } = input;
-      if (!userCtx.is_dev) return { error: 'Only developers can change backlog status' };
+      const blAccess = userCtx.permissions?.backlog || 'none';
+      if (blAccess !== 'write') return { error: 'You need backlog:write permission to update backlog items.' };
+      if (!userCtx.is_dev) return { error: 'Only developers can change backlog status.' };
       const { rows } = await localPool.query(
         `UPDATE mcogs_backlog SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, key, status`,
         [status, id]
