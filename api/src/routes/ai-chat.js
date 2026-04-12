@@ -10,6 +10,7 @@ const router    = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 const XLSX      = require('xlsx');
 const pool      = require('../db/pool');
+const localPool = require('../db/local-pool');
 const rag       = require('../helpers/rag');
 const aiConfig  = require('../helpers/aiConfig');
 const { agenticStream } = require('../helpers/agenticStream');
@@ -209,6 +210,95 @@ CONFIRMATION REQUIRED before calling.`,
         id: { type: 'integer', description: 'Ticket ID to delete' },
       },
       required: ['id'],
+    },
+  },
+
+  // ── Bugs & Backlog ──────────────────────────────────────────────────────────
+  {
+    name: 'list_bugs',
+    description: 'Returns bug tickets from the bugs log, filterable by status, priority, and severity.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status:   { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] },
+        priority: { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity: { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        search:   { type: 'string', description: 'Search in summary/description' },
+        limit:    { type: 'integer', description: 'Max rows (default 30)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_bug',
+    description: 'Logs a new bug report. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary:              { type: 'string', description: 'Short bug title' },
+        description:          { type: 'string', description: 'Detailed description' },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity:             { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        page:                 { type: 'string', description: 'Which page/module is affected' },
+        steps_to_reproduce:   { type: 'string' },
+      },
+      required: ['summary'],
+    },
+  },
+  {
+    name: 'update_bug_status',
+    description: 'Updates the status of a bug. Only developers can change bug status. Call list_bugs first to get the ID. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:         { type: 'integer', description: 'Bug ID' },
+        status:     { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] },
+        resolution: { type: 'string', description: 'Resolution notes (optional)' },
+      },
+      required: ['id', 'status'],
+    },
+  },
+  {
+    name: 'list_backlog',
+    description: 'Returns backlog items (stories, tasks, epics), filterable by status, priority, and type.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'wont_do'] },
+        priority:  { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        item_type: { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        search:    { type: 'string', description: 'Search in summary/description' },
+        limit:     { type: 'integer', description: 'Max rows (default 30)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_backlog_item',
+    description: 'Creates a new backlog item (story, task, epic, or improvement). CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary:             { type: 'string', description: 'Short title' },
+        description:         { type: 'string', description: 'Detailed description' },
+        item_type:           { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        priority:            { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        acceptance_criteria: { type: 'string' },
+        story_points:        { type: 'integer' },
+      },
+      required: ['summary'],
+    },
+  },
+  {
+    name: 'update_backlog_status',
+    description: 'Updates the status of a backlog item. Only developers can change status. Call list_backlog first to get the ID. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:     { type: 'integer', description: 'Backlog item ID' },
+        status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'wont_do'] },
+      },
+      required: ['id', 'status'],
     },
   },
 
@@ -1711,6 +1801,95 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       );
       if (!rows.length) return { error: `Ticket #${id} not found` };
       return { deleted: rows[0].id };
+    }
+
+    // ── Bugs & Backlog (local DB) ────────────────────────────────────────────
+
+    case 'list_bugs': {
+      const { status, priority, severity, search, limit = 30 } = input;
+      const conditions = [];
+      const vals = [];
+      if (status)   conditions.push(`status = $${vals.push(status)}`);
+      if (priority) conditions.push(`priority = $${vals.push(priority)}`);
+      if (severity) conditions.push(`severity = $${vals.push(severity)}`);
+      if (search)   conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      vals.push(Math.min(parseInt(limit, 10) || 30, 100));
+      const { rows } = await localPool.query(
+        `SELECT id, key, summary, priority, status, severity, reported_by_email, assigned_to, page, created_at, updated_at FROM mcogs_bugs ${where} ORDER BY created_at DESC LIMIT $${vals.length}`,
+        vals
+      );
+      return rows.length ? rows : 'No bugs found.';
+    }
+
+    case 'create_bug': {
+      const { summary, description, priority, severity, page, steps_to_reproduce } = input;
+      if (!summary?.trim()) return { error: 'summary is required' };
+      const keyRes = await localPool.query(`SELECT nextval('mcogs_bug_number_seq')::int AS num`);
+      const key = `BUG-${keyRes.rows[0].num}`;
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_bugs (key, summary, description, priority, severity, reported_by, reported_by_email, page, steps_to_reproduce)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, key, summary, priority, severity, status
+      `, [key, summary.trim(), description?.trim() || null, priority || 'medium', severity || 'minor',
+          userCtx.sub || null, userCtx.email || null, page?.trim() || null, steps_to_reproduce?.trim() || null]);
+      return rows[0];
+    }
+
+    case 'update_bug_status': {
+      const { id, status, resolution } = input;
+      if (!userCtx.is_dev) return { error: 'Only developers can change bug status' };
+      const sets = [`status = $1`, `updated_at = NOW()`];
+      const vals = [status];
+      if (resolution) { sets.push(`resolution = $${vals.push(resolution.trim())}`); }
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_bugs SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, status, resolution`,
+        vals
+      );
+      if (!rows.length) return { error: `Bug #${id} not found` };
+      return rows[0];
+    }
+
+    case 'list_backlog': {
+      const { status, priority, item_type, search, limit = 30 } = input;
+      const conditions = [];
+      const vals = [];
+      if (status)    conditions.push(`status = $${vals.push(status)}`);
+      if (priority)  conditions.push(`priority = $${vals.push(priority)}`);
+      if (item_type) conditions.push(`item_type = $${vals.push(item_type)}`);
+      if (search)    conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      vals.push(Math.min(parseInt(limit, 10) || 30, 100));
+      const { rows } = await localPool.query(
+        `SELECT id, key, summary, item_type, priority, status, requested_by_email, assigned_to, story_points, sprint, sort_order, created_at FROM mcogs_backlog ${where} ORDER BY sort_order ASC, created_at DESC LIMIT $${vals.length}`,
+        vals
+      );
+      return rows.length ? rows : 'No backlog items found.';
+    }
+
+    case 'create_backlog_item': {
+      const { summary, description, item_type, priority, acceptance_criteria, story_points } = input;
+      if (!summary?.trim()) return { error: 'summary is required' };
+      const keyRes = await localPool.query(`SELECT nextval('mcogs_backlog_number_seq')::int AS num`);
+      const key = `BACK-${keyRes.rows[0].num}`;
+      const maxSort = await localPool.query(`SELECT COALESCE(MAX(sort_order), 0)::int + 1 AS next FROM mcogs_backlog`);
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, acceptance_criteria, story_points, sort_order)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, key, summary, item_type, priority, status
+      `, [key, summary.trim(), description?.trim() || null, item_type || 'story', priority || 'medium',
+          userCtx.sub || null, userCtx.email || null, acceptance_criteria?.trim() || null, story_points || null, maxSort.rows[0].next]);
+      return rows[0];
+    }
+
+    case 'update_backlog_status': {
+      const { id, status } = input;
+      if (!userCtx.is_dev) return { error: 'Only developers can change backlog status' };
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_backlog SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, key, status`,
+        [status, id]
+      );
+      if (!rows.length) return { error: `Backlog item #${id} not found` };
+      return rows[0];
     }
 
     // ── New Lookup / Read ──────────────────────────────────────────────────────

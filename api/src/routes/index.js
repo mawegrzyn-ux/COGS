@@ -135,4 +135,10 @@ router.use('/seed',               ...can('settings', 'write'),                  
 router.use('/feedback',           auth,                                               require('./feedback'));
 router.use('/internal/feedback',                                                       require('./internal-feedback'));
 
+// ── Bugs & Backlog (always local DB) ─────────────────────────────────────────
+router.use('/bugs',              ...can('bugs', 'read'),    write('bugs'),             require('./bugs'));
+router.use('/backlog',           ...can('backlog', 'read'), write('backlog'),           require('./backlog'));
+router.use('/internal/bugs',                                                            require('./internal-bugs'));
+router.use('/internal/backlog',                                                         require('./internal-backlog'));
+
 module.exports = router;

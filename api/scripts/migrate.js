@@ -1509,6 +1509,81 @@ const migrations = [
   // Set existing TRUE values to NULL (follow group default)
   `UPDATE mcogs_sales_item_modifier_groups SET auto_show = NULL WHERE auto_show = TRUE`,
   `UPDATE mcogs_combo_step_option_modifier_groups SET auto_show = NULL WHERE auto_show = TRUE`,
+
+  // ── Step 107: Bugs log + Backlog tables ────────────────────────────────────
+  `CREATE SEQUENCE IF NOT EXISTS mcogs_bug_number_seq START 1001`,
+  `CREATE TABLE IF NOT EXISTS mcogs_bugs (
+    id                  SERIAL PRIMARY KEY,
+    key                 VARCHAR(20)  NOT NULL UNIQUE,
+    summary             VARCHAR(500) NOT NULL,
+    description         TEXT,
+    priority            VARCHAR(20)  NOT NULL DEFAULT 'medium'
+                        CHECK (priority IN ('highest','high','medium','low','lowest')),
+    status              VARCHAR(30)  NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open','in_progress','resolved','closed','wont_fix')),
+    severity            VARCHAR(20)  NOT NULL DEFAULT 'minor'
+                        CHECK (severity IN ('critical','major','minor','trivial')),
+    reported_by         VARCHAR(200),
+    reported_by_email   VARCHAR(200),
+    assigned_to         VARCHAR(200),
+    page                VARCHAR(200),
+    steps_to_reproduce  TEXT,
+    environment         TEXT,
+    labels              JSONB NOT NULL DEFAULT '[]',
+    attachments         JSONB NOT NULL DEFAULT '[]',
+    resolution          TEXT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_bugs_status      ON mcogs_bugs(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_bugs_priority     ON mcogs_bugs(priority)`,
+  `CREATE INDEX IF NOT EXISTS idx_bugs_assigned     ON mcogs_bugs(assigned_to) WHERE assigned_to IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_bugs_reported     ON mcogs_bugs(reported_by)`,
+
+  `CREATE SEQUENCE IF NOT EXISTS mcogs_backlog_number_seq START 1001`,
+  `CREATE TABLE IF NOT EXISTS mcogs_backlog (
+    id                  SERIAL PRIMARY KEY,
+    key                 VARCHAR(20)  NOT NULL UNIQUE,
+    summary             VARCHAR(500) NOT NULL,
+    description         TEXT,
+    item_type           VARCHAR(20)  NOT NULL DEFAULT 'story'
+                        CHECK (item_type IN ('story','task','epic','improvement')),
+    priority            VARCHAR(20)  NOT NULL DEFAULT 'medium'
+                        CHECK (priority IN ('highest','high','medium','low','lowest')),
+    status              VARCHAR(30)  NOT NULL DEFAULT 'backlog'
+                        CHECK (status IN ('backlog','todo','in_progress','in_review','done','wont_do')),
+    requested_by        VARCHAR(200),
+    requested_by_email  VARCHAR(200),
+    assigned_to         VARCHAR(200),
+    labels              JSONB NOT NULL DEFAULT '[]',
+    acceptance_criteria TEXT,
+    story_points        INTEGER,
+    sprint              VARCHAR(100),
+    sort_order          INTEGER NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_backlog_status    ON mcogs_backlog(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_backlog_priority   ON mcogs_backlog(priority)`,
+  `CREATE INDEX IF NOT EXISTS idx_backlog_assigned   ON mcogs_backlog(assigned_to) WHERE assigned_to IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_backlog_sort       ON mcogs_backlog(sort_order)`,
+
+  // ── Step 107b: RBAC — seed bugs + backlog features ─────────────────────────
+  `DO $$ DECLARE r RECORD; feat TEXT; BEGIN
+     FOR r IN SELECT id, name FROM mcogs_roles LOOP
+       -- bugs: everyone gets write (anyone can log)
+       INSERT INTO mcogs_role_permissions (role_id, feature, access)
+       VALUES (r.id, 'bugs', 'write')
+       ON CONFLICT (role_id, feature) DO NOTHING;
+
+       -- backlog: admin=write, operator/viewer=read
+       INSERT INTO mcogs_role_permissions (role_id, feature, access)
+       VALUES (r.id, 'backlog',
+         CASE WHEN r.name = 'Admin' THEN 'write'
+              ELSE 'read' END
+       ) ON CONFLICT (role_id, feature) DO NOTHING;
+     END LOOP;
+   END $$`,
 ];
 
 async function runMigrations(pool) {
