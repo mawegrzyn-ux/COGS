@@ -247,7 +247,7 @@ router.get('/:id/price-diff', async (req, res, next) => {
 
 async function loadModifierGroupsForItem(salesItemId, msiId) {
   const { rows: mgRows } = await pool.query(
-    `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection, simgj.auto_show
+    `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show, simgj.auto_show
      FROM   mcogs_sales_item_modifier_groups simgj
      JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
      WHERE  simgj.sales_item_id = $1
@@ -292,7 +292,7 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
     min_select: mg.min_select,
     max_select: mg.max_select,
     allow_repeat_selection: mg.allow_repeat_selection || false,
-    auto_show: mg.auto_show ?? true,
+    auto_show: mg.auto_show != null ? mg.auto_show : (mg.default_auto_show ?? true),
     options: optByMg[mg.modifier_group_id] || [],
   }));
 }
@@ -330,7 +330,7 @@ async function loadComboStructure(comboId, msiId) {
   const optModMap = {};
   if (optIds.length) {
     const { rows: csomgRows } = await pool.query(
-      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection, csomg.auto_show
+      `SELECT csomg.combo_step_option_id, mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show, csomg.auto_show
        FROM   mcogs_combo_step_option_modifier_groups csomg
        JOIN   mcogs_modifier_groups mg ON mg.id = csomg.modifier_group_id
        WHERE  csomg.combo_step_option_id = ANY($1) ORDER BY csomg.sort_order, mg.name`, [optIds]
@@ -366,7 +366,7 @@ async function loadComboStructure(comboId, msiId) {
         optModMap[r.combo_step_option_id].push({
           modifier_group_id: r.modifier_group_id, name: r.name, display_name: r.display_name || null,
           min_select: r.min_select, max_select: r.max_select, allow_repeat_selection: r.allow_repeat_selection || false,
-          auto_show: r.auto_show ?? true,
+          auto_show: r.auto_show != null ? r.auto_show : (r.default_auto_show ?? true),
           options: modOptByMg[r.modifier_group_id] || [],
         });
       }

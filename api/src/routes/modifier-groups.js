@@ -47,12 +47,12 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /modifier-groups ────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { name, display_name, description, min_select, max_select, allow_repeat_selection } = req.body;
+    const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
     if (!name) return res.status(400).json({ error: { message: 'name is required' } });
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_modifier_groups (name, display_name, description, min_select, max_select, allow_repeat_selection)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false]
+      `INSERT INTO mcogs_modifier_groups (name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true]
     );
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
@@ -61,11 +61,11 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /modifier-groups/:id ─────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, display_name, description, min_select, max_select, allow_repeat_selection } = req.body;
+    const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
     const { rows } = await pool.query(
-      `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5, allow_repeat_selection=$6
-       WHERE id=$7 RETURNING *`,
-      [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, req.params.id]
+      `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5, allow_repeat_selection=$6, default_auto_show=$7
+       WHERE id=$8 RETURNING *`,
+      [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
     res.json(rows[0]);
@@ -127,9 +127,9 @@ router.post('/:id/duplicate', async (req, res, next) => {
     if (!src.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Modifier group not found' } }); }
 
     const { rows: newGroup } = await client.query(
-      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select, allow_repeat_selection)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [`${src[0].name} (copy)`, src[0].description, src[0].min_select, src[0].max_select, src[0].allow_repeat_selection ?? false]
+      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select, allow_repeat_selection, default_auto_show)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [`${src[0].name} (copy)`, src[0].description, src[0].min_select, src[0].max_select, src[0].allow_repeat_selection ?? false, src[0].default_auto_show ?? true]
     );
     const newId = newGroup[0].id;
 

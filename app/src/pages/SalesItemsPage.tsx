@@ -59,7 +59,7 @@ interface SalesItem {
   qty: number
   modifier_group_count?: number
   markets?: SalesItemMarket[]
-  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]
+  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]
 }
 
 // ── Combo panel edit target ────────────────────────────────────────────────────
@@ -688,7 +688,7 @@ export default function SalesItemsPage() {
   }
 
   // ── Sales Item — modifier group assignment ────────────────────────────────
-  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]>>({})
+  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]>>({})
   const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
   const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
   const [siMgAddPos,    setSiMgAddPos]    = useState<{ top: number; left: number } | null>(null)
@@ -704,7 +704,7 @@ export default function SalesItemsPage() {
     }
   }
 
-  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]) => {
+  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]) => {
     try {
       await api.put(`/sales-items/${siId}/modifier-groups`, {
         groups: groups.map(g => ({ modifier_group_id: g.modifier_group_id, auto_show: g.auto_show !== false }))
@@ -727,7 +727,7 @@ export default function SalesItemsPage() {
   const addSiModifier = (siId: number, mg: ModifierGroup) => {
     const current = siMgData[siId] || []
     if (current.some(g => g.modifier_group_id === mg.id)) return
-    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length, min_select: mg.min_select, auto_show: true }])
+    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length, min_select: mg.min_select, auto_show: null }])
     setSiMgAddOpen(null)
   }
 
@@ -747,7 +747,7 @@ export default function SalesItemsPage() {
   const [mgEditTarget,    setMgEditTarget]    = useState<MgEditTarget>(null)
   const [mgPanelWidth,    setMgPanelWidth]    = useState(360)
   const [mgPanelSaving,   setMgPanelSaving]   = useState(false)
-  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number; allow_repeat_selection: boolean } | null>(null)
+  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number; allow_repeat_selection: boolean; default_auto_show?: boolean | null } | null>(null)
   const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number; image_url: string | null } | null>(null)
   const [mpOptRecipeSearch, setMpOptRecipeSearch] = useState('')
   const [mpOptIngSearch,    setMpOptIngSearch]    = useState('')
@@ -803,7 +803,7 @@ export default function SalesItemsPage() {
     if (!mgEditTarget) { setMpGroupForm(null); setMpOptForm(null); return }
     if (mgEditTarget.type === 'group') {
       const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
-      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select, allow_repeat_selection: g.allow_repeat_selection ?? false })
+      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select, allow_repeat_selection: g.allow_repeat_selection ?? false, default_auto_show: g.default_auto_show ?? true })
       setMpOptForm(null)
     } else {
       const { opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
@@ -2124,6 +2124,16 @@ export default function SalesItemsPage() {
                         <p className="text-[10px] text-text-3">Same option can be selected multiple times (e.g. extra toppings)</p>
                       </div>
                     </label>
+                    {mpGroupForm.min_select === 0 && (
+                      <label className="flex items-center gap-2 mt-1 p-2 bg-surface-2 rounded-lg border border-border cursor-pointer">
+                        <input type="checkbox" checked={mpGroupForm.default_auto_show ?? true}
+                          onChange={e => setMpGroupForm(f => f ? { ...f, default_auto_show: e.target.checked } : f)} className="rounded" />
+                        <div>
+                          <span className="text-xs font-medium text-text-1">Show automatically in POS</span>
+                          <p className="text-[10px] text-text-3">When off, this modifier appears as an optional button in the POS. Can be overridden per sales item.</p>
+                        </div>
+                      </label>
+                    )}
                   </>
                 )}
 

@@ -1899,9 +1899,11 @@ Three interconnected features that extend the menu builder towards a full POS ba
 
 **Note:** The data model, DB tables, API routes, and frontend components for Sales Items, Combos, Modifier Groups, and Combo Step Options are already built. The POS_MENU_FEATURES.md doc describes the full original specification. The remaining work is deeper POS-workflow features (kitchen display, order flows, etc.).
 
-### Smart Scenario — Ingredient-Level Cost Overrides
+### Smart Scenario — Ingredient-Level Cost Overrides (enhancement)
 
-**Current state:** The Smart Scenario feature (🧠 Smart button in Menu Engineer) accepts natural language prompts and proposes price or cost changes at the **menu item** level. Cost overrides apply to the total recipe cost (`costOverrides[nat_key]`).
+**Current state:** The Smart Scenario feature is BUILT. The base feature (menu-item-level price and cost changes via `POST /scenarios/smart` using Claude Haiku) is complete. The enhancement below would add ingredient-level granularity. **Do not build until explicitly requested.**
+
+**What exists:** `POST /scenarios/smart` endpoint calls Claude Haiku with restricted prompt, returns structured price/cost change proposals. `SmartScenarioModal` shows confirmation table with checkboxes. Supports both price and cost changes at the menu item level. Cost overrides apply to the total recipe cost (`costOverrides[nat_key]`).
 
 **Desired enhancement:** Allow the AI to increase the cost of a **specific ingredient within recipes**. For example, "increase bone-in wings cost by 5%" should:
 1. Identify which recipes contain the "bone-in wings" ingredient
@@ -1928,70 +1930,11 @@ Three interconnected features that extend the menu builder towards a full POS ba
 
 **Do not build until explicitly requested.**
 
-### POS Functional Mockup (Menu Tester)
+### POS Functional Mockup (Menu Tester) — BUILT
 
-**Purpose:** A functional POS simulator within System menu for testing menu structure, combos, modifiers, and pricing flow without a real POS backend. No transactions saved to DB — purely for menu validation and staff training.
+**Status:** Fully built as `PosTesterPage.tsx`. Accessible at System → POS Mockup. See Section 12 (Pages Built) for full details.
 
-**Location:** System → POS Tester (gated by `settings:read` or `menus:read`)
-
-**Layout (three panels, full-window mode):**
-
-```
-┌──────────────────┬────────────────────────────┬──────────────────────┐
-│   CURRENT CHECK  │      MENU (by category)    │   ORDER FLOW         │
-│                  │                            │   (steps/modifiers)  │
-│  Item 1    ₹550  │  [Wings] [Combos] [Drinks] │                      │
-│  Item 2    ₹450  │                            │  Step 1: Choose size │
-│    + Mod   ₹ 50  │  ┌─────┐ ┌─────┐ ┌─────┐  │  ○ 8pc  ● 10pc      │
-│                  │  │Wing8│ │Bone │ │Combo│  │                      │
-│                  │  │ ₹500│ │₹550 │ │₹450 │  │  Step 2: Flavours   │
-│                  │  └─────┘ └─────┘ └─────┘  │  ☑ Spicy Korean     │
-│                  │                            │  ☑ Atomic           │
-│                  │  ┌─────┐ ┌─────┐           │  ○ Lemon Pepper     │
-│                  │  │Tikka│ │Plain│           │                      │
-│                  │  │ ₹500│ │₹400 │           │  [Add to Order]      │
-│                  │  └─────┘ └─────┘           │                      │
-│──────────────────│                            │──────────────────────│
-│  Subtotal  ₹1050 │                            │                      │
-│  Tax 5%    ₹ 52  │                            │                      │
-│  TOTAL     ₹1102 │                            │                      │
-│                  │                            │                      │
-│  [  PAY  ]       │                            │                      │
-└──────────────────┴────────────────────────────┴──────────────────────┘
-```
-
-**Features:**
-- **Full window mode** — button to toggle fullscreen (hides sidebar, header). ESC to exit.
-- **Menu selector** — dropdown to pick which menu to load. Loads via `/cogs/menu-sales/:id`.
-- **Category tabs** — all categories on one page as tab buttons across the top of the middle panel. No sub-menus. Items shown as tile grid within the selected category.
-- **Item tiles** — show name, price, type badge (recipe/combo/manual). Click to add to check (simple items) or enter order flow (combos/items with modifiers).
-- **Order flow (right panel)** — activated when an item has combo steps or modifier groups:
-  - Combo: walks through each step sequentially. Shows options as selectable tiles. Enforces min/max selection per step. "Next Step" advances.
-  - Modifiers: shows modifier groups with min/max. Checkboxes for multi-select, radio for single-select.
-  - Price add-ons displayed per option.
-  - "Add to Order" button (disabled until all required steps complete).
-- **Current check (left panel):**
-  - Line items with name, modifiers as indented sub-lines, price
-  - Qty adjustment (+/- buttons) and remove (X)
-  - Subtotal, tax (from menu's country tax rate), total
-  - Running item count
-- **PAY button** — closes the check, shows a mock receipt modal:
-  - Receipt styled like a thermal printer (monospace font, narrow width)
-  - Lists all items, modifiers, subtotal, tax, total
-  - "Print" button (window.print() on the modal) and "New Order" button (clears check)
-- **No data persistence** — nothing saved to DB. This is a stateless mock.
-
-**Data source:** Uses existing menu COGS data (`/cogs/menu-sales/:id`) which already includes items, categories, prices per level, combo steps, modifier groups.
-
-**Implementation notes:**
-- Single page component: `app/src/pages/PosTesterPage.tsx`
-- Route: `/system/pos-tester` (nested under System) or standalone `/pos-tester`
-- No new API endpoints — reads existing COGS + menu data
-- No new DB tables
-- Estimated effort: 1.5-2 days
-- Price level selector in header (Dine In / Takeout / Delivery)
-
-**Do not build until explicitly requested.**
+**Key features:** Three-panel layout (check / menu grid / order flow), combo step walker with auto-advance for single-choice steps, modifier groups with repeat selection (+/- stepper) and auto_show (inline vs popup), fullscreen portal overlay, mock receipt modal with print, category-grouped tile grid, price level selector.
 
 ### Lightsail Upgrade
 
@@ -2194,6 +2137,8 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 
 ---
 
-*README last updated: April 2026 (session: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (mcogs_user_notes + mcogs_user_profiles, migration steps 102-103), 3 new Pepper tools (save_memory_note, list_memory_notes, delete_memory_note), /api/memory routes (memory.js), system prompt injection of notes + profile; RBAC expanded from 13 to 19 features (stock_manager split into 7 granular features: stock_overview/stock_purchase_orders/stock_goods_in/stock_invoices/stock_waste/stock_transfers/stock_stocktake); Stores renamed to Centres in UI, Centres management moved to Configuration → Locations; UAT bug fixes: Fix 21 TransfersTab wrong API path (/transfers → /stock-transfers), Fix 22 status changes wrong HTTP method (patch → post to dedicated endpoints), Fix 23 invoice from-GRN wrong column names (quantity_received/unit_cost → qty_received/unit_price); Express route ordering gotcha documented; Audit Log gate updated settings:write → settings:read; tool count 89→92)*
+*README last updated: April 2026 (session: POS Mockup + Smart Scenario + CalcInput + Pepper docking redesign + modifier enhancements — POS Mockup built (PosTesterPage.tsx, three-panel POS simulator with combo step walker, modifier groups, receipt modal, fullscreen portal, category-grouped tiles); Smart Scenario built (POST /scenarios/smart, Claude Haiku prompt, SmartScenarioModal with price/cost change proposals and checkboxes); CalcInput math expression evaluator component (ui.tsx, wired into PO item form + Inventory conversion/waste fields); Pepper docking redesigned (removed float mode, added docked-bottom with resizable panel 200px-60vh, three modes: left/right/bottom, conversation preserved across switches); allow_repeat_selection flag on modifier groups (migration step 104, +/- stepper UI in POS, SalesItems checkbox); auto_show flag on modifier junction tables (migration step 105, eye toggle in SalesItems, POS splits inline vs popup modifiers); PO improvements (3 lots: per-item store + quote lookup + save-as-quote, configurable prefixes + backdated toggle, global quote creation toggle + per-role override); security fixes (SHARED_PAGE_SECRET crypto.randomBytes, deploy.yml domain parameterised, negative qty validation); 20+ bug fixes (transfers API path, status change HTTP methods, invoice from-GRN columns, Smart Scenario price calc, POS combo auto-advance, media library selection logic, various TS build errors); docs created: SECURITY_AUDIT.md, AI_MEMORY_REVIEW.md)*
 
-*README previous session: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*
+*README previous session: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (migration steps 102-103), 3 new Pepper tools, /api/memory routes, RBAC expanded 13→19 features, Stores→Centres rename, Audit Log, 3 UAT bug fixes*
+
+*README two sessions ago: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*

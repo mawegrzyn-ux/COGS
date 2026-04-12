@@ -1265,6 +1265,77 @@ Use the filter controls at the top of the page to narrow results by user, action
 
 ---
 
+## POS Mockup
+
+The POS Mockup is a functional point-of-sale simulator for testing menu structure, combos, modifiers, and pricing flow. It does not save any transactions to the database — it is purely for menu validation and staff training.
+
+**Access:** System → POS Mockup (requires `settings:read` or `menus:read` permission).
+
+### Layout
+
+The screen is divided into three panels:
+
+| Panel | Purpose |
+|---|---|
+| **Current Check** (left) | Running order with line items, modifiers as indented sub-lines, qty +/- buttons, remove button, subtotal, tax, and total |
+| **Menu Grid** (centre) | Category tabs across the top, item tiles below. Each tile shows name, price, and type badge (recipe/combo/manual) |
+| **Order Flow** (right) | Activated when a combo or item with modifiers is selected. Shows step-by-step options and modifier groups |
+
+### How to Use
+
+1. Select a menu from the dropdown in the header bar. Choose a price level (Dine In / Takeout / Delivery).
+2. Click a category tab to filter items. Click an item tile to add it to the check.
+3. For combos: the Order Flow panel walks through each step. Select options, then click "Next Step" or "Add to Order" when all required steps are complete. Single-choice steps auto-advance.
+4. For items with modifiers: required modifier groups appear inline (if auto_show is enabled) or behind a "Customise" button. Select options respecting min/max rules.
+5. Modifier groups with repeat selection enabled show +/- stepper buttons instead of checkboxes.
+6. Adjust quantities on the check with +/- buttons. Remove items with the X button.
+7. Click **PAY** to close the check and see a mock receipt styled like a thermal printer printout. Click "Print" to use the browser print dialog, or "New Order" to start fresh.
+
+### Fullscreen Mode
+
+Click the expand button in the header to enter fullscreen mode. The sidebar and app header are hidden, giving you the full browser window. Press ESC or click the collapse button to exit.
+
+---
+
+## Smart Scenario
+
+The Smart Scenario tool uses AI to propose price or cost changes across your menu items in the Menu Engineer.
+
+### How to Use
+
+1. Open a menu in the **Menu Engineer** tab.
+2. Click the brain icon button in the toolbar.
+3. Type a natural language prompt describing what you want. Examples:
+   - "Increase all prices by 5%"
+   - "Set food cost target to 30% and adjust prices accordingly"
+   - "Reduce costs on all wing items by 10%"
+4. The AI analyses your menu data and returns a table of proposed changes.
+5. Review each proposal in the confirmation modal. Each row shows the item name, the field being changed (price or cost), old value, new value, and the change amount.
+6. Use the checkboxes to select which proposals to apply. Click "Apply Selected" to update the scenario grid.
+7. The changes are applied as scenario overrides only — they do not affect your live menu prices until you use "Push Prices".
+
+---
+
+## CalcInput (Math Expressions in Number Fields)
+
+Several number input fields in the application support inline math expressions. Instead of typing a final number, you can type a calculation and the system evaluates it for you.
+
+**Supported operators:** `+`, `-`, `*`, `/`, and parentheses `()`.
+
+**Where it works:**
+- Purchase Order item form: quantity and unit price fields
+- Inventory page: prep-to-base conversion and waste percentage fields
+
+**How to use:**
+
+1. Click into a supported number field.
+2. Type a math expression, for example `500 * 1.2` or `(100 + 50) / 3`.
+3. A preview tooltip appears below the field showing the calculated result.
+4. Press Enter or Tab to accept the result — the field updates to the evaluated number.
+5. If the expression is invalid, the preview shows an error and the field retains its previous value.
+
+---
+
 ## Troubleshooting
 
 **Recipe shows £0 COGS or zero cost per portion**
@@ -1335,4 +1406,4 @@ A menu filter may be active in the toolbar. Check for a selected menu in the "Fi
 
 ---
 
-*User guide last updated: April 2026 (Stock Manager module and Audit Log sections added)*
+*User guide last updated: April 2026 (POS Mockup, Smart Scenario, CalcInput, Pepper Memory sections added; Stock Manager and Audit Log from previous session)*

@@ -1498,6 +1498,17 @@ const migrations = [
   // ── Step 105: auto_show flag on modifier group junctions ───────────────────
   `ALTER TABLE mcogs_sales_item_modifier_groups ADD COLUMN IF NOT EXISTS auto_show BOOLEAN NOT NULL DEFAULT TRUE`,
   `ALTER TABLE mcogs_combo_step_option_modifier_groups ADD COLUMN IF NOT EXISTS auto_show BOOLEAN NOT NULL DEFAULT TRUE`,
+
+  // ── Step 106: default_auto_show on modifier groups + make junction auto_show nullable ──
+  `ALTER TABLE mcogs_modifier_groups ADD COLUMN IF NOT EXISTS default_auto_show BOOLEAN NOT NULL DEFAULT TRUE`,
+  // Change junction columns from NOT NULL to nullable (NULL = use group default)
+  `ALTER TABLE mcogs_sales_item_modifier_groups ALTER COLUMN auto_show DROP NOT NULL`,
+  `ALTER TABLE mcogs_sales_item_modifier_groups ALTER COLUMN auto_show SET DEFAULT NULL`,
+  `ALTER TABLE mcogs_combo_step_option_modifier_groups ALTER COLUMN auto_show DROP NOT NULL`,
+  `ALTER TABLE mcogs_combo_step_option_modifier_groups ALTER COLUMN auto_show SET DEFAULT NULL`,
+  // Set existing TRUE values to NULL (follow group default)
+  `UPDATE mcogs_sales_item_modifier_groups SET auto_show = NULL WHERE auto_show = TRUE`,
+  `UPDATE mcogs_combo_step_option_modifier_groups SET auto_show = NULL WHERE auto_show = TRUE`,
 ];
 
 async function runMigrations(pool) {
