@@ -416,24 +416,13 @@ function TroubleshootingSection() {
     <div className="p-6 max-w-4xl">
       <H2 icon="🔧" title="Troubleshooting" />
 
-      <H3>Known Bugs Fixed</H3>
-      <div className="space-y-3">
-        {[
-          { title: 'Fix 1 — Mixed Content / 1,252 blocked requests',       symptom: 'All API calls going to http:// despite HTTPS.',                                                                                               fix: 'deploy.yml was hardcoding http:// prefix when constructing VITE_API_URL. Use ${{ secrets.VITE_API_URL }} directly.',                                                                                                    file: '.github/workflows/deploy.yml' },
-          { title: 'Fix 2 — Infinite useEffect loop',                      symptom: 'Thousands of API requests per second. UI continuously re-rendering.',                                                                         fix: 'useApi() returned a new object on every render. Wrap return in useMemo(() => ({...}), [request]).',                                                                                                                     file: 'app/src/hooks/useApi.ts' },
-          { title: 'Fix 3 — Express Trust Proxy error',                    symptom: 'ERR_ERL_UNEXPECTED_X_FORWARDED_FOR — all POST requests rejected.',                                                                            fix: 'Add app.set("trust proxy", 1) immediately after const app = express().',                                                                                                                                                 file: 'api/src/index.js' },
-          { title: 'Fix 4 — ColumnHeader dropdown clipping',               symptom: 'Filter/sort dropdowns were cut off inside overflow-x: auto wrappers.',                                                                        fix: 'Changed to position: fixed with getBoundingClientRect() coordinates at z-index: 99999.',                                                                                                                                 file: 'app/src/components/ColumnHeader.tsx' },
-          { title: 'Fix 5 — Pepper loses focus on every keystroke',        symptom: 'Typing in the chat textarea lost focus after each character. Focus not restored after AI response.',                                           fix: 'ChatPanel/HistoryPanel were defined inside AiChat(), creating new component identities on every render. Move both to module level. Add wasStreaming ref + useEffect to restore focus 100ms after streaming ends.',      file: 'app/src/components/AiChat.tsx' },
-          { title: 'Fix 6 — Sidebar does not span full viewport height',   symptom: "The sidebar's green border stopped short of the bottom of the screen.",                                                                        fix: 'Change wrapper div from h-full to flex flex-col self-stretch so aside fills height definitively.',                                                                                                                       file: 'app/src/components/AppLayout.tsx' },
-          { title: 'Fix 7 — Anthropic 400 error in multi-turn tool calls', symptom: 'messages.N.content.0.text.input_str: Extra inputs are not permitted — on message 9+ when Claude called multiple tools.',                     fix: 'agenticStream.js used input_str as a local streaming accumulator left on tool blocks. Destructure it off before pushing: const { input_str, ...cleanBlock } = currentBlock.',                                           file: 'api/src/helpers/agenticStream.js' },
-        ].map(b => (
-          <div key={b.title} className="border border-[#D8E6DD] rounded-lg p-3 bg-white">
-            <p className="text-sm font-bold text-[#0F1F17]">{b.title}</p>
-            <p className="text-xs text-[#6B7F74] mt-1"><span className="font-semibold text-red-600">Symptom:</span> {b.symptom}</p>
-            <p className="text-xs text-[#2D4A38] mt-1"><span className="font-semibold text-[#146A34]">Fix:</span> {b.fix}</p>
-            <p className="text-[10px] font-mono text-[#6B7F74] mt-1.5">📄 {b.file}</p>
-          </div>
-        ))}
+      <H3>Known Bugs &amp; Backlog</H3>
+      <div className="border border-[#D8E6DD] rounded-lg p-4 bg-white flex items-start gap-3">
+        <span className="text-xl leading-none">🐛</span>
+        <div>
+          <p className="text-sm font-semibold text-[#0F1F17]">All known bugs and backlog items are tracked in the Bugs &amp; Backlog section.</p>
+          <p className="text-xs text-[#6B7F74] mt-1">Click <strong>Bugs &amp; Backlog</strong> in the System sidebar to view, search, and comment on issues. 23 historical bug fixes and 9 backlog items were imported from the project documentation.</p>
+        </div>
       </div>
 
       <H3>Frequently Asked Questions</H3>
