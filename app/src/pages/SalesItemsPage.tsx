@@ -850,8 +850,9 @@ export default function SalesItemsPage() {
       if (mgEditTarget.type === 'group' && mpGroupForm) {
         const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
         await api.put(`/modifier-groups/${g.id}`, { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null })
-        setModifierGroups(prev => prev.map(mg => mg.id === g.id ? { ...mg, ...mpGroupForm, display_name: mpGroupForm.display_name || null } : mg))
-        setMgEditTarget({ type: 'group', group: { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null } })
+        const merged = { ...mpGroupForm, display_name: mpGroupForm.display_name || null, default_auto_show: mpGroupForm.default_auto_show ?? undefined }
+        setModifierGroups(prev => prev.map(mg => mg.id === g.id ? { ...mg, ...merged } : mg))
+        setMgEditTarget({ type: 'group', group: { ...g, ...merged } })
         showToast('Group saved')
       } else if (mgEditTarget.type === 'option' && mpOptForm) {
         const { groupId, opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
