@@ -1083,16 +1083,20 @@ export default function PosTesterPage() {
               <div key={idx}
                 onClick={() => {
                   if (item._item && item._subPrices) {
+                    const isCombo = !!(item._subPrices.combo_steps?.length)
                     setEditingIdx(idx)
                     setOrderFlow({
                       item: item._item,
                       subPrices: item._subPrices,
-                      phase: (item._subPrices.combo_steps?.length) ? 'combo' : 'modifiers',
+                      phase: isCombo ? 'combo' : 'modifiers',
                       currentStepIdx: 0,
                       stepSelections: item._stepSelections || {},
                       modSelections: item._modSelections || {},
                       modQty: item._modQty || {},
-                      resolvedSelections: item._resolvedSelections || [],
+                      // When re-entering combo phase, start with empty resolvedSelections
+                      // because advanceStep() will rebuild them from stepSelections.
+                      // If we restore old resolvedSelections, they get doubled on each edit.
+                      resolvedSelections: isCombo ? [] : (item._resolvedSelections || []),
                     })
                   }
                 }}
