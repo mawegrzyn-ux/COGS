@@ -930,7 +930,6 @@ function ClaudeDocSection() {
     let i = 0
     let inCode = false
     let codeBuf: string[] = []
-    let codeLang = ''
 
     const inlineFormat = (text: string) => {
       // Bold, inline code, links
@@ -947,7 +946,6 @@ function ClaudeDocSection() {
       if (line.startsWith('```')) {
         if (!inCode) {
           inCode = true
-          codeLang = line.slice(3).trim()
           codeBuf = []
           i++; continue
         } else {

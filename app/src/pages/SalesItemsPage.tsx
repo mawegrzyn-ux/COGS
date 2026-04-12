@@ -22,7 +22,7 @@ interface ModifierOption {
 }
 interface ModifierGroup {
   id: number; name: string; display_name?: string | null; description: string | null
-  min_select: number; max_select: number; allow_repeat_selection?: boolean; option_count?: number
+  min_select: number; max_select: number; allow_repeat_selection?: boolean; default_auto_show?: boolean; option_count?: number
   options?: ModifierOption[]
 }
 interface ComboStepOption {
