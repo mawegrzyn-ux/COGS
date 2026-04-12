@@ -41,7 +41,7 @@ async function fetchFull(id, client) {
               FROM   mcogs_sales_item_prices sip
               JOIN   mcogs_price_levels pl ON pl.id = sip.price_level_id
               WHERE  sip.sales_item_id = $1 ORDER BY pl.id`, [id]),
-    db.query(`SELECT simgj.modifier_group_id, simgj.sort_order,
+    db.query(`SELECT simgj.modifier_group_id, simgj.sort_order, simgj.auto_show,
                      mg.name, mg.description, mg.min_select, mg.max_select
               FROM   mcogs_sales_item_modifier_groups simgj
               JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
@@ -327,20 +327,24 @@ router.put('/:id/prices', async (req, res, next) => {
 });
 
 // ─── PUT /sales-items/:id/modifier-groups ─────────────────────────────────────
-// body: { modifier_group_ids: [1, 2] } — full replace
+// body: { modifier_group_ids: [1, 2] } — full replace (legacy)
+// body: { groups: [{ modifier_group_id, auto_show }] } — full replace with auto_show
 router.put('/:id/modifier-groups', async (req, res, next) => {
   try {
-    const { modifier_group_ids } = req.body;
-    const ids = Array.isArray(modifier_group_ids) ? modifier_group_ids.map(Number) : [];
+    const { modifier_group_ids, groups } = req.body;
+    // Support new format (groups array with auto_show) or legacy (plain id array)
+    const entries = Array.isArray(groups)
+      ? groups.map(g => ({ modifier_group_id: Number(g.modifier_group_id), auto_show: g.auto_show !== false }))
+      : (Array.isArray(modifier_group_ids) ? modifier_group_ids.map(id => ({ modifier_group_id: Number(id), auto_show: true })) : []);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM mcogs_sales_item_modifier_groups WHERE sales_item_id=$1', [req.params.id]);
-      for (let i = 0; i < ids.length; i++) {
+      for (let i = 0; i < entries.length; i++) {
         await client.query(
-          `INSERT INTO mcogs_sales_item_modifier_groups (sales_item_id, modifier_group_id, sort_order)
-           VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-          [req.params.id, ids[i], i]
+          `INSERT INTO mcogs_sales_item_modifier_groups (sales_item_id, modifier_group_id, sort_order, auto_show)
+           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [req.params.id, entries[i].modifier_group_id, i, entries[i].auto_show]
         );
       }
       await client.query('COMMIT');

@@ -1494,6 +1494,10 @@ const migrations = [
 
   // ── Step 104: Allow repeat selection on modifier groups ─────────────────────
   `ALTER TABLE mcogs_modifier_groups ADD COLUMN IF NOT EXISTS allow_repeat_selection BOOLEAN NOT NULL DEFAULT FALSE`,
+
+  // ── Step 105: auto_show flag on modifier group junctions ───────────────────
+  `ALTER TABLE mcogs_sales_item_modifier_groups ADD COLUMN IF NOT EXISTS auto_show BOOLEAN NOT NULL DEFAULT TRUE`,
+  `ALTER TABLE mcogs_combo_step_option_modifier_groups ADD COLUMN IF NOT EXISTS auto_show BOOLEAN NOT NULL DEFAULT TRUE`,
 ];
 
 async function runMigrations(pool) {

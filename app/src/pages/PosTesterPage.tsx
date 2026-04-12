@@ -53,6 +53,7 @@ interface ModGroup {
   min_select: number
   max_select: number
   allow_repeat_selection?: boolean
+  auto_show?: boolean
   options: ModOption[]
 }
 
@@ -155,6 +156,9 @@ export default function PosTesterPage() {
 
   // ── fullscreen ──
   const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // ── modifier popup (for hidden/optional modifiers) ──
+  const [modPopup, setModPopup] = useState<ModGroup | null>(null)
 
   /* ── load menus + levels on mount ──────────────────────────────────────────── */
 
@@ -483,6 +487,7 @@ export default function PosTesterPage() {
       addToCheck(checkItem)
     }
     setOrderFlow(null)
+    setModPopup(null)
   }
 
   /* ── order flow validation ──────────────────────────────────────────────────── */
@@ -839,10 +844,32 @@ export default function PosTesterPage() {
           </div>
 
           {/* Modifiers for selected option (within combo step) */}
-          {selectedOption?.modifier_groups && selectedOption.modifier_groups.length > 0 && (
+          {selectedOption?.modifier_groups && selectedOption.modifier_groups.length > 0 && (() => {
+            const comboAutoShow = selectedOption.modifier_groups.filter(mg => mg.auto_show !== false)
+            const comboHidden = selectedOption.modifier_groups.filter(mg => mg.auto_show === false && mg.min_select === 0)
+            return (
             <div className="mt-3 pt-3 border-t border-gray-200">
               <p className="text-[10px] font-bold uppercase tracking-wider text-purple-500 mb-2">Modifiers</p>
-              {selectedOption.modifier_groups.map(mg => (
+              {/* Hidden optional combo modifiers — compact buttons */}
+              {comboHidden.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {comboHidden.map(mg => {
+                    const modKey = `${step.id}_${mg.modifier_group_id}`
+                    const chosen = orderFlow.modSelections[modKey] || new Set()
+                    return (
+                      <button key={mg.modifier_group_id}
+                        onClick={() => setModPopup({ ...mg, _comboStepId: step.id } as any)}
+                        className={`px-3 py-2 rounded-lg border border-dashed text-xs font-medium transition-colors
+                          ${chosen.size > 0 ? 'border-purple-400 text-purple-600 bg-purple-50' : 'border-gray-300 text-gray-500 hover:border-purple-400 hover:text-purple-600'}`}>
+                        + {mg.display_name || mg.name}
+                        {chosen.size > 0 && <span className="ml-1 text-[10px]">&#10003;</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {/* Auto-show combo modifiers — inline */}
+              {comboAutoShow.map(mg => (
                 <div key={mg.modifier_group_id} className="mb-3">
                   <p className="text-xs font-semibold text-gray-700 mb-1">
                     {mg.display_name || mg.name}
@@ -871,7 +898,8 @@ export default function PosTesterPage() {
                 </div>
               ))}
             </div>
-          )}
+            )
+          })()}
 
           <div className="flex items-center justify-between mt-4">
             <button disabled={orderFlow.currentStepIdx === 0}
@@ -897,10 +925,33 @@ export default function PosTesterPage() {
       )
     }
 
-    // Modifiers phase
+    // Modifiers phase — split into auto-show (inline) and hidden (popup buttons)
+    const autoShowGroups = orderFlow.subPrices.modifier_groups.filter(mg => mg.auto_show !== false)
+    const hiddenGroups = orderFlow.subPrices.modifier_groups.filter(mg => mg.auto_show === false && mg.min_select === 0)
+
     return (
       <div className="space-y-5">
-        {orderFlow.subPrices.modifier_groups.map(mg => {
+        {/* Hidden optional modifier groups — shown as compact buttons */}
+        {hiddenGroups.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {hiddenGroups.map(mg => {
+              const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
+              const hasSelections = chosen.size > 0 || (orderFlow.modQty?.[String(mg.modifier_group_id)] && Object.values(orderFlow.modQty[String(mg.modifier_group_id)]).some(q => q > 0))
+              return (
+                <button key={mg.modifier_group_id}
+                  onClick={() => setModPopup(mg)}
+                  className={`px-3 py-2 rounded-lg border border-dashed text-xs font-medium transition-colors
+                    ${hasSelections ? 'border-accent text-accent bg-accent/5' : 'border-gray-300 text-gray-500 hover:border-accent hover:text-accent'}`}>
+                  + {mg.display_name || mg.name}
+                  {hasSelections && <span className="ml-1 text-[10px]">&#10003;</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Auto-show modifier groups — rendered inline */}
+        {autoShowGroups.map(mg => {
           const chosen = orderFlow.modSelections[mg.modifier_group_id] || new Set()
           const isRadio = mg.max_select === 1
           const metMin = chosen.size >= mg.min_select
@@ -933,7 +984,7 @@ export default function PosTesterPage() {
                   return mg.allow_repeat_selection ? (
                     <div key={opt.id} className={`flex items-center gap-2 px-3 py-3 rounded-lg border transition-colors ${qty > 0 ? 'border-accent bg-accent/5' : 'border-gray-200'}`}>
                       <button onClick={() => adjustModQty(modKey, opt.id, -1, mg.max_select)} disabled={qty === 0}
-                        className="w-9 h-9 rounded-full border-2 border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-base font-bold shrink-0 active:scale-95">−</button>
+                        className="w-9 h-9 rounded-full border-2 border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-base font-bold shrink-0 active:scale-95">&#8722;</button>
                       <span className={`w-6 text-center text-base font-bold shrink-0 ${qty > 0 ? 'text-accent' : 'text-gray-300'}`}>{qty}</span>
                       <button onClick={() => adjustModQty(modKey, opt.id, 1, mg.max_select)}
                         className="flex-1 text-left text-base text-gray-800 hover:text-accent transition-colors truncate py-1">
@@ -1169,7 +1220,7 @@ export default function PosTesterPage() {
                 <h3 className="text-sm font-bold text-gray-800">{orderFlow.item.display_name}</h3>
                 <p className="text-[10px] text-gray-500">{sym}{itemRunningTotal.toFixed(2)}</p>
               </div>
-              <button onClick={() => { setOrderFlow(null); setEditingIdx(null) }} className="text-gray-400 hover:text-gray-600 p-1">
+              <button onClick={() => { setOrderFlow(null); setEditingIdx(null); setModPopup(null) }} className="text-gray-400 hover:text-gray-600 p-1">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
@@ -1235,6 +1286,78 @@ export default function PosTesterPage() {
           )}
         </div>
       </div>
+
+      {/* ── modifier popup overlay (for hidden/optional groups) ─────────────────── */}
+      {modPopup && orderFlow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => setModPopup(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="relative bg-white rounded-xl shadow-2xl w-80 max-h-[60vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">{modPopup.display_name || modPopup.name}</h3>
+                <p className="text-xs text-gray-500">Optional &middot; up to {modPopup.max_select}</p>
+              </div>
+              <button onClick={() => setModPopup(null)} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            {/* Options */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-1">
+              {modPopup.options.map(opt => {
+                const isComboMod = !!(modPopup as any)._comboStepId
+                const mgKey = isComboMod
+                  ? `${(modPopup as any)._comboStepId}_${modPopup.modifier_group_id}`
+                  : String(modPopup.modifier_group_id)
+                const sel = orderFlow.modSelections[mgKey]?.has(opt.id)
+                const qty = orderFlow.modQty?.[mgKey]?.[opt.id] || 0
+                const price = selectedLevelId ? (opt.prices?.[selectedLevelId] || 0) : 0
+
+                return modPopup.allow_repeat_selection ? (
+                  <div key={opt.id} className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border transition-colors ${qty > 0 ? 'border-accent bg-accent/5' : 'border-gray-200'}`}>
+                    <button onClick={() => adjustModQty(mgKey, opt.id, -1, modPopup.max_select)} disabled={qty === 0}
+                      className="w-8 h-8 rounded-full border-2 border-gray-300 flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-20 text-sm font-bold shrink-0 active:scale-95">&#8722;</button>
+                    <span className={`w-5 text-center text-sm font-bold shrink-0 ${qty > 0 ? 'text-accent' : 'text-gray-300'}`}>{qty}</span>
+                    <button onClick={() => adjustModQty(mgKey, opt.id, 1, modPopup.max_select)}
+                      className="flex-1 text-left text-sm text-gray-800 hover:text-accent transition-colors truncate py-0.5">
+                      {opt.display_name || opt.name}
+                    </button>
+                    <span className="text-xs text-gray-400 shrink-0">{price > 0 ? `+${sym}${price.toFixed(2)}/ea` : 'incl.'}</span>
+                  </div>
+                ) : (
+                  <button key={opt.id}
+                    onClick={() => isComboMod
+                      ? toggleComboStepModifier(mgKey, opt.id, modPopup.min_select, modPopup.max_select)
+                      : toggleModOption(modPopup.modifier_group_id, opt.id, modPopup.max_select)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all active:scale-[0.98]
+                      ${sel
+                        ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
+                        : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                    <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors
+                      ${sel ? 'border-accent bg-accent' : 'border-gray-300'}`}>
+                      {sel && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      )}
+                    </div>
+                    <span className="flex-1 text-sm text-gray-800 truncate">{opt.display_name || opt.name}</span>
+                    {price > 0 && (
+                      <span className="text-xs font-medium text-gray-500 shrink-0">+{sym}{price.toFixed(2)}</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            {/* Done button */}
+            <div className="px-4 py-3 border-t border-gray-200">
+              <button onClick={() => setModPopup(null)} className="w-full py-2.5 rounded-lg bg-accent text-white font-medium text-sm hover:bg-accent-mid transition-colors">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── receipt modal ───────────────────────────────────────────────────────── */}
       {showReceipt && (

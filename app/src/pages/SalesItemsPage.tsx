@@ -59,7 +59,7 @@ interface SalesItem {
   qty: number
   modifier_group_count?: number
   markets?: SalesItemMarket[]
-  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
+  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]
 }
 
 // ── Combo panel edit target ────────────────────────────────────────────────────
@@ -688,7 +688,7 @@ export default function SalesItemsPage() {
   }
 
   // ── Sales Item — modifier group assignment ────────────────────────────────
-  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number }[]>>({})
+  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]>>({})
   const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
   const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
   const [siMgAddPos,    setSiMgAddPos]    = useState<{ top: number; left: number } | null>(null)
@@ -704,12 +704,19 @@ export default function SalesItemsPage() {
     }
   }
 
-  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number }[]) => {
+  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean }[]) => {
     try {
-      await api.put(`/sales-items/${siId}/modifier-groups`, { modifier_group_ids: groups.map(g => g.modifier_group_id) })
+      await api.put(`/sales-items/${siId}/modifier-groups`, {
+        groups: groups.map(g => ({ modifier_group_id: g.modifier_group_id, auto_show: g.auto_show !== false }))
+      })
       setSiMgData(prev => ({ ...prev, [siId]: groups }))
       setSalesItems(prev => prev.map(s => s.id === siId ? { ...s, modifier_group_count: groups.length } : s))
     } catch { showToast('Failed to save modifiers') }
+  }
+
+  const toggleAutoShow = (siId: number, mgId: number, newVal: boolean) => {
+    const current = siMgData[siId] || []
+    saveSiModifiers(siId, current.map(g => g.modifier_group_id === mgId ? { ...g, auto_show: newVal } : g))
   }
 
   const removeSiModifier = (siId: number, mgId: number) => {
@@ -720,7 +727,7 @@ export default function SalesItemsPage() {
   const addSiModifier = (siId: number, mg: ModifierGroup) => {
     const current = siMgData[siId] || []
     if (current.some(g => g.modifier_group_id === mg.id)) return
-    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length }])
+    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length, min_select: mg.min_select, auto_show: true }])
     setSiMgAddOpen(null)
   }
 
@@ -1370,13 +1377,27 @@ export default function SalesItemsPage() {
                           {panelMgGroups.map(mg => (
                             <div key={mg.modifier_group_id}
                               className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-blue-50 border border-blue-100 rounded text-xs">
-                              <span className="font-medium text-blue-800">{mg.name}</span>
-                              <button className="text-blue-300 hover:text-red-500 transition-colors" title={`Remove ${mg.name}`}
-                                onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-                                </svg>
-                              </button>
+                              <span className="font-medium text-blue-800 flex-1 min-w-0 truncate">{mg.name}</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {(mg.min_select === 0 || mg.min_select === undefined) && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); toggleAutoShow(selectedSiId, mg.modifier_group_id, !mg.auto_show) }}
+                                    title={mg.auto_show !== false ? 'Shown automatically in POS' : 'Hidden in POS (optional — tap to add)'}
+                                    className={`p-1 rounded transition-colors ${mg.auto_show !== false ? 'text-accent hover:text-accent-mid' : 'text-gray-300 hover:text-gray-500'}`}>
+                                    {mg.auto_show !== false ? (
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    ) : (
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                                    )}
+                                  </button>
+                                )}
+                                <button className="text-blue-300 hover:text-red-500 transition-colors" title={`Remove ${mg.name}`}
+                                  onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                  </svg>
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
