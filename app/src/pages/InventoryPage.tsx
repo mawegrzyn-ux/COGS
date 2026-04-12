@@ -566,6 +566,10 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const blankNutForm: Record<string, string> = { energy_kcal: '', protein_g: '', carbs_g: '', fat_g: '', fibre_g: '', sugar_g: '', salt_g: '' }
   const [nutForm,      setNutForm]      = useState<Record<string, string>>(blankNutForm)
   const [nutSearch,    setNutSearch]    = useState('')
+
+  // Base unit change warning (edit only — not shown during create)
+  const [baseUnitWarning, setBaseUnitWarning] = useState<{ newValue: string; unitName: string } | null>(null)
+  const originalBaseUnitRef = useRef<string>('')
   const [nutResults,   setNutResults]   = useState<any[]>([])
   const [nutLoading,   setNutLoading]   = useState(false)
   const [savingNut,    setSavingNut]    = useState(false)
@@ -769,6 +773,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   function openEdit(i: Ingredient) {
     setModal(i)
     setIngModalTab('details')
+    originalBaseUnitRef.current = i.base_unit_id ? String(i.base_unit_id) : ''
     setForm({
       name: i.name, category_id: i.category_id ? String(i.category_id) : '',
       base_unit_id: i.base_unit_id ? String(i.base_unit_id) : '',
@@ -1163,16 +1168,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                               setForm(f => ({
                                 ...f,
                                 base_unit_id: e.target.value,
-                                // Auto-populate prep unit from the unit's default if user hasn't set one
-                                ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
-                                  ? { default_prep_unit: selectedUnit.default_recipe_unit }
-                                  : {}),
-                                // Auto-populate conversion — apply if user hasn't manually set a custom value
-                                // (treat '1' and '' as "not yet set" since '1' is the initial default)
-                                ...(selectedUnit?.default_recipe_unit_conversion != null
-                                    && (!f.default_prep_to_base_conversion || f.default_prep_to_base_conversion === '1')
-                                  ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
-                                  : {}),
+                                // Always update prep unit and conversion from the new unit's defaults
+                                default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                                default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                                  ? String(selectedUnit.default_recipe_unit_conversion)
+                                  : '1',
                               }))
                             }}>
                               <option value="">Select unit…</option>
@@ -1279,17 +1279,22 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               </Field>
               <Field label="Base Unit" required error={errors.base_unit_id}>
                 <select className="select w-full" value={form.base_unit_id} onChange={e => {
-                  const selectedUnit = units.find(u => u.id === Number(e.target.value))
+                  const newVal = e.target.value
+                  const selectedUnit = units.find(u => u.id === Number(newVal))
+
+                  // Show warning if changing from an existing base unit (not initial selection)
+                  if (originalBaseUnitRef.current && newVal !== originalBaseUnitRef.current) {
+                    setBaseUnitWarning({ newValue: newVal, unitName: selectedUnit ? `${selectedUnit.name} (${selectedUnit.abbreviation})` : newVal })
+                    return // Don't apply yet — wait for user confirmation
+                  }
+
                   setForm(f => ({
                     ...f,
-                    base_unit_id: e.target.value,
-                    ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
-                      ? { default_prep_unit: selectedUnit.default_recipe_unit }
-                      : {}),
-                    ...(selectedUnit?.default_recipe_unit_conversion != null
-                        && (!f.default_prep_to_base_conversion || f.default_prep_to_base_conversion === '1')
-                      ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
-                      : {}),
+                    base_unit_id: newVal,
+                    default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                    default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                      ? String(selectedUnit.default_recipe_unit_conversion)
+                      : '1',
                   }))
                 }}>
                   <option value="">Select unit…</option>
@@ -1396,6 +1401,43 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+
+      {/* Base unit change warning modal (edit only) */}
+      {baseUnitWarning && (
+        <Modal title="Change Base Unit?" onClose={() => setBaseUnitWarning(null)} width="max-w-md">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <span className="text-amber-600 text-lg">&#9888;</span>
+              <p className="text-sm text-amber-800">
+                Changing the base unit has a <strong>significant impact</strong> on recipe calculations and price quote conversions.
+              </p>
+            </div>
+            <p className="text-sm text-text-2">
+              All existing price quotes and recipe quantities for this ingredient are expressed in the current base unit.
+              Switching to <strong>{baseUnitWarning.unitName}</strong> will not automatically recalculate those values.
+            </p>
+            <p className="text-sm text-text-2">
+              We recommend asking <strong>Pepper</strong> to review the impact before proceeding — right-click any field and choose "Ask Pepper" or open the AI chat.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-ghost text-sm" onClick={() => setBaseUnitWarning(null)}>Cancel</button>
+              <button className="btn-primary text-sm bg-amber-600 hover:bg-amber-700 border-amber-600" onClick={() => {
+                const selectedUnit = units.find(u => u.id === Number(baseUnitWarning.newValue))
+                setForm(f => ({
+                  ...f,
+                  base_unit_id: baseUnitWarning.newValue,
+                  default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                  default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                    ? String(selectedUnit.default_recipe_unit_conversion)
+                    : '1',
+                }))
+                setBaseUnitWarning(null)
+              }}>Change Base Unit</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   )

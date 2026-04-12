@@ -54,12 +54,14 @@ router.get('/export/jira', async (req, res) => {
   }
 });
 
-// ── GET /:id — single bug ───────────────────────────────────────────────────
+// ── GET /:id — single bug (includes can_edit flag) ─────────────────────────
 router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT * FROM mcogs_bugs WHERE id = $1`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Bug not found' } });
-    res.json(rows[0]);
+    const bug = rows[0];
+    bug.can_edit = (bug.reported_by && bug.reported_by === req.user?.sub) || !!req.user?.is_dev;
+    res.json(bug);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch bug' } });
@@ -102,14 +104,20 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { summary, description, priority, severity, status, assigned_to, page, steps_to_reproduce, environment, labels, resolution } = req.body;
 
-  // Status change requires dev
-  if (status !== undefined && !req.user?.is_dev) {
-    return res.status(403).json({ error: { message: 'Only developers can change bug status' } });
-  }
-
   try {
     const old = await pool.query(`SELECT * FROM mcogs_bugs WHERE id = $1`, [req.params.id]);
     if (!old.rows.length) return res.status(404).json({ error: { message: 'Bug not found' } });
+
+    // Author + dev gate — only the original reporter or a developer can edit
+    const isAuthor = old.rows[0].reported_by && old.rows[0].reported_by === req.user?.sub;
+    if (!isAuthor && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only the original reporter or a developer can edit this bug' } });
+    }
+
+    // Status changes still require dev even if you are the author
+    if (status !== undefined && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only developers can change bug status' } });
+    }
 
     const { rows } = await pool.query(`
       UPDATE mcogs_bugs SET
@@ -161,6 +169,70 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete bug' } });
+  }
+});
+
+// ── GET /:id/comments — list comments for a bug ───────────────────────────
+router.get('/:id/comments', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM mcogs_item_comments WHERE entity_type = 'bug' AND entity_id = $1 ORDER BY created_at ASC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch comments' } });
+  }
+});
+
+// ── POST /:id/comments — add a comment (or reply) ─────────────────────────
+router.post('/:id/comments', async (req, res) => {
+  const { comment, parent_id } = req.body;
+  if (!comment?.trim()) return res.status(400).json({ error: { message: 'comment is required' } });
+  try {
+    // Verify bug exists
+    const bugCheck = await pool.query(`SELECT id FROM mcogs_bugs WHERE id = $1`, [req.params.id]);
+    if (!bugCheck.rows.length) return res.status(404).json({ error: { message: 'Bug not found' } });
+
+    // If reply, verify parent exists and belongs to same entity
+    if (parent_id) {
+      const parentCheck = await pool.query(
+        `SELECT id FROM mcogs_item_comments WHERE id = $1 AND entity_type = 'bug' AND entity_id = $2`,
+        [parent_id, req.params.id]
+      );
+      if (!parentCheck.rows.length) return res.status(400).json({ error: { message: 'Parent comment not found' } });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO mcogs_item_comments (entity_type, entity_id, user_sub, user_email, user_name, comment, parent_id)
+      VALUES ('bug', $1, $2, $3, $4, $5, $6) RETURNING *
+    `, [req.params.id, req.user?.sub || null, req.user?.email || null,
+        req.user?.name || req.user?.email || 'Anonymous', comment.trim(), parent_id || null]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to add comment' } });
+  }
+});
+
+// ── DELETE /:id/comments/:commentId — delete own comment or dev ────────────
+router.delete('/:id/comments/:commentId', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM mcogs_item_comments WHERE id = $1 AND entity_type = 'bug' AND entity_id = $2`,
+      [req.params.commentId, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: { message: 'Comment not found' } });
+    const isCommentAuthor = rows[0].user_sub && rows[0].user_sub === req.user?.sub;
+    if (!isCommentAuthor && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only the comment author or a developer can delete this comment' } });
+    }
+    await pool.query(`DELETE FROM mcogs_item_comments WHERE id = $1`, [req.params.commentId]);
+    res.json({ deleted: parseInt(req.params.commentId) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to delete comment' } });
   }
 });
 

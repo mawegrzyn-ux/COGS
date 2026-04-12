@@ -86,12 +86,14 @@ router.put('/reorder', async (req, res) => {
   }
 });
 
-// ── GET /:id — single backlog item ──────────────────────────────────────────
+// ── GET /:id — single backlog item (includes can_edit flag) ────────────────
 router.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT * FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Backlog item not found' } });
-    res.json(rows[0]);
+    const item = rows[0];
+    item.can_edit = (item.requested_by && item.requested_by === req.user?.sub) || !!req.user?.is_dev;
+    res.json(item);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch backlog item' } });
@@ -137,13 +139,20 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint } = req.body;
 
-  if (status !== undefined && !req.user?.is_dev) {
-    return res.status(403).json({ error: { message: 'Only developers can change backlog status' } });
-  }
-
   try {
     const old = await pool.query(`SELECT * FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
     if (!old.rows.length) return res.status(404).json({ error: { message: 'Backlog item not found' } });
+
+    // Author + dev gate
+    const isAuthor = old.rows[0].requested_by && old.rows[0].requested_by === req.user?.sub;
+    if (!isAuthor && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only the original requester or a developer can edit this item' } });
+    }
+
+    // Status changes still require dev even if author
+    if (status !== undefined && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only developers can change backlog status' } });
+    }
 
     const { rows } = await pool.query(`
       UPDATE mcogs_backlog SET
@@ -193,6 +202,68 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete backlog item' } });
+  }
+});
+
+// ── GET /:id/comments — list comments for a backlog item ───────────────────
+router.get('/:id/comments', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM mcogs_item_comments WHERE entity_type = 'backlog' AND entity_id = $1 ORDER BY created_at ASC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch comments' } });
+  }
+});
+
+// ── POST /:id/comments — add a comment (or reply) ─────────────────────────
+router.post('/:id/comments', async (req, res) => {
+  const { comment, parent_id } = req.body;
+  if (!comment?.trim()) return res.status(400).json({ error: { message: 'comment is required' } });
+  try {
+    const itemCheck = await pool.query(`SELECT id FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
+    if (!itemCheck.rows.length) return res.status(404).json({ error: { message: 'Backlog item not found' } });
+
+    if (parent_id) {
+      const parentCheck = await pool.query(
+        `SELECT id FROM mcogs_item_comments WHERE id = $1 AND entity_type = 'backlog' AND entity_id = $2`,
+        [parent_id, req.params.id]
+      );
+      if (!parentCheck.rows.length) return res.status(400).json({ error: { message: 'Parent comment not found' } });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO mcogs_item_comments (entity_type, entity_id, user_sub, user_email, user_name, comment, parent_id)
+      VALUES ('backlog', $1, $2, $3, $4, $5, $6) RETURNING *
+    `, [req.params.id, req.user?.sub || null, req.user?.email || null,
+        req.user?.name || req.user?.email || 'Anonymous', comment.trim(), parent_id || null]);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to add comment' } });
+  }
+});
+
+// ── DELETE /:id/comments/:commentId — delete own comment or dev ────────────
+router.delete('/:id/comments/:commentId', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM mcogs_item_comments WHERE id = $1 AND entity_type = 'backlog' AND entity_id = $2`,
+      [req.params.commentId, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: { message: 'Comment not found' } });
+    const isCommentAuthor = rows[0].user_sub && rows[0].user_sub === req.user?.sub;
+    if (!isCommentAuthor && !req.user?.is_dev) {
+      return res.status(403).json({ error: { message: 'Only the comment author or a developer can delete this comment' } });
+    }
+    await pool.query(`DELETE FROM mcogs_item_comments WHERE id = $1`, [req.params.commentId]);
+    res.json({ deleted: parseInt(req.params.commentId) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to delete comment' } });
   }
 });
 

@@ -302,6 +302,69 @@ CONFIRMATION REQUIRED before calling.`,
     },
   },
 
+  // ── Bugs & Backlog — Edit + Comments ──────────────────────────────────────
+  {
+    name: 'edit_bug',
+    description: 'Edits bug fields (not status). Only the original reporter or a developer can edit. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                   { type: 'integer', description: 'Bug ID' },
+        summary:              { type: 'string' },
+        description:          { type: 'string' },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity:             { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        page:                 { type: 'string' },
+        steps_to_reproduce:   { type: 'string' },
+        resolution:           { type: 'string' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'edit_backlog_item',
+    description: 'Edits backlog item fields (not status). Only the original requester or a developer can edit. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                   { type: 'integer', description: 'Backlog item ID' },
+        summary:              { type: 'string' },
+        description:          { type: 'string' },
+        item_type:            { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        acceptance_criteria:  { type: 'string' },
+        story_points:         { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'add_comment',
+    description: 'Posts a comment on a bug or backlog item. Anyone can comment. No confirmation required.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['bug', 'backlog'], description: 'Type of item to comment on' },
+        entity_id:   { type: 'integer', description: 'Bug or backlog item ID' },
+        comment:     { type: 'string', description: 'Comment text' },
+        parent_id:   { type: 'integer', description: 'Optional: ID of parent comment to reply to' },
+      },
+      required: ['entity_type', 'entity_id', 'comment'],
+    },
+  },
+  {
+    name: 'list_comments',
+    description: 'Lists all comments on a bug or backlog item.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['bug', 'backlog'] },
+        entity_id:   { type: 'integer', description: 'Bug or backlog item ID' },
+      },
+      required: ['entity_type', 'entity_id'],
+    },
+  },
+
   // ── New Lookup / Read ────────────────────────────────────────────────────────
   {
     name: 'list_vendors',
@@ -1894,6 +1957,85 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       );
       if (!rows.length) return { error: `Backlog item #${id} not found` };
       return rows[0];
+    }
+
+    // ── Bugs & Backlog — Edit + Comments ────────────────────────────────────
+
+    case 'edit_bug': {
+      const { id, summary, description, priority, severity, page, steps_to_reproduce, resolution } = input;
+      const bug = await localPool.query(`SELECT reported_by FROM mcogs_bugs WHERE id = $1`, [id]);
+      if (!bug.rows.length) return { error: `Bug #${id} not found` };
+      const isAuthor = bug.rows[0].reported_by && bug.rows[0].reported_by === userCtx.sub;
+      if (!isAuthor && !userCtx.is_dev) return { error: 'Only the original reporter or a developer can edit this bug.' };
+      const sets = ['updated_at = NOW()'];
+      const vals = [];
+      if (summary)              sets.push(`summary = $${vals.push(summary.trim())}`);
+      if (description)          sets.push(`description = $${vals.push(description.trim())}`);
+      if (priority)             sets.push(`priority = $${vals.push(priority)}`);
+      if (severity)             sets.push(`severity = $${vals.push(severity)}`);
+      if (page !== undefined)   sets.push(`page = $${vals.push(page.trim())}`);
+      if (steps_to_reproduce)   sets.push(`steps_to_reproduce = $${vals.push(steps_to_reproduce.trim())}`);
+      if (resolution)           sets.push(`resolution = $${vals.push(resolution.trim())}`);
+      if (vals.length === 0) return { error: 'No fields to update' };
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_bugs SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, summary, priority, severity, status`,
+        vals
+      );
+      return rows[0];
+    }
+
+    case 'edit_backlog_item': {
+      const { id, summary, description, item_type, priority, acceptance_criteria, story_points } = input;
+      const bl = await localPool.query(`SELECT requested_by FROM mcogs_backlog WHERE id = $1`, [id]);
+      if (!bl.rows.length) return { error: `Backlog item #${id} not found` };
+      const isAuthor = bl.rows[0].requested_by && bl.rows[0].requested_by === userCtx.sub;
+      if (!isAuthor && !userCtx.is_dev) return { error: 'Only the original requester or a developer can edit this item.' };
+      const sets = ['updated_at = NOW()'];
+      const vals = [];
+      if (summary)              sets.push(`summary = $${vals.push(summary.trim())}`);
+      if (description)          sets.push(`description = $${vals.push(description.trim())}`);
+      if (item_type)            sets.push(`item_type = $${vals.push(item_type)}`);
+      if (priority)             sets.push(`priority = $${vals.push(priority)}`);
+      if (acceptance_criteria)  sets.push(`acceptance_criteria = $${vals.push(acceptance_criteria.trim())}`);
+      if (story_points !== undefined) sets.push(`story_points = $${vals.push(story_points)}`);
+      if (vals.length === 0) return { error: 'No fields to update' };
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_backlog SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, summary, item_type, priority, status`,
+        vals
+      );
+      return rows[0];
+    }
+
+    case 'add_comment': {
+      const { entity_type, entity_id, comment, parent_id } = input;
+      if (!comment?.trim()) return { error: 'comment text is required' };
+      const table = entity_type === 'bug' ? 'mcogs_bugs' : 'mcogs_backlog';
+      const check = await localPool.query(`SELECT id FROM ${table} WHERE id = $1`, [entity_id]);
+      if (!check.rows.length) return { error: `${entity_type} #${entity_id} not found` };
+      if (parent_id) {
+        const pCheck = await localPool.query(
+          `SELECT id FROM mcogs_item_comments WHERE id = $1 AND entity_type = $2 AND entity_id = $3`,
+          [parent_id, entity_type, entity_id]
+        );
+        if (!pCheck.rows.length) return { error: 'Parent comment not found' };
+      }
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_item_comments (entity_type, entity_id, user_sub, user_email, user_name, comment, parent_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, user_name, comment, created_at
+      `, [entity_type, entity_id, userCtx.sub || null, userCtx.email || null,
+          userCtx.name || userCtx.email || 'Pepper', comment.trim(), parent_id || null]);
+      return rows[0];
+    }
+
+    case 'list_comments': {
+      const { entity_type, entity_id } = input;
+      const { rows } = await localPool.query(
+        `SELECT id, user_name, comment, parent_id, created_at FROM mcogs_item_comments WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at ASC`,
+        [entity_type, entity_id]
+      );
+      return rows.length ? rows : 'No comments found.';
     }
 
     // ── New Lookup / Read ──────────────────────────────────────────────────────

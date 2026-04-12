@@ -25,6 +25,12 @@ interface BacklogItem {
   created_at: string; updated_at: string
 }
 
+interface ItemComment {
+  id: number; entity_type: 'bug' | 'backlog'; entity_id: number
+  user_sub: string | null; user_email: string | null; user_name: string
+  comment: string; parent_id: number | null; created_at: string
+}
+
 type Tab = 'bugs' | 'backlog'
 
 const BUG_STATUSES  = ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as const
@@ -84,11 +90,106 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function CommentSection({ entityType, entityId, comments, commentsLoading, commentText, setCommentText, replyTo, setReplyTo, replyText, setReplyText, postingComment, onPost, onDelete, userSub, isDev }: {
+  entityType: 'bug' | 'backlog'; entityId: number; comments: ItemComment[]
+  commentsLoading: boolean; commentText: string; setCommentText: (v: string) => void
+  replyTo: number | null; setReplyTo: (v: number | null) => void
+  replyText: string; setReplyText: (v: string) => void; postingComment: boolean
+  onPost: (text: string, parentId?: number | null) => void
+  onDelete: (commentId: number) => void
+  userSub: string | null | undefined; isDev: boolean
+}) {
+  const topLevel = comments.filter(c => !c.parent_id)
+  const byParent: Record<number, ItemComment[]> = {}
+  for (const c of comments) {
+    if (c.parent_id) {
+      if (!byParent[c.parent_id]) byParent[c.parent_id] = []
+      byParent[c.parent_id].push(c)
+    }
+  }
+
+  return (
+    <div className="border-t border-border pt-3 mt-3 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-text-1">Comments</span>
+        <span className="text-xs text-text-3">({topLevel.length})</span>
+      </div>
+
+      {commentsLoading ? (
+        <div className="text-xs text-text-3 py-2">Loading comments...</div>
+      ) : topLevel.length === 0 ? (
+        <div className="text-xs text-text-3 py-2">No comments yet</div>
+      ) : (
+        <div className="space-y-2 max-h-64 overflow-y-auto">
+          {topLevel.map(c => (
+            <div key={c.id}>
+              {/* Top-level comment */}
+              <div className="bg-blue-50 rounded-lg p-2.5 text-sm">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-text-1 text-xs">{c.user_name}</span>
+                  <span className="text-[10px] text-text-3">{fmtTime(c.created_at)}</span>
+                  <div className="flex-1" />
+                  <button className="text-[10px] text-accent hover:underline" onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setReplyText('') }}>
+                    {replyTo === c.id ? 'Cancel' : 'Reply'}
+                  </button>
+                  {(c.user_sub === userSub || isDev) && (
+                    <button className="text-[10px] text-red-400 hover:text-red-600" onClick={() => onDelete(c.id)}>Delete</button>
+                  )}
+                </div>
+                <p className="text-text-2 whitespace-pre-wrap break-words text-xs">{c.comment}</p>
+              </div>
+
+              {/* Replies */}
+              {(byParent[c.id] || []).map(r => (
+                <div key={r.id} className="ml-5 mt-1 border-l-2 border-blue-100 pl-2.5">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="font-medium text-text-1 text-[11px]">{r.user_name}</span>
+                    <span className="text-[10px] text-text-3">{fmtTime(r.created_at)}</span>
+                    <div className="flex-1" />
+                    {(r.user_sub === userSub || isDev) && (
+                      <button className="text-[10px] text-red-400 hover:text-red-600" onClick={() => onDelete(r.id)}>Delete</button>
+                    )}
+                  </div>
+                  <p className="text-text-2 whitespace-pre-wrap break-words text-[11px]">{r.comment}</p>
+                </div>
+              ))}
+
+              {/* Reply input */}
+              {replyTo === c.id && (
+                <div className="ml-5 mt-1 flex gap-1.5">
+                  <input className="input flex-1 text-xs" placeholder="Reply..." value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && replyText.trim()) { e.preventDefault(); onPost(replyText, c.id) } }} />
+                  <button className="btn-primary text-xs px-2 py-1" disabled={!replyText.trim() || postingComment}
+                    onClick={() => onPost(replyText, c.id)}>Send</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* New comment */}
+      <div className="flex gap-1.5">
+        <textarea className="input flex-1 text-xs" rows={2} placeholder="Add a comment... (Ctrl+Enter to post)" value={commentText}
+          onChange={e => setCommentText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && commentText.trim()) { e.preventDefault(); onPost(commentText) } }} />
+        <button className="btn-primary text-xs px-3 self-end" disabled={!commentText.trim() || postingComment}
+          onClick={() => onPost(commentText)}>Post</button>
+      </div>
+    </div>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {}) {
   const api = useApi()
-  const { can, isDev } = usePermissions()
+  const { can, isDev, user } = usePermissions()
 
   const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('bb_tab') as Tab) || 'bugs')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
@@ -112,6 +213,20 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [backlogDetail, setBacklogDetail] = useState<BacklogItem | null>(null)
   const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '' })
   const [deleteBacklog, setDeleteBacklog] = useState<BacklogItem | null>(null)
+
+  // ── Comments state ────────────────────────────────────────────────────
+  const [comments, setComments] = useState<ItemComment[]>([])
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentText, setCommentText] = useState('')
+  const [replyTo, setReplyTo] = useState<number | null>(null)
+  const [replyText, setReplyText] = useState('')
+  const [postingComment, setPostingComment] = useState(false)
+
+  // ── Edit state ────────────────────────────────────────────────────────
+  const [bugEditForm, setBugEditForm] = useState<any>(null)
+  const [backlogEditForm, setBacklogEditForm] = useState<any>(null)
+  const [canEditBug, setCanEditBug] = useState(false)
+  const [canEditBacklog, setCanEditBacklog] = useState(false)
 
   // ── Load functions ──────────────────────────────────────────────────────
 
@@ -264,6 +379,85 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     setToast({ message: `Exported ${data.length} items`, type: 'success' })
   }
 
+  // ── Comment helpers ───────────────────────────────────────────────────
+
+  async function loadComments(entityType: 'bug' | 'backlog', entityId: number) {
+    setCommentsLoading(true)
+    try {
+      const route = entityType === 'bug' ? 'bugs' : 'backlog'
+      const data = await api.get(`/${route}/${entityId}/comments`)
+      setComments(data || [])
+    } finally { setCommentsLoading(false) }
+  }
+
+  async function postComment(entityType: 'bug' | 'backlog', entityId: number, text: string, parentId?: number | null) {
+    if (!text.trim()) return
+    setPostingComment(true)
+    try {
+      const route = entityType === 'bug' ? 'bugs' : 'backlog'
+      await api.post(`/${route}/${entityId}/comments`, { comment: text.trim(), parent_id: parentId || null })
+      setCommentText('')
+      setReplyTo(null)
+      setReplyText('')
+      loadComments(entityType, entityId)
+    } finally { setPostingComment(false) }
+  }
+
+  async function deleteComment(entityType: 'bug' | 'backlog', entityId: number, commentId: number) {
+    const route = entityType === 'bug' ? 'bugs' : 'backlog'
+    await api.delete(`/${route}/${entityId}/comments/${commentId}`)
+    loadComments(entityType, entityId)
+  }
+
+  // ── Open detail with edit check + comments ────────────────────────────
+
+  async function openBugDetail(bug: Bug) {
+    setBugDetail(bug)
+    setCommentText(''); setReplyTo(null); setReplyText('')
+    try {
+      const full = await api.get(`/bugs/${bug.id}`)
+      if (full) {
+        setBugDetail(full)
+        setCanEditBug(!!full.can_edit)
+        setBugEditForm({ summary: full.summary, description: full.description || '', priority: full.priority, severity: full.severity, page: full.page || '', steps_to_reproduce: full.steps_to_reproduce || '', resolution: full.resolution || '' })
+      }
+    } catch {}
+    loadComments('bug', bug.id)
+  }
+
+  async function openBacklogDetail(item: BacklogItem) {
+    setBacklogDetail(item)
+    setCommentText(''); setReplyTo(null); setReplyText('')
+    try {
+      const full = await api.get(`/backlog/${item.id}`)
+      if (full) {
+        setBacklogDetail(full)
+        setCanEditBacklog(!!full.can_edit)
+        setBacklogEditForm({ summary: full.summary, description: full.description || '', item_type: full.item_type, priority: full.priority, acceptance_criteria: full.acceptance_criteria || '', story_points: full.story_points ? String(full.story_points) : '' })
+      }
+    } catch {}
+    loadComments('backlog', item.id)
+  }
+
+  async function saveBugEdit() {
+    if (!bugDetail || !bugEditForm) return
+    await api.put(`/bugs/${bugDetail.id}`, bugEditForm)
+    setToast({ message: 'Bug updated', type: 'success' })
+    loadBugs()
+    const updated = await api.get(`/bugs/${bugDetail.id}`)
+    if (updated) setBugDetail(updated)
+  }
+
+  async function saveBacklogEdit() {
+    if (!backlogDetail || !backlogEditForm) return
+    const payload = { ...backlogEditForm, story_points: backlogEditForm.story_points ? parseInt(backlogEditForm.story_points) : null }
+    await api.put(`/backlog/${backlogDetail.id}`, payload)
+    setToast({ message: 'Backlog item updated', type: 'success' })
+    loadBacklog()
+    const updated = await api.get(`/backlog/${backlogDetail.id}`)
+    if (updated) setBacklogDetail(updated)
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const TABS: { key: Tab; label: string; count: number }[] = [
@@ -332,7 +526,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                 <tbody>
                   {bugs.map(b => (
                     <tr key={b.id} className="border-b border-border/50 hover:bg-surface-2 cursor-pointer"
-                      onClick={() => setBugDetail(b)}>
+                      onClick={() => openBugDetail(b)}>
                       <td className="px-3 py-2 font-mono text-xs text-accent">{b.key}</td>
                       <td className="px-3 py-2 font-medium truncate max-w-[300px]">{b.summary}</td>
                       <td className="px-3 py-2"><PriorityBadge priority={b.priority} /></td>
@@ -414,7 +608,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                       onDragStart={() => handleDragStart(b.id)}
                       onDragOver={e => handleDragOver(e, b.id)}
                       onDrop={handleDrop}
-                      onClick={() => setBacklogDetail(b)}>
+                      onClick={() => openBacklogDetail(b)}>
                       {can('backlog', 'write') && (
                         <td className="px-2 py-2 text-center cursor-grab active:cursor-grabbing" onClick={e => e.stopPropagation()}>
                           <svg className="w-4 h-4 text-text-3 mx-auto" fill="currentColor" viewBox="0 0 24 24">
@@ -502,39 +696,101 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
         </Modal>
       )}
 
-      {/* Bug detail modal */}
+      {/* Bug detail / edit modal */}
       {bugDetail && (
-        <Modal title={bugDetail.key} onClose={() => setBugDetail(null)} width="max-w-2xl">
+        <Modal title={bugDetail.key} onClose={() => { setBugDetail(null); setCanEditBug(false); setBugEditForm(null) }} width="max-w-3xl">
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold">{bugDetail.summary}</h3>
-            <div className="flex flex-wrap gap-2">
-              <PriorityBadge priority={bugDetail.priority} />
-              <SeverityBadge severity={bugDetail.severity} />
-              <StatusBadge status={bugDetail.status} />
-            </div>
-            {bugDetail.description && <p className="text-sm text-text-2 whitespace-pre-wrap">{bugDetail.description}</p>}
-            {bugDetail.steps_to_reproduce && (
-              <div>
-                <div className="text-xs text-text-3 font-medium mb-1">Steps to Reproduce</div>
-                <p className="text-sm text-text-2 whitespace-pre-wrap bg-surface-2 rounded p-2">{bugDetail.steps_to_reproduce}</p>
-              </div>
+            {/* Editable fields or read-only display */}
+            {canEditBug && bugEditForm ? (
+              <>
+                <Field label="Summary" required>
+                  <input className="input w-full" value={bugEditForm.summary}
+                    onChange={e => setBugEditForm((f: any) => ({ ...f, summary: e.target.value }))} />
+                </Field>
+                <Field label="Description">
+                  <textarea className="input w-full" rows={3} value={bugEditForm.description}
+                    onChange={e => setBugEditForm((f: any) => ({ ...f, description: e.target.value }))} />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Priority">
+                    <select className="input w-full" value={bugEditForm.priority}
+                      onChange={e => setBugEditForm((f: any) => ({ ...f, priority: e.target.value }))}>
+                      {BUG_PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Severity">
+                    <select className="input w-full" value={bugEditForm.severity}
+                      onChange={e => setBugEditForm((f: any) => ({ ...f, severity: e.target.value }))}>
+                      {BUG_SEVERITIES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Page / Module">
+                  <input className="input w-full" value={bugEditForm.page}
+                    onChange={e => setBugEditForm((f: any) => ({ ...f, page: e.target.value }))} />
+                </Field>
+                <Field label="Steps to Reproduce">
+                  <textarea className="input w-full" rows={3} value={bugEditForm.steps_to_reproduce}
+                    onChange={e => setBugEditForm((f: any) => ({ ...f, steps_to_reproduce: e.target.value }))} />
+                </Field>
+                <Field label="Resolution">
+                  <textarea className="input w-full" rows={2} value={bugEditForm.resolution}
+                    onChange={e => setBugEditForm((f: any) => ({ ...f, resolution: e.target.value }))} />
+                </Field>
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={bugDetail.status} />
+                  <span className="text-xs text-text-3">Reported by {bugDetail.reported_by_email || '—'} · {fmtDate(bugDetail.created_at)}</span>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBugDetail(null); setDeleteBug(bugDetail) }}>Delete</button>}
+                  <button className="btn-ghost" onClick={() => { setBugDetail(null); setCanEditBug(false); setBugEditForm(null) }}>Cancel</button>
+                  <button className="btn-primary text-sm" onClick={saveBugEdit} disabled={!bugEditForm.summary?.trim()}>Save</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-lg font-semibold">{bugDetail.summary}</h3>
+                <div className="flex flex-wrap gap-2">
+                  <PriorityBadge priority={bugDetail.priority} />
+                  <SeverityBadge severity={bugDetail.severity} />
+                  <StatusBadge status={bugDetail.status} />
+                </div>
+                {bugDetail.description && <p className="text-sm text-text-2 whitespace-pre-wrap">{bugDetail.description}</p>}
+                {bugDetail.steps_to_reproduce && (
+                  <div>
+                    <div className="text-xs text-text-3 font-medium mb-1">Steps to Reproduce</div>
+                    <p className="text-sm text-text-2 whitespace-pre-wrap bg-surface-2 rounded p-2">{bugDetail.steps_to_reproduce}</p>
+                  </div>
+                )}
+                {bugDetail.resolution && (
+                  <div>
+                    <div className="text-xs text-text-3 font-medium mb-1">Resolution</div>
+                    <p className="text-sm text-text-2 whitespace-pre-wrap bg-green-50 rounded p-2">{bugDetail.resolution}</p>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2 text-xs text-text-3">
+                  <div>Page: {bugDetail.page || '—'}</div>
+                  <div>Reported by: {bugDetail.reported_by_email || '—'}</div>
+                  <div>Created: {fmtDate(bugDetail.created_at)}</div>
+                  <div>Updated: {fmtDate(bugDetail.updated_at)}</div>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBugDetail(null); setDeleteBug(bugDetail) }}>Delete</button>}
+                  <button className="btn-ghost" onClick={() => setBugDetail(null)}>Close</button>
+                </div>
+              </>
             )}
-            {bugDetail.resolution && (
-              <div>
-                <div className="text-xs text-text-3 font-medium mb-1">Resolution</div>
-                <p className="text-sm text-text-2 whitespace-pre-wrap bg-green-50 rounded p-2">{bugDetail.resolution}</p>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2 text-xs text-text-3">
-              <div>Page: {bugDetail.page || '—'}</div>
-              <div>Reported by: {bugDetail.reported_by_email || '—'}</div>
-              <div>Created: {fmtDate(bugDetail.created_at)}</div>
-              <div>Updated: {fmtDate(bugDetail.updated_at)}</div>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBugDetail(null); setDeleteBug(bugDetail) }}>Delete</button>}
-              <button className="btn-ghost" onClick={() => setBugDetail(null)}>Close</button>
-            </div>
+
+            {/* Comments */}
+            <CommentSection entityType="bug" entityId={bugDetail.id}
+              comments={comments} commentsLoading={commentsLoading}
+              commentText={commentText} setCommentText={setCommentText}
+              replyTo={replyTo} setReplyTo={setReplyTo}
+              replyText={replyText} setReplyText={setReplyText}
+              postingComment={postingComment}
+              onPost={(text, parentId) => postComment('bug', bugDetail.id, text, parentId)}
+              onDelete={(cid) => deleteComment('bug', bugDetail.id, cid)}
+              userSub={user?.sub} isDev={isDev} />
           </div>
         </Modal>
       )}
@@ -583,34 +839,92 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
         </Modal>
       )}
 
-      {/* Backlog detail modal */}
+      {/* Backlog detail / edit modal */}
       {backlogDetail && (
-        <Modal title={backlogDetail.key} onClose={() => setBacklogDetail(null)} width="max-w-2xl">
+        <Modal title={backlogDetail.key} onClose={() => { setBacklogDetail(null); setCanEditBacklog(false); setBacklogEditForm(null) }} width="max-w-3xl">
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold">{backlogDetail.summary}</h3>
-            <div className="flex flex-wrap gap-2">
-              <Badge label={backlogDetail.item_type} variant="neutral" />
-              <PriorityBadge priority={backlogDetail.priority} />
-              <StatusBadge status={backlogDetail.status} />
-              {backlogDetail.story_points && <Badge label={`${backlogDetail.story_points} pts`} variant="green" />}
-            </div>
-            {backlogDetail.description && <p className="text-sm text-text-2 whitespace-pre-wrap">{backlogDetail.description}</p>}
-            {backlogDetail.acceptance_criteria && (
-              <div>
-                <div className="text-xs text-text-3 font-medium mb-1">Acceptance Criteria</div>
-                <p className="text-sm text-text-2 whitespace-pre-wrap bg-surface-2 rounded p-2">{backlogDetail.acceptance_criteria}</p>
-              </div>
+            {canEditBacklog && backlogEditForm ? (
+              <>
+                <Field label="Summary" required>
+                  <input className="input w-full" value={backlogEditForm.summary}
+                    onChange={e => setBacklogEditForm((f: any) => ({ ...f, summary: e.target.value }))} />
+                </Field>
+                <Field label="Description">
+                  <textarea className="input w-full" rows={3} value={backlogEditForm.description}
+                    onChange={e => setBacklogEditForm((f: any) => ({ ...f, description: e.target.value }))} />
+                </Field>
+                <div className="grid grid-cols-3 gap-3">
+                  <Field label="Type">
+                    <select className="input w-full" value={backlogEditForm.item_type}
+                      onChange={e => setBacklogEditForm((f: any) => ({ ...f, item_type: e.target.value }))}>
+                      {BACKLOG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Priority">
+                    <select className="input w-full" value={backlogEditForm.priority}
+                      onChange={e => setBacklogEditForm((f: any) => ({ ...f, priority: e.target.value }))}>
+                      {BUG_PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Story Points">
+                    <input className="input w-full" type="number" min={0} value={backlogEditForm.story_points}
+                      onChange={e => setBacklogEditForm((f: any) => ({ ...f, story_points: e.target.value }))} />
+                  </Field>
+                </div>
+                <Field label="Acceptance Criteria">
+                  <textarea className="input w-full" rows={3} value={backlogEditForm.acceptance_criteria}
+                    onChange={e => setBacklogEditForm((f: any) => ({ ...f, acceptance_criteria: e.target.value }))} />
+                </Field>
+                <div className="flex items-center gap-2">
+                  <Badge label={backlogDetail.item_type} variant="neutral" />
+                  <StatusBadge status={backlogDetail.status} />
+                  <span className="text-xs text-text-3">Requested by {backlogDetail.requested_by_email || '—'} · {fmtDate(backlogDetail.created_at)}</span>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBacklogDetail(null); setDeleteBacklog(backlogDetail) }}>Delete</button>}
+                  <button className="btn-ghost" onClick={() => { setBacklogDetail(null); setCanEditBacklog(false); setBacklogEditForm(null) }}>Cancel</button>
+                  <button className="btn-primary text-sm" onClick={saveBacklogEdit} disabled={!backlogEditForm.summary?.trim()}>Save</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-lg font-semibold">{backlogDetail.summary}</h3>
+                <div className="flex flex-wrap gap-2">
+                  <Badge label={backlogDetail.item_type} variant="neutral" />
+                  <PriorityBadge priority={backlogDetail.priority} />
+                  <StatusBadge status={backlogDetail.status} />
+                  {backlogDetail.story_points && <Badge label={`${backlogDetail.story_points} pts`} variant="green" />}
+                </div>
+                {backlogDetail.description && <p className="text-sm text-text-2 whitespace-pre-wrap">{backlogDetail.description}</p>}
+                {backlogDetail.acceptance_criteria && (
+                  <div>
+                    <div className="text-xs text-text-3 font-medium mb-1">Acceptance Criteria</div>
+                    <p className="text-sm text-text-2 whitespace-pre-wrap bg-surface-2 rounded p-2">{backlogDetail.acceptance_criteria}</p>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2 text-xs text-text-3">
+                  <div>Requested by: {backlogDetail.requested_by_email || '—'}</div>
+                  <div>Sprint: {backlogDetail.sprint || '—'}</div>
+                  <div>Created: {fmtDate(backlogDetail.created_at)}</div>
+                  <div>Updated: {fmtDate(backlogDetail.updated_at)}</div>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBacklogDetail(null); setDeleteBacklog(backlogDetail) }}>Delete</button>}
+                  <button className="btn-ghost" onClick={() => setBacklogDetail(null)}>Close</button>
+                </div>
+              </>
             )}
-            <div className="grid grid-cols-2 gap-2 text-xs text-text-3">
-              <div>Requested by: {backlogDetail.requested_by_email || '—'}</div>
-              <div>Sprint: {backlogDetail.sprint || '—'}</div>
-              <div>Created: {fmtDate(backlogDetail.created_at)}</div>
-              <div>Updated: {fmtDate(backlogDetail.updated_at)}</div>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBacklogDetail(null); setDeleteBacklog(backlogDetail) }}>Delete</button>}
-              <button className="btn-ghost" onClick={() => setBacklogDetail(null)}>Close</button>
-            </div>
+
+            {/* Comments */}
+            <CommentSection entityType="backlog" entityId={backlogDetail.id}
+              comments={comments} commentsLoading={commentsLoading}
+              commentText={commentText} setCommentText={setCommentText}
+              replyTo={replyTo} setReplyTo={setReplyTo}
+              replyText={replyText} setReplyText={setReplyText}
+              postingComment={postingComment}
+              onPost={(text, parentId) => postComment('backlog', backlogDetail.id, text, parentId)}
+              onDelete={(cid) => deleteComment('backlog', backlogDetail.id, cid)}
+              userSub={user?.sub} isDev={isDev} />
           </div>
         </Modal>
       )}

@@ -1755,6 +1755,21 @@ const migrations = [
     -- Bump backlog sequence past highest seeded key
     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1010));
   END $$`,
+
+  // ── Step 109: Item Comments (threaded, unified for bugs + backlog) ──────
+  `CREATE TABLE IF NOT EXISTS mcogs_item_comments (
+     id          SERIAL PRIMARY KEY,
+     entity_type VARCHAR(20)  NOT NULL CHECK (entity_type IN ('bug','backlog')),
+     entity_id   INTEGER      NOT NULL,
+     user_sub    VARCHAR(255),
+     user_email  VARCHAR(255),
+     user_name   VARCHAR(100) NOT NULL DEFAULT 'Anonymous',
+     comment     TEXT         NOT NULL,
+     parent_id   INTEGER      REFERENCES mcogs_item_comments(id) ON DELETE CASCADE,
+     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_item_comments_entity ON mcogs_item_comments(entity_type, entity_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_item_comments_parent ON mcogs_item_comments(parent_id) WHERE parent_id IS NOT NULL`,
 ];
 
 async function runMigrations(pool) {
