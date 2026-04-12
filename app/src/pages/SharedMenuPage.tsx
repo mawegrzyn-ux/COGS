@@ -194,7 +194,7 @@ export default function SharedMenuPage() {
 
   // Mobile + view mode state
   const [isMobile,          setIsMobile]          = useState(() => window.innerWidth < 768)
-  const [gridView,          setGridView]          = useState(false)
+  const [viewMode,          setViewMode]          = useState<'table' | 'grid' | 'excel'>('table')
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(true)
   const [mobileLevelFilter, setMobileLevelFilter] = useState<number | 'all'>('all')
 
@@ -776,23 +776,24 @@ export default function SharedMenuPage() {
                 <span className="hidden sm:inline">Help</span>
               </button>
 
-              {/* Grid / list toggle */}
-              <button
-                className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${gridView ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}
-                onClick={() => setGridView(v => !v)}
-                title={gridView ? 'Switch to table view' : 'Switch to grid view'}
-              >
-                {gridView ? (
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
-                  </svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
-                  </svg>
-                )}
-                <span className="hidden sm:inline">{gridView ? 'List' : 'Grid'}</span>
-              </button>
+              {/* View mode toggle: Table / Excel / Grid */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
+                {([
+                  { mode: 'table' as const, label: 'List', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/></svg> },
+                  { mode: 'excel' as const, label: 'Excel', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M3 6h18M3 18h18M8 6v12M16 6v12"/></svg> },
+                  { mode: 'grid' as const, label: 'Grid', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg> },
+                ]).map(({ mode, label, icon }) => (
+                  <button
+                    key={mode}
+                    className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === mode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                    onClick={() => setViewMode(mode)}
+                    title={label}
+                  >
+                    {icon}
+                    <span className="hidden sm:inline">{label}</span>
+                  </button>
+                ))}
+              </div>
 
               {/* Changes toggle */}
               <button
@@ -1162,7 +1163,7 @@ export default function SharedMenuPage() {
             )}  {/* end tilesLayout === 'top' charts */}
 
             {/* ── Grid view ──────────────────────────────────────────────────────── */}
-            {gridView && (
+            {viewMode === 'grid' && (
               <div className="flex-1 min-h-0 overflow-auto pb-2">
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {categories.map(cat => {
@@ -1263,7 +1264,7 @@ export default function SharedMenuPage() {
             )}
 
             {/* ── Table view ─────────────────────────────────────────────────────── */}
-            {!gridView && (
+            {viewMode === 'table' && (
             <div className="flex-1 min-h-0 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
@@ -1477,7 +1478,200 @@ export default function SharedMenuPage() {
                 <span className="text-gray-300 ml-auto hidden sm:block">Right-click any row to add a comment</span>
               </div>
             </div>
-            )}  {/* end !gridView */}
+            )}  {/* end table view */}
+
+            {/* ── Excel view ────────────────────────────────────────────────────── */}
+            {viewMode === 'excel' && (
+            <div className="flex-1 min-h-0 bg-white border border-gray-200 overflow-hidden flex flex-col" style={{ fontSize: 12 }}>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full" style={{ borderCollapse: 'collapse' }}>
+                  <thead className="sticky top-0 z-10">
+                    <tr style={{ background: '#f0f0f0' }}>
+                      <th className="text-left font-semibold text-gray-600 uppercase tracking-wide sticky left-0 whitespace-nowrap border border-gray-300"
+                          style={{ background: '#e8e8e8', padding: '4px 8px', fontSize: 10, minWidth: 180 }}>
+                        <div className="flex items-center gap-1.5">
+                          Item
+                          <button
+                            className="text-gray-400 hover:text-gray-600 text-[9px] border border-gray-300 rounded px-1 py-0 bg-white/80 leading-tight"
+                            onClick={() => collapsedCats.size === categories.length ? expandAll() : collapseAll()}
+                          >
+                            {collapsedCats.size === categories.length ? '▼' : '▶'}
+                          </button>
+                        </div>
+                      </th>
+                      <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                          style={{ background: '#e8e8e8', padding: '4px 8px', fontSize: 10, minWidth: 70 }}>
+                        Cost
+                      </th>
+                      {visibleLevels.map(l => (
+                        <React.Fragment key={l.id}>
+                          <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                              style={{ background: '#dce8dc', padding: '4px 8px', fontSize: 10, minWidth: 80 }}>
+                            {l.name}
+                          </th>
+                          <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                              style={{ background: '#dce8dc', padding: '4px 8px', fontSize: 10, minWidth: 60 }}>
+                            COGS%
+                          </th>
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.map(cat => {
+                      const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                      const isCollapsed = collapsedCats.has(cat)
+                      const avgCogsPerLevel = Object.fromEntries(
+                        levels.map(l => {
+                          const vals = catItems.map(i => i.levels[l.id]?.cogs_pct).filter((v): v is number => v !== null && v !== undefined)
+                          return [l.id, vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null]
+                        })
+                      )
+
+                      return (
+                        <React.Fragment key={`xl-${cat}`}>
+                          {/* Category header */}
+                          <tr
+                            className="cursor-pointer select-none"
+                            style={{ background: '#f5f5f0' }}
+                            onClick={() => toggleCat(cat)}
+                          >
+                            <td className="font-bold text-gray-700 uppercase tracking-wide sticky left-0 border border-gray-300"
+                                style={{ background: '#f5f5f0', padding: '3px 8px', fontSize: 10 }}
+                                colSpan={1}>
+                              <span className="text-gray-400 mr-1">{isCollapsed ? '▶' : '▼'}</span>
+                              {cat}
+                              <span className="text-gray-400 font-normal ml-1.5">({catItems.length})</span>
+                            </td>
+                            <td className="border border-gray-300" style={{ background: '#f5f5f0', padding: '3px 8px' }} />
+                            {visibleLevels.map(l => {
+                              const avg = avgCogsPerLevel[l.id]
+                              return (
+                                <React.Fragment key={l.id}>
+                                  <td className="border border-gray-300" style={{ background: '#f5f5f0', padding: '3px 8px' }} />
+                                  <td className="text-right border border-gray-300 font-mono" style={{ background: '#f5f5f0', padding: '3px 8px', fontSize: 11 }}>
+                                    {avg !== null && (
+                                      <span className={cogsCls(avg)}>{fmt2(avg)}%</span>
+                                    )}
+                                  </td>
+                                </React.Fragment>
+                              )
+                            })}
+                          </tr>
+                          {/* Item rows */}
+                          {!isCollapsed && catItems.map((item, idx) => (
+                            <tr
+                              key={`xl-${item.menu_item_id}`}
+                              className="hover:bg-blue-50/40 transition-colors"
+                              style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}
+                              onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
+                            >
+                              {/* Item name */}
+                              <td className="sticky left-0 border border-gray-200" style={{ background: 'inherit', padding: '2px 8px' }}>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    className={`font-medium text-gray-800 text-left truncate ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 cursor-pointer underline decoration-dotted underline-offset-2' : 'cursor-default'}`}
+                                    onClick={() => (item.item_type === 'recipe' || item.item_type === 'combo') && openBreakdown(item.menu_item_id)}
+                                    style={{ fontSize: 12 }}
+                                  >
+                                    {item.display_name}
+                                  </button>
+                                  {changes.some(c => c.change_type === 'comment' && c.menu_item_id === item.menu_item_id) && (
+                                    <span className="text-blue-400 text-[10px]">💬</span>
+                                  )}
+                                </div>
+                              </td>
+                              {/* Cost */}
+                              <td className="text-right font-mono text-gray-500 border border-gray-200 tabular-nums" style={{ padding: '2px 8px', fontSize: 11 }}>
+                                {sym}{fmt2(item.cost)}
+                              </td>
+                              {/* Price levels */}
+                              {visibleLevels.map(l => {
+                                const entry = item.levels[l.id]
+                                const isEditing = editCell?.itemId === item.menu_item_id && editCell?.levelId === l.id
+                                const changeKey = `${item.menu_item_id}_l${l.id}`
+                                const cellChange = changedCells[changeKey]
+
+                                if (!entry?.set) {
+                                  return (
+                                    <React.Fragment key={l.id}>
+                                      <td className={`text-center border border-gray-200 ${cellChange ? 'bg-amber-50' : ''}`} style={{ padding: '2px 8px' }}>
+                                        {isEdit ? (
+                                          isEditing ? (
+                                            <input
+                                              className="w-16 text-right border border-emerald-400 rounded px-1 py-0 text-xs tabular-nums outline-none bg-white font-mono"
+                                              type="number" step="0.01" min="0" autoFocus
+                                              value={editCell!.value}
+                                              onChange={e => setEditCell(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                              onBlur={commitEdit}
+                                              onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditCell(null) }}
+                                            />
+                                          ) : (
+                                            <button className="text-gray-300 hover:text-emerald-500 text-[10px]"
+                                              onClick={() => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: '', originalValue: '' })}>
+                                              +
+                                            </button>
+                                          )
+                                        ) : (
+                                          <span className="text-gray-200">—</span>
+                                        )}
+                                      </td>
+                                      <td className="border border-gray-200" style={{ padding: '2px 8px' }}>
+                                        <span className="text-gray-200">—</span>
+                                      </td>
+                                    </React.Fragment>
+                                  )
+                                }
+
+                                return (
+                                  <React.Fragment key={l.id}>
+                                    {/* Sell price cell — editable */}
+                                    <td
+                                      className={`text-right border border-gray-200 tabular-nums font-mono ${cellChange || entry.is_scenario_override ? 'bg-amber-50' : ''}`}
+                                      style={{ padding: '2px 8px', fontSize: 11, cursor: isEdit ? 'pointer' : 'default' }}
+                                      onClick={isEdit && !isEditing ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
+                                    >
+                                      {isEditing ? (
+                                        <input
+                                          className="w-16 text-right border border-emerald-400 rounded px-1 py-0 text-xs tabular-nums outline-none bg-white font-mono"
+                                          type="number" step="0.01" min="0" autoFocus
+                                          value={editCell!.value}
+                                          onChange={e => setEditCell(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                          onBlur={commitEdit}
+                                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditCell(null) }}
+                                        />
+                                      ) : (
+                                        <span className={`${isEdit ? 'hover:text-emerald-600' : ''} text-gray-800`}>
+                                          {(cellChange || entry.is_scenario_override) && <span className="inline-block w-1 h-1 rounded-full bg-amber-400 mr-1 align-middle" />}
+                                          {sym}{fmt2(entry.gross)}
+                                        </span>
+                                      )}
+                                    </td>
+                                    {/* COGS% cell */}
+                                    <td className={`text-right border border-gray-200 tabular-nums font-mono ${cogsCls(entry.cogs_pct)}`}
+                                        style={{ padding: '2px 8px', fontSize: 11 }}>
+                                      {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                    </td>
+                                  </React.Fragment>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* Legend */}
+              <div className="flex items-center gap-3 text-[10px] text-gray-400 px-3 py-1.5 border-t border-gray-200 flex-shrink-0 flex-wrap" style={{ background: '#f8f8f8' }}>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" /> ≤28%</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> 28-35%</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400" /> &gt;35%</span>
+                {isEdit && <span className="text-amber-600 font-medium">Click prices to edit</span>}
+              </div>
+            </div>
+            )}
 
           </>
         )}

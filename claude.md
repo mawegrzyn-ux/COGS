@@ -1,5 +1,7 @@
 # COGS Manager
 
+> **⚠️ DEVELOPER ONLY** — This file contains sensitive infrastructure details (server IPs, Auth0 config, database credentials, SSH key paths, API architecture). Access should be restricted to developers with the `is_dev` flag. Do not share with operators or external reviewers.
+
 **Menu cost-of-goods calculator for restaurant franchise operators.**
 
 Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreSQL full-stack application. Gives franchise operators accurate, real-time food cost visibility across menus, recipes, ingredients, and vendor pricing by market/country.
@@ -816,6 +818,7 @@ Three tabs:
 - In edit mode, each recipient price change is logged and surfaced in the ME History tab
 - Comments posted via shared links appear in ME Comments tab, merged and sorted by timestamp
 - Reply from ME routes to the correct originating shared view via `shared_page_id` tagging
+- **Three view modes** (toggle in toolbar): **List** (default rich table with progress bars), **Excel** (compact spreadsheet with cell borders, category grouping, inline editing), **Grid** (card tiles)
 
 **Currency conversion:**
 
@@ -1188,6 +1191,7 @@ Individual users can be granted the **developer flag** (`mcogs_users.is_dev BOOL
 | Feature | Normal user | Dev user |
 |---|---|---|
 | **System → Test Data** section | Hidden | Visible (marked purple DEV badge) |
+| **System → CLAUDE.md** section | Hidden | Visible (marked purple DEV badge) |
 | **Settings → Test Data** tab | Hidden | Visible (marked purple DEV badge) |
 
 The flag is separate from roles — a Viewer or Operator can be granted dev access independently of their COGS permissions.
@@ -1207,6 +1211,7 @@ The flag is separate from roles — a Viewer or Operator can be granted dev acce
 | **AI** | — | none | Embeds Settings → AI (API keys, token usage, concise mode) |
 | **Database** | `settings:write` (admin) | amber ADMIN | Embeds Settings → Database — DB connection mode (local vs standalone/RDS), test/save/migrate/switch |
 | **Test Data** | `is_dev` (dev) | purple DEV | Embeds Settings → Test Data — Load Test / Load Small / Clear / Load Defaults, all gated by `DateConfirmDialog` (ddmmyyyy) |
+| **CLAUDE.md** | `is_dev` (dev) | purple DEV | Project documentation viewer — reads raw CLAUDE.md from repo root via `GET /api/docs/claude-md` |
 | Architecture / API Reference / Security / Troubleshooting / Domain Migration | — | none | Reference documentation |
 
 ### Market Scope (Brand Partner Filtering)

@@ -1108,7 +1108,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
   { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
-  { id: 'claude-doc',       icon: '📄', label: 'CLAUDE.md',       gate: 'admin' },
+  { id: 'claude-doc',       icon: '📄', label: 'CLAUDE.md',       gate: 'dev'   },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
@@ -1157,9 +1157,9 @@ export default function SystemPage() {
       case 'troubleshooting':  return <TroubleshootingSection />
       case 'domain-migration': return <DomainMigrationSection />
       case 'pos-tester':       return <PosTesterPage />
-      case 'claude-doc':       return canManageSettings
+      case 'claude-doc':       return isDev
                                   ? <ClaudeDocSection />
-                                  : <GatedFallback reason="admin" />
+                                  : <GatedFallback reason="dev" />
       default:                 return null
     }
   }
