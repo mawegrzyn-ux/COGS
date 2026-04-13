@@ -1227,7 +1227,7 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   // ── Functional sections ──
-  { id: 'ai',               icon: '🤖', label: 'AI' },
+  { id: 'ai',               icon: '🤖', label: 'AI & Integrations' },
   { id: 'bugs-backlog',     icon: '🐛', label: 'Bugs & Backlog' },
   { id: 'jira',             icon: '🔗', label: 'Jira Sync',        gate: 'admin' },
   { id: 'audit-log',        icon: '📋', label: 'Audit Log',        gate: 'admin' },
