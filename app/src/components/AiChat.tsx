@@ -103,8 +103,6 @@ function renderMd(text: string, isUser = false): string {
   const codeBg     = isUser ? 'rgba(255,255,255,0.12)' : 'var(--accent-dim)'
   const blockBg    = isUser ? 'rgba(255,255,255,0.1)' : 'var(--surface-2)'
   const borderClr  = isUser ? 'rgba(255,255,255,0.25)' : 'var(--border)'
-  const surfaceClr = isUser ? 'transparent' : 'var(--surface)'
-
   // Escape HTML entities (applied before inline formatting)
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')

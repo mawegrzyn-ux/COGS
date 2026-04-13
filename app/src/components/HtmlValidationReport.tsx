@@ -46,8 +46,6 @@ function InfoIcon() {
 
 const SEVERITY_ICON = { error: ErrorIcon, warning: WarningIcon, info: InfoIcon }
 const SEVERITY_BORDER = { error: '#DC2626', warning: '#D97706', info: '#3B82F6' }
-const SEVERITY_BADGE: Record<string, 'red' | 'yellow' | 'neutral'> =
-  { error: 'red', warning: 'yellow', info: 'neutral' }
 
 // ── Pepper prompt builder ────────────────────────────────────────────────────
 
