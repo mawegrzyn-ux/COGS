@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import SettingsPage from './SettingsPage'
 import PosTesterPage from './PosTesterPage'
 import BugsBacklogPage from './BugsBacklogPage'
+import DocLibrary from '../components/DocLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 import { Spinner } from '../components/ui'
@@ -1212,6 +1213,7 @@ type Section =
   | 'security'
   | 'troubleshooting'
   | 'domain-migration'
+  | 'doc-library'
   | 'pos-tester'
   | 'claude-doc'
 
@@ -1234,6 +1236,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'storage',          icon: '☁️', label: 'Storage',           gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
   { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
+  { id: 'doc-library',      icon: '📄', label: 'Doc Library' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
   // ── Documentation / reference ──
   { id: 'architecture',     icon: '🏗️', label: 'Architecture',     isDoc: true },
@@ -1293,6 +1296,7 @@ export default function SystemPage() {
       case 'security':         return <SecuritySection />
       case 'troubleshooting':  return <TroubleshootingSection />
       case 'domain-migration': return <DomainMigrationSection />
+      case 'doc-library':      return <DocLibrary location="system" />
       case 'pos-tester':       return <PosTesterPage />
       case 'claude-doc':       return isDev
                                   ? <ClaudeDocSection />

@@ -7,7 +7,7 @@ export type Feature =
   | 'settings' | 'import' | 'ai_chat' | 'users'
   | 'stock_overview' | 'stock_purchase_orders' | 'stock_goods_in'
   | 'stock_invoices' | 'stock_waste' | 'stock_transfers' | 'stock_stocktake'
-  | 'bugs' | 'backlog'
+  | 'bugs' | 'backlog' | 'docs'
 
 export interface MeUser {
   id:              number

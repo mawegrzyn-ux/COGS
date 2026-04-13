@@ -2248,6 +2248,42 @@ const migrations = [
      -- Bump sequence past new key
      PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1400));
    END $$`,
+
+  // ── Step 114: Doc Library tables ───────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_doc_categories (
+     id          SERIAL PRIMARY KEY,
+     name        VARCHAR(200) NOT NULL,
+     sort_order  INTEGER DEFAULT 0,
+     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   )`,
+  `CREATE TABLE IF NOT EXISTS mcogs_docs (
+     id              SERIAL PRIMARY KEY,
+     title           VARCHAR(500) NOT NULL,
+     slug            VARCHAR(500) NOT NULL UNIQUE,
+     description     TEXT,
+     content_html    TEXT NOT NULL DEFAULT '',
+     content_type    VARCHAR(20) NOT NULL DEFAULT 'wysiwyg',
+     location        VARCHAR(20) NOT NULL DEFAULT 'help',
+     category_id     INTEGER REFERENCES mcogs_doc_categories(id) ON DELETE SET NULL,
+     skip_sanitize   BOOLEAN NOT NULL DEFAULT FALSE,
+     is_published    BOOLEAN NOT NULL DEFAULT TRUE,
+     created_by      TEXT,
+     updated_by      TEXT,
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_docs_location ON mcogs_docs(location)`,
+  `CREATE INDEX IF NOT EXISTS idx_docs_slug ON mcogs_docs(slug)`,
+
+  // ── Step 114b: RBAC — seed docs feature ────────────────────────────────────
+  `DO $$ DECLARE r RECORD; BEGIN
+     FOR r IN SELECT id, name FROM mcogs_roles LOOP
+       INSERT INTO mcogs_role_permissions (role_id, feature, access)
+       VALUES (r.id, 'docs',
+         CASE WHEN r.name = 'Admin' THEN 'write' ELSE 'read' END)
+       ON CONFLICT (role_id, feature) DO NOTHING;
+     END LOOP;
+   END $$`,
 ];
 
 async function runMigrations(pool) {

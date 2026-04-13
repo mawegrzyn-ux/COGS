@@ -138,6 +138,9 @@ router.use('/internal/feedback',                                                
 // ── Jira integration (admin-only) ────────────────────────────────────────────
 router.use('/jira',              ...can('settings', 'write'),                           require('./jira'));
 
+// ── Doc Library ──────────────────────────────────────────────────────────────
+router.use('/docs-library',      ...can('docs', 'read'),    write('docs'),             require('./docs-library'));
+
 // ── Bugs & Backlog (always local DB) ─────────────────────────────────────────
 router.use('/bugs',              ...can('bugs', 'read'),    write('bugs'),             require('./bugs'));
 router.use('/backlog',           ...can('backlog', 'read'), write('backlog'),           require('./backlog'));
