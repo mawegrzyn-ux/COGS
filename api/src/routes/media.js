@@ -26,6 +26,7 @@
 
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 const multer = require('multer');
 const path   = require('path');
 const fs     = require('fs');
@@ -258,6 +259,7 @@ router.post('/upload', upload.array('images', 50), async (req, res) => {
       const variants = await generateVariants(file.buffer, file.mimetype);
       const item     = await saveFile(cfg, base, ext, file.mimetype, variants, uploadedBy, categoryId, scope, formKey);
       results.push({ ...item, duplicate_of: isDupe ? file.originalname : null });
+      logAudit(pool, req, { action: 'create', entity_type: 'media_item', entity_id: item.id, entity_label: item.filename });
     }
 
     res.json({ items: results });
@@ -285,6 +287,9 @@ router.post('/bulk', async (req, res) => {
       const { rows } = await pool.query(`SELECT * FROM mcogs_media_items WHERE id = ANY($1::int[])`, [ids]);
       await Promise.all(rows.map(deleteItemStorage));
       await pool.query(`DELETE FROM mcogs_media_items WHERE id = ANY($1::int[])`, [ids]);
+      for (const item of rows) {
+        logAudit(pool, req, { action: 'delete', entity_type: 'media_item', entity_id: item.id, entity_label: item.filename });
+      }
       return res.json({ ok: true, deleted: ids.length });
     }
 
@@ -373,6 +378,7 @@ router.post('/categories', async (req, res) => {
       `INSERT INTO mcogs_media_categories (name) VALUES ($1) RETURNING *`,
       [name.trim()]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'media_category', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });
@@ -386,6 +392,7 @@ router.put('/categories/:id', async (req, res) => {
       [name.trim(), req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'media_category', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });
@@ -394,6 +401,7 @@ router.delete('/categories/:id', async (req, res) => {
   try {
     await pool.query(`UPDATE mcogs_media_items SET category_id=NULL WHERE category_id=$1`, [req.params.id]);
     await pool.query(`DELETE FROM mcogs_media_categories WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'media_category', entity_id: Number(req.params.id), entity_label: `id:${req.params.id}` });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });
@@ -459,6 +467,7 @@ router.put('/:id', async (req, res) => {
       vals
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'media_item', entity_id: rows[0].id, entity_label: rows[0].filename });
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });
@@ -471,6 +480,7 @@ router.delete('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
     await deleteItemStorage(rows[0]);
     await pool.query(`DELETE FROM mcogs_media_items WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'media_item', entity_id: rows[0].id, entity_label: rows[0].filename });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: { message: err.message } }); }
 });

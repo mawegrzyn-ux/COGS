@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // POST /feedback — submit feedback from the app
 router.post('/', async (req, res) => {
@@ -13,6 +14,7 @@ router.post('/', async (req, res) => {
        VALUES ($1, $2, $3, $4) RETURNING *`,
       [type, title.trim(), description?.trim() || null, page?.trim() || null]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'feedback', entity_id: rows[0].id, entity_label: rows[0].title });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);

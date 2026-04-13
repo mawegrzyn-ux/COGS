@@ -1,5 +1,6 @@
 const router  = require('express').Router();
 const pool = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /country-level-tax
 router.get('/', async (req, res) => {
@@ -31,6 +32,7 @@ router.post('/', async (req, res) => {
         `DELETE FROM mcogs_country_level_tax WHERE country_id=$1 AND price_level_id=$2`,
         [country_id, price_level_id]
       );
+      logAudit(pool, req, { action: 'delete', entity_type: 'country_level_tax', entity_id: null, entity_label: `country:${country_id} level:${price_level_id}` });
       return res.status(204).send();
     }
 
@@ -43,6 +45,7 @@ router.post('/', async (req, res) => {
        RETURNING *`,
       [country_id, price_level_id, tax_rate_id]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'country_level_tax', entity_id: rows[0].id, entity_label: `country:${country_id} level:${price_level_id}` });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -54,6 +57,7 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     await pool.query(`DELETE FROM mcogs_country_level_tax WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'country_level_tax', entity_id: Number(req.params.id), entity_label: `id:${req.params.id}` });
     res.status(204).send();
   } catch (err) {
     console.error(err);

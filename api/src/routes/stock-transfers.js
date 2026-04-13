@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /stock-transfers?from_store_id=&to_store_id=&status=&from=&to=
 router.get('/', async (req, res) => {
@@ -105,6 +106,7 @@ router.post('/', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'stock_transfer', entity_id: transfer.id, entity_label: transfer.transfer_number });
     res.status(201).json({ ...transfer, items: insertedItems });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -142,6 +144,7 @@ router.put('/:id', async (req, res) => {
       WHERE  id = $5
       RETURNING *
     `, [from_store_id || null, to_store_id || null, transfer_date || null, notes || null, req.params.id]);
+    logAudit(pool, req, { action: 'update', entity_type: 'stock_transfer', entity_id: rows[0].id, entity_label: rows[0].transfer_number });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -153,13 +156,14 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { rows: check } = await pool.query(
-      `SELECT status FROM mcogs_stock_transfers WHERE id=$1`, [req.params.id]
+      `SELECT status, transfer_number FROM mcogs_stock_transfers WHERE id=$1`, [req.params.id]
     );
     if (!check.length) return res.status(404).json({ error: { message: 'Not found' } });
     if (check[0].status !== 'pending') {
       return res.status(409).json({ error: { message: 'Can only delete pending transfers' } });
     }
     await pool.query(`DELETE FROM mcogs_stock_transfers WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'stock_transfer', entity_id: Number(req.params.id), entity_label: check[0].transfer_number || `id:${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);
@@ -289,6 +293,7 @@ router.post('/:id/dispatch', async (req, res) => {
     `, [transfer.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'status_change', entity_type: 'stock_transfer', entity_id: transfer.id, entity_label: transfer.transfer_number, field_changes: { status: { old: 'pending', new: 'in_transit' } } });
     res.json(updated[0]);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -359,6 +364,7 @@ router.post('/:id/confirm', async (req, res) => {
     `, [confirmed_by, transfer.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'status_change', entity_type: 'stock_transfer', entity_id: transfer.id, entity_label: transfer.transfer_number, field_changes: { status: { old: 'in_transit', new: 'confirmed' } } });
     res.json(updated[0]);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -420,6 +426,7 @@ router.post('/:id/cancel', async (req, res) => {
     `, [transfer.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'status_change', entity_type: 'stock_transfer', entity_id: transfer.id, entity_label: transfer.transfer_number, field_changes: { status: { old: transfer.status, new: 'cancelled' } } });
     res.json(updated[0]);
   } catch (err) {
     await client.query('ROLLBACK');

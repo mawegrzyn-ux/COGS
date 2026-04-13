@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /brand-partners
 router.get('/', async (req, res) => {
@@ -43,6 +44,7 @@ router.post('/', async (req, res) => {
       phone?.trim()   || null,
       notes?.trim()   || null,
     ]);
+    logAudit(pool, req, { action: 'create', entity_type: 'brand_partner', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -55,6 +57,7 @@ router.put('/:id', async (req, res) => {
   const { name, contact, email, phone, notes } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    const { rows: oldRows } = await pool.query(`SELECT * FROM mcogs_brand_partners WHERE id=$1`, [req.params.id]);
     const { rows } = await pool.query(`
       UPDATE mcogs_brand_partners
       SET name=$1, contact=$2, email=$3, phone=$4, notes=$5, updated_at=NOW()
@@ -68,6 +71,7 @@ router.put('/:id', async (req, res) => {
       req.params.id,
     ]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'brand_partner', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(oldRows[0], rows[0], ['name', 'contact', 'email', 'phone', 'notes']) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -78,10 +82,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /brand-partners/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: old } = await pool.query(`SELECT * FROM mcogs_brand_partners WHERE id=$1`, [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_brand_partners WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'brand_partner', entity_id: Number(req.params.id), entity_label: old[0]?.name || `id:${req.params.id}` });
     res.status(204).send();
   } catch (err) {
     // FK violation — brand partner is still assigned to one or more markets

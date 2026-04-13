@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /order-templates
 router.get('/', async (req, res) => {
@@ -103,6 +104,7 @@ router.post('/', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'order_template', entity_id: tpl.id, entity_label: tpl.name });
     res.status(201).json(tpl);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -118,6 +120,7 @@ router.put('/:id', async (req, res) => {
   const { store_id, vendor_id, name, notes } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    const { rows: oldRows } = await pool.query(`SELECT * FROM mcogs_order_templates WHERE id=$1`, [req.params.id]);
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_order_templates
       SET    store_id=$1, vendor_id=$2, name=$3, notes=$4, updated_at=NOW()
@@ -131,6 +134,7 @@ router.put('/:id', async (req, res) => {
       req.params.id,
     ]);
     if (!row) return res.status(404).json({ error: { message: 'Order template not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'order_template', entity_id: row.id, entity_label: row.name, field_changes: diffFields(oldRows[0], row, ['name', 'notes', 'store_id', 'vendor_id']) });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -141,10 +145,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /order-templates/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: old } = await pool.query(`SELECT id, name FROM mcogs_order_templates WHERE id=$1`, [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_order_templates WHERE id = $1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Order template not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'order_template', entity_id: Number(req.params.id), entity_label: old[0]?.name || `id:${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);
@@ -280,6 +286,7 @@ router.post('/from-po/:poId', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'order_template', entity_id: tpl.id, entity_label: tpl.name, context: { source_po_id: Number(req.params.poId) } });
     res.status(201).json(tpl);
   } catch (err) {
     await client.query('ROLLBACK');

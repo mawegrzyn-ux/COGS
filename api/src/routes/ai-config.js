@@ -10,9 +10,11 @@
 
 const crypto      = require('crypto');
 const router      = require('express').Router();
+const pool        = require('../db/pool');
 const aiConfig    = require('../helpers/aiConfig');
 const configStore = require('../config-store');
 const rag         = require('../helpers/rag');
+const { logAudit } = require('../helpers/audit');
 
 const ALLOWED_KEYS = configStore.AI_KEY_NAMES;
 
@@ -51,6 +53,7 @@ router.patch('/', async (req, res) => {
       rag.init().catch(err => console.error('[rag] re-init error:', err.message));
     }
 
+    logAudit(pool, req, { action: 'update', entity_type: 'ai_config', entity_id: 1, entity_label: 'ai settings', context: { keys_updated: Object.keys(updates) } });
     res.json(aiConfig.status());
   } catch (err) {
     console.error('[ai-config] save failed:', err);
@@ -68,6 +71,7 @@ router.delete('/:key', async (req, res) => {
   try {
     await configStore.deleteAiKey(key, actorOf(req));
     aiConfig.set(key, null);
+    logAudit(pool, req, { action: 'delete', entity_type: 'ai_config', entity_id: 1, entity_label: 'ai settings', context: { key_deleted: key } });
     res.json(aiConfig.status());
   } catch (err) {
     console.error('[ai-config] delete failed:', err);
@@ -82,6 +86,7 @@ router.post('/generate-claude-code-key', async (req, res) => {
   try {
     await configStore.setAiKey('CLAUDE_CODE_API_KEY', key, actorOf(req));
     aiConfig.set('CLAUDE_CODE_API_KEY', key);
+    logAudit(pool, req, { action: 'create', entity_type: 'ai_config', entity_id: 1, entity_label: 'ai settings', context: { action: 'generate_claude_code_key' } });
     res.json({ key, ...aiConfig.status() });
   } catch (err) {
     console.error('[ai-config] generate key failed:', err);

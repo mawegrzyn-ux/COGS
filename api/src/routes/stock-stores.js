@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /stock-stores?location_id=&active=
 router.get('/', async (req, res, next) => {
@@ -67,6 +68,7 @@ router.post('/', async (req, res, next) => {
       notes?.trim()      || null,
       sort_order         ?? 0,
     ]);
+    logAudit(pool, req, { action: 'create', entity_type: 'store', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === '23505') {
@@ -114,6 +116,9 @@ router.post('/bulk-create', async (req, res, next) => {
       created.push(rows[0]);
     }
     await client.query('COMMIT');
+    for (const c of created) {
+      logAudit(pool, req, { action: 'create', entity_type: 'store', entity_id: c.id, entity_label: c.name });
+    }
     res.status(201).json(created);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -135,6 +140,7 @@ router.put('/:id', async (req, res, next) => {
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
 
   try {
+    const { rows: oldRows } = await pool.query(`SELECT * FROM mcogs_stores WHERE id=$1`, [req.params.id]);
     const { rows } = await pool.query(`
       UPDATE mcogs_stores
       SET    location_id=$1, name=$2, code=$3, store_type=$4,
@@ -154,6 +160,7 @@ router.put('/:id', async (req, res, next) => {
       req.params.id,
     ]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Store not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'store', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(oldRows[0], rows[0], ['name', 'code', 'store_type', 'is_store_itself', 'is_active', 'notes', 'sort_order', 'location_id']) });
     res.json(rows[0]);
   } catch (err) {
     if (err.code === '23505') {
@@ -181,10 +188,12 @@ router.delete('/:id', async (req, res, next) => {
       });
     }
 
+    const { rows: old } = await pool.query(`SELECT id, name FROM mcogs_stores WHERE id=$1`, [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_stores WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Store not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'store', entity_id: Number(req.params.id), entity_label: old[0]?.name || `id:${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     next(err);
