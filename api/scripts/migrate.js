@@ -2340,6 +2340,33 @@ const migrations = [
      -- Bump backlog sequence past new keys
      PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1355));
    END $$`,
+
+  // ── Step 117: Memory consolidation tables ──────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_memory_daily (
+    id            SERIAL PRIMARY KEY,
+    user_sub      VARCHAR(200) NOT NULL,
+    summary_date  DATE NOT NULL,
+    summary       TEXT NOT NULL,
+    topics        JSONB NOT NULL DEFAULT '[]',
+    tools_used    JSONB NOT NULL DEFAULT '[]',
+    token_count   INTEGER,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_sub, summary_date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_daily_sub_date ON mcogs_memory_daily(user_sub, summary_date DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS mcogs_memory_monthly (
+    id              SERIAL PRIMARY KEY,
+    user_sub        VARCHAR(200) NOT NULL,
+    summary_month   DATE NOT NULL,
+    summary         TEXT NOT NULL,
+    themes          JSONB NOT NULL DEFAULT '[]',
+    focus_shifts    JSONB NOT NULL DEFAULT '[]',
+    is_quarterly    BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_sub, summary_month)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_monthly_sub ON mcogs_memory_monthly(user_sub, summary_month DESC)`,
 ];
 
 async function runMigrations(pool) {

@@ -90,4 +90,38 @@ router.put('/profile', async (req, res) => {
   }
 });
 
+// ── Memory Consolidation (admin only) ─────────────────────────────────────────
+
+// POST /memory/consolidate — trigger consolidation manually
+router.post('/consolidate', async (req, res) => {
+  if (req.user?.permissions?.settings !== 'write') {
+    return res.status(403).json({ error: { message: 'Admin access required' } });
+  }
+  const { date, forceMonthly } = req.body || {};
+  const targetDate = date || undefined;
+
+  // Fire-and-forget — return immediately
+  const { runConsolidation } = require('../jobs/consolidateMemory');
+  runConsolidation({ targetDate, forceMonthly })
+    .then(result => console.log('[memory] Manual consolidation done:', JSON.stringify(result)))
+    .catch(err => console.error('[memory] Manual consolidation error:', err.message));
+
+  res.json({ status: 'started', targetDate: targetDate || 'yesterday' });
+});
+
+// GET /memory/consolidation-status — last run info
+router.get('/consolidation-status', async (req, res) => {
+  if (req.user?.permissions?.settings !== 'write') {
+    return res.status(403).json({ error: { message: 'Admin access required' } });
+  }
+  try {
+    const { rows } = await pool.query(
+      "SELECT data->'memory_consolidation' AS status FROM mcogs_settings WHERE id = 1"
+    );
+    res.json(rows[0]?.status || { last_run: null });
+  } catch (err) {
+    res.status(500).json({ error: { message: 'Failed to read consolidation status' } });
+  }
+});
+
 module.exports = router;

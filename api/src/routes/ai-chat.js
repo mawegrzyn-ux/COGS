@@ -3695,7 +3695,7 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
   try {
     const userSub = context?.userSub;
     if (userSub) {
-      const [notesRes, profileRes] = await Promise.all([
+      const [notesRes, profileRes, dailyRes, lastChatRes] = await Promise.all([
         pool.query(
           'SELECT note, created_at FROM mcogs_user_notes WHERE user_sub = $1 ORDER BY created_at ASC',
           [userSub]
@@ -3704,11 +3704,21 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
           'SELECT display_name, profile_json, long_term_summary FROM mcogs_user_profiles WHERE user_sub = $1',
           [userSub]
         ),
+        pool.query(
+          'SELECT summary_date, summary FROM mcogs_memory_daily WHERE user_sub = $1 ORDER BY summary_date DESC LIMIT 3',
+          [userSub]
+        ),
+        pool.query(
+          'SELECT created_at FROM mcogs_ai_chat_log WHERE user_sub = $1 ORDER BY created_at DESC LIMIT 1 OFFSET 1',
+          [userSub]
+        ),
       ]);
       const notes   = notesRes.rows;
       const profile = profileRes.rows[0];
+      const dailySummaries = dailyRes.rows;
+      const prevChat = lastChatRes.rows[0];
 
-      if (notes.length || profile) {
+      if (notes.length || profile || dailySummaries.length) {
         memoryBlock = '\n\n## Memory\n';
 
         if (profile?.display_name) {
@@ -3729,6 +3739,32 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
           for (const n of notes) {
             memoryBlock += `- ${n.note}\n`;
           }
+        }
+
+        // Recent daily summaries (from nightly consolidation job)
+        if (dailySummaries.length) {
+          memoryBlock += '\nRecent conversation summaries:\n';
+          for (const d of dailySummaries) {
+            memoryBlock += `- ${d.summary_date}: ${d.summary}\n`;
+          }
+        }
+
+        // Activity digest — changes since last conversation
+        if (prevChat?.created_at) {
+          try {
+            const { rows: recentAudit } = await pool.query(`
+              SELECT entity_type, action, entity_label
+              FROM   mcogs_audit_log
+              WHERE  created_at > $1
+              ORDER BY created_at DESC LIMIT 10
+            `, [prevChat.created_at]);
+            if (recentAudit.length) {
+              memoryBlock += '\nChanges since your last conversation:\n';
+              for (const a of recentAudit) {
+                memoryBlock += `- ${a.action} ${a.entity_type}: ${a.entity_label || '(unnamed)'}\n`;
+              }
+            }
+          } catch { /* non-critical — skip activity digest */ }
         }
       }
     }

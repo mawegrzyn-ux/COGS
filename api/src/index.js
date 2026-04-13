@@ -58,6 +58,24 @@ app.use(express.urlencoded({ extended: true }));
 
     app.listen(PORT, '127.0.0.1', () => {
       console.log(`[api] Menu COGS API running on port ${PORT} (${process.env.NODE_ENV})`);
+
+      // ── Nightly memory consolidation — 02:07 UTC daily ──────────────────────
+      try {
+        const cron = require('node-cron');
+        const { runConsolidation } = require('./jobs/consolidateMemory');
+        cron.schedule('7 2 * * *', async () => {
+          console.log('[cron] Starting memory consolidation...');
+          try {
+            const result = await runConsolidation();
+            console.log('[cron] Memory consolidation complete:', JSON.stringify(result));
+          } catch (err) {
+            console.error('[cron] Memory consolidation failed:', err.message);
+          }
+        }, { timezone: 'UTC' });
+        console.log('[cron] Memory consolidation scheduled at 02:07 UTC daily');
+      } catch (err) {
+        console.warn('[cron] node-cron not available — memory consolidation disabled:', err.message);
+      }
     });
   } catch (err) {
     console.error('[startup] Fatal error:', err.message);
