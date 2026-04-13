@@ -3,6 +3,26 @@ import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
 import { PageHeader, Modal, Field, Spinner, Toast, Badge, ConfirmDialog } from '../components/ui'
 
+// ── Jira icon ────────────────────────────────────────────────────────────────
+
+function JiraIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="inline-block shrink-0">
+      <path d="M11.53 2c0 4.97 3.52 9 8.47 9H22v1.53c0 4.97-4.03 8.47-9 8.47h-1.53C6.5 21 2 16.5 2 11.53V2h9.53z" fill="#2684FF"/>
+      <path d="M11.53 2v9.53H2C2 6.56 6.56 2 11.53 2z" fill="url(#jira_g1)" fillOpacity=".4"/>
+      <path d="M20 11H11.53V21c4.47-.5 8.47-5.03 8.47-10z" fill="url(#jira_g2)" fillOpacity=".4"/>
+      <defs>
+        <linearGradient id="jira_g1" x1="2" y1="2" x2="11.53" y2="11.53" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" stopOpacity="0"/><stop offset="1" stopColor="#0052CC"/>
+        </linearGradient>
+        <linearGradient id="jira_g2" x1="20" y1="11" x2="11.53" y2="21" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" stopOpacity="0"/><stop offset="1" stopColor="#0052CC"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface Bug {
@@ -12,6 +32,7 @@ interface Bug {
   assigned_to: string | null; page: string | null
   steps_to_reproduce: string | null; environment: string | null
   labels: string[]; attachments: any[]; resolution: string | null
+  jira_key: string | null; jira_url: string | null; jira_synced_at: string | null
   created_at: string; updated_at: string
 }
 
@@ -24,7 +45,13 @@ interface BacklogItem {
   sprint: string | null; sort_order: number
   epic_id: number | null; epic_key: string | null; epic_summary: string | null
   child_count?: number; child_done?: number
+  jira_key: string | null; jira_url: string | null; jira_synced_at: string | null
   created_at: string; updated_at: string
+}
+
+interface JiraStatus {
+  configured: boolean; projectKey: string | null; baseUrl: string | null
+  linkedBugs: number; linkedBacklog: number
 }
 
 interface EpicSummary {
@@ -236,6 +263,10 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [canEditBug, setCanEditBug] = useState(false)
   const [canEditBacklog, setCanEditBacklog] = useState(false)
 
+  // ── Jira state ──────────────────────────────────────────────────────
+  const [jiraStatus, setJiraStatus] = useState<JiraStatus | null>(null)
+  const [jiraSyncing, setJiraSyncing] = useState<string | null>(null) // e.g. "bug-5" or "bulk"
+
   // ── Load functions ──────────────────────────────────────────────────────
 
   const loadBugs = useCallback(async () => {
@@ -276,9 +307,46 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     } catch {}
   }, [api])
 
+  // ── Jira helpers ─────────────────────────────────────────────────────
+  const loadJiraStatus = useCallback(async () => {
+    try {
+      const data = await api.get('/jira')
+      setJiraStatus(data || null)
+    } catch { setJiraStatus(null) }
+  }, [api])
+
+  async function jiraPush(type: 'bug' | 'backlog', id: number) {
+    const tag = `${type}-${id}`
+    setJiraSyncing(tag)
+    try {
+      const result = await api.post(`/jira/push/${type}/${id}`)
+      setToast({ message: `${result.action === 'created' ? 'Created' : 'Updated'} Jira issue ${result.jira_key}`, type: 'success' })
+      if (type === 'bug') loadBugs(); else loadBacklog()
+      loadJiraStatus()
+    } catch (err: any) {
+      setToast({ message: err?.body?.error?.message || 'Jira sync failed', type: 'error' })
+    } finally { setJiraSyncing(null) }
+  }
+
+  async function jiraPull(type: 'bug' | 'backlog', id: number) {
+    const tag = `${type}-${id}`
+    setJiraSyncing(tag)
+    try {
+      const result = await api.post(`/jira/pull/${type}/${id}`)
+      const changes = []
+      if (result.status_changed) changes.push(`status: ${result.status_changed.from} → ${result.status_changed.to}`)
+      if (result.priority_changed) changes.push(`priority: ${result.priority_changed.from} → ${result.priority_changed.to}`)
+      setToast({ message: changes.length ? `Updated: ${changes.join(', ')}` : 'Already in sync', type: 'success' })
+      if (type === 'bug') loadBugs(); else loadBacklog()
+    } catch (err: any) {
+      setToast({ message: err?.body?.error?.message || 'Pull failed', type: 'error' })
+    } finally { setJiraSyncing(null) }
+  }
+
   useEffect(() => { loadBugs() }, [loadBugs])
   useEffect(() => { loadBacklog() }, [loadBacklog])
   useEffect(() => { loadEpics() }, [loadEpics])
+  useEffect(() => { loadJiraStatus() }, [loadJiraStatus])
   useEffect(() => { localStorage.setItem('bb_tab', tab) }, [tab])
 
   // ── Bug handlers ────────────────────────────────────────────────────────
@@ -516,6 +584,22 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               {BUG_SEVERITIES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <div className="flex-1" />
+            {isDev && jiraStatus?.configured && (
+              <button className="btn-outline text-xs flex items-center gap-1" disabled={jiraSyncing === 'bulk'}
+                onClick={async () => {
+                  const ids = bugs.filter(b => !b.jira_key).map(b => b.id)
+                  if (!ids.length) { setToast({ message: 'All bugs already linked', type: 'success' }); return }
+                  setJiraSyncing('bulk')
+                  try {
+                    const r = await api.post('/jira/push/bulk', { bugs: ids })
+                    setToast({ message: `Pushed ${r.pushed} bugs to Jira${r.errors?.length ? ` (${r.errors.length} errors)` : ''}`, type: r.errors?.length ? 'error' : 'success' })
+                    loadBugs(); loadJiraStatus()
+                  } catch { setToast({ message: 'Bulk sync failed', type: 'error' }) }
+                  finally { setJiraSyncing(null) }
+                }}>
+                <JiraIcon /> {jiraSyncing === 'bulk' ? 'Syncing…' : 'Sync All to Jira'}
+              </button>
+            )}
             {isDev && <button className="btn-outline text-xs" onClick={() => exportJira('bugs')}>Export Jira</button>}
             <button className="btn-primary text-sm" onClick={() => setShowBugModal(true)}>+ Log Bug</button>
           </div>
@@ -528,7 +612,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs text-text-3 border-b border-border">
-                    <th className="px-3 py-2 w-24">Key</th>
+                    <th className="px-3 py-2 w-28">Key</th>
                     <th className="px-3 py-2">Summary</th>
                     <th className="px-3 py-2 w-24">Priority</th>
                     <th className="px-3 py-2 w-24">Severity</th>
@@ -542,7 +626,17 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   {bugs.map(b => (
                     <tr key={b.id} className="border-b border-border/50 hover:bg-surface-2 cursor-pointer"
                       onClick={() => openBugDetail(b)}>
-                      <td className="px-3 py-2 font-mono text-xs text-accent">{b.key}</td>
+                      <td className="px-3 py-2 font-mono text-xs">
+                        <span className="text-accent">{b.key}</span>
+                        {b.jira_key && (
+                          <a href={b.jira_url || '#'} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-blue-600 hover:underline"
+                            title={`Synced ${b.jira_synced_at ? new Date(b.jira_synced_at).toLocaleString() : ''}`}>
+                            <JiraIcon size={10} />{b.jira_key}
+                          </a>
+                        )}
+                      </td>
                       <td className="px-3 py-2 font-medium truncate max-w-[300px]">{b.summary}</td>
                       <td className="px-3 py-2"><PriorityBadge priority={b.priority} /></td>
                       <td className="px-3 py-2"><SeverityBadge severity={b.severity} /></td>
@@ -596,6 +690,22 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               {epics.map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary.length > 30 ? ep.summary.slice(0, 30) + '…' : ep.summary}</option>)}
             </select>
             <div className="flex-1" />
+            {isDev && jiraStatus?.configured && (
+              <button className="btn-outline text-xs flex items-center gap-1" disabled={jiraSyncing === 'bulk'}
+                onClick={async () => {
+                  const ids = backlog.filter(b => !b.jira_key).map(b => b.id)
+                  if (!ids.length) { setToast({ message: 'All items already linked', type: 'success' }); return }
+                  setJiraSyncing('bulk')
+                  try {
+                    const r = await api.post('/jira/push/bulk', { backlog: ids })
+                    setToast({ message: `Pushed ${r.pushed} items to Jira${r.errors?.length ? ` (${r.errors.length} errors)` : ''}`, type: r.errors?.length ? 'error' : 'success' })
+                    loadBacklog(); loadJiraStatus()
+                  } catch { setToast({ message: 'Bulk sync failed', type: 'error' }) }
+                  finally { setJiraSyncing(null) }
+                }}>
+                <JiraIcon /> {jiraSyncing === 'bulk' ? 'Syncing…' : 'Sync All to Jira'}
+              </button>
+            )}
             {isDev && <button className="btn-outline text-xs" onClick={() => exportJira('backlog')}>Export Jira</button>}
             {can('backlog', 'write') && <button className="btn-primary text-sm" onClick={() => setShowBacklogModal(true)}>+ Add Item</button>}
           </div>
@@ -638,7 +748,17 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                           </svg>
                         </td>
                       )}
-                      <td className="px-3 py-2 font-mono text-xs text-accent">{b.key}</td>
+                      <td className="px-3 py-2 font-mono text-xs">
+                        <span className="text-accent">{b.key}</span>
+                        {b.jira_key && (
+                          <a href={b.jira_url || '#'} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-blue-600 hover:underline"
+                            title={`Synced ${b.jira_synced_at ? new Date(b.jira_synced_at).toLocaleString() : ''}`}>
+                            <JiraIcon size={10} />{b.jira_key}
+                          </a>
+                        )}
+                      </td>
                       <td className="px-3 py-2 font-medium truncate max-w-[300px]">
                         {b.item_type === 'epic' && <span className="text-purple-600 mr-1">⬡</span>}
                         {b.summary}
@@ -807,7 +927,30 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   <div>Created: {fmtDate(bugDetail.created_at)}</div>
                   <div>Updated: {fmtDate(bugDetail.updated_at)}</div>
                 </div>
+                {bugDetail.jira_key && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <JiraIcon size={14} />
+                    <a href={bugDetail.jira_url || '#'} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-mono">{bugDetail.jira_key}</a>
+                    <span className="text-text-3">Synced {bugDetail.jira_synced_at ? new Date(bugDetail.jira_synced_at).toLocaleString() : ''}</span>
+                  </div>
+                )}
                 <div className="flex justify-end gap-2 pt-1">
+                  {isDev && jiraStatus?.configured && (
+                    <>
+                      <button className="btn-outline text-xs flex items-center gap-1"
+                        disabled={jiraSyncing === `bug-${bugDetail.id}`}
+                        onClick={() => jiraPush('bug', bugDetail.id)}>
+                        <JiraIcon size={12} /> {bugDetail.jira_key ? 'Update in Jira' : 'Push to Jira'}
+                      </button>
+                      {bugDetail.jira_key && (
+                        <button className="btn-outline text-xs flex items-center gap-1"
+                          disabled={jiraSyncing === `bug-${bugDetail.id}`}
+                          onClick={() => jiraPull('bug', bugDetail.id)}>
+                          <JiraIcon size={12} /> Pull from Jira
+                        </button>
+                      )}
+                    </>
+                  )}
                   {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBugDetail(null); setDeleteBug(bugDetail) }}>Delete</button>}
                   <button className="btn-ghost" onClick={() => setBugDetail(null)}>Close</button>
                 </div>
@@ -974,7 +1117,30 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   <div>Created: {fmtDate(backlogDetail.created_at)}</div>
                   <div>Updated: {fmtDate(backlogDetail.updated_at)}</div>
                 </div>
+                {backlogDetail.jira_key && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <JiraIcon size={14} />
+                    <a href={backlogDetail.jira_url || '#'} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-mono">{backlogDetail.jira_key}</a>
+                    <span className="text-text-3">Synced {backlogDetail.jira_synced_at ? new Date(backlogDetail.jira_synced_at).toLocaleString() : ''}</span>
+                  </div>
+                )}
                 <div className="flex justify-end gap-2 pt-1">
+                  {isDev && jiraStatus?.configured && (
+                    <>
+                      <button className="btn-outline text-xs flex items-center gap-1"
+                        disabled={jiraSyncing === `backlog-${backlogDetail.id}`}
+                        onClick={() => jiraPush('backlog', backlogDetail.id)}>
+                        <JiraIcon size={12} /> {backlogDetail.jira_key ? 'Update in Jira' : 'Push to Jira'}
+                      </button>
+                      {backlogDetail.jira_key && (
+                        <button className="btn-outline text-xs flex items-center gap-1"
+                          disabled={jiraSyncing === `backlog-${backlogDetail.id}`}
+                          onClick={() => jiraPull('backlog', backlogDetail.id)}>
+                          <JiraIcon size={12} /> Pull from Jira
+                        </button>
+                      )}
+                    </>
+                  )}
                   {isDev && <button className="btn-ghost text-red-600 text-sm" onClick={() => { setBacklogDetail(null); setDeleteBacklog(backlogDetail) }}>Delete</button>}
                   <button className="btn-ghost" onClick={() => setBacklogDetail(null)}>Close</button>
                 </div>

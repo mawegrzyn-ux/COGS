@@ -135,6 +135,9 @@ router.use('/seed',               ...can('settings', 'write'),                  
 router.use('/feedback',           auth,                                               require('./feedback'));
 router.use('/internal/feedback',                                                       require('./internal-feedback'));
 
+// ── Jira integration (admin-only) ────────────────────────────────────────────
+router.use('/jira',              ...can('settings', 'write'),                           require('./jira'));
+
 // ── Bugs & Backlog (always local DB) ─────────────────────────────────────────
 router.use('/bugs',              ...can('bugs', 'read'),    write('bugs'),             require('./bugs'));
 router.use('/backlog',           ...can('backlog', 'read'), write('backlog'),           require('./backlog'));

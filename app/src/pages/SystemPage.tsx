@@ -4,6 +4,7 @@ import PosTesterPage from './PosTesterPage'
 import BugsBacklogPage from './BugsBacklogPage'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
+import { Spinner } from '../components/ui'
 
 // ── Shared doc helpers ─────────────────────────────────────────────────────────
 
@@ -1048,11 +1049,160 @@ function ClaudeDocSection() {
   )
 }
 
+// ── Jira Sync Section ─────────────────────────────────────────────────────────
+
+function JiraSyncSection() {
+  const api = useApi()
+  const [status, setStatus] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState<string | null>(null)
+  const [result, setResult] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api.get('/jira')
+      setStatus(data)
+    } catch { setStatus(null) }
+    finally { setLoading(false) }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="p-6"><Spinner /></div>
+
+  return (
+    <div className="p-6 max-w-3xl space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-text-1 flex items-center gap-2">
+          <span className="text-xl">🔗</span> Jira Sync
+        </h2>
+        <p className="text-sm text-text-3 mt-1">Sync bugs and backlog items with a Jira Cloud project.</p>
+      </div>
+
+      {!status?.configured ? (
+        <div className="card p-6 text-center space-y-3">
+          <div className="text-4xl">⚙️</div>
+          <h3 className="font-semibold text-text-1">Not Configured</h3>
+          <p className="text-sm text-text-3 max-w-md mx-auto">
+            Set up your Jira credentials in <strong>System → AI → Jira Integration</strong> to enable two-way sync between COGS and your Jira board.
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Status cards */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="card p-4">
+              <div className="text-xs text-text-3 mb-1">Project</div>
+              <div className="text-lg font-bold font-mono text-accent">{status.projectKey}</div>
+              <div className="text-[10px] text-text-3 mt-1 truncate">{status.baseUrl}</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-xs text-text-3 mb-1">Linked Bugs</div>
+              <div className="text-lg font-bold text-text-1">{status.linkedBugs}</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-xs text-text-3 mb-1">Linked Backlog</div>
+              <div className="text-lg font-bold text-text-1">{status.linkedBacklog}</div>
+            </div>
+          </div>
+
+          {/* Bulk actions */}
+          <div className="card p-5 space-y-4">
+            <h3 className="font-semibold text-text-1 text-sm">Bulk Operations</h3>
+
+            <div className="flex flex-wrap gap-3">
+              <button className="btn-primary text-sm px-4 py-2" disabled={!!syncing}
+                onClick={async () => {
+                  setSyncing('push-all')
+                  try {
+                    // Fetch all unlinked items
+                    const [bugsData, backlogData] = await Promise.all([
+                      api.get('/bugs?limit=500'),
+                      api.get('/backlog?limit=500'),
+                    ])
+                    const bugIds = (bugsData?.rows || []).filter((b: any) => !b.jira_key).map((b: any) => b.id)
+                    const backlogIds = (backlogData?.rows || []).filter((b: any) => !b.jira_key).map((b: any) => b.id)
+                    if (!bugIds.length && !backlogIds.length) {
+                      setResult({ message: 'Everything is already linked to Jira', type: 'success' })
+                      return
+                    }
+                    const r = await api.post('/jira/push/bulk', { bugs: bugIds, backlog: backlogIds })
+                    setResult({ message: `Pushed ${r.pushed} items${r.errors?.length ? ` (${r.errors.length} errors)` : ''}`, type: r.errors?.length ? 'error' : 'success' })
+                    load()
+                  } catch { setResult({ message: 'Bulk push failed', type: 'error' }) }
+                  finally { setSyncing(null) }
+                }}>
+                {syncing === 'push-all' ? 'Pushing…' : '↑ Push All Unlinked to Jira'}
+              </button>
+
+              <button className="btn-outline text-sm px-4 py-2" disabled={!!syncing}
+                onClick={async () => {
+                  setSyncing('pull-all')
+                  try {
+                    const r = await api.post('/jira/pull/all')
+                    setResult({ message: `Pulled ${r.pulled} items${r.errors?.length ? ` (${r.errors.length} errors)` : ''}`, type: r.errors?.length ? 'error' : 'success' })
+                    load()
+                  } catch { setResult({ message: 'Bulk pull failed', type: 'error' }) }
+                  finally { setSyncing(null) }
+                }}>
+                {syncing === 'pull-all' ? 'Pulling…' : '↓ Pull All from Jira'}
+              </button>
+            </div>
+
+            {result && (
+              <div className={`text-sm px-3 py-2 rounded ${result.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {result.type === 'success' ? '✓' : '✗'} {result.message}
+              </div>
+            )}
+          </div>
+
+          {/* Mapping reference */}
+          <div className="card p-5 space-y-3">
+            <h3 className="font-semibold text-text-1 text-sm">Status Mapping</h3>
+            <div className="grid grid-cols-2 gap-6 text-xs">
+              <div>
+                <div className="font-medium text-text-2 mb-2">Bugs</div>
+                <table className="w-full">
+                  <tbody>
+                    {[['open', 'To Do'], ['in_progress', 'In Progress'], ['resolved', 'Done'], ['closed', 'Done'], ['wont_fix', "Won't Do"]].map(([cogs, jira]) => (
+                      <tr key={cogs} className="border-b border-border/30">
+                        <td className="py-1 font-mono text-text-2">{cogs}</td>
+                        <td className="py-1 text-text-3">→</td>
+                        <td className="py-1 text-text-2">{jira}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div>
+                <div className="font-medium text-text-2 mb-2">Backlog</div>
+                <table className="w-full">
+                  <tbody>
+                    {[['backlog', 'Backlog'], ['todo', 'To Do'], ['in_progress', 'In Progress'], ['in_review', 'In Review'], ['done', 'Done'], ['wont_do', "Won't Do"]].map(([cogs, jira]) => (
+                      <tr key={cogs} className="border-b border-border/30">
+                        <td className="py-1 font-mono text-text-2">{cogs}</td>
+                        <td className="py-1 text-text-3">→</td>
+                        <td className="py-1 text-text-2">{jira}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Section definitions ────────────────────────────────────────────────────────
 
 type Section =
   | 'ai'
   | 'bugs-backlog'   // Bugs & Backlog tracker
+  | 'jira'           // Jira sync dashboard — admin-only
   | 'audit-log'      // Central audit trail — admin-only
   | 'storage'        // Media storage config (local vs S3) — admin-only
   | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
@@ -1071,22 +1221,27 @@ interface SectionDef {
   label:     string
   /** Permission level required: 'admin' = settings:write, 'dev' = is_dev flag. Omit for public. */
   gate?:     'admin' | 'dev'
+  /** If true, this section is a documentation/reference page (rendered below separator). */
+  isDoc?:    boolean
 }
 
 const SECTIONS: SectionDef[] = [
+  // ── Functional sections ──
   { id: 'ai',               icon: '🤖', label: 'AI' },
   { id: 'bugs-backlog',     icon: '🐛', label: 'Bugs & Backlog' },
+  { id: 'jira',             icon: '🔗', label: 'Jira Sync',        gate: 'admin' },
   { id: 'audit-log',        icon: '📋', label: 'Audit Log',        gate: 'admin' },
   { id: 'storage',          icon: '☁️', label: 'Storage',           gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
   { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
-  { id: 'architecture',     icon: '🏗️', label: 'Architecture' },
-  { id: 'api-reference',    icon: '📡', label: 'API Reference' },
-  { id: 'security',         icon: '🔒', label: 'Security' },
-  { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting' },
-  { id: 'domain-migration', icon: '🌐', label: 'Domain Migration' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
-  { id: 'claude-doc',       icon: '📄', label: 'CLAUDE.md',       gate: 'dev'   },
+  // ── Documentation / reference ──
+  { id: 'architecture',     icon: '🏗️', label: 'Architecture',     isDoc: true },
+  { id: 'api-reference',    icon: '📡', label: 'API Reference',    isDoc: true },
+  { id: 'security',         icon: '🔒', label: 'Security',         isDoc: true },
+  { id: 'troubleshooting',  icon: '🔧', label: 'Troubleshooting',  isDoc: true },
+  { id: 'domain-migration', icon: '🌐', label: 'Domain Migration', isDoc: true },
+  { id: 'claude-doc',       icon: '📄', label: 'CLAUDE.md',       gate: 'dev', isDoc: true },
 ]
 
 // ── SystemPage ─────────────────────────────────────────────────────────────────
@@ -1118,6 +1273,9 @@ export default function SystemPage() {
     switch (active) {
       case 'ai':               return <SettingsPage embedded initialTab="ai" />
       case 'bugs-backlog':     return <BugsBacklogPage embedded />
+      case 'jira':             return canManageSettings
+                                  ? <JiraSyncSection />
+                                  : <GatedFallback reason="admin" />
       case 'audit-log':        return canManageSettings
                                   ? <AuditLogSection />
                                   : <GatedFallback reason="admin" />
@@ -1154,30 +1312,45 @@ export default function SystemPage() {
         </div>
 
         <nav className="py-3 flex-1">
-          {visibleSections.map(section => (
-            <button
-              key={section.id}
-              onClick={() => setActive(section.id)}
-              className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium transition-colors text-left
-                ${active === section.id
-                  ? 'bg-accent-dim text-accent font-semibold'
-                  : 'text-text-2 hover:bg-surface-2 hover:text-text-1'
-                }`}
-            >
-              <span className="text-base leading-none shrink-0">{section.icon}</span>
-              <span className="flex-1">{section.label}</span>
-              {section.gate === 'dev' && (
-                <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">
-                  DEV
-                </span>
-              )}
-              {section.gate === 'admin' && (
-                <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">
-                  ADMIN
-                </span>
-              )}
-            </button>
-          ))}
+          {(() => {
+            const functional = visibleSections.filter(s => !s.isDoc)
+            const docs       = visibleSections.filter(s =>  s.isDoc)
+            const renderBtn  = (section: SectionDef) => (
+              <button
+                key={section.id}
+                onClick={() => setActive(section.id)}
+                className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium transition-colors text-left
+                  ${active === section.id
+                    ? 'bg-accent-dim text-accent font-semibold'
+                    : 'text-text-2 hover:bg-surface-2 hover:text-text-1'
+                  }`}
+              >
+                <span className="text-base leading-none shrink-0">{section.icon}</span>
+                <span className="flex-1">{section.label}</span>
+                {section.gate === 'dev' && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-purple-100 text-purple-700 leading-none">
+                    DEV
+                  </span>
+                )}
+                {section.gate === 'admin' && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">
+                    ADMIN
+                  </span>
+                )}
+              </button>
+            )
+            return (
+              <>
+                {functional.map(renderBtn)}
+                {docs.length > 0 && (
+                  <div className="mx-4 my-2 border-t border-border">
+                    <p className="text-[10px] font-semibold text-text-3 uppercase tracking-wider mt-2 mb-0.5 px-0">Documentation</p>
+                  </div>
+                )}
+                {docs.map(renderBtn)}
+              </>
+            )
+          })()}
         </nav>
       </aside>
 

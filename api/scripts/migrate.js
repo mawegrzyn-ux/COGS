@@ -2138,6 +2138,19 @@ const migrations = [
      -- Bump backlog sequence past highest seeded key
      PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1400));
    END $$`,
+
+  // ── Step 112: Jira integration columns on bugs + backlog ──────────────
+  `DO $$ BEGIN ALTER TABLE mcogs_bugs ADD COLUMN jira_key VARCHAR(50); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_bugs ADD COLUMN jira_id VARCHAR(50); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_bugs ADD COLUMN jira_synced_at TIMESTAMPTZ; EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_bugs ADD COLUMN jira_url VARCHAR(500); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_bugs_jira_key ON mcogs_bugs(jira_key) WHERE jira_key IS NOT NULL`,
+
+  `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_key VARCHAR(50); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_id VARCHAR(50); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_synced_at TIMESTAMPTZ; EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_url VARCHAR(500); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_jira_key ON mcogs_backlog(jira_key) WHERE jira_key IS NOT NULL`,
 ];
 
 async function runMigrations(pool) {

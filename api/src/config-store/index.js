@@ -29,6 +29,10 @@ const AI_KEY_NAMES = [
   'CLAUDE_CODE_API_KEY',
   'GITHUB_PAT',
   'GITHUB_REPO',
+  'JIRA_BASE_URL',
+  'JIRA_EMAIL',
+  'JIRA_API_TOKEN',
+  'JIRA_PROJECT_KEY',
 ];
 
 // ── DB connection ────────────────────────────────────────────────────────────

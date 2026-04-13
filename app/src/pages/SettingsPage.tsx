@@ -1174,6 +1174,10 @@ interface AiKeyStatus {
   claude_code_key_set: boolean
   github_pat_set:      boolean
   github_repo_set:     boolean
+  jira_base_url_set:   boolean
+  jira_email_set:      boolean
+  jira_token_set:      boolean
+  jira_project_set:    boolean
 }
 
 interface UsageSummary {
@@ -2074,12 +2078,18 @@ function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
   const [githubPat,    setGithubPat]    = useState('')
   const [githubRepo,   setGithubRepo]   = useState('')
+  const [jiraUrl,      setJiraUrl]      = useState('')
+  const [jiraEmail,    setJiraEmail]    = useState('')
+  const [jiraToken,    setJiraToken]    = useState('')
+  const [jiraProject,  setJiraProject]  = useState('')
+  const [jiraTesting,  setJiraTesting]  = useState(false)
+  const [jiraTestResult, setJiraTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
@@ -2153,6 +2163,10 @@ function AiTab() {
     if (brave.trim())      payload.BRAVE_SEARCH_API_KEY = brave.trim()
     if (githubPat.trim())  payload.GITHUB_PAT           = githubPat.trim()
     if (githubRepo.trim()) payload.GITHUB_REPO          = githubRepo.trim()
+    if (jiraUrl.trim())    payload.JIRA_BASE_URL        = jiraUrl.trim().replace(/\/+$/, '')
+    if (jiraEmail.trim())  payload.JIRA_EMAIL           = jiraEmail.trim()
+    if (jiraToken.trim())  payload.JIRA_API_TOKEN       = jiraToken.trim()
+    if (jiraProject.trim()) payload.JIRA_PROJECT_KEY    = jiraProject.trim().toUpperCase()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -2171,7 +2185,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -2316,11 +2330,107 @@ function AiTab() {
         </Field>
       </div>
 
+      {/* ── Jira Integration ── */}
+      <div className="mt-6 pt-5 border-t border-border">
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="text-base font-bold text-text-1">Jira Integration</h2>
+          <span className={`w-2 h-2 rounded-full ${status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set ? 'bg-green-500' : 'bg-gray-300'}`} />
+          <span className="text-[10px] text-text-3">
+            {status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set ? 'Configured' : 'Not configured'}
+          </span>
+        </div>
+        <p className="text-sm text-text-3 mb-4">Sync bugs and backlog items to a Jira Cloud project. Requires a Jira API token from <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">id.atlassian.com</a>.</p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Jira Base URL">
+            <input
+              type="text"
+              className="input w-full font-mono text-sm"
+              value={jiraUrl}
+              onChange={e => setJiraUrl(e.target.value)}
+              placeholder={status.jira_base_url_set ? '(configured — leave blank to keep)' : 'https://yourteam.atlassian.net'}
+              autoComplete="off"
+            />
+            {status.jira_base_url_set && (
+              <button onClick={() => handleClear('JIRA_BASE_URL')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira Project Key">
+            <input
+              type="text"
+              className="input w-full font-mono text-sm uppercase"
+              value={jiraProject}
+              onChange={e => setJiraProject(e.target.value)}
+              placeholder={status.jira_project_set ? '(configured — leave blank to keep)' : 'COGS'}
+              autoComplete="off"
+            />
+            {status.jira_project_set && (
+              <button onClick={() => handleClear('JIRA_PROJECT_KEY')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira Account Email">
+            <input
+              type="email"
+              className="input w-full text-sm"
+              value={jiraEmail}
+              onChange={e => setJiraEmail(e.target.value)}
+              placeholder={status.jira_email_set ? '(configured — leave blank to keep)' : 'you@company.com'}
+              autoComplete="off"
+            />
+            {status.jira_email_set && (
+              <button onClick={() => handleClear('JIRA_EMAIL')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira API Token">
+            <input
+              type="password"
+              className="input w-full font-mono text-sm"
+              value={jiraToken}
+              onChange={e => setJiraToken(e.target.value)}
+              placeholder={status.jira_token_set ? '••••••••  (leave blank to keep existing)' : 'ATATT3x…'}
+              autoComplete="off"
+            />
+            {status.jira_token_set && (
+              <button onClick={() => handleClear('JIRA_API_TOKEN')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+        </div>
+
+        {status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set && (
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              className="btn-outline text-xs px-3 py-1.5"
+              onClick={async () => {
+                setJiraTesting(true)
+                setJiraTestResult(null)
+                try {
+                  const r = await api.post('/jira/test')
+                  setJiraTestResult({ ok: true, message: `Connected as ${r.displayName} (${r.emailAddress})` })
+                } catch (err: any) {
+                  setJiraTestResult({ ok: false, message: err?.body?.error?.message || err?.message || 'Connection failed' })
+                } finally { setJiraTesting(false) }
+              }}
+              disabled={jiraTesting}
+            >
+              {jiraTesting ? 'Testing…' : 'Test Connection'}
+            </button>
+            {jiraTestResult && (
+              <span className={`text-xs ${jiraTestResult.ok ? 'text-green-600' : 'text-red-600'}`}>
+                {jiraTestResult.ok ? '✓' : '✗'} {jiraTestResult.message}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>

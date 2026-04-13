@@ -19,6 +19,10 @@ const _keys = {
   CLAUDE_CODE_API_KEY:  null,
   GITHUB_PAT:           null,
   GITHUB_REPO:          null,
+  JIRA_BASE_URL:        null,
+  JIRA_EMAIL:           null,
+  JIRA_API_TOKEN:       null,
+  JIRA_PROJECT_KEY:     null,
 };
 
 // One-time migration: pre-feature, AI keys lived in mcogs_settings.data->ai_keys
@@ -95,6 +99,7 @@ async function init() {
       brave:       !!_keys.BRAVE_SEARCH_API_KEY,
       claude_code: !!_keys.CLAUDE_CODE_API_KEY,
       github:      !!_keys.GITHUB_PAT,
+      jira:        !!_keys.JIRA_API_TOKEN,
     });
   } catch (err) {
     console.warn('[aiConfig] Could not load keys from config store:', err.message);
@@ -121,6 +126,10 @@ function status() {
     claude_code_key_set:  !!_keys.CLAUDE_CODE_API_KEY,
     github_pat_set:       !!_keys.GITHUB_PAT,
     github_repo_set:      !!_keys.GITHUB_REPO,
+    jira_base_url_set:    !!_keys.JIRA_BASE_URL,
+    jira_email_set:       !!_keys.JIRA_EMAIL,
+    jira_token_set:       !!_keys.JIRA_API_TOKEN,
+    jira_project_set:     !!_keys.JIRA_PROJECT_KEY,
   };
 }
 
