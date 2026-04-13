@@ -2024,6 +2024,36 @@ This pattern is used by `GET /ingredients/stats` for the Inventory page header b
 
 The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
 
+### End-of-Session Protocol
+
+When the user initiates end of session (e.g. "wrap up", "end session", "that's all"), Claude must perform the following steps **in order**:
+
+**1. Update all documentation:**
+- `CLAUDE.md` — update any sections affected by this session's changes (tables, tool counts, page descriptions, schema, routes, etc.)
+- `docs/user-guide.md` — update user-facing documentation if UI or workflow changed
+- `app/src/pages/HelpPage.tsx` — update in-app help if relevant features changed
+- `app/src/pages/SystemPage.tsx` — update system docs sections if architecture changed
+- Any other relevant docs (`docs/AI.md`, `docs/DATABASE.md`, etc.)
+
+**2. Update backlog and issue log:**
+- Add new bugs found during the session to `mcogs_bugs` via migration step seed (append to `api/scripts/migrate.js` seed data)
+- Add new backlog items discovered during the session to `mcogs_backlog` via migration step seed
+- Update status of resolved bugs/backlog items if applicable
+- Use `ON CONFLICT (key) DO NOTHING` pattern for idempotent seeding
+
+**3. Impact analysis (retro):**
+- List all files modified and created during the session
+- Identify which existing features may be affected by the changes
+- Flag any cross-cutting concerns (e.g. changes to shared hooks, UI components, API middleware)
+- Note any regressions or breaking changes introduced
+
+**4. Risk and gap assessment:**
+- Identify untested edge cases or scenarios
+- Flag any incomplete implementations or TODO items left behind
+- Highlight security considerations if applicable
+- Recommend specific actions for the user (e.g. "test the X flow manually", "run migration on staging first", "review Y before deploying")
+- Present as a clear, actionable list
+
 ### Media Library Selection Behaviour
 
 The Media Library (`app/src/components/MediaLibrary.tsx`) uses a **focus-vs-select** model with two modes that transition automatically:

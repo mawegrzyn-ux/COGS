@@ -324,6 +324,23 @@ export default function AppLayout() {
 
   const pepperToggle = useCallback(() => setPepperOpen(o => !o), [])
 
+  // ── Keyboard shortcut: Ctrl+Shift+P (or Cmd+Shift+P) → open/focus Pepper ──
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        if (!pepperOpen) {
+          setPepperOpen(true) // opening auto-focuses via AiChat useEffect
+        } else {
+          // Already open — dispatch focus event so AiChat re-focuses the textarea
+          window.dispatchEvent(new CustomEvent('pepper-focus'))
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [pepperOpen])
+
   /*
     Layout approach for preserving AiChat across mode switches (never unmount):
 

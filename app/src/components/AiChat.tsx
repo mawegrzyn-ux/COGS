@@ -547,6 +547,16 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
     wasStreaming.current = streaming
   }, [streaming, pepperOpen, view])
 
+  // Listen for pepper-focus event (keyboard shortcut when already open)
+  useEffect(() => {
+    function onFocus() {
+      if (view !== 'chat') setView('chat')
+      setTimeout(() => inputRef.current?.focus(), 80)
+    }
+    window.addEventListener('pepper-focus', onFocus)
+    return () => window.removeEventListener('pepper-focus', onFocus)
+  }, [view])
+
   // Fetch monthly usage when panel opens and after each response completes
   const refreshUsage = useCallback(async () => {
     try {
