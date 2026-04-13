@@ -2284,6 +2284,25 @@ const migrations = [
        ON CONFLICT (role_id, feature) DO NOTHING;
      END LOOP;
    END $$`,
+
+  // ── Step 115: Seed backlog — Pepper tongue tab + TS build fixes ───────────
+  `DO $$ DECLARE sort_n INTEGER;
+   BEGIN
+     SELECT COALESCE(MAX(sort_order), 0) + 1 INTO sort_n FROM mcogs_backlog;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES
+       ('BACK-1410', 'Pepper button redesign — floating tongue tab on bottom edge',
+        'Moved Pepper AI button from sidebar to a floating tongue tab centered on the bottom screen edge. Small rounded-top pill with Pepper icon + name. Toggles the Pepper panel open/closed. Uses accent green when active, subtle border when inactive. Removed old sidebar Pepper button entirely.',
+        'improvement', 'medium', 'done', '["ui","pepper"]'::jsonb, sort_n),
+       ('BACK-1411', 'Fix TS build errors — DocLibrary unused handleEdit, HelpPage type narrowing',
+        'Removed unused handleEdit function from DocLibrary.tsx (TS6133). Fixed HelpPage.tsx type narrowing issue where mode toggle buttons had unreachable comparisons (TS2367) — hardcoded the active/inactive styles in each branch since the mode is already known.',
+        'task', 'low', 'done', '["bugfix","typescript"]'::jsonb, sort_n + 1)
+     ON CONFLICT (key) DO NOTHING;
+
+     -- Bump backlog sequence past new keys
+     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1411));
+   END $$`,
 ];
 
 async function runMigrations(pool) {

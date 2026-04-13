@@ -240,11 +240,6 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
     openView(full)
   }
 
-  async function handleEdit(doc: Doc) {
-    const full = await loadFullDoc(doc.id)
-    openEdit(full)
-  }
-
   async function handleSave() {
     if (!editDoc?.title) { setToast({ message: 'Title is required', type: 'error' }); return }
     setSaving(true)

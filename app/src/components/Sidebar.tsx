@@ -28,10 +28,7 @@ const NAV_ITEMS: NavItem[] = [
 
 const STORAGE_KEY = 'mcogs_sidebar_collapsed'
 
-export default function Sidebar({ pepperOpen = false, onPepperToggle }: {
-  pepperOpen?: boolean
-  onPepperToggle?: () => void
-}) {
+export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY) === 'true' } catch { return false }
   })
@@ -97,33 +94,6 @@ export default function Sidebar({ pepperOpen = false, onPepperToggle }: {
           )
         })}
       </nav>
-
-      {/* Pepper AI button — toggles panel open/closed */}
-      <div className={`px-2 pb-1 ${collapsed ? 'flex justify-center' : ''}`}>
-        <button
-          onClick={() => onPepperToggle?.()}
-          title={pepperOpen ? 'Close Pepper' : 'Open Pepper'}
-          className={[
-            'flex items-center gap-3 rounded px-2 py-2 transition-colors text-sm font-semibold w-full cursor-pointer',
-            pepperOpen
-              ? 'bg-accent-dim text-accent'
-              : 'text-text-2 hover:bg-surface-2 hover:text-text-1',
-          ].join(' ')}
-        >
-          {/* Pepper cog icon — monochrome, inherits text color */}
-          <svg viewBox="-100 -100 200 200" width="18" height="18" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
-            <circle cx="0" cy="0" r="66" fill="currentColor"/>
-            <g fill="currentColor">
-              {[0,30,60,90,120,150,180,210,240,270,300,330].map(deg => (
-                <rect key={deg} x="-9" y="-80" width="18" height="20" rx="3" transform={`rotate(${deg})`}/>
-              ))}
-            </g>
-            <circle cx="0" cy="0" r="44" fill="var(--surface)"/>
-            <circle cx="0" cy="0" r="26" fill="currentColor"/>
-          </svg>
-          {!collapsed && <span>Pepper</span>}
-        </button>
-      </div>
 
       {/* Install as app */}
       {!collapsed && (

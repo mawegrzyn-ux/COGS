@@ -364,10 +364,7 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen overflow-hidden bg-surface-2">
       <div className="print:hidden flex flex-col self-stretch">
-        <Sidebar
-          pepperOpen={pepperOpen}
-          onPepperToggle={pepperToggle}
-        />
+        <Sidebar />
       </div>
 
       {/*
@@ -447,6 +444,38 @@ export default function AppLayout() {
         open={mediaOpen}
         onClose={() => setMediaOpen(false)}
       />
+
+      {/* ── Pepper floating tongue tab ──────────────────────────────────────── */}
+      <button
+        onClick={pepperToggle}
+        className={[
+          'pepper-tongue pepper-ui fixed z-50 flex items-center gap-1.5 rounded-t-lg shadow-lg border border-b-0 transition-all duration-200 cursor-pointer select-none print:hidden',
+          pepperOpen
+            ? 'bg-accent text-white border-accent shadow-accent/20'
+            : 'bg-surface text-accent border-border hover:bg-accent-dim hover:shadow-md',
+        ].join(' ')}
+        style={{
+          bottom: 0,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          padding: '5px 14px 3px 10px',
+          fontSize: 12,
+        }}
+        title={pepperOpen ? 'Close Pepper' : 'Open Pepper'}
+      >
+        {/* Pepper icon — small */}
+        <svg viewBox="-100 -100 200 200" width="14" height="14" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+          <circle cx="0" cy="0" r="66" fill="currentColor"/>
+          <g fill="currentColor">
+            {[0,60,120,180,240,300].map(deg => (
+              <rect key={deg} x="-10" y="-82" width="20" height="22" rx="4" transform={`rotate(${deg})`}/>
+            ))}
+          </g>
+          <circle cx="0" cy="0" r="44" fill={pepperOpen ? 'var(--accent)' : 'var(--surface)'}/>
+          <circle cx="0" cy="0" r="26" fill="currentColor"/>
+        </svg>
+        <span className="font-semibold tracking-wide" style={{ lineHeight: 1 }}>Pepper</span>
+      </button>
     </div>
   )
 }

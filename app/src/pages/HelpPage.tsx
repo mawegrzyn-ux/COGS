@@ -145,9 +145,9 @@ export default function HelpPage() {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface shrink-0">
-          <button className={`px-3 py-1.5 text-xs rounded-lg font-medium ${helpMode === 'guide' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          <button className="px-3 py-1.5 text-xs rounded-lg font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
             onClick={() => setHelpMode('guide')}>Guide</button>
-          <button className={`px-3 py-1.5 text-xs rounded-lg font-medium ${helpMode === 'library' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          <button className="px-3 py-1.5 text-xs rounded-lg font-medium bg-accent text-white"
             onClick={() => setHelpMode('library')}>Library</button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
@@ -167,9 +167,9 @@ export default function HelpPage() {
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <div className="flex items-center gap-1 mb-2">
-            <button className={`px-2 py-1 text-[10px] rounded font-medium ${helpMode === 'guide' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            <button className="px-2 py-1 text-[10px] rounded font-medium bg-accent text-white"
               onClick={() => setHelpMode('guide')}>Guide</button>
-            <button className={`px-2 py-1 text-[10px] rounded font-medium ${helpMode === 'library' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            <button className="px-2 py-1 text-[10px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
               onClick={() => setHelpMode('library')}>Library</button>
           </div>
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
