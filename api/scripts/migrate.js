@@ -2151,6 +2151,103 @@ const migrations = [
   `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_synced_at TIMESTAMPTZ; EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
   `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_url VARCHAR(500); EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_jira_key ON mcogs_backlog(jira_key) WHERE jira_key IS NOT NULL`,
+
+  // ── Step 112b: Seed Jira Integration epic + stories ────────────────────
+  `DO $$ DECLARE
+     eid INTEGER;
+     sort_n INTEGER;
+   BEGIN
+     SELECT COALESCE(MAX(sort_order), 0) + 1 INTO sort_n FROM mcogs_backlog;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1330', 'Jira Integration',
+       'Two-way sync between COGS Bugs & Backlog and Jira Cloud. Encrypted credential storage, push/pull individual or bulk, status/priority mapping, Jira badges in UI.',
+       'epic', 'high', 'done', '["feature-doc","jira"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1330';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1331', 'Jira credential storage — 4 keys in encrypted config store (base URL, email, token, project key)', NULL, 'story', 'high', 'done', '["feature-doc","jira"]'::jsonb, sort_n, eid),
+       ('BACK-1332', 'Jira REST API v3 helper — create/update/get/transition issues, search, comments, test connection', NULL, 'story', 'high', 'done', '["feature-doc","jira"]'::jsonb, sort_n+1, eid),
+       ('BACK-1333', 'Jira sync API route — push/pull single + bulk, unlink, status endpoint', NULL, 'story', 'high', 'done', '["feature-doc","jira"]'::jsonb, sort_n+2, eid),
+       ('BACK-1334', 'DB migration — jira_key, jira_id, jira_synced_at, jira_url columns on bugs + backlog', NULL, 'story', 'medium', 'done', '["feature-doc","jira"]'::jsonb, sort_n+3, eid),
+       ('BACK-1335', 'Settings → AI — Jira config card with test connection button', NULL, 'story', 'medium', 'done', '["feature-doc","jira"]'::jsonb, sort_n+4, eid),
+       ('BACK-1336', 'Bugs & Backlog page — Jira badges, sync buttons, bulk sync, per-item push/pull in modals', NULL, 'story', 'high', 'done', '["feature-doc","jira"]'::jsonb, sort_n+5, eid),
+       ('BACK-1337', 'System → Jira Sync section — dashboard with linked counts, bulk ops, status mapping reference', NULL, 'story', 'medium', 'done', '["feature-doc","jira"]'::jsonb, sort_n+6, eid)
+     ON CONFLICT (key) DO NOTHING;
+   END $$`,
+
+  // ── Step 113: Link orphan stories/tasks to relevant epics ─────────────
+  `DO $$ DECLARE
+     rep_eid INTEGER;
+     sort_n  INTEGER;
+   BEGIN
+     SELECT COALESCE(MAX(sort_order), 0) + 1 INTO sort_n FROM mcogs_backlog;
+
+     -- Create "Reports & Analytics" epic for BACK-1002 + BACK-1008
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1340', 'Reports & Analytics',
+       'Reporting features: missing price quotes report, cross-market COGS comparison, coverage reports.',
+       'epic', 'medium', 'backlog', '["reports"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO rep_eid FROM mcogs_backlog WHERE key = 'BACK-1340';
+
+     -- Link BACK-1002 (Missing Price Quotes Report) → Reports & Analytics
+     UPDATE mcogs_backlog SET epic_id = rep_eid, updated_at = NOW()
+     WHERE key = 'BACK-1002' AND epic_id IS NULL;
+
+     -- Link BACK-1008 (Reports Page) → Reports & Analytics
+     UPDATE mcogs_backlog SET epic_id = rep_eid, updated_at = NOW()
+     WHERE key = 'BACK-1008' AND epic_id IS NULL;
+
+     -- Link BACK-1009 (AI get_menu_cogs bug) → Pepper AI Assistant (BACK-1190)
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1190'), updated_at = NOW()
+     WHERE key = 'BACK-1009' AND epic_id IS NULL;
+
+     -- Link BACK-1005 (Voice Tier 1) → Pepper AI Assistant
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1190'), updated_at = NOW()
+     WHERE key = 'BACK-1005' AND epic_id IS NULL;
+
+     -- Link BACK-1006 (Voice Tier 2) → Pepper AI Assistant
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1190'), updated_at = NOW()
+     WHERE key = 'BACK-1006' AND epic_id IS NULL;
+
+     -- Link BACK-1001 (Category Groups cleanup) → Configuration Hub (BACK-1160)
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1160'), updated_at = NOW()
+     WHERE key = 'BACK-1001' AND epic_id IS NULL;
+
+     -- Link BACK-1014 (Help: Brand Partners) → Configuration Hub
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1160'), updated_at = NOW()
+     WHERE key = 'BACK-1014' AND epic_id IS NULL;
+
+     -- Link BACK-1015 (Help: base currency) → Configuration Hub
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1160'), updated_at = NOW()
+     WHERE key = 'BACK-1015' AND epic_id IS NULL;
+
+     -- Link BACK-1003 (Auth0 JWT) → Auth & Infrastructure (BACK-1310)
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1310'), updated_at = NOW()
+     WHERE key = 'BACK-1003' AND epic_id IS NULL;
+
+     -- Link BACK-1007 (Lightsail Upgrade) → Auth & Infrastructure
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1310'), updated_at = NOW()
+     WHERE key = 'BACK-1007' AND epic_id IS NULL;
+
+     -- Link BACK-1016 (Help: Recipe variations) → Recipe Builder (BACK-1120)
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1120'), updated_at = NOW()
+     WHERE key = 'BACK-1016' AND epic_id IS NULL;
+
+     -- Link BACK-1401 (Update button scenario) → Menu Builder & Menu Engineer (BACK-1140)
+     UPDATE mcogs_backlog SET epic_id = (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1140'), updated_at = NOW()
+     WHERE key = 'BACK-1401' AND epic_id IS NULL;
+
+     -- BACK-1009 was already fixed in a previous session — mark as done
+     UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+     WHERE key = 'BACK-1009' AND status != 'done';
+
+     -- Bump sequence past new key
+     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1400));
+   END $$`,
 ];
 
 async function runMigrations(pool) {

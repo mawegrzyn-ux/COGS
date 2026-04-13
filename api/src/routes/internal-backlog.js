@@ -80,7 +80,7 @@ router.post('/', async (req, res) => {
 
 // PATCH /internal/backlog/:id — update
 router.patch('/:id', async (req, res) => {
-  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order } = req.body;
+  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order, epic_id } = req.body;
   const sets = [];
   const vals = [];
   if (summary !== undefined)             sets.push(`summary = $${vals.push(summary.trim())}`);
@@ -94,6 +94,7 @@ router.patch('/:id', async (req, res) => {
   if (story_points !== undefined)        sets.push(`story_points = $${vals.push(story_points)}`);
   if (sprint !== undefined)              sets.push(`sprint = $${vals.push(sprint.trim())}`);
   if (sort_order !== undefined)          sets.push(`sort_order = $${vals.push(sort_order)}`);
+  if (epic_id !== undefined)             sets.push(`epic_id = $${vals.push(epic_id)}`);
   if (!sets.length) return res.status(400).json({ error: { message: 'No fields to update' } });
   sets.push(`updated_at = NOW()`);
   vals.push(req.params.id);
