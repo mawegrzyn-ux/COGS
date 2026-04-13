@@ -1100,7 +1100,7 @@ export default function PosTesterPage() {
                     })
                   }
                 }}
-                className={`px-4 py-2 border-b border-gray-100 group cursor-pointer transition-colors ${editingIdx === idx ? 'bg-accent-dim' : 'hover:bg-gray-50'}`}>
+                className={`px-4 py-2 border-b border-gray-100 group cursor-pointer transition-colors ${editingIdx === idx ? 'bg-accent-dim border-l-[3px] border-l-accent' : 'hover:bg-gray-50'}`}>
                 <div className="flex items-start gap-2">
                   {/* Qty controls */}
                   <div className="flex items-center gap-1 shrink-0 pt-0.5" onClick={e => e.stopPropagation()}>
