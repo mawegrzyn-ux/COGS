@@ -242,7 +242,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [backlog, setBacklog] = useState<BacklogItem[]>([])
   const [backlogTotal, setBacklogTotal] = useState(0)
   const [backlogLoading, setBacklogLoading] = useState(true)
-  const [backlogFilter, setBacklogFilter] = useState({ status: '', priority: '', item_type: '', search: '', epic_id: '' })
+  const [backlogFilter, setBacklogFilter] = useState({ status: 'backlog,todo,in_progress,in_review', priority: '', item_type: '', search: '', epic_id: '' })
   const [showBacklogModal, setShowBacklogModal] = useState(false)
   const [backlogDetail, setBacklogDetail] = useState<BacklogItem | null>(null)
   const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
@@ -675,6 +675,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               onChange={e => setBacklogFilter(f => ({ ...f, search: e.target.value }))} />
             <select className="input w-36" value={backlogFilter.status} onChange={e => setBacklogFilter(f => ({ ...f, status: e.target.value }))}>
               <option value="">All statuses</option>
+              <option value="backlog,todo,in_progress,in_review">Active</option>
               {BACKLOG_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
             </select>
             <select className="input w-32" value={backlogFilter.priority} onChange={e => setBacklogFilter(f => ({ ...f, priority: e.target.value }))}>

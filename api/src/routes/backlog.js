@@ -7,7 +7,15 @@ router.get('/', async (req, res) => {
   const { status, priority, item_type, assigned_to, search, epic_id, orphan_stories, sort = 'sort_order', limit = 50, offset = 0 } = req.query;
   const conditions = [];
   const vals = [];
-  if (status)      conditions.push(`b.status = $${vals.push(status)}`);
+  if (status) {
+    const statuses = status.split(',').map(s => s.trim()).filter(Boolean);
+    if (statuses.length === 1) {
+      conditions.push(`b.status = $${vals.push(statuses[0])}`);
+    } else {
+      const placeholders = statuses.map(s => `$${vals.push(s)}`).join(',');
+      conditions.push(`b.status IN (${placeholders})`);
+    }
+  }
   if (priority)    conditions.push(`b.priority = $${vals.push(priority)}`);
   if (item_type)   conditions.push(`b.item_type = $${vals.push(item_type)}`);
   if (assigned_to) conditions.push(`b.assigned_to = $${vals.push(assigned_to)}`);
