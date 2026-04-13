@@ -95,7 +95,16 @@ function CogIcon({ size = 24, color = '#fff' }: { size?: number; color?: string 
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
-function renderMd(text: string): string {
+function renderMd(text: string, isUser = false): string {
+  // Colour tokens — user messages inherit parent white; assistant uses design tokens
+  const textColor  = isUser ? 'color:inherit' : 'color:var(--text-1)'
+  const mutedColor = isUser ? 'color:inherit;opacity:0.85' : 'color:var(--text-2)'
+  const dimColor   = isUser ? 'color:inherit;opacity:0.7' : 'color:var(--text-3)'
+  const codeBg     = isUser ? 'rgba(255,255,255,0.12)' : 'var(--accent-dim)'
+  const blockBg    = isUser ? 'rgba(255,255,255,0.1)' : 'var(--surface-2)'
+  const borderClr  = isUser ? 'rgba(255,255,255,0.25)' : 'var(--border)'
+  const surfaceClr = isUser ? 'transparent' : 'var(--surface)'
+
   // Escape HTML entities (applied before inline formatting)
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -103,7 +112,7 @@ function renderMd(text: string): string {
   // Inline markdown – input is already HTML-escaped
   const inline = (s: string): string =>
     s.replace(/`([^`\n]+)`/g, (_, c) =>
-        `<code style="background:var(--accent-dim);padding:1px 4px;border-radius:3px;font-size:0.75em;font-family:ui-monospace,SFMono-Regular,monospace">${c}</code>`)
+        `<code style="background:${codeBg};padding:1px 4px;border-radius:3px;font-size:0.75em;font-family:ui-monospace,SFMono-Regular,monospace">${c}</code>`)
      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
      .replace(/_([^_\n]+)_/g, '<em>$1</em>')
@@ -125,9 +134,9 @@ function renderMd(text: string): string {
       }
       i++ // skip closing ```
       out.push(
-        `<pre style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;` +
+        `<pre style="background:${blockBg};border:1px solid ${borderClr};border-radius:6px;` +
         `padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:0.72rem;font-family:ui-monospace,` +
-        `SFMono-Regular,monospace;line-height:1.55;white-space:pre-wrap;color:var(--text-2)">${body.join('\n')}</pre>`
+        `SFMono-Regular,monospace;line-height:1.55;white-space:pre-wrap;${mutedColor}">${body.join('\n')}</pre>`
       )
       continue
     }
@@ -137,10 +146,10 @@ function renderMd(text: string): string {
     if (hm) {
       const lvl = hm[1].length
       const style = lvl === 1
-        ? 'font-size:0.9rem;font-weight:800;margin:10px 0 3px;color:var(--text-1)'
+        ? `font-size:0.9rem;font-weight:800;margin:10px 0 3px;${textColor}`
         : lvl === 2
-        ? 'font-size:0.85rem;font-weight:700;margin:8px 0 2px;color:var(--text-1)'
-        : 'font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:6px 0 2px;color:var(--text-3)'
+        ? `font-size:0.85rem;font-weight:700;margin:8px 0 2px;${textColor}`
+        : `font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:6px 0 2px;${dimColor}`
       out.push(`<div style="${style}">${inline(esc(hm[2]))}</div>`)
       i++; continue
     }
@@ -156,18 +165,18 @@ function renderMd(text: string): string {
         rows.push(parseRow(lines[i]))
         i++
       }
-      let tbl = '<div style="overflow-x:auto;margin:6px 0;border-radius:6px;border:1px solid var(--border)">'
+      let tbl = `<div style="overflow-x:auto;margin:6px 0;border-radius:6px;border:1px solid ${borderClr}">`
       tbl += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem">'
-      tbl += '<thead><tr style="background:var(--surface-2)">'
+      tbl += `<thead><tr style="background:${blockBg}">`
       for (const h of headers)
-        tbl += `<th style="padding:5px 10px;text-align:left;font-weight:600;color:var(--text-2);` +
-               `border-bottom:2px solid var(--border);white-space:nowrap">${inline(esc(h))}</th>`
+        tbl += `<th style="padding:5px 10px;text-align:left;font-weight:600;${mutedColor};` +
+               `border-bottom:2px solid ${borderClr};white-space:nowrap">${inline(esc(h))}</th>`
       tbl += '</tr></thead><tbody>'
       rows.forEach((row, ri) => {
-        tbl += `<tr style="background:${ri % 2 === 1 ? 'var(--surface-2)' : 'transparent'}">`
+        tbl += `<tr style="background:${ri % 2 === 1 ? blockBg : 'transparent'}">`
         headers.forEach((_, hi) => {
           const cell = row[hi] ?? ''
-          tbl += `<td style="padding:4px 10px;color:var(--text-1);border-top:1px solid var(--border)">${inline(esc(cell))}</td>`
+          tbl += `<td style="padding:4px 10px;${textColor};border-top:1px solid ${borderClr}">${inline(esc(cell))}</td>`
         })
         tbl += '</tr>'
       })
@@ -181,7 +190,7 @@ function renderMd(text: string): string {
       const items: string[] = []
       while (i < lines.length && /^[-*•]\s/.test(lines[i].trim())) {
         items.push(
-          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^[-*•]\s+/, '')))}</li>`
+          `<li style="${textColor};padding-left:2px">${inline(esc(lines[i].trim().replace(/^[-*•]\s+/, '')))}</li>`
         )
         i++
       }
@@ -194,7 +203,7 @@ function renderMd(text: string): string {
       const items: string[] = []
       while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
         items.push(
-          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^\d+[.)]\s+/, '')))}</li>`
+          `<li style="${textColor};padding-left:2px">${inline(esc(lines[i].trim().replace(/^\d+[.)]\s+/, '')))}</li>`
         )
         i++
       }
@@ -209,7 +218,7 @@ function renderMd(text: string): string {
     }
 
     // ── Regular text ──────────────────────────────────────────────────────────
-    out.push(`<div style="line-height:1.6;color:var(--text-1)">${inline(esc(line))}</div>`)
+    out.push(`<div style="line-height:1.6;${textColor}">${inline(esc(line))}</div>`)
     i++
   }
 
@@ -385,7 +394,7 @@ function ChatPanel({
                 </div>
               )}
               {msg.content ? (
-                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
+                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content, msg.role === 'user') }} />
               ) : (
                 streaming && i === messages.length - 1 ? (
                   <span className="flex items-center gap-1.5 py-0.5">

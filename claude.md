@@ -185,7 +185,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # Pepper AI chat (92 tools)
+│           ├── ai-chat.js          # Pepper AI chat (95 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── db-config.js        # Database management (local ↔ standalone switch)
@@ -656,7 +656,7 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
 | `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by Pepper) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 92 tools (includes web search, GitHub, and Excel export) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 95 tools (includes web search, GitHub, Excel export, and audit log) |
 | `GET /api/ai-chat/my-usage` | `ai-chat.js` | ✅ Active — current period token usage stats |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
@@ -1224,7 +1224,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 92
+### Tool Count: 95
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1281,6 +1281,11 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 `save_memory_note` — saves a pinned note that persists across sessions (user says "remember X")
 `list_memory_notes` — lists all pinned notes for the current user
 `delete_memory_note` — deletes a specific note by ID (user says "forget X")
+
+**Audit Log (3):**
+`query_audit_log` — search audit log with filters (entity type, user, action, date range, entity label search). Returns who changed what, when, with old/new field values
+`get_entity_audit_history` — full change history for a specific entity (e.g. ingredient #5). Shows all changes over time
+`get_audit_stats` — summary statistics: total changes, breakdown by action/entity type, most active users. Supports date range filtering
 
 ### Memory System
 

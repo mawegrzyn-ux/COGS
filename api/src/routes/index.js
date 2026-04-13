@@ -28,6 +28,18 @@ router.use('/public/share',      require('./shared-pages').publicRouter);
 // Query-param URL avoids Nginx extension-based static-file rules (*.jpg etc.)
 router.use('/media/img',         require('./media-file'));
 
+// ── Public: Doc Library HTML authoring guide download ────────────────────────
+// Static markdown file — no sensitive data, allows <a download> without auth token.
+router.get('/docs-library/html-guide', (_req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+  const filePath = path.resolve(__dirname, '../../../docs/HTML_DOC_AUTHORING_GUIDE.md');
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'Guide not found' } });
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="COGS_HTML_Authoring_Guide.md"');
+  fs.createReadStream(filePath).pipe(res);
+});
+
 // ── Auth identity ──────────────────────────────────────────────────────────────
 // me.js applies requireAuth internally
 router.use('/me',                require('./me'));

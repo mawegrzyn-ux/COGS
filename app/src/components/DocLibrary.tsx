@@ -15,6 +15,9 @@ import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import DOMPurify from 'dompurify'
+import { validateHtml } from '../lib/htmlValidator'
+import type { HtmlValidationResult } from '../lib/htmlValidator'
+import HtmlValidationReport from './HtmlValidationReport'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -144,6 +147,11 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
   const [newCatName, setNewCatName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // HTML validation state
+  const [validationResult, setValidationResult] = useState<HtmlValidationResult | null>(null)
+  const [pendingUpload, setPendingUpload] = useState<{ title: string; content_html: string; rawHtml: string; file: File } | null>(null)
+  const [liveValidation, setLiveValidation] = useState<HtmlValidationResult | null>(null)
+
   // ── Data loading ─────────────────────────────────────────────────────────
 
   const loadDocs = useCallback(async () => {
@@ -175,6 +183,18 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
     document.addEventListener('fullscreenchange', handler)
     return () => document.removeEventListener('fullscreenchange', handler)
   }, [])
+
+  // ── Live HTML validation (debounced) ────────────────────────────────────
+  useEffect(() => {
+    if (editMode !== 'html' || !htmlSource.trim()) {
+      setLiveValidation(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      setLiveValidation(validateHtml(htmlSource))
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [htmlSource, editMode])
 
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen()
@@ -288,6 +308,9 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
     const file = e.target.files?.[0]
     if (!file) return
     try {
+      // Read raw HTML client-side for validation
+      const rawHtml = await file.text()
+
       const formData = new FormData()
       formData.append('file', file)
       const headers: Record<string, string> = {}
@@ -299,6 +322,16 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
       })
       const data = await res.json()
       if (data.error) { setToast({ message: data.error.message, type: 'error' }); return }
+
+      // Run validation on the ORIGINAL raw HTML (before sanitisation)
+      const result = validateHtml(rawHtml)
+      if (result.violations.length > 0) {
+        setValidationResult(result)
+        setPendingUpload({ title: data.title, content_html: data.content_html, rawHtml, file })
+        return // show report modal — don't apply to editor yet
+      }
+
+      // No violations — proceed directly
       setEditDoc(prev => prev ? { ...prev, title: prev.title || data.title, content_html: data.content_html } : prev)
       setHtmlSource(data.content_html)
       setEditMode('html')
@@ -306,6 +339,21 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
       setToast({ message: 'Upload failed', type: 'error' })
     }
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function handleValidationContinue() {
+    if (pendingUpload) {
+      setEditDoc(prev => prev ? { ...prev, title: prev.title || pendingUpload.title, content_html: pendingUpload.content_html } : prev)
+      setHtmlSource(pendingUpload.content_html)
+      setEditMode('html')
+    }
+    setValidationResult(null)
+    setPendingUpload(null)
+  }
+
+  function handleValidationCancel() {
+    setValidationResult(null)
+    setPendingUpload(null)
   }
 
   async function handleCreateCategory() {
@@ -509,6 +557,22 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
                 Upload HTML File
               </button>
               <input ref={fileInputRef} type="file" accept=".html,.htm" className="hidden" onChange={handleUploadHtml} />
+              <span className="w-px h-5 bg-gray-300 mx-1" />
+              <a href={`${(import.meta as any).env.VITE_API_URL || '/api'}/docs-library/html-guide`}
+                download="COGS_HTML_Authoring_Guide.md"
+                className="px-3 py-1 text-xs text-accent hover:text-accent-dark underline underline-offset-2"
+                title="Download the HTML authoring guide to give to an AI assistant">
+                HTML Guide
+              </a>
+              <span className="text-[10px] text-text-3 italic">Give this to an AI to create docs for you</span>
+              {/* Live validation badges */}
+              {editMode === 'html' && liveValidation && liveValidation.violations.length > 0 && (
+                <div className="flex items-center gap-1.5 ml-auto">
+                  {liveValidation.counts.error > 0 && <Badge label={`${liveValidation.counts.error} error${liveValidation.counts.error > 1 ? 's' : ''}`} variant="red" />}
+                  {liveValidation.counts.warning > 0 && <Badge label={`${liveValidation.counts.warning} warning${liveValidation.counts.warning > 1 ? 's' : ''}`} variant="yellow" />}
+                  {liveValidation.counts.info > 0 && <Badge label={`${liveValidation.counts.info} info`} variant="neutral" />}
+                </div>
+              )}
             </div>
 
             {/* Editor content */}
@@ -578,6 +642,15 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
         {confirmDelete && (
           <ConfirmDialog message={`Delete "${confirmDelete.title}"? This cannot be undone.`} danger
             onConfirm={() => handleDelete(confirmDelete)} onCancel={() => setConfirmDelete(null)} />
+        )}
+        {validationResult && pendingUpload && (
+          <HtmlValidationReport
+            result={validationResult}
+            originalFile={pendingUpload.file}
+            rawHtml={pendingUpload.rawHtml}
+            onContinue={handleValidationContinue}
+            onCancel={handleValidationCancel}
+          />
         )}
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       </div>

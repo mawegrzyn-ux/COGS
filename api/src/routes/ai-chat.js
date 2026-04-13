@@ -1521,6 +1521,50 @@ Returns items with their urls and metadata.`,
       required: ['note_id'],
     },
   },
+
+  // ── Audit Log (read-only) ─────────────────────────────────────────────────
+  {
+    name: 'query_audit_log',
+    description: 'Search the audit log for recent changes. Returns who changed what, when, and the old/new field values. Use when user asks about change history, who did something, or what happened recently.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', description: 'Filter by type: ingredient, recipe, price_quote, purchase_order, goods_received, stocktake, waste, stock_level' },
+        entity_id:   { type: 'integer', description: 'Filter by specific entity ID' },
+        user_email:  { type: 'string', description: 'Filter by user email (partial match)' },
+        action:      { type: 'string', description: 'Filter by action: create, update, delete, status_change, confirm, approve, reverse' },
+        from:        { type: 'string', description: 'Start date (ISO format, e.g. 2026-04-01)' },
+        to:          { type: 'string', description: 'End date (ISO format)' },
+        search:      { type: 'string', description: 'Search in entity label (item name)' },
+        limit:       { type: 'integer', description: 'Max results (default 20, max 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_entity_audit_history',
+    description: 'Get the full change history for a specific entity (e.g. a specific ingredient or recipe). Shows all changes over time with old/new field values.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', description: 'Entity type (e.g. ingredient, recipe, price_quote)' },
+        entity_id:   { type: 'integer', description: 'Entity ID' },
+      },
+      required: ['entity_type', 'entity_id'],
+    },
+  },
+  {
+    name: 'get_audit_stats',
+    description: 'Get audit log summary statistics: total changes, breakdown by action/entity type, most active users. Use for activity overviews or "what happened this week" questions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Start date (ISO format)' },
+        to:   { type: 'string', description: 'End date (ISO format)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3585,6 +3629,57 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       }
     }
 
+    // ── Audit Log ───────────────────────────────────────────────────────────────
+
+    case 'query_audit_log': {
+      const { entity_type, entity_id, user_email, action, from, to, search, limit } = input;
+      const conditions = [], params = [];
+      let idx = 1;
+      if (entity_type) { conditions.push(`entity_type = $${idx++}`); params.push(entity_type); }
+      if (entity_id)   { conditions.push(`entity_id = $${idx++}`);   params.push(entity_id); }
+      if (user_email)  { conditions.push(`user_email ILIKE $${idx++}`); params.push(`%${user_email}%`); }
+      if (action)      { conditions.push(`action = $${idx++}`);       params.push(action); }
+      if (from)        { conditions.push(`created_at >= $${idx++}`);  params.push(from); }
+      if (to)          { conditions.push(`created_at < ($${idx++})::date + 1`); params.push(to); }
+      if (search)      { conditions.push(`entity_label ILIKE '%' || $${idx++} || '%'`); params.push(search); }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const cap = Math.min(limit || 20, 50);
+      const { rows } = await pool.query(`
+        SELECT id, action, entity_type, entity_id, entity_label,
+               user_email, user_name, field_changes, context, created_at
+        FROM   mcogs_audit_log ${where}
+        ORDER BY created_at DESC LIMIT $${idx}
+      `, [...params, cap]);
+      return { count: rows.length, entries: rows };
+    }
+
+    case 'get_entity_audit_history': {
+      const { entity_type, entity_id } = input;
+      const { rows } = await pool.query(`
+        SELECT id, action, entity_label, user_email, user_name,
+               field_changes, context, related_entities, created_at
+        FROM   mcogs_audit_log
+        WHERE  entity_type = $1 AND entity_id = $2
+        ORDER BY created_at ASC
+      `, [entity_type, entity_id]);
+      return { entity_type, entity_id, history: rows };
+    }
+
+    case 'get_audit_stats': {
+      const { from, to } = input;
+      const conditions = [], params = [];
+      let idx = 1;
+      if (from) { conditions.push(`created_at >= $${idx++}`); params.push(from); }
+      if (to)   { conditions.push(`created_at < ($${idx++})::date + 1`); params.push(to); }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const [totRes, byRes, usrRes] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS total FROM mcogs_audit_log ${where}`, params),
+        pool.query(`SELECT action, entity_type, COUNT(*)::int AS count FROM mcogs_audit_log ${where} GROUP BY action, entity_type ORDER BY count DESC`, params),
+        pool.query(`SELECT user_email, user_name, COUNT(*)::int AS action_count, MAX(created_at) AS last_action FROM mcogs_audit_log ${where} GROUP BY user_email, user_name ORDER BY action_count DESC LIMIT 10`, params),
+      ]);
+      return { total: totRes.rows[0].total, by_action_entity: byRes.rows, top_users: usrRes.rows };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -3785,7 +3880,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 92 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), and **Memory** (save_memory_note, list_memory_notes, delete_memory_note).
+You have 95 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), and **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
