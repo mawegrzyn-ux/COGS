@@ -2332,6 +2332,11 @@ const migrations = [
        ('BACK-1354', 'Frontend wiring — X-Language header in useApi.ts + TranslationEditor component',
         'Inject X-Language header in useApi.ts from user preference. Build TranslationEditor component for detail panels — inline editing of translated names/descriptions per language. ~4 days.',
         'story', 'high', 'backlog', '["localization","frontend"]'::jsonb, sort_n+4, eid),
+       ('BACK-1355', 'UI localisation — react-i18next setup + locale JSON files + LanguageSwitcher + RTL',
+        'Install react-i18next + i18next-http-backend. Extract static labels into locale JSON per page namespace. Add LanguageSwitcher component in app header. Add RTL layout variants for Arabic/Hebrew. Pilot: English + French. ~4–5 days.',
+        'story', 'high', 'backlog', '["localization","frontend","i18n"]'::jsonb, sort_n+5, eid)
+     ON CONFLICT (key) DO NOTHING;
+
      -- Bump backlog sequence past new keys
      PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1355));
    END $$`,
