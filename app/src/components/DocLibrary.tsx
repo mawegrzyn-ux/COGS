@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useAuth0 } from '@auth0/auth0-react'
 import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
 import { Modal, Field, Spinner, Toast, Badge, ConfirmDialog } from './ui'
@@ -115,6 +116,7 @@ function EditorToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
 
 export default function DocLibrary({ location }: { location: 'system' | 'help' }) {
   const api = useApi()
+  const { getAccessTokenSilently } = useAuth0()
   const { can, isDev } = usePermissions()
   const canWrite = can('docs', 'write')
 
@@ -288,10 +290,12 @@ export default function DocLibrary({ location }: { location: 'system' | 'help' }
     try {
       const formData = new FormData()
       formData.append('file', file)
+      const headers: Record<string, string> = {}
+      try { const token = await getAccessTokenSilently(); if (token) headers['Authorization'] = `Bearer ${token}` } catch {}
       const res = await fetch(`${(import.meta as any).env.VITE_API_URL || '/api'}/docs-library/upload-html`, {
         method: 'POST',
         body: formData,
-        headers: { /* auth handled by browser for multipart */ },
+        headers,
       })
       const data = await res.json()
       if (data.error) { setToast({ message: data.error.message, type: 'error' }); return }
