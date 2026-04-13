@@ -2303,6 +2303,38 @@ const migrations = [
      -- Bump backlog sequence past new keys
      PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1411));
    END $$`,
+
+  // ── Step 116: Seed Localization epic + stories ─────────────────────────────
+  `DO $$ DECLARE sort_n INTEGER; eid INTEGER;
+   BEGIN
+     SELECT COALESCE(MAX(sort_order), 0) + 1 INTO sort_n FROM mcogs_backlog;
+
+     -- Epic
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1350', 'Localization — Multi-Language Support',
+       'Translate ingredient names, recipes, sales items, categories, and all customer-facing content into any language. Separate layer for UI localisation (buttons, labels, navigation). ~16–19 days estimated.',
+       'epic', 'high', 'backlog', '["localization","i18n"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1350';
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id)
+     VALUES
+       ('BACK-1351', 'Foundation — mcogs_languages table + /api/languages CRUD + Settings → Localisation tab',
+        'Create languages table (code, name, is_default, is_rtl). Build CRUD API. Add Localisation tab to Settings/Configuration page. ~3 days.',
+        'story', 'high', 'backlog', '["localization","backend"]'::jsonb, sort_n+1, eid),
+       ('BACK-1352', 'Translation tables — 11 per-entity translation tables in migrate.js',
+        'Create mcogs_ingredient_translations, mcogs_recipe_translations, mcogs_sales_item_translations, mcogs_modifier_group_translations, mcogs_modifier_option_translations, mcogs_combo_step_translations, mcogs_combo_step_option_translations, mcogs_category_translations, mcogs_vendor_translations, mcogs_price_level_translations, mcogs_menu_translations. Add sub-routes on each entity router. ~4 days.',
+        'story', 'high', 'backlog', '["localization","backend","database"]'::jsonb, sort_n+2, eid),
+       ('BACK-1353', 'Backend resolution — resolveLanguage middleware + COALESCE queries',
+        'Add resolveLanguage middleware that reads X-Language header. Update all entity GET endpoints to use COALESCE chain: requested lang → country default → system default → base (English) column. ~4 days.',
+        'story', 'high', 'backlog', '["localization","backend"]'::jsonb, sort_n+3, eid),
+       ('BACK-1354', 'Frontend wiring — X-Language header in useApi.ts + TranslationEditor component',
+        'Inject X-Language header in useApi.ts from user preference. Build TranslationEditor component for detail panels — inline editing of translated names/descriptions per language. ~4 days.',
+        'story', 'high', 'backlog', '["localization","frontend"]'::jsonb, sort_n+4, eid),
+     -- Bump backlog sequence past new keys
+     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1355));
+   END $$`,
 ];
 
 async function runMigrations(pool) {
