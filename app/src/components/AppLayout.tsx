@@ -458,13 +458,13 @@ export default function AppLayout() {
           bottom: 0,
           left: '50%',
           transform: 'translateX(-50%)',
-          padding: '5px 14px 3px 10px',
-          fontSize: 12,
+          padding: '10px 28px 6px 20px',
+          fontSize: 24,
         }}
         title={pepperOpen ? 'Close Pepper' : 'Open Pepper'}
       >
-        {/* Pepper icon — small */}
-        <svg viewBox="-100 -100 200 200" width="14" height="14" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+        {/* Pepper icon */}
+        <svg viewBox="-100 -100 200 200" width="28" height="28" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
           <circle cx="0" cy="0" r="66" fill="currentColor"/>
           <g fill="currentColor">
             {[0,60,120,180,240,300].map(deg => (
