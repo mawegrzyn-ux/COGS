@@ -1770,6 +1770,374 @@ const migrations = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_item_comments_entity ON mcogs_item_comments(entity_type, entity_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_item_comments_parent ON mcogs_item_comments(parent_id) WHERE parent_id IS NOT NULL`,
+
+  // ── Step 110: epic_id on backlog (stories → epics) ──────────────────────
+  `DO $$ BEGIN
+     ALTER TABLE mcogs_backlog ADD COLUMN epic_id INTEGER REFERENCES mcogs_backlog(id) ON DELETE SET NULL;
+   EXCEPTION WHEN duplicate_column THEN NULL;
+   END $$`,
+  `CREATE INDEX IF NOT EXISTS idx_backlog_epic ON mcogs_backlog(epic_id) WHERE epic_id IS NOT NULL`,
+
+  // ── Step 111: Seed feature epics + stories ──────────────────────────────
+  `DO $$ DECLARE
+     eid INTEGER;
+     sort_n INTEGER := 100;
+   BEGIN
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 1: Dashboard & KPIs
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1101', 'Dashboard & KPIs',
+       'Dashboard page with KPI cards, coverage tracking, menu tiles, and quick links.',
+       'epic', 'medium', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1101';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1102', 'KPI cards — ingredients, recipes, vendors, markets, active quotes, categories, coverage', NULL, 'story', 'medium', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n, eid),
+       ('BACK-1103', 'Menu tiles — clickable cards linking to /menus with COGS% per price level', NULL, 'story', 'medium', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n+1, eid),
+       ('BACK-1104', 'Price quote coverage progress bar (green/amber/red)', NULL, 'story', 'medium', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n+2, eid),
+       ('BACK-1105', 'Missing quotes panel — top 10 ingredients with no active price quote', NULL, 'story', 'medium', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n+3, eid),
+       ('BACK-1106', 'Silent refresh with last-updated timestamp', NULL, 'story', 'low', 'done', '["feature-doc","dashboard"]'::jsonb, sort_n+4, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 2: Inventory Management
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1110', 'Inventory Management',
+       'Ingredients, vendors, and price quotes management with three-tab layout.',
+       'epic', 'high', 'done', '["feature-doc","inventory"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1110';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1111', 'Ingredients CRUD — category, unit, waste %, prep conversion, image', NULL, 'story', 'high', 'done', '["feature-doc","inventory"]'::jsonb, sort_n, eid),
+       ('BACK-1112', 'Vendors CRUD — name, country assignment, contact details', NULL, 'story', 'high', 'done', '["feature-doc","inventory"]'::jsonb, sort_n+1, eid),
+       ('BACK-1113', 'Price Quotes CRUD — vendor pricing per ingredient, active/inactive, vendor product code', NULL, 'story', 'high', 'done', '["feature-doc","inventory"]'::jsonb, sort_n+2, eid),
+       ('BACK-1114', 'Preferred vendor assignment per ingredient per country', NULL, 'story', 'high', 'done', '["feature-doc","inventory"]'::jsonb, sort_n+3, eid),
+       ('BACK-1115', 'Menu filter dropdown — narrow ingredients/quotes to a specific menu', NULL, 'story', 'medium', 'done', '["feature-doc","inventory"]'::jsonb, sort_n+4, eid),
+       ('BACK-1116', 'Header badges with lightweight stats endpoint (/ingredients/stats)', NULL, 'story', 'low', 'done', '["feature-doc","inventory"]'::jsonb, sort_n+5, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 3: Recipes
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1120', 'Recipe Builder',
+       'Recipe management with ingredient/sub-recipe line items, COGS calculation, and market/PL variations.',
+       'epic', 'high', 'done', '["feature-doc","recipes"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1120';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1121', 'Recipe CRUD — name, category, yield qty + unit', NULL, 'story', 'high', 'done', '["feature-doc","recipes"]'::jsonb, sort_n, eid),
+       ('BACK-1122', 'Recipe items — add ingredients or sub-recipes with qty, prep unit, conversion', NULL, 'story', 'high', 'done', '["feature-doc","recipes"]'::jsonb, sort_n+1, eid),
+       ('BACK-1123', 'COGS calculation — cost per portion from preferred vendor quotes', NULL, 'story', 'high', 'done', '["feature-doc","recipes"]'::jsonb, sort_n+2, eid),
+       ('BACK-1124', 'Market variations — alternative ingredient lists per country', NULL, 'story', 'medium', 'done', '["feature-doc","recipes"]'::jsonb, sort_n+3, eid),
+       ('BACK-1125', 'Price Level variations — alternative ingredient lists per price level', NULL, 'story', 'medium', 'done', '["feature-doc","recipes"]'::jsonb, sort_n+4, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 4: Sales Items & POS Catalog
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1130', 'Sales Items & POS Catalog',
+       'Sales item catalog with recipe/ingredient/manual/combo types, modifier groups, market visibility, and default sell prices.',
+       'epic', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1130';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1131', 'Sales item CRUD — 4 types: recipe, ingredient, manual, combo', NULL, 'story', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n, eid),
+       ('BACK-1132', 'Market visibility — per-item enable/disable per market', NULL, 'story', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+1, eid),
+       ('BACK-1133', 'Default sell prices per price level', NULL, 'story', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+2, eid),
+       ('BACK-1134', 'Modifier groups — reusable add-on lists with min/max select, repeat selection, auto_show', NULL, 'story', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+3, eid),
+       ('BACK-1135', 'Combos — structured bundles: steps → options with price addons', NULL, 'story', 'high', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+4, eid),
+       ('BACK-1136', 'Combo templates — reusable combo configurations', NULL, 'story', 'medium', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+5, eid),
+       ('BACK-1137', 'Three-tab edit panel — Details, Markets, Modifiers', NULL, 'story', 'medium', 'done', '["feature-doc","sales-items"]'::jsonb, sort_n+6, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 5: Menu Builder & Menu Engineer
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1140', 'Menu Builder & Menu Engineer',
+       'Menu management with sales item linking, scenario planning, price overrides, shared links, and three view modes.',
+       'epic', 'highest', 'done', '["feature-doc","menus"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1140';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1141', 'Menu CRUD — create menus per country, link sales items with sort order', NULL, 'story', 'highest', 'done', '["feature-doc","menus"]'::jsonb, sort_n, eid),
+       ('BACK-1142', 'Menu Engineer — sales mix analysis, per-level qty, COGS% calculation', NULL, 'story', 'highest', 'done', '["feature-doc","menus"]'::jsonb, sort_n+1, eid),
+       ('BACK-1143', 'Price overrides — editable prices in scenario, push to live menu', NULL, 'story', 'high', 'done', '["feature-doc","menus"]'::jsonb, sort_n+2, eid),
+       ('BACK-1144', 'Cost overrides — editable cost per portion in scenario', NULL, 'story', 'high', 'done', '["feature-doc","menus"]'::jsonb, sort_n+3, eid),
+       ('BACK-1145', 'What If tool — bulk % change to prices and/or costs', NULL, 'story', 'medium', 'done', '["feature-doc","menus"]'::jsonb, sort_n+4, eid),
+       ('BACK-1146', 'Scenario save/load/delete with named snapshots', NULL, 'story', 'high', 'done', '["feature-doc","menus"]'::jsonb, sort_n+5, eid),
+       ('BACK-1147', 'Smart Scenario — AI-powered price/cost change proposals via Claude Haiku', NULL, 'story', 'medium', 'done', '["feature-doc","menus"]'::jsonb, sort_n+6, eid),
+       ('BACK-1148', 'Shared Links — password-protected public pages for external reviewers', NULL, 'story', 'high', 'done', '["feature-doc","menus"]'::jsonb, sort_n+7, eid),
+       ('BACK-1149', 'Three view modes — List (rich table), Excel (compact), Grid (card tiles)', NULL, 'story', 'medium', 'done', '["feature-doc","menus"]'::jsonb, sort_n+8, eid),
+       ('BACK-1150', 'Cross-tab sync — menu selection syncs between Menu Builder and Menu Engineer', NULL, 'story', 'medium', 'done', '["feature-doc","menus"]'::jsonb, sort_n+9, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 15;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 6: Configuration Hub
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1160', 'Configuration Hub',
+       'Unified configuration page replacing Settings, Markets, Categories, and Import. All legacy routes redirect here.',
+       'epic', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1160';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1161', 'Units CRUD — measurement units (kg, litre, each)', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n, eid),
+       ('BACK-1162', 'Price Levels CRUD — Dine In, Delivery, etc.', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+1, eid),
+       ('BACK-1163', 'Countries/Markets — CRUD with currency, exchange rate, default price level, tax rates', NULL, 'story', 'high', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+2, eid),
+       ('BACK-1164', 'Exchange rate sync from Frankfurter API', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+3, eid),
+       ('BACK-1165', 'Categories CRUD — scope flags (for_ingredients, for_recipes, for_sales_items)', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+4, eid),
+       ('BACK-1166', 'Category groups — canonical grouping mechanism', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+5, eid),
+       ('BACK-1167', 'COGS thresholds — configure green/amber/red target percentages', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+6, eid),
+       ('BACK-1168', 'Locations CRUD — physical stores with market, group, address, contact', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+7, eid),
+       ('BACK-1169', 'Location groups — clusters of locations (e.g. London Central)', NULL, 'story', 'low', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+8, eid),
+       ('BACK-1170', 'Brand partners — franchise partners linked to markets', NULL, 'story', 'medium', 'done', '["feature-doc","configuration"]'::jsonb, sort_n+9, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 15;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 7: RBAC & User Management
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1180', 'RBAC & User Management',
+       'Role-based access control with 21 features, 3 system roles, custom roles, market scope filtering, and developer flag.',
+       'epic', 'high', 'done', '["feature-doc","rbac","users"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1180';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1181', 'User lifecycle — register → pending → approved → active/disabled', NULL, 'story', 'high', 'done', '["feature-doc","rbac"]'::jsonb, sort_n, eid),
+       ('BACK-1182', 'Roles CRUD — Admin/Operator/Viewer system roles + custom roles', NULL, 'story', 'high', 'done', '["feature-doc","rbac"]'::jsonb, sort_n+1, eid),
+       ('BACK-1183', 'Permission matrix — features × roles, click to cycle none/read/write', NULL, 'story', 'high', 'done', '["feature-doc","rbac"]'::jsonb, sort_n+2, eid),
+       ('BACK-1184', 'Market scope — user restricted to specific brand partners/countries', NULL, 'story', 'high', 'done', '["feature-doc","rbac"]'::jsonb, sort_n+3, eid),
+       ('BACK-1185', 'Developer flag (is_dev) — toggle per user, gates System sections', NULL, 'story', 'medium', 'done', '["feature-doc","rbac"]'::jsonb, sort_n+4, eid),
+       ('BACK-1186', '21 granular RBAC features including 7 stock features', NULL, 'story', 'medium', 'done', '["feature-doc","rbac"]'::jsonb, sort_n+5, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 8: Pepper AI Assistant
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1190', 'Pepper AI Assistant',
+       'In-app AI assistant (Claude Haiku) with 92 tools, SSE streaming, memory system, dockable panel, and agentic loop.',
+       'epic', 'high', 'done', '["feature-doc","ai","pepper"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1190';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1191', '92 tools — lookup, create, update, delete across all entities', NULL, 'story', 'high', 'done', '["feature-doc","ai"]'::jsonb, sort_n, eid),
+       ('BACK-1192', 'SSE streaming responses with agentic tool loop', NULL, 'story', 'high', 'done', '["feature-doc","ai"]'::jsonb, sort_n+1, eid),
+       ('BACK-1193', 'Memory system — pinned notes + user profiles persisted across sessions', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+2, eid),
+       ('BACK-1194', 'Dockable panel — left, right, bottom modes with conversation preservation', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+3, eid),
+       ('BACK-1195', 'File upload — CSV/text injection, image vision (base64), screenshot capture', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+4, eid),
+       ('BACK-1196', 'Web search tool — Brave Search API with DuckDuckGo fallback', NULL, 'story', 'low', 'done', '["feature-doc","ai"]'::jsonb, sort_n+5, eid),
+       ('BACK-1197', 'GitHub integration — 8 tools for read/write to GitHub repo', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+6, eid),
+       ('BACK-1198', 'Excel export tool — multi-sheet .xlsx with market scope filtering', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+7, eid),
+       ('BACK-1199', 'Monthly token allowance — per-user cap, usage bar, period 25th→24th', NULL, 'story', 'medium', 'done', '["feature-doc","ai"]'::jsonb, sort_n+8, eid),
+       ('BACK-1200', 'Right-click Ask Pepper — context menu with screenshot', NULL, 'story', 'low', 'done', '["feature-doc","ai"]'::jsonb, sort_n+9, eid),
+       ('BACK-1201', 'Contextual help buttons (PepperHelpButton) on page headers and tabs', NULL, 'story', 'low', 'done', '["feature-doc","ai"]'::jsonb, sort_n+10, eid),
+       ('BACK-1202', 'Markdown rendering in chat responses', NULL, 'story', 'low', 'done', '["feature-doc","ai"]'::jsonb, sort_n+11, eid),
+       ('BACK-1203', 'Concise mode — toggle in Settings → AI', NULL, 'story', 'low', 'done', '["feature-doc","ai"]'::jsonb, sort_n+12, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 20;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 9: AI-Powered Import
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1220', 'AI-Powered Data Import',
+       '5-step import wizard: upload → AI extraction → categories mapping → vendors mapping → execute. Supports CSV, XLSX, XLSB.',
+       'epic', 'high', 'done', '["feature-doc","import"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1220';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1221', 'File upload — drag-and-drop CSV/XLSX/XLSB', NULL, 'story', 'high', 'done', '["feature-doc","import"]'::jsonb, sort_n, eid),
+       ('BACK-1222', 'AI extraction — Claude parses spreadsheet into structured data', NULL, 'story', 'high', 'done', '["feature-doc","import"]'::jsonb, sort_n+1, eid),
+       ('BACK-1223', 'Category mapping — map imported categories to COGS categories or create new', NULL, 'story', 'high', 'done', '["feature-doc","import"]'::jsonb, sort_n+2, eid),
+       ('BACK-1224', 'Vendor mapping — map imported vendors to existing or create new', NULL, 'story', 'high', 'done', '["feature-doc","import"]'::jsonb, sort_n+3, eid),
+       ('BACK-1225', 'Unit fuzzy-matching with UNIT_ALIASES map', NULL, 'story', 'medium', 'done', '["feature-doc","import"]'::jsonb, sort_n+4, eid),
+       ('BACK-1226', 'Sub-recipe recognition — three-tier recipe hierarchies', NULL, 'story', 'medium', 'done', '["feature-doc","import"]'::jsonb, sort_n+5, eid),
+       ('BACK-1227', 'Override action — create/skip/override for duplicate rows', NULL, 'story', 'medium', 'done', '["feature-doc","import"]'::jsonb, sort_n+6, eid),
+       ('BACK-1228', 'Chatbot integration — Pepper triggers import via start_import tool', NULL, 'story', 'medium', 'done', '["feature-doc","import"]'::jsonb, sort_n+7, eid),
+       ('BACK-1229', 'Template sheet download for each entity type', NULL, 'story', 'low', 'done', '["feature-doc","import"]'::jsonb, sort_n+8, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 15;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 10: Allergen Matrix
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1240', 'Allergen Matrix',
+       'EU/UK FIC 14 allergen status matrix for ingredients and menu items with sticky headers and allergen notes.',
+       'epic', 'medium', 'done', '["feature-doc","allergens"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1240';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1241', 'Inventory matrix — allergen status per ingredient (contains/may_contain/free_from)', NULL, 'story', 'medium', 'done', '["feature-doc","allergens"]'::jsonb, sort_n, eid),
+       ('BACK-1242', 'Menu matrix — allergen status per menu item including combo ingredient chains', NULL, 'story', 'medium', 'done', '["feature-doc","allergens"]'::jsonb, sort_n+1, eid),
+       ('BACK-1243', 'Sticky headers and first columns with border-separate workaround', NULL, 'story', 'low', 'done', '["feature-doc","allergens"]'::jsonb, sort_n+2, eid),
+       ('BACK-1244', 'Allergen notes — inline editable textarea per row', NULL, 'story', 'low', 'done', '["feature-doc","allergens"]'::jsonb, sort_n+3, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 11: HACCP
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1250', 'HACCP Compliance',
+       'HACCP temperature logs and CCP logs linked to locations and equipment.',
+       'epic', 'medium', 'done', '["feature-doc","haccp"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1250';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1251', 'Equipment register — CRUD linked to locations', NULL, 'story', 'medium', 'done', '["feature-doc","haccp"]'::jsonb, sort_n, eid),
+       ('BACK-1252', 'Temperature logging per equipment', NULL, 'story', 'medium', 'done', '["feature-doc","haccp"]'::jsonb, sort_n+1, eid),
+       ('BACK-1253', 'CCP logs — cooking/cooling/delivery linked to locations', NULL, 'story', 'medium', 'done', '["feature-doc","haccp"]'::jsonb, sort_n+2, eid),
+       ('BACK-1254', 'HACCP report endpoint', NULL, 'story', 'low', 'done', '["feature-doc","haccp"]'::jsonb, sort_n+3, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 12: Stock Manager
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1260', 'Stock Manager',
+       'Full inventory management module with 8 tabs: overview, stores, purchase orders, goods in, invoices, waste, transfers, stocktake.',
+       'epic', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1260';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1261', 'Stock overview — KPI cards, stock levels grid, recent movements', NULL, 'story', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n, eid),
+       ('BACK-1262', 'Stores (centres) — sub-locations within locations, is_store_itself flag', NULL, 'story', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n+1, eid),
+       ('BACK-1263', 'Purchase orders — lifecycle: draft → submitted → partial → received → cancelled', NULL, 'story', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n+2, eid),
+       ('BACK-1264', 'PO smart item form — auto-populate from vendor quotes, no-quote warning', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+3, eid),
+       ('BACK-1265', 'Goods received — GRN lifecycle, confirm updates stock levels', NULL, 'story', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n+4, eid),
+       ('BACK-1266', 'Invoices — lifecycle: draft → pending → approved → paid → disputed', NULL, 'story', 'high', 'done', '["feature-doc","stock"]'::jsonb, sort_n+5, eid),
+       ('BACK-1267', 'Waste logging — bulk entry form with reason codes, stock movement', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+6, eid),
+       ('BACK-1268', 'Stock transfers — two-step: dispatch → confirm, inter-store', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+7, eid),
+       ('BACK-1269', 'Stocktake — full/spot check, populate, variance, approve adjusts stock', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+8, eid),
+       ('BACK-1270', 'Stock movements — immutable audit ledger, dual-write consistency', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+9, eid),
+       ('BACK-1271', 'Order templates — saved PO templates for recurring orders', NULL, 'story', 'low', 'done', '["feature-doc","stock"]'::jsonb, sort_n+10, eid),
+       ('BACK-1272', 'Credit notes — lifecycle: draft → submitted → approved → applied', NULL, 'story', 'medium', 'done', '["feature-doc","stock"]'::jsonb, sort_n+11, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 20;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 13: System & Administration
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1290', 'System & Administration',
+       'System page with AI config, bugs & backlog, audit log, storage, database management, test data, architecture docs.',
+       'epic', 'medium', 'done', '["feature-doc","system"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1290';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1291', 'Central audit log — action, entity, field_changes JSONB, context', NULL, 'story', 'high', 'done', '["feature-doc","system"]'::jsonb, sort_n, eid),
+       ('BACK-1292', 'Bugs & Backlog tracker — two-tab interface embedded in System page', NULL, 'story', 'medium', 'done', '["feature-doc","system"]'::jsonb, sort_n+1, eid),
+       ('BACK-1293', 'Database management — local/standalone switch, migrate data, test/save', NULL, 'story', 'medium', 'done', '["feature-doc","system"]'::jsonb, sort_n+2, eid),
+       ('BACK-1294', 'Two-database architecture — config store (encrypted) + main DB', NULL, 'story', 'medium', 'done', '["feature-doc","system"]'::jsonb, sort_n+3, eid),
+       ('BACK-1295', 'Test data seeder — load test/small/clear/defaults, date confirm dialog', NULL, 'story', 'low', 'done', '["feature-doc","system"]'::jsonb, sort_n+4, eid),
+       ('BACK-1296', 'Architecture docs — API reference, security, troubleshooting, domain migration', NULL, 'story', 'low', 'done', '["feature-doc","system"]'::jsonb, sort_n+5, eid),
+       ('BACK-1297', 'POS Mockup — functional POS simulator embedded in System', NULL, 'story', 'medium', 'done', '["feature-doc","system"]'::jsonb, sort_n+6, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 14: Media Library
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1300', 'Media Library',
+       'Image management with local disk and S3 storage, variant generation, category organization, bulk operations.',
+       'epic', 'medium', 'done', '["feature-doc","media"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1300';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1301', 'Image upload with automatic variant generation (original, thumb 300px, web 1200px)', NULL, 'story', 'medium', 'done', '["feature-doc","media"]'::jsonb, sort_n, eid),
+       ('BACK-1302', 'Category organization and scope filtering', NULL, 'story', 'medium', 'done', '["feature-doc","media"]'::jsonb, sort_n+1, eid),
+       ('BACK-1303', 'Grid and list view with focus-vs-select model', NULL, 'story', 'medium', 'done', '["feature-doc","media"]'::jsonb, sort_n+2, eid),
+       ('BACK-1304', 'Bulk operations — move to category, bulk delete', NULL, 'story', 'low', 'done', '["feature-doc","media"]'::jsonb, sort_n+3, eid),
+       ('BACK-1305', 'S3 migration via SSE progress stream', NULL, 'story', 'low', 'done', '["feature-doc","media"]'::jsonb, sort_n+4, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 15: Auth & Infrastructure
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1310', 'Auth & Infrastructure',
+       'Auth0 SSO, CI/CD pipeline, Nginx reverse proxy, PM2 process management, SSL via Certbot.',
+       'epic', 'high', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1310';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1311', 'Auth0 SPA integration — username/password + Google OAuth', NULL, 'story', 'high', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n, eid),
+       ('BACK-1312', 'CI/CD — GitHub Actions push to main → build → deploy → health check', NULL, 'story', 'high', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n+1, eid),
+       ('BACK-1313', 'AWS Lightsail — Nginx reverse proxy, PM2 process manager', NULL, 'story', 'high', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n+2, eid),
+       ('BACK-1314', 'SSL — Let''s Encrypt via Certbot with auto-renewal', NULL, 'story', 'high', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n+3, eid),
+       ('BACK-1315', 'Domain migration — obscurekitty.com → cogs.macaroonie.com', NULL, 'story', 'medium', 'done', '["feature-doc","infrastructure"]'::jsonb, sort_n+4, eid)
+     ON CONFLICT (key) DO NOTHING;
+     sort_n := sort_n + 10;
+
+     -- ═══════════════════════════════════════════════════════════════════════
+     -- EPIC 16: Shared Menu Pages
+     -- ═══════════════════════════════════════════════════════════════════════
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1320', 'Shared Menu Pages',
+       'Password-protected public pages for external reviewers with view/edit mode, price change tracking, and comments.',
+       'epic', 'medium', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1320';
+     sort_n := sort_n + 1;
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1321', 'Public shared page at /share/:slug — no auth required', NULL, 'story', 'medium', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n, eid),
+       ('BACK-1322', 'View and edit modes — read-only or price editing for external reviewers', NULL, 'story', 'medium', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n+1, eid),
+       ('BACK-1323', 'Price change tracking — logged and surfaced in ME History tab', NULL, 'story', 'medium', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n+2, eid),
+       ('BACK-1324', 'Comments — posted via shared links, merged in ME Comments tab', NULL, 'story', 'medium', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n+3, eid),
+       ('BACK-1325', 'Multiple shared links per scenario — separate per franchisee', NULL, 'story', 'low', 'done', '["feature-doc","shared-pages"]'::jsonb, sort_n+4, eid)
+     ON CONFLICT (key) DO NOTHING;
+
+     -- Bump backlog sequence past highest seeded key
+     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1400));
+   END $$`,
 ];
 
 async function runMigrations(pool) {

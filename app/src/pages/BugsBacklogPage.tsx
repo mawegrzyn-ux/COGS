@@ -22,7 +22,14 @@ interface BacklogItem {
   assigned_to: string | null; labels: string[]
   acceptance_criteria: string | null; story_points: number | null
   sprint: string | null; sort_order: number
+  epic_id: number | null; epic_key: string | null; epic_summary: string | null
+  child_count?: number; child_done?: number
   created_at: string; updated_at: string
+}
+
+interface EpicSummary {
+  id: number; key: string; summary: string; status: string
+  child_count: number; child_done: number
 }
 
 interface ItemComment {
@@ -208,11 +215,12 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [backlog, setBacklog] = useState<BacklogItem[]>([])
   const [backlogTotal, setBacklogTotal] = useState(0)
   const [backlogLoading, setBacklogLoading] = useState(true)
-  const [backlogFilter, setBacklogFilter] = useState({ status: '', priority: '', item_type: '', search: '' })
+  const [backlogFilter, setBacklogFilter] = useState({ status: '', priority: '', item_type: '', search: '', epic_id: '' })
   const [showBacklogModal, setShowBacklogModal] = useState(false)
   const [backlogDetail, setBacklogDetail] = useState<BacklogItem | null>(null)
-  const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '' })
+  const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
   const [deleteBacklog, setDeleteBacklog] = useState<BacklogItem | null>(null)
+  const [epics, setEpics] = useState<EpicSummary[]>([])
 
   // ── Comments state ────────────────────────────────────────────────────
   const [comments, setComments] = useState<ItemComment[]>([])
@@ -253,6 +261,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       if (backlogFilter.priority) params.set('priority', backlogFilter.priority)
       if (backlogFilter.item_type) params.set('item_type', backlogFilter.item_type)
       if (backlogFilter.search) params.set('search', backlogFilter.search)
+      if (backlogFilter.epic_id) params.set('epic_id', backlogFilter.epic_id)
       const qs = params.toString()
       const data = await api.get(`/backlog${qs ? `?${qs}` : ''}`)
       setBacklog(data?.rows || [])
@@ -260,8 +269,16 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     } finally { setBacklogLoading(false) }
   }, [api, backlogFilter])
 
+  const loadEpics = useCallback(async () => {
+    try {
+      const data = await api.get('/backlog/epics')
+      setEpics(data || [])
+    } catch {}
+  }, [api])
+
   useEffect(() => { loadBugs() }, [loadBugs])
   useEffect(() => { loadBacklog() }, [loadBacklog])
+  useEffect(() => { loadEpics() }, [loadEpics])
   useEffect(() => { localStorage.setItem('bb_tab', tab) }, [tab])
 
   // ── Bug handlers ────────────────────────────────────────────────────────
@@ -295,12 +312,17 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
 
   async function createBacklogItem() {
     if (!backlogForm.summary.trim()) return
-    const payload = { ...backlogForm, story_points: backlogForm.story_points ? parseInt(backlogForm.story_points) : null }
+    const payload = {
+      ...backlogForm,
+      story_points: backlogForm.story_points ? parseInt(backlogForm.story_points) : null,
+      epic_id: backlogForm.epic_id ? parseInt(backlogForm.epic_id) : null,
+    }
     await api.post('/backlog', payload)
     setShowBacklogModal(false)
-    setBacklogForm({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '' })
+    setBacklogForm({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
     setToast({ message: 'Backlog item created', type: 'success' })
     loadBacklog()
+    loadEpics()
   }
 
   async function updateBacklogStatus(id: number, status: string) {
@@ -317,6 +339,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     setBacklogDetail(null)
     setToast({ message: `${deleteBacklog.key} deleted`, type: 'success' })
     loadBacklog()
+    loadEpics()
   }
 
   // ── Drag-and-drop reorder ─────────────────────────────────────────────
@@ -420,7 +443,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       if (full) {
         setBacklogDetail(full)
         setCanEditBacklog(!!full.can_edit)
-        setBacklogEditForm({ summary: full.summary, description: full.description || '', item_type: full.item_type, priority: full.priority, acceptance_criteria: full.acceptance_criteria || '', story_points: full.story_points ? String(full.story_points) : '' })
+        setBacklogEditForm({ summary: full.summary, description: full.description || '', item_type: full.item_type, priority: full.priority, acceptance_criteria: full.acceptance_criteria || '', story_points: full.story_points ? String(full.story_points) : '', epic_id: full.epic_id ? String(full.epic_id) : '' })
       }
     } catch {}
     loadComments('backlog', item.id)
@@ -437,10 +460,15 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
 
   async function saveBacklogEdit() {
     if (!backlogDetail || !backlogEditForm) return
-    const payload = { ...backlogEditForm, story_points: backlogEditForm.story_points ? parseInt(backlogEditForm.story_points) : null }
+    const payload = {
+      ...backlogEditForm,
+      story_points: backlogEditForm.story_points ? parseInt(backlogEditForm.story_points) : null,
+      epic_id: backlogEditForm.epic_id ? parseInt(backlogEditForm.epic_id) : null,
+    }
     await api.put(`/backlog/${backlogDetail.id}`, payload)
     setToast({ message: 'Backlog item updated', type: 'success' })
     loadBacklog()
+    loadEpics()
     const updated = await api.get(`/backlog/${backlogDetail.id}`)
     if (updated) setBacklogDetail(updated)
   }
@@ -563,6 +591,10 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               <option value="">All types</option>
               {BACKLOG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
+            <select className="input w-40" value={backlogFilter.epic_id} onChange={e => setBacklogFilter(f => ({ ...f, epic_id: e.target.value }))}>
+              <option value="">All epics</option>
+              {epics.map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary.length > 30 ? ep.summary.slice(0, 30) + '…' : ep.summary}</option>)}
+            </select>
             <div className="flex-1" />
             {isDev && <button className="btn-outline text-xs" onClick={() => exportJira('backlog')}>Export Jira</button>}
             {can('backlog', 'write') && <button className="btn-primary text-sm" onClick={() => setShowBacklogModal(true)}>+ Add Item</button>}
@@ -580,6 +612,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                     <th className="px-3 py-2 w-28">Key</th>
                     <th className="px-3 py-2">Summary</th>
                     <th className="px-3 py-2 w-24">Type</th>
+                    <th className="px-3 py-2 w-36">Epic</th>
                     <th className="px-3 py-2 w-24">Priority</th>
                     <th className="px-3 py-2 w-28">Status</th>
                     <th className="px-3 py-2 w-16">Points</th>
@@ -606,8 +639,21 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                         </td>
                       )}
                       <td className="px-3 py-2 font-mono text-xs text-accent">{b.key}</td>
-                      <td className="px-3 py-2 font-medium truncate max-w-[300px]">{b.summary}</td>
-                      <td className="px-3 py-2"><Badge label={b.item_type} variant="neutral" /></td>
+                      <td className="px-3 py-2 font-medium truncate max-w-[300px]">
+                        {b.item_type === 'epic' && <span className="text-purple-600 mr-1">⬡</span>}
+                        {b.summary}
+                        {b.item_type === 'epic' && b.child_count != null && b.child_count > 0 && (
+                          <span className="ml-2 text-xs text-text-3">({b.child_done ?? 0}/{b.child_count})</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2"><Badge label={b.item_type} variant={b.item_type === 'epic' ? 'yellow' : 'neutral'} /></td>
+                      <td className="px-3 py-2 text-xs truncate max-w-[120px]">
+                        {b.epic_key ? (
+                          <span className="inline-flex items-center gap-1 text-purple-600" title={b.epic_summary || ''}>
+                            <span className="font-mono">{b.epic_key}</span>
+                          </span>
+                        ) : b.item_type !== 'epic' ? <span className="text-text-3">—</span> : null}
+                      </td>
                       <td className="px-3 py-2"><PriorityBadge priority={b.priority} /></td>
                       <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
                         {isDev ? (
@@ -812,6 +858,15 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   onChange={e => setBacklogForm(f => ({ ...f, story_points: e.target.value }))} />
               </Field>
             </div>
+            {backlogForm.item_type !== 'epic' && epics.length > 0 && (
+              <Field label="Epic">
+                <select className="input w-full" value={backlogForm.epic_id}
+                  onChange={e => setBacklogForm(f => ({ ...f, epic_id: e.target.value }))}>
+                  <option value="">— No epic —</option>
+                  {epics.map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary}</option>)}
+                </select>
+              </Field>
+            )}
             <Field label="Acceptance Criteria">
               <textarea className="input w-full" rows={3} value={backlogForm.acceptance_criteria}
                 onChange={e => setBacklogForm(f => ({ ...f, acceptance_criteria: e.target.value }))}
@@ -857,12 +912,21 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                       onChange={e => setBacklogEditForm((f: any) => ({ ...f, story_points: e.target.value }))} />
                   </Field>
                 </div>
+                {backlogEditForm.item_type !== 'epic' && epics.length > 0 && (
+                  <Field label="Epic">
+                    <select className="input w-full" value={backlogEditForm.epic_id || ''}
+                      onChange={e => setBacklogEditForm((f: any) => ({ ...f, epic_id: e.target.value }))}>
+                      <option value="">— No epic —</option>
+                      {epics.filter(ep => ep.id !== backlogDetail.id).map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary}</option>)}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Acceptance Criteria">
                   <textarea className="input w-full" rows={3} value={backlogEditForm.acceptance_criteria}
                     onChange={e => setBacklogEditForm((f: any) => ({ ...f, acceptance_criteria: e.target.value }))} />
                 </Field>
                 <div className="flex items-center gap-2">
-                  <Badge label={backlogDetail.item_type} variant="neutral" />
+                  <Badge label={backlogDetail.item_type} variant={backlogDetail.item_type === 'epic' ? 'yellow' : 'neutral'} />
                   <StatusBadge status={backlogDetail.status} />
                   <span className="text-xs text-text-3">Requested by {backlogDetail.requested_by_email || '—'} · {fmtDate(backlogDetail.created_at)}</span>
                 </div>
@@ -874,13 +938,29 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               </>
             ) : (
               <>
-                <h3 className="text-lg font-semibold">{backlogDetail.summary}</h3>
+                <h3 className="text-lg font-semibold">
+                  {backlogDetail.item_type === 'epic' && <span className="text-purple-600 mr-1">⬡</span>}
+                  {backlogDetail.summary}
+                </h3>
                 <div className="flex flex-wrap gap-2">
-                  <Badge label={backlogDetail.item_type} variant="neutral" />
+                  <Badge label={backlogDetail.item_type} variant={backlogDetail.item_type === 'epic' ? 'yellow' : 'neutral'} />
                   <PriorityBadge priority={backlogDetail.priority} />
                   <StatusBadge status={backlogDetail.status} />
                   {backlogDetail.story_points && <Badge label={`${backlogDetail.story_points} pts`} variant="green" />}
+                  {backlogDetail.epic_key && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                      ⬡ {backlogDetail.epic_key}
+                    </span>
+                  )}
                 </div>
+                {backlogDetail.item_type === 'epic' && backlogDetail.child_count != null && backlogDetail.child_count > 0 && (
+                  <div className="bg-surface-2 rounded-lg p-3">
+                    <div className="text-xs text-text-3 mb-1 font-medium">Epic Progress — {backlogDetail.child_done ?? 0} / {backlogDetail.child_count} stories done</div>
+                    <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${Math.round(((backlogDetail.child_done ?? 0) / backlogDetail.child_count) * 100)}%` }} />
+                    </div>
+                  </div>
+                )}
                 {backlogDetail.description && <p className="text-sm text-text-2 whitespace-pre-wrap">{backlogDetail.description}</p>}
                 {backlogDetail.acceptance_criteria && (
                   <div>

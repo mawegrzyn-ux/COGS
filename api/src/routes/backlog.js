@@ -4,21 +4,23 @@ const { logAudit, diffFields } = require('../helpers/audit');
 
 // ── GET / — list backlog with filters ───────────────────────────────────────
 router.get('/', async (req, res) => {
-  const { status, priority, item_type, assigned_to, search, sort = 'sort_order', limit = 50, offset = 0 } = req.query;
+  const { status, priority, item_type, assigned_to, search, epic_id, orphan_stories, sort = 'sort_order', limit = 50, offset = 0 } = req.query;
   const conditions = [];
   const vals = [];
-  if (status)      conditions.push(`status = $${vals.push(status)}`);
-  if (priority)    conditions.push(`priority = $${vals.push(priority)}`);
-  if (item_type)   conditions.push(`item_type = $${vals.push(item_type)}`);
-  if (assigned_to) conditions.push(`assigned_to = $${vals.push(assigned_to)}`);
-  if (search)      conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
+  if (status)      conditions.push(`b.status = $${vals.push(status)}`);
+  if (priority)    conditions.push(`b.priority = $${vals.push(priority)}`);
+  if (item_type)   conditions.push(`b.item_type = $${vals.push(item_type)}`);
+  if (assigned_to) conditions.push(`b.assigned_to = $${vals.push(assigned_to)}`);
+  if (epic_id)     conditions.push(`b.epic_id = $${vals.push(parseInt(epic_id, 10))}`);
+  if (orphan_stories === 'true') conditions.push(`b.epic_id IS NULL AND b.item_type != 'epic'`);
+  if (search)      conditions.push(`(b.summary ILIKE $${vals.push(`%${search}%`)} OR b.description ILIKE $${vals.length})`);
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const sortMap = {
-    sort_order: 'sort_order ASC, created_at DESC',
-    priority:   `CASE priority WHEN 'highest' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 WHEN 'lowest' THEN 5 END ASC, created_at DESC`,
-    created_at: 'created_at DESC',
-    updated_at: 'updated_at DESC',
+    sort_order: 'b.sort_order ASC, b.created_at DESC',
+    priority:   `CASE b.priority WHEN 'highest' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 WHEN 'lowest' THEN 5 END ASC, b.created_at DESC`,
+    created_at: 'b.created_at DESC',
+    updated_at: 'b.updated_at DESC',
   };
   const orderBy = sortMap[sort] || sortMap.sort_order;
 
@@ -26,10 +28,19 @@ router.get('/', async (req, res) => {
   vals.push(parseInt(offset, 10) || 0);
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM mcogs_backlog ${where} ORDER BY ${orderBy} LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
+      `SELECT b.*, e.key AS epic_key, e.summary AS epic_summary,
+              child_stats.child_count, child_stats.child_done
+       FROM mcogs_backlog b
+       LEFT JOIN mcogs_backlog e ON e.id = b.epic_id AND e.item_type = 'epic'
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS child_count,
+                COUNT(*) FILTER (WHERE status = 'done')::int AS child_done
+         FROM mcogs_backlog WHERE epic_id = b.id
+       ) child_stats ON b.item_type = 'epic'
+       ${where} ORDER BY ${orderBy} LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
       vals
     );
-    const countQ = await pool.query(`SELECT COUNT(*)::int AS total FROM mcogs_backlog ${where}`,
+    const countQ = await pool.query(`SELECT COUNT(*)::int AS total FROM mcogs_backlog b ${where}`,
       vals.slice(0, vals.length - 2));
     res.json({ rows, total: countQ.rows[0].total });
   } catch (err) {
@@ -38,10 +49,35 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ── GET /epics — list all epics with child counts (BEFORE /:id) ────────────
+router.get('/epics', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT ep.*,
+             COUNT(ch.id)::int AS child_count,
+             COUNT(ch.id) FILTER (WHERE ch.status = 'done')::int AS child_done
+      FROM mcogs_backlog ep
+      LEFT JOIN mcogs_backlog ch ON ch.epic_id = ep.id
+      WHERE ep.item_type = 'epic'
+      GROUP BY ep.id
+      ORDER BY ep.sort_order ASC, ep.created_at DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to fetch epics' } });
+  }
+});
+
 // ── GET /export/jira — Jira-compatible export (BEFORE /:id) ─────────────────
 router.get('/export/jira', async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT * FROM mcogs_backlog ORDER BY sort_order ASC, created_at DESC`);
+    const { rows } = await pool.query(`
+      SELECT b.*, e.key AS epic_key
+      FROM mcogs_backlog b
+      LEFT JOIN mcogs_backlog e ON e.id = b.epic_id AND e.item_type = 'epic'
+      ORDER BY b.sort_order ASC, b.created_at DESC
+    `);
     const statusMap = { backlog: 'To Do', todo: 'To Do', in_progress: 'In Progress', in_review: 'In Progress', done: 'Done', wont_do: "Won't Do" };
     const typeMap   = { story: 'Story', task: 'Task', epic: 'Epic', improvement: 'Improvement' };
     const jira = rows.map(r => ({
@@ -55,6 +91,7 @@ router.get('/export/jira', async (req, res) => {
       Labels:       (r.labels || []).join(','),
       'Story Points': r.story_points || '',
       Sprint:       r.sprint || '',
+      'Epic Link':  r.epic_key || '',
       Created:      r.created_at,
       Updated:      r.updated_at,
     }));
@@ -89,10 +126,24 @@ router.put('/reorder', async (req, res) => {
 // ── GET /:id — single backlog item (includes can_edit flag) ────────────────
 router.get('/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT * FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
+    const { rows } = await pool.query(`
+      SELECT b.*, e.key AS epic_key, e.summary AS epic_summary
+      FROM mcogs_backlog b
+      LEFT JOIN mcogs_backlog e ON e.id = b.epic_id AND e.item_type = 'epic'
+      WHERE b.id = $1
+    `, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Backlog item not found' } });
     const item = rows[0];
     item.can_edit = (item.requested_by && item.requested_by === req.user?.sub) || !!req.user?.is_dev;
+    // If this is an epic, attach child story count
+    if (item.item_type === 'epic') {
+      const childQ = await pool.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status = 'done')::int AS done
+         FROM mcogs_backlog WHERE epic_id = $1`, [item.id]);
+      item.child_count = childQ.rows[0].total;
+      item.child_done  = childQ.rows[0].done;
+    }
     res.json(item);
   } catch (err) {
     console.error(err);
@@ -102,16 +153,21 @@ router.get('/:id', async (req, res) => {
 
 // ── POST / — create backlog item (requires backlog:write) ───────────────────
 router.post('/', async (req, res) => {
-  const { summary, description, item_type, priority, labels, acceptance_criteria, story_points, sprint, assigned_to } = req.body;
+  const { summary, description, item_type, priority, labels, acceptance_criteria, story_points, sprint, assigned_to, epic_id } = req.body;
   if (!summary?.trim()) return res.status(400).json({ error: { message: 'summary is required' } });
+  // Validate epic_id if provided — must reference an existing epic
+  if (epic_id) {
+    const epicCheck = await pool.query(`SELECT id FROM mcogs_backlog WHERE id = $1 AND item_type = 'epic'`, [epic_id]);
+    if (!epicCheck.rows.length) return res.status(400).json({ error: { message: 'epic_id must reference an existing epic' } });
+  }
   try {
     const keyRes = await pool.query(`SELECT nextval('mcogs_backlog_number_seq')::int AS num`);
     const key = `BACK-${keyRes.rows[0].num}`;
     // Get max sort_order
     const maxSort = await pool.query(`SELECT COALESCE(MAX(sort_order), 0)::int + 1 AS next FROM mcogs_backlog`);
     const { rows } = await pool.query(`
-      INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *
+      INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order, epic_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *
     `, [
       key,
       summary.trim(),
@@ -126,6 +182,7 @@ router.post('/', async (req, res) => {
       story_points || null,
       sprint?.trim() || null,
       maxSort.rows[0].next,
+      epic_id || null,
     ]);
     await logAudit(pool, req, { action: 'create', entity_type: 'backlog', entity_id: rows[0].id, entity_label: key, context: { source: 'manual' } });
     res.status(201).json(rows[0]);
@@ -137,7 +194,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /:id — update backlog item (status changes require is_dev) ──────────
 router.put('/:id', async (req, res) => {
-  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint } = req.body;
+  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint, epic_id } = req.body;
 
   try {
     const old = await pool.query(`SELECT * FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
@@ -154,6 +211,16 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ error: { message: 'Only developers can change backlog status' } });
     }
 
+    // Validate epic_id if provided
+    if (epic_id) {
+      if (epic_id === parseInt(req.params.id, 10)) return res.status(400).json({ error: { message: 'An item cannot be its own epic' } });
+      const epicCheck = await pool.query(`SELECT id FROM mcogs_backlog WHERE id = $1 AND item_type = 'epic'`, [epic_id]);
+      if (!epicCheck.rows.length) return res.status(400).json({ error: { message: 'epic_id must reference an existing epic' } });
+    }
+
+    // Handle explicit null for epic_id (unlink from epic) — use sentinel 0 to mean "clear"
+    const epicVal = epic_id === null || epic_id === 0 ? null : (epic_id || undefined);
+
     const { rows } = await pool.query(`
       UPDATE mcogs_backlog SET
         summary = COALESCE($1, summary),
@@ -166,9 +233,23 @@ router.put('/:id', async (req, res) => {
         acceptance_criteria = COALESCE($8, acceptance_criteria),
         story_points = COALESCE($9, story_points),
         sprint = COALESCE($10, sprint),
+        epic_id = ${epic_id !== undefined ? '$12' : 'epic_id'},
         updated_at = NOW()
       WHERE id = $11 RETURNING *
-    `, [
+    `, epic_id !== undefined ? [
+      summary?.trim() || null,
+      description?.trim() || null,
+      item_type || null,
+      priority || null,
+      status || null,
+      assigned_to || null,
+      labels ? JSON.stringify(labels) : null,
+      acceptance_criteria?.trim() || null,
+      story_points || null,
+      sprint?.trim() || null,
+      req.params.id,
+      epicVal,
+    ] : [
       summary?.trim() || null,
       description?.trim() || null,
       item_type || null,
@@ -182,7 +263,7 @@ router.put('/:id', async (req, res) => {
       req.params.id,
     ]);
 
-    const changes = diffFields(old.rows[0], rows[0], ['summary', 'item_type', 'priority', 'status', 'assigned_to', 'story_points', 'sprint']);
+    const changes = diffFields(old.rows[0], rows[0], ['summary', 'item_type', 'priority', 'status', 'assigned_to', 'story_points', 'sprint', 'epic_id']);
     if (changes) await logAudit(pool, req, { action: 'update', entity_type: 'backlog', entity_id: rows[0].id, entity_label: rows[0].key, field_changes: changes, context: { source: 'manual' } });
     res.json(rows[0]);
   } catch (err) {
