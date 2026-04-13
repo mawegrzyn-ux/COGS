@@ -5,6 +5,7 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ─── fetchComboFull ───────────────────────────────────────────────────────────
 
@@ -102,6 +103,7 @@ router.post('/', async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [name.trim(), description || null, category_id || null, image_url || null, sort_order || 0]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'combo', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], steps: [] });
   } catch (err) { next(err); }
 });
@@ -111,6 +113,7 @@ router.post('/', async (req, res, next) => {
 router.put('/:id', async (req, res, next) => {
   try {
     const { name, description, category_id, image_url, sort_order } = req.body;
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_combos WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_combos
        SET name=$1, description=$2, category_id=$3, image_url=$4, sort_order=$5, updated_at=NOW()
@@ -118,6 +121,7 @@ router.put('/:id', async (req, res, next) => {
       [name?.trim(), description || null, category_id || null, image_url || null, sort_order || 0, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Combo not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'combo', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'description', 'category_id']) });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -126,10 +130,12 @@ router.put('/:id', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_combos WHERE id=$1', [req.params.id]);
     // Null out any sales items that link to this combo
     await pool.query(`UPDATE mcogs_sales_items SET combo_id=NULL WHERE combo_id=$1`, [req.params.id]);
     const { rowCount } = await pool.query('DELETE FROM mcogs_combos WHERE id=$1', [req.params.id]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Combo not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'combo', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });
@@ -209,6 +215,7 @@ router.post('/:id/steps', async (req, res, next) => {
       [req.params.id, name.trim(), display_name || null, description || null, sort_order || 0,
        min_select ?? 1, max_select ?? 1, allow_repeat ?? false, auto_select ?? false]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'combo_step', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
 });
@@ -225,6 +232,7 @@ router.put('/:id/steps/:sid', async (req, res, next) => {
        req.params.sid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Step not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'combo_step', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -236,6 +244,7 @@ router.delete('/:id/steps/:sid', async (req, res, next) => {
       [req.params.sid, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Step not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'combo_step', entity_id: Number(req.params.sid), entity_label: `Step #${req.params.sid}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });
@@ -316,6 +325,7 @@ router.post('/:id/steps/:sid/options', async (req, res, next) => {
        recipe_id || null, ingredient_id || null, sales_item_id || null,
        manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'combo_step_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], modifier_groups: [] });
   } catch (err) { next(err); }
 });
@@ -332,6 +342,7 @@ router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
        manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0, req.params.oid, req.params.sid]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'combo_step_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -343,6 +354,7 @@ router.delete('/:id/steps/:sid/options/:oid', async (req, res, next) => {
       [req.params.oid, req.params.sid]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'combo_step_option', entity_id: Number(req.params.oid), entity_label: `Option #${req.params.oid}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

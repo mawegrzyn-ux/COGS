@@ -1,6 +1,7 @@
 const router    = require('express').Router();
 const pool      = require('../db/pool');
 const Anthropic = require('@anthropic-ai/sdk');
+const { logAudit, diffFields } = require('../helpers/audit');
 const aiConfig  = require('../helpers/aiConfig');
 const { loadQuoteLookup, calcRecipeCost } = require('./cogs');
 
@@ -227,6 +228,7 @@ router.post('/push-prices', async (req, res) => {
       `, [menu_sales_item_id, price_level_id, sell_price]);
     }
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'update', entity_type: 'scenario', entity_id: null, entity_label: 'push prices to menu', context: { items_pushed: overrides.length } });
     res.json({ pushed: overrides.length });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -258,6 +260,7 @@ router.post('/', async (req, res) => {
       notes?.trim() || null,
     ]);
     const row = await fetchScenario(inserted.id);
+    logAudit(pool, req, { action: 'create', entity_type: 'scenario', entity_id: inserted.id, entity_label: name.trim() });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -289,6 +292,7 @@ router.put('/:id', async (req, res) => {
     ]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Scenario not found' } });
     const row = await fetchScenario(req.params.id);
+    logAudit(pool, req, { action: 'update', entity_type: 'scenario', entity_id: Number(req.params.id), entity_label: name.trim() });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -299,7 +303,9 @@ router.put('/:id', async (req, res) => {
 // ── DELETE /scenarios/:id ─────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_scenarios WHERE id=$1', [req.params.id]);
     await pool.query(`DELETE FROM mcogs_menu_scenarios WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'scenario', entity_id: Number(req.params.id), entity_label: old?.name || `Scenario #${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);

@@ -1,5 +1,6 @@
 const router = require('express').Router()
 const pool   = require('../db/pool')
+const { logAudit, diffFields } = require('../helpers/audit')
 
 // GET /categories
 //   ?for_ingredients=true   filter to ingredient-scoped categories
@@ -49,6 +50,7 @@ router.post('/', async (req, res) => {
       SELECT c.*, g.name AS group_name
       FROM mcogs_categories c LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       WHERE c.id = $1`, [rows[0].id])
+    logAudit(pool, req, { action: 'create', entity_type: 'category', entity_id: rows[0].id, entity_label: rows[0].name })
     res.status(201).json(full[0])
   } catch (err) {
     console.error(err)
@@ -62,6 +64,7 @@ router.put('/:id', async (req, res) => {
   if (!name?.trim())
     return res.status(400).json({ error: { message: 'name is required' } })
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_categories WHERE id=$1', [req.params.id])
     const { rows } = await pool.query(
       `UPDATE mcogs_categories
        SET name=$1, group_id=$2, for_ingredients=$3, for_recipes=$4, for_sales_items=$5,
@@ -75,6 +78,7 @@ router.put('/:id', async (req, res) => {
       SELECT c.*, g.name AS group_name
       FROM mcogs_categories c LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       WHERE c.id = $1`, [rows[0].id])
+    logAudit(pool, req, { action: 'update', entity_type: 'category', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'group_id', 'for_ingredients', 'for_recipes', 'for_sales_items']) })
     res.json(full[0])
   } catch (err) {
     console.error(err)
@@ -86,10 +90,12 @@ router.put('/:id', async (req, res) => {
 // ON DELETE SET NULL on category_id FKs means ingredients/recipes/sales_items become uncategorised automatically
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_categories WHERE id=$1', [req.params.id])
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_categories WHERE id=$1`, [req.params.id]
     )
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } })
+    logAudit(pool, req, { action: 'delete', entity_type: 'category', entity_id: old?.id, entity_label: old?.name })
     res.status(204).send()
   } catch (err) {
     console.error(err)

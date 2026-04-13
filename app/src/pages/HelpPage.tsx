@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useApi } from '../hooks/useApi'
 import DocLibrary from '../components/DocLibrary'
 
 // ─── Utility components ──────────────────────────────────────────────────────
@@ -106,10 +107,60 @@ const SECTIONS = [
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// ─── FAQ types ────────────────────────────────────────────────────────────────
+interface FaqItem { id: number; question: string; answer: string; category: string; tags: string[] }
+
 export default function HelpPage() {
-  const [helpMode, setHelpMode] = useState<'guide' | 'library'>('guide')
+  const api = useApi()
+  const [helpMode, setHelpMode] = useState<'guide' | 'library' | 'faq'>('guide')
   const [active, setActive] = useState('quick-start')
   const [search, setSearch] = useState('')
+
+  // ─── FAQ state ──────────────────────────────────────────────────────────────
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([])
+  const [faqCategories, setFaqCategories] = useState<string[]>([])
+  const [faqSearch, setFaqSearch] = useState('')
+  const [faqCatFilter, setFaqCatFilter] = useState<string[]>([])
+  const [faqExpanded, setFaqExpanded] = useState<Set<number>>(new Set())
+  const [faqLoading, setFaqLoading] = useState(false)
+
+  const loadFaq = useCallback(async () => {
+    setFaqLoading(true)
+    try {
+      const data = await api.get('/faq')
+      setFaqItems(data?.items || [])
+      setFaqCategories(data?.categories || [])
+    } catch { /* ignore */ }
+    finally { setFaqLoading(false) }
+  }, [api])
+
+  useEffect(() => { if (helpMode === 'faq' && !faqItems.length) loadFaq() }, [helpMode, loadFaq, faqItems.length])
+
+  const filteredFaq = useMemo(() => {
+    let items = faqItems
+    if (faqCatFilter.length) items = items.filter(f => faqCatFilter.includes(f.category))
+    if (faqSearch.trim()) {
+      const q = faqSearch.toLowerCase()
+      items = items.filter(f =>
+        f.question.toLowerCase().includes(q) ||
+        f.answer.toLowerCase().includes(q) ||
+        (f.tags || []).some(t => t.toLowerCase().includes(q))
+      )
+    }
+    return items
+  }, [faqItems, faqCatFilter, faqSearch])
+
+  function toggleFaqCat(cat: string) {
+    setFaqCatFilter(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])
+  }
+
+  function toggleFaqExpand(id: number) {
+    setFaqExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  function askPepperFaq(question: string) {
+    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message: question } }))
+  }
 
   // Track active section as user scrolls within `main`
   useEffect(() => {
@@ -140,17 +191,122 @@ export default function HelpPage() {
     search === '' || s.label.toLowerCase().includes(search.toLowerCase())
   )
 
+  // ── Tab bar helper ───────────────────────────────────────────────────────
+  const tabBtn = (mode: 'guide' | 'library' | 'faq', label: string, size: 'sm' | 'xs' = 'sm') => (
+    <button
+      className={`px-3 py-1.5 text-${size === 'xs' ? '[10px]' : 'xs'} rounded-lg font-medium ${
+        helpMode === mode ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      }`}
+      onClick={() => setHelpMode(mode)}
+    >{label}</button>
+  )
+
   if (helpMode === 'library') {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface shrink-0">
-          <button className="px-3 py-1.5 text-xs rounded-lg font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
-            onClick={() => setHelpMode('guide')}>Guide</button>
-          <button className="px-3 py-1.5 text-xs rounded-lg font-medium bg-accent text-white"
-            onClick={() => setHelpMode('library')}>Library</button>
+          {tabBtn('guide', 'Guide')}{tabBtn('library', 'Library')}{tabBtn('faq', 'FAQ')}
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           <DocLibrary location="help" />
+        </div>
+      </div>
+    )
+  }
+
+  if (helpMode === 'faq') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface shrink-0">
+          {tabBtn('guide', 'Guide')}{tabBtn('library', 'Library')}{tabBtn('faq', 'FAQ')}
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto p-6">
+            <h1 className="text-lg font-bold text-text-1 mb-1">Frequently Asked Questions</h1>
+            <p className="text-sm text-text-3 mb-4">Search for answers or browse by category</p>
+
+            {/* Search bar */}
+            <input
+              className="input w-full mb-3"
+              placeholder="Search FAQs..."
+              value={faqSearch}
+              onChange={e => setFaqSearch(e.target.value)}
+            />
+
+            {/* Category pills */}
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {faqCategories.map(cat => (
+                <button key={cat}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                    faqCatFilter.includes(cat)
+                      ? 'bg-accent text-white border-accent'
+                      : 'bg-white text-text-2 border-border hover:bg-accent-dim'
+                  }`}
+                  onClick={() => toggleFaqCat(cat)}
+                >{cat}</button>
+              ))}
+              {faqCatFilter.length > 0 && (
+                <button className="px-2.5 py-1 text-xs text-text-3 hover:text-red-500" onClick={() => setFaqCatFilter([])}>
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* FAQ items */}
+            {faqLoading ? (
+              <div className="text-center py-8 text-text-3 text-sm">Loading FAQs...</div>
+            ) : filteredFaq.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-text-3 text-sm mb-3">No matching FAQs found</p>
+                <button className="btn-primary text-sm" onClick={() => askPepperFaq(faqSearch || 'How can I help?')}>
+                  Ask Pepper Instead
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredFaq.map(faq => {
+                  const isOpen = faqExpanded.has(faq.id)
+                  return (
+                    <div key={faq.id} className="border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border)' }}>
+                      {/* Question header */}
+                      <button
+                        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-surface-2 transition-colors"
+                        onClick={() => toggleFaqExpand(faq.id)}
+                      >
+                        <svg className={`w-3.5 h-3.5 shrink-0 text-text-3 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                          <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                        <span className="flex-1 text-sm font-medium text-text-1">{faq.question}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
+                          style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+                          {faq.category}
+                        </span>
+                      </button>
+
+                      {/* Answer (expanded) */}
+                      {isOpen && (
+                        <div className="px-4 pb-3 pt-0 border-t" style={{ borderColor: 'var(--border)' }}>
+                          <p className="text-sm text-text-2 leading-relaxed mt-3 whitespace-pre-line">{faq.answer}</p>
+                          <div className="flex justify-end mt-3">
+                            <button
+                              className="text-xs text-accent hover:text-accent-dark flex items-center gap-1"
+                              onClick={() => askPepperFaq(faq.question)}
+                            >
+                              <span>Ask Pepper for more detail</span>
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -166,10 +322,7 @@ export default function HelpPage() {
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
           <div className="flex items-center gap-1 mb-2">
-            <button className="px-2 py-1 text-[10px] rounded font-medium bg-accent text-white"
-              onClick={() => setHelpMode('guide')}>Guide</button>
-            <button className="px-2 py-1 text-[10px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
-              onClick={() => setHelpMode('library')}>Library</button>
+            {tabBtn('guide', 'Guide', 'xs')}{tabBtn('library', 'Library', 'xs')}{tabBtn('faq', 'FAQ', 'xs')}
           </div>
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
           <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.5</p>

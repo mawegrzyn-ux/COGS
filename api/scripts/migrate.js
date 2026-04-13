@@ -2367,6 +2367,366 @@ const migrations = [
     UNIQUE(user_sub, summary_month)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_memory_monthly_sub ON mcogs_memory_monthly(user_sub, summary_month DESC)`,
+
+  // ── Step 118: FAQ knowledge base ───────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_faq (
+    id            SERIAL PRIMARY KEY,
+    question      TEXT NOT NULL,
+    answer        TEXT NOT NULL,
+    category      VARCHAR(100) NOT NULL DEFAULT 'General',
+    tags          JSONB NOT NULL DEFAULT '[]',
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    is_published  BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_faq_category ON mcogs_faq(category)`,
+  `CREATE INDEX IF NOT EXISTS idx_faq_published ON mcogs_faq(is_published) WHERE is_published = TRUE`,
+
+  // ── Step 118b: Seed FAQ entries ────────────────────────────────────────────
+  `DO $$ BEGIN
+    INSERT INTO mcogs_faq (question, answer, category, tags, sort_order) VALUES
+
+    -- ═══ Getting Started ═══════════════════════════════════════════════════
+    ('How do I add my first ingredient?',
+     'Go to Inventory → Ingredients tab → click "+ Add Ingredient". Enter the name, select a category and base unit (e.g. kg, litre), optionally set waste % and prep conversion. Save, then add a price quote from a vendor on the Quotes tab.',
+     'Getting Started', '["ingredient","create","beginner"]'::jsonb, 1),
+
+    ('How do I create a recipe?',
+     'Go to Recipes → click "+ New Recipe". Enter the name, category, yield quantity and yield unit. Then add line items — each line is an ingredient (or sub-recipe) with a prep quantity and unit. The COGS is calculated automatically from vendor quotes.',
+     'Getting Started', '["recipe","create","beginner"]'::jsonb, 2),
+
+    ('How do I set up a new market/country?',
+     'Go to Configuration → scroll to the Markets/Countries section → click "+ Add Country". Enter the country name, currency code (e.g. GBP), currency symbol (e.g. £), and exchange rate vs USD. Set a default price level and tax rate.',
+     'Getting Started', '["market","country","create","beginner"]'::jsonb, 3),
+
+    ('What is a price level?',
+     'A price level represents a pricing tier such as "Dine In" or "Delivery". Each menu item can have different sell prices per price level. One price level is marked as the default per country. Manage them in Configuration → Price Levels.',
+     'Getting Started', '["price-level","concept"]'::jsonb, 4),
+
+    ('How do I set up tax rates?',
+     'Go to Configuration → find your country → Tax Rates section. Add tax rates (e.g. "Standard VAT 20%"). Then assign which tax rate applies to which price level via the Country Level Tax mapping. One rate per country can be marked as default.',
+     'Getting Started', '["tax","vat","setup"]'::jsonb, 5),
+
+    -- ═══ Ingredients & Vendors ════════════════════════════════════════════
+    ('How do I add a vendor?',
+     'Go to Inventory → Vendors tab → click "+ Add Vendor". Enter the vendor name and select the country/market they supply. You can also add contact details, email, phone, and notes.',
+     'Ingredients & Vendors', '["vendor","create"]'::jsonb, 10),
+
+    ('How do I set a preferred vendor for an ingredient?',
+     'Go to Inventory → Quotes tab. Find the ingredient, then click the star icon next to the vendor quote you want to set as preferred for that market. Each ingredient can have one preferred vendor per country.',
+     'Ingredients & Vendors', '["vendor","preferred","quote"]'::jsonb, 11),
+
+    ('What does waste % mean?',
+     'Waste % is the proportion of an ingredient lost during preparation (peeling, trimming, bones, etc.). If chicken wings have 15% waste, the system assumes you need to purchase 15% more than the recipe quantity to account for unusable portions. This increases the effective cost per usable unit.',
+     'Ingredients & Vendors', '["waste","cost","ingredient"]'::jsonb, 12),
+
+    ('How does prep conversion work?',
+     'Prep conversion translates between the unit you buy in (base unit, e.g. kg) and the unit you use in recipes (prep unit, e.g. pieces). If 1 kg = 20 pieces, set prep unit to "piece" and conversion factor to 20. Recipes can then specify quantities in pieces while costs are calculated from the kg price.',
+     'Ingredients & Vendors', '["prep","conversion","unit"]'::jsonb, 13),
+
+    ('Why is my ingredient showing no cost?',
+     'An ingredient shows no cost when it has no active price quote from a preferred vendor in the selected market. Check: 1) Does the ingredient have at least one active quote? 2) Is a preferred vendor set for the target country? 3) Is the quote marked as active (not disabled)?',
+     'Ingredients & Vendors', '["cost","troubleshoot","quote"]'::jsonb, 14),
+
+    ('How do I import ingredients from a spreadsheet?',
+     'Go to Configuration → Import section (or ask Pepper to start an import). Upload a CSV or Excel file. The AI will extract ingredients, vendors, quotes, and recipes. Review the extracted data, map categories and vendors, then execute. Download the template from the Import page for the correct format.',
+     'Ingredients & Vendors', '["import","spreadsheet","csv","excel"]'::jsonb, 15),
+
+    -- ═══ Recipes ══════════════════════════════════════════════════════════
+    ('How do I add a sub-recipe to a recipe?',
+     'In the recipe editor, click "+ Add Item" and switch the type from "Ingredient" to "Recipe". Search for the sub-recipe by name. Set the quantity (how many portions of the sub-recipe this recipe uses). Sub-recipe costs cascade — changes to the sub-recipe automatically update the parent.',
+     'Recipes', '["recipe","sub-recipe","nested"]'::jsonb, 20),
+
+    ('What is yield qty/unit?',
+     'Yield is how much finished product one batch of the recipe produces. For example, a soup recipe might yield 5 litres, or a dough recipe might yield 20 portions. COGS per portion = total ingredient cost / yield qty. Set yield unit to match how you serve the item (portions, kg, litres, etc.).',
+     'Recipes', '["recipe","yield","portion","cost"]'::jsonb, 21),
+
+    ('Why is my recipe COGS showing as 0?',
+     'Recipe COGS is 0 when one or more ingredients lack a preferred vendor quote. Check each ingredient in the recipe: does it have an active, preferred quote for the target market? Also check that yield qty is not 0 (division by zero returns 0 cost per portion).',
+     'Recipes', '["recipe","cogs","troubleshoot","zero"]'::jsonb, 22),
+
+    ('How do market variations work?',
+     'Market variations let you substitute different ingredients for specific countries. For example, a recipe might use "UK Flour" in the UK market and "US All-Purpose Flour" in the US. Create a variation in the recipe editor by selecting a country and specifying alternative ingredients. The system uses the variation when calculating COGS for that market.',
+     'Recipes', '["recipe","market","variation","country"]'::jsonb, 23),
+
+    ('How do price level variations work?',
+     'Price level (PL) variations let you use different ingredients based on the price level (e.g. Dine In vs Delivery). Create a PL variation in the recipe editor. Priority: PL variation > market variation > global recipe. Use "Copy to Global" to promote a PL variation to the base recipe.',
+     'Recipes', '["recipe","price-level","variation"]'::jsonb, 24),
+
+    -- ═══ Menus & COGS ═════════════════════════════════════════════════════
+    ('How do I create a menu?',
+     'Go to Menus → Menu Builder tab → click "+ New Menu". Enter a name and select the country/market. The menu will use that country''s currency and tax rates. Then add sales items to the menu from the catalog.',
+     'Menus & COGS', '["menu","create"]'::jsonb, 30),
+
+    ('How do I add items to a menu?',
+     'In the Menu Builder, select a menu, then click "+ Add Item". Search for sales items from the catalog. Set the display name, sort order, and sell prices per price level. Items must exist in the Sales Items catalog first.',
+     'Menus & COGS', '["menu","item","add"]'::jsonb, 31),
+
+    ('What does COGS % mean?',
+     'COGS % (Cost of Goods Sold percentage) = (food cost / sell price) × 100. A COGS% of 30% means 30p of every £1 in revenue goes to food cost. Lower is better for profitability. The app colour-codes: green (≤ target), amber (target to +10%), red (> target + 10%). Default targets are configurable in Configuration → COGS Thresholds.',
+     'Menus & COGS', '["cogs","percentage","concept","profitability"]'::jsonb, 32),
+
+    ('How are menu prices stored?',
+     'All prices are stored in USD as the base currency. When displaying, prices are converted using the country''s exchange rate. The formula: display price = USD price × (country rate / target currency rate). When saving, the reverse: USD price = display price / exchange rate.',
+     'Menus & COGS', '["price","currency","usd","conversion"]'::jsonb, 33),
+
+    ('Why are my menu prices showing 0?',
+     'Menu prices show 0 when sell prices have not been set for the menu items at the relevant price level. Go to Menu Builder → select the menu → check the Price columns. Enter sell prices for each item at each price level. Also ensure the country has a default price level assigned.',
+     'Menus & COGS', '["price","zero","troubleshoot"]'::jsonb, 34),
+
+    ('How does currency conversion work?',
+     'The system uses USD as the base currency with exchange rates per country (synced from the Frankfurter API). Display rate = country rate / target currency rate. For example, if GBP rate is 0.79 and you view in GBP, prices are multiplied by 0.79. Exchange rates can be synced or manually overridden in Configuration.',
+     'Menus & COGS', '["currency","exchange","rate","conversion"]'::jsonb, 35),
+
+    -- ═══ Menu Engineer / Scenarios ════════════════════════════════════════
+    ('How do I use the Sales Mix Generator?',
+     'In Menu Engineer, click "Generate Mix". Set the total weekly covers and the distribution per category (e.g. 40% Mains, 25% Starters). The generator distributes quantities across items within each category. Use the per-row fill button (=X%) to auto-calculate remaining percentages.',
+     'Menu Engineer', '["scenario","mix","generator","quantity"]'::jsonb, 40),
+
+    ('How do I save a scenario?',
+     'In Menu Engineer, click the scenario button in the toolbar → the Scenario Modal opens. Enter a name and click Save. Scenarios store: quantities, price overrides, cost overrides, notes, and change history. Load a saved scenario to restore all values.',
+     'Menu Engineer', '["scenario","save","load"]'::jsonb, 41),
+
+    ('How do I push scenario prices to the live menu?',
+     'After making price overrides in a scenario (type new prices in the Price cells), click "→ Menu" in the toolbar. This permanently writes your scenario prices to the actual menu. A confirmation dialog shows how many overrides will be pushed. This action cannot be undone.',
+     'Menu Engineer', '["scenario","push","price","override"]'::jsonb, 42),
+
+    ('What does the What If tool do?',
+     'The What If tool applies a percentage change to all prices and/or all costs in one step. Click "What If" → enter a price % change (e.g. +5%) and/or cost % change (e.g. +3%) → Apply. The changes are applied as overrides — they do not affect the live menu until you push them.',
+     'Menu Engineer', '["scenario","whatif","percentage"]'::jsonb, 43),
+
+    ('How do I share a menu with an external reviewer?',
+     'In Menus → Shared Links tab, click "+ New Link". Set a password, choose view or edit mode, optionally pin to a scenario and set an expiry date. Share the generated URL with the reviewer. In edit mode, their price changes are tracked and visible in the Menu Engineer History tab.',
+     'Menu Engineer', '["share","link","external","reviewer"]'::jsonb, 44),
+
+    -- ═══ Sales Items & POS ════════════════════════════════════════════════
+    ('What are the different sales item types?',
+     'Four types: 1) Recipe — linked to a recipe, COGS from ingredient costs. 2) Ingredient — linked directly to an ingredient. 3) Manual — no link, cost entered manually. 4) Combo — structured bundle with steps and options, COGS = sum of step costs. All types can have modifier groups attached.',
+     'Sales Items', '["sales-item","type","recipe","ingredient","manual","combo"]'::jsonb, 50),
+
+    ('How do combos work?',
+     'A combo has ordered steps (e.g. Step 1: Choose a drink, Step 2: Choose a side). Each step has options the customer can select from. Options can be recipes, ingredients, or manual-cost items. COGS is calculated from the selected options. Manage combos in Sales Items → Combos tab.',
+     'Sales Items', '["combo","step","option","structure"]'::jsonb, 51),
+
+    ('How do modifier groups work?',
+     'Modifier groups are reusable add-on lists (e.g. "Extra Toppings", "Sauce Options") that can be attached to any sales item or combo step option. Each group has min/max selection rules and a list of options with optional price add-ons. Manage in Sales Items → Modifiers tab.',
+     'Sales Items', '["modifier","group","addon"]'::jsonb, 52),
+
+    ('What is auto_show on modifiers?',
+     'auto_show controls whether a modifier group appears automatically inline when ordering (true) or is hidden behind a "Customise" button (false). For example, cooking temperature might be auto_show (always ask), while extra toppings might be hidden until requested. Set per attachment, or use the group default.',
+     'Sales Items', '["modifier","auto-show","pos"]'::jsonb, 53),
+
+    -- ═══ Stock Manager ════════════════════════════════════════════════════
+    ('How do I create a purchase order?',
+     'Go to Stock Manager → Purchase Orders tab → "+ New PO". Select a vendor and location. Add items — the system auto-populates price and unit from the vendor''s active quotes. If no quote exists, enter manually and optionally save as a new quote. Submit when ready.',
+     'Stock Manager', '["purchase-order","create","po"]'::jsonb, 60),
+
+    ('How does goods receiving work?',
+     'When goods arrive, go to Stock Manager → Goods In tab → create a GRN (linked to PO or standalone). Enter the quantities actually received. On confirm, the system: 1) Creates stock movements, 2) Updates stock levels, 3) Updates PO received quantities.',
+     'Stock Manager', '["goods-received","grn","receive"]'::jsonb, 61),
+
+    ('How do I log waste?',
+     'Go to Stock Manager → Waste tab. Select ingredient, enter qty wasted, choose a reason code (Expired, Damaged, Spillage, etc.), add notes. Each waste entry deducts from stock levels and creates an audit trail. Manage reason codes in the right panel.',
+     'Stock Manager', '["waste","log","reason"]'::jsonb, 62),
+
+    ('How do stock transfers work?',
+     'Go to Stock Manager → Transfers tab → "+ New Transfer". Select source and destination stores, add items with quantities. Dispatch (deducts from source) → Confirm at destination (adds to destination). Cancel reverses the dispatch if needed.',
+     'Stock Manager', '["transfer","stock","move"]'::jsonb, 63),
+
+    ('How does stocktake approval adjust stock?',
+     'A stocktake compares expected stock (system qty) against counted stock (physical count). When approved, the system: 1) Calculates variance per item, 2) Creates adjustment movements for any differences, 3) Sets stock levels to match the counted quantities.',
+     'Stock Manager', '["stocktake","count","variance","adjust"]'::jsonb, 64),
+
+    -- ═══ Allergens & HACCP ════════════════════════════════════════════════
+    ('What are the EU/UK FIC 14 allergens?',
+     'The 14 regulated allergens: Celery, Cereals (gluten), Crustaceans, Eggs, Fish, Lupin, Milk, Molluscs, Mustard, Nuts, Peanuts, Sesame, Soya, Sulphur dioxide. Each ingredient can be marked as Contains, May Contain, or Free From for each allergen. The allergen matrix shows this across all ingredients or menu items.',
+     'Allergens & HACCP', '["allergen","fic","eu","uk","14"]'::jsonb, 70),
+
+    ('How do I set allergen status for an ingredient?',
+     'Go to Allergens → Inventory Matrix. Find the ingredient row and click the cell for each allergen to cycle through: Contains (red C), May Contain (amber M), Free From (green F), or Unknown (blank). Changes save automatically. You can also add free-text allergen notes per ingredient.',
+     'Allergens & HACCP', '["allergen","ingredient","set","matrix"]'::jsonb, 71),
+
+    ('How do I log a temperature reading?',
+     'Go to HACCP → select the location → Equipment tab. Click on a piece of equipment to see its log. Click "+ Log Temperature" — enter the temperature and any notes. Readings are timestamped and stored for compliance reporting.',
+     'Allergens & HACCP', '["haccp","temperature","log","equipment"]'::jsonb, 72),
+
+    -- ═══ Configuration & Admin ════════════════════════════════════════════
+    ('How do I approve a new user?',
+     'When someone registers via Auth0, they land in "pending" status. Go to Configuration → Users & Roles. Find the pending user and click Approve. Assign them a role (Admin, Operator, or Viewer). Optionally restrict their market scope via brand partner assignment.',
+     'Configuration', '["user","approve","pending","role"]'::jsonb, 80),
+
+    ('How do I set up RBAC roles?',
+     'Go to Configuration → Users & Roles → Roles tab. Three system roles exist (Admin, Operator, Viewer). Create custom roles by clicking "+ New Role" and setting permission levels (none/read/write) for each of the 21 features. Assign roles to users in the Users tab.',
+     'Configuration', '["rbac","role","permission","access"]'::jsonb, 81),
+
+    ('How do I restrict a user to specific markets?',
+     'In Configuration → Users & Roles, find the user and click the market scope button. Assign brand partners — the user will only see data from countries linked to those brand partners. Leave empty for unrestricted access (Admin default).',
+     'Configuration', '["user","market","scope","restrict","brand"]'::jsonb, 82),
+
+    ('What is the developer (is_dev) flag?',
+     'The is_dev flag gives a user access to developer-only features: System → Test Data (load/clear test data) and System → CLAUDE.md (project documentation viewer). It is separate from RBAC roles — any role can have dev access. Toggle via the </> button in Users & Roles.',
+     'Configuration', '["developer","dev","flag","system"]'::jsonb, 83),
+
+    -- ═══ Pepper AI ════════════════════════════════════════════════════════
+    ('What can Pepper do?',
+     'Pepper is an AI assistant with 96 tools. It can: read and write ingredients, recipes, menus, vendors, quotes, and categories; manage allergens, HACCP, locations, markets, and brand partners; run the import wizard; export data to Excel; search the web; read/write GitHub; query the audit log; search the FAQ; and remember things you tell it across sessions.',
+     'Pepper AI', '["pepper","ai","tools","capabilities"]'::jsonb, 90),
+
+    ('How do I teach Pepper to remember something?',
+     'Say "remember that I always want prices in GBP" or "note that John handles UK allergens". Pepper saves this as a pinned note that persists across all future sessions. Say "what do you remember?" to see all notes, or "forget the note about GBP" to delete one.',
+     'Pepper AI', '["pepper","memory","remember","note"]'::jsonb, 91),
+
+    ('How do I export data to Excel via Pepper?',
+     'Ask Pepper "export ingredients to Excel" or "download a full export". Pepper generates an .xlsx workbook with sheets for ingredients, price quotes, recipes, and menus — filtered to your market scope. The file downloads automatically in your browser.',
+     'Pepper AI', '["pepper","export","excel","download"]'::jsonb, 92),
+
+    ('Can Pepper search the web?',
+     'Yes, if a Brave Search API key is configured in Settings → AI. Ask Pepper to "search the web for..." and it will use Brave Search (or DuckDuckGo fallback). Pepper only searches when you explicitly ask — it does not search autonomously.',
+     'Pepper AI', '["pepper","web","search","brave"]'::jsonb, 93),
+
+    ('What is the monthly token limit?',
+     'Each user has a monthly token allowance (configurable in Settings → AI, 0 = unlimited). The billing period runs 25th to 24th. Usage is shown as a progress bar in the Pepper panel header. When exceeded, Pepper returns a 429 error until the next period.',
+     'Pepper AI', '["pepper","token","limit","usage","billing"]'::jsonb, 94),
+
+    -- ═══ Import ═══════════════════════════════════════════════════════════
+    ('What file formats does import support?',
+     'CSV, TXT, XLSX, XLS, XLSB, XLSM, DOCX, and PPTX files up to 10 MB. The AI extraction engine handles any column layout — it maps your data to the COGS schema automatically. Download the template from the Import page for the recommended format.',
+     'Import', '["import","format","csv","excel","file"]'::jsonb, 100),
+
+    ('How does the AI import wizard work?',
+     'Upload a file → AI extracts structured data (ingredients, vendors, quotes, recipes, menus) → Review in tabbed tables → Map categories and vendors to existing or new entries → Execute to write to the database. Each step validates and allows corrections before committing.',
+     'Import', '["import","wizard","ai","pipeline"]'::jsonb, 101),
+
+    ('What if my import has duplicate ingredients?',
+     'The wizard detects duplicates by name matching. For each duplicate, you choose: Create (new entry), Skip (ignore), or Override (update existing record). Override is useful for updating prices or categories without creating duplicates.',
+     'Import', '["import","duplicate","override","skip"]'::jsonb, 102)
+
+    ON CONFLICT DO NOTHING;
+  END $$`,
+
+  // ── Step 118c: Additional deep-dive FAQ entries ────────────────────────────
+  `DO $$ BEGIN
+    INSERT INTO mcogs_faq (question, answer, category, tags, sort_order) VALUES
+
+    -- ═══ Deeper Menus & COGS ══════════════════════════════════════════════
+    ('How do I set sell prices per price level?',
+     'In Menu Builder, select a menu and click on an item. The right panel shows price fields for each price level (e.g. Dine In, Delivery). Enter the gross sell price — the system calculates the net price using the country''s tax rate. You can also set default prices on the Sales Items page under the Details tab, which apply unless overridden per-menu.',
+     'Menus & COGS', '["price","price-level","sell","menu"]'::jsonb, 36),
+
+    ('How do I compare COGS across markets?',
+     'Use the Dashboard — each menu tile shows COGS% per price level. For detailed comparison, go to Menu Engineer, select a menu, and view the COGS% column. Switch between menus to compare. You can also ask Pepper: "compare wings COGS between UK and India" and it will query both menus.',
+     'Menus & COGS', '["cogs","compare","market","cross-market"]'::jsonb, 37),
+
+    ('What is the difference between gross and net price?',
+     'Gross price includes tax (what the customer pays). Net price excludes tax (your revenue before tax). COGS% is calculated against net price: (food cost / net sell price) × 100. The tax rate is determined by the country + price level tax mapping in Configuration.',
+     'Menus & COGS', '["price","gross","net","tax"]'::jsonb, 38),
+
+    -- ═══ Deeper Scenarios ═════════════════════════════════════════════════
+    ('How do shared link comments work?',
+     'When you create a shared link in edit mode, external reviewers can post comments and change prices. Comments appear in the Menu Engineer → Notes/History panel → Comments tab, merged from all active shared links for that menu/scenario. Replies from ME are routed back to the correct shared view. Price changes appear in the History tab under "Shared View Edits".',
+     'Menu Engineer', '["share","comment","reviewer","history"]'::jsonb, 45),
+
+    ('How do category collapsing and compact view work in Menu Engineer?',
+     'In Menu Engineer, items are grouped by category. Click a category header row to collapse/expand its items. Use the "All" button next to the Item column header to collapse or expand all categories at once. Compact view reduces column widths and hides the Revenue column for a denser spreadsheet-like layout.',
+     'Menu Engineer', '["scenario","category","collapse","compact"]'::jsonb, 46),
+
+    ('How do per-level quantities work in All Levels view?',
+     'When viewing "All Levels" in Menu Engineer, each price level gets its own Qty column. This lets you model different sales volumes per channel — e.g. 100 Dine In, 50 Delivery. The COGS% for each level is calculated independently. Total COGS% uses the weighted sum across all levels.',
+     'Menu Engineer', '["scenario","quantity","all-levels","per-level"]'::jsonb, 47),
+
+    ('What is the Smart Scenario feature?',
+     'Smart Scenario uses Claude AI to suggest price and cost changes based on your targets. Click the Smart Scenario button, describe your goal (e.g. "reduce overall COGS to 28%"), and the AI proposes specific item-level price or cost adjustments. Review and accept/reject each suggestion before applying.',
+     'Menu Engineer', '["scenario","smart","ai","suggestion"]'::jsonb, 48),
+
+    -- ═══ Deeper Sales Items ═══════════════════════════════════════════════
+    ('How do I set default prices for a sales item?',
+     'Go to Sales Items → select an item → Details tab. Scroll to the price section showing each price level. Enter the default sell price per level. These defaults apply when the item is added to any menu, but can be overridden per-menu in the Menu Builder. Market-level defaults are not yet supported — defaults are global.',
+     'Sales Items', '["sales-item","default","price"]'::jsonb, 54),
+
+    ('How do I manage market visibility for sales items?',
+     'Select a sales item → Markets tab. Toggle each market on/off with checkboxes. When a market is disabled, the item won''t appear in menus for that country. Changes save automatically. Use bulk operations to update visibility for multiple items at once.',
+     'Sales Items', '["sales-item","market","visibility","toggle"]'::jsonb, 55),
+
+    ('How do I duplicate a combo or modifier group?',
+     'In Sales Items → Combos tab, click the duplicate icon on a combo row. This creates a copy with all steps and options. For modifier groups, go to Modifiers tab → click the duplicate icon on a group row. The copy includes all options with their prices and settings.',
+     'Sales Items', '["combo","modifier","duplicate","copy"]'::jsonb, 56),
+
+    -- ═══ Deeper Stock Manager ═════════════════════════════════════════════
+    ('What are stores (centres) and how do I set them up?',
+     'Stores are sub-locations within a physical location — e.g. kitchen, bar, walk-in fridge. Go to Configuration → Locations → select a location → Centres section. Add centres to track stock at a granular level. The "is_store_itself" flag marks the main location as its own store.',
+     'Stock Manager', '["store","centre","location","sub-location"]'::jsonb, 65),
+
+    ('How do I create an invoice from a GRN?',
+     'After confirming a Goods Received Note, go to Stock Manager → Invoices tab → click "+ From GRN". Select the confirmed GRN — the invoice auto-populates with the received items and prices. Review, adjust if needed, then save. The invoice starts in draft status.',
+     'Stock Manager', '["invoice","grn","create","from-grn"]'::jsonb, 66),
+
+    ('What are order templates?',
+     'Order templates save a standard set of items for recurring purchase orders (e.g. weekly wing restock). Create a PO, then save it as a template. Next time, load the template to pre-populate a new PO with the same items and quantities. Edit as needed before submitting.',
+     'Stock Manager', '["purchase-order","template","reorder"]'::jsonb, 67),
+
+    ('How do credit notes work?',
+     'Credit notes record returns or price adjustments from vendors. Create one in Stock Manager → (via invoices or standalone). Add items with quantities and values. Submit → Approve → Apply. When applied, credit notes can adjust stock levels and create a financial record for reconciliation.',
+     'Stock Manager', '["credit-note","return","vendor","adjustment"]'::jsonb, 68),
+
+    -- ═══ Deeper Configuration ═════════════════════════════════════════════
+    ('How do I switch database modes (local vs standalone)?',
+     'Go to System → Database (admin only). You can switch between local PostgreSQL (same server as the API) and standalone (remote, e.g. AWS RDS). Test the connection first, then save. Use "Migrate Data & Switch" to copy all data from the current database to a new target in one operation.',
+     'Configuration', '["database","mode","local","standalone","rds"]'::jsonb, 84),
+
+    ('How do COGS threshold colours work?',
+     'COGS thresholds determine the colour coding: Green = COGS% at or below target (excellent). Amber = between target and target + 10% (acceptable). Red = above target + 10% (alert). Configure the target percentages in Configuration → COGS Thresholds. Default is typically 28-32%.',
+     'Configuration', '["cogs","threshold","colour","target"]'::jsonb, 85),
+
+    ('How do brand partners and market scope work?',
+     'Brand partners represent franchise brands linked to specific markets/countries. Users can be restricted to see only data from their assigned brand partners'' markets. This creates market-scoped views — a UK operator only sees UK menus, vendors, and quotes. Assign via Configuration → Users & Roles.',
+     'Configuration', '["brand","partner","market","scope","rbac"]'::jsonb, 86),
+
+    -- ═══ Deeper Import ════════════════════════════════════════════════════
+    ('How do I use the import template?',
+     'Download the template from Configuration → Import → "Download template". It contains sheets for Ingredients, Vendors, Price Quotes, Recipes, Menus, and Menu Items. Fill in your data following the column headers. Upload the file and the AI will map your data to the COGS schema. Unit names are auto-matched (e.g. "pound" → kg).',
+     'Import', '["import","template","download","format"]'::jsonb, 103),
+
+    ('Can I import menus and menu items?',
+     'Yes. The import template has two sheets: Menus (menu_name, country, description) and Menu Items (menu_name, item_type, item_name, display_name, sort_order). The import wizard creates the menus and links items from your imported recipes/ingredients. Existing menus with the same name are detected as duplicates.',
+     'Import', '["import","menu","menu-item"]'::jsonb, 104),
+
+    ('How does Pepper handle imports?',
+     'Paste or upload data directly in the Pepper chat. Pepper calls the import pipeline, extracts structured data via AI, and returns a link to the Import Wizard pre-loaded with your data. Click the link to review, map categories/vendors, and execute. This skips the manual upload step.',
+     'Import', '["import","pepper","ai","chat"]'::jsonb, 105),
+
+    -- ═══ Deeper Allergens ═════════════════════════════════════════════════
+    ('How does the allergen matrix work for combo items?',
+     'For combo-type sales items, the allergen system traces the full ingredient chain: direct ingredient options from combo step options, plus recipe options (then their ingredients via recipe items). The matrix aggregates allergen status across all possible paths through the combo.',
+     'Allergens & HACCP', '["allergen","combo","matrix","chain"]'::jsonb, 73),
+
+    ('What are allergen notes?',
+     'Each ingredient and menu item has an optional free-text allergen notes field. Use it for information that doesn''t fit the 14-allergen matrix — e.g. "May contain traces of tree nuts due to shared facility" or "Vegan-certified supplier". Notes are editable inline in both the Inventory and Menu allergen matrices.',
+     'Allergens & HACCP', '["allergen","notes","free-text"]'::jsonb, 74),
+
+    -- ═══ Troubleshooting ══════════════════════════════════════════════════
+    ('Why am I getting a 403 Forbidden error?',
+     'A 403 means your role lacks permission for that feature. Check your role in Configuration → Users & Roles. Each feature has three access levels: none (hidden + 403), read (view only), write (full access). Ask an Admin to update your role permissions.',
+     'Troubleshooting', '["error","403","forbidden","permission","rbac"]'::jsonb, 110),
+
+    ('Why is the app showing "Pending" after I log in?',
+     'New users start in "pending" status after registering via Auth0. An Admin must approve your account in Configuration → Users & Roles. The first-ever user is auto-approved as Admin. Contact your system administrator to get approved.',
+     'Troubleshooting', '["pending","login","approve","new-user"]'::jsonb, 111),
+
+    ('Why are exchange rates not updating?',
+     'Exchange rates are synced from the Frankfurter API (free, no key required). Go to Configuration → Currency section → click "Sync Rates". If it fails, check your server''s internet connectivity. Rates are relative to USD base. You can also manually override any rate.',
+     'Troubleshooting', '["exchange","rate","sync","currency","frankfurter"]'::jsonb, 112),
+
+    ('How do I fix missing COGS on a menu item?',
+     'COGS shows 0 or blank when the cost chain is incomplete. Check in order: 1) Does the sales item link to a recipe or ingredient? 2) Does the recipe have all ingredients added? 3) Does each ingredient have an active price quote? 4) Is a preferred vendor set for the target market? 5) Is the recipe yield qty > 0?',
+     'Troubleshooting', '["cogs","missing","zero","troubleshoot","checklist"]'::jsonb, 113),
+
+    ('Pepper is not responding — what should I check?',
+     'Check: 1) Is the Anthropic API key configured in Settings → AI? 2) Have you exceeded your monthly token limit? (check the usage bar in the Pepper header). 3) Is the server running? (check /api/health). 4) Try refreshing the page — SSE connections can drop on unstable networks.',
+     'Troubleshooting', '["pepper","error","not-responding","troubleshoot"]'::jsonb, 114)
+
+    ON CONFLICT DO NOTHING;
+  END $$`,
 ];
 
 async function runMigrations(pool) {

@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // ── Helper: recalculate invoice subtotal/total after item changes ────────────
 async function recalcTotals(client, invoiceId) {
@@ -125,6 +126,7 @@ router.post('/', async (req, res) => {
     const { rows: [result] } = await client.query('SELECT * FROM mcogs_invoices WHERE id=$1', [inv.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'invoice', entity_id: result.id, entity_label: result.invoice_number });
     res.status(201).json(result);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -306,6 +308,7 @@ router.post('/:id/submit', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Invoice not found or not in draft status' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'invoice', entity_id: row.id, entity_label: row.invoice_number, field_changes: { status: { old: 'draft', new: 'pending' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -322,6 +325,7 @@ router.post('/:id/approve', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Invoice not found or not in pending status' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'invoice', entity_id: row.id, entity_label: row.invoice_number, field_changes: { status: { old: 'pending', new: 'approved' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -338,6 +342,7 @@ router.post('/:id/mark-paid', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Invoice not found or not in approved status' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'invoice', entity_id: row.id, entity_label: row.invoice_number, field_changes: { status: { old: 'approved', new: 'paid' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -354,6 +359,7 @@ router.post('/:id/dispute', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Invoice not found or already paid' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'invoice', entity_id: row.id, entity_label: row.invoice_number, field_changes: { status: { old: '(previous)', new: 'disputed' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -422,6 +428,7 @@ router.post('/from-grn/:grnId', async (req, res) => {
     const { rows: [result] } = await client.query('SELECT * FROM mcogs_invoices WHERE id=$1', [inv.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'invoice', entity_id: result.id, entity_label: result.invoice_number, context: { source: 'from_grn', grn_id: Number(req.params.grnId) } });
     res.status(201).json(result);
   } catch (err) {
     await client.query('ROLLBACK');

@@ -4,6 +4,7 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ─── helper: full row with prices + override flags ───────────────────────────
 async function fetchRow(id, client) {
@@ -164,6 +165,7 @@ router.post('/', async (req, res, next) => {
     finally { client.release(); }
 
     const full = await fetchRow(newMsi.id);
+    logAudit(pool, req, { action: 'create', entity_type: 'menu_sales_item', entity_id: newMsi.id, entity_label: `SI #${sales_item_id} on menu #${menu_id}` });
     res.status(201).json(full);
   } catch (err) { next(err); }
 });
@@ -172,12 +174,14 @@ router.post('/', async (req, res, next) => {
 router.put('/:id', async (req, res, next) => {
   try {
     const { qty, sort_order, allergen_notes } = req.body;
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_sales_items WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_menu_sales_items SET qty=$1, sort_order=$2, allergen_notes=$3
        WHERE id=$4 RETURNING *`,
       [qty || 1, sort_order || 0, allergen_notes || null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Menu sales item not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'menu_sales_item', entity_id: rows[0].id, entity_label: `MSI #${rows[0].id}`, field_changes: diffFields(old, rows[0], ['sales_item_id', 'sort_order', 'qty', 'allergen_notes']) });
     const full = await fetchRow(rows[0].id);
     res.json(full);
   } catch (err) { next(err); }
@@ -186,10 +190,12 @@ router.put('/:id', async (req, res, next) => {
 // ─── DELETE /menu-sales-items/:id ─────────────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_sales_items WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       'DELETE FROM mcogs_menu_sales_items WHERE id=$1', [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Menu sales item not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'menu_sales_item', entity_id: old?.id, entity_label: `MSI #${req.params.id}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

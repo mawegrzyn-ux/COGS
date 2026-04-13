@@ -11,6 +11,7 @@
 const router    = require('express').Router();
 const pool      = require('../db/pool');
 const crypto    = require('crypto');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 const {
   loadQuoteLookup,
@@ -156,6 +157,7 @@ router.post('/', async (req, res) => {
         expires_at  || null,
         notes       || null]);
 
+    logAudit(pool, req, { action: 'create', entity_type: 'shared_page', entity_id: row.id, entity_label: row.name });
     res.status(201).json({ ...row, url: `/share/${slug}` });
   } catch (err) {
     console.error(err);
@@ -209,6 +211,7 @@ router.put('/:id', async (req, res) => {
       notes      !== undefined ? (notes      || null)  : existing.notes,
     ]);
 
+    logAudit(pool, req, { action: 'update', entity_type: 'shared_page', entity_id: row.id, entity_label: row.name, field_changes: diffFields(existing, row, ['slug', 'mode', 'is_active', 'expires_at']) });
     res.json({ ...row, url: `/share/${row.slug}` });
   } catch (err) {
     console.error(err);
@@ -219,10 +222,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/shared-pages/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_shared_pages WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_shared_pages WHERE id = $1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'shared_page', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) {
     console.error(err);

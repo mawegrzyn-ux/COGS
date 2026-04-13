@@ -2,6 +2,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 const auth  = requireAuth;
 const admin = requirePermission('users', 'write');
@@ -85,6 +86,7 @@ router.put('/:id', auth, admin, async (req, res) => {
       LEFT JOIN mcogs_roles r ON r.id = u.role_id
       WHERE u.id = $1
     `, [id]);
+    logAudit(pool, req, { action: 'update', entity_type: 'user', entity_id: Number(id), entity_label: updated?.email || updated?.name });
     res.json(updated);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -101,7 +103,9 @@ router.delete('/:id', auth, admin, async (req, res) => {
     return res.status(400).json({ error: { message: 'You cannot delete your own account.' } });
   }
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_users WHERE id=$1', [id]);
     await pool.query('DELETE FROM mcogs_users WHERE id = $1', [id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'user', entity_id: Number(id), entity_label: old?.email || old?.name });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: { message: err.message } });

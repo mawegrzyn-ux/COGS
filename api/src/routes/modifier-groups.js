@@ -3,6 +3,7 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ─── GET /modifier-groups ─────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
@@ -54,6 +55,7 @@ router.post('/', async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'modifier_group', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
 });
@@ -62,12 +64,14 @@ router.post('/', async (req, res, next) => {
 router.put('/:id', async (req, res, next) => {
   try {
     const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5, allow_repeat_selection=$6, default_auto_show=$7
        WHERE id=$8 RETURNING *`,
       [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'modifier_group', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'min_select', 'max_select', 'allow_repeat_selection', 'default_auto_show']) });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -108,8 +112,10 @@ router.delete('/:id', async (req, res, next) => {
     await pool.query('DELETE FROM mcogs_sales_item_modifier_groups WHERE modifier_group_id=$1', [req.params.id]);
     await pool.query('DELETE FROM mcogs_combo_step_option_modifier_groups WHERE modifier_group_id=$1', [req.params.id]);
 
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query('DELETE FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Modifier group not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'modifier_group', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });
@@ -192,6 +198,7 @@ router.post('/:id/options', async (req, res, next) => {
       [req.params.id, name.trim(), display_name || null, item_type,
        recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1, image_url || null]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'modifier_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -207,6 +214,7 @@ router.put('/:id/options/:oid', async (req, res, next) => {
        manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1, image_url || null, req.params.oid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'modifier_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -218,6 +226,7 @@ router.delete('/:id/options/:oid', async (req, res, next) => {
       [req.params.oid, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'modifier_option', entity_id: Number(req.params.oid), entity_label: `Option #${req.params.oid}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

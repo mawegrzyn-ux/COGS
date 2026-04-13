@@ -534,8 +534,46 @@ async function clearData(client) {
   //   mcogs_ai_chat_log        — AI assistant history
   //   mcogs_feedback           — user-submitted bug/feature reports
   //   mcogs_import_jobs        — import staging data
+  //   mcogs_audit_log          — historical audit trail (preserved for compliance)
+  //   mcogs_user_notes         — Pepper memory notes (preserved per-user)
+  //   mcogs_user_profiles      — Pepper user profiles (preserved per-user)
   await client.query(`
     TRUNCATE TABLE
+      -- FAQ knowledge base
+      mcogs_faq,
+      -- AI memory consolidation
+      mcogs_memory_monthly,
+      mcogs_memory_daily,
+      -- Doc library
+      mcogs_docs,
+      mcogs_doc_categories,
+      -- Media library
+      mcogs_media_items,
+      mcogs_media_categories,
+      -- Bug tracker + backlog (comments reference these)
+      mcogs_item_comments,
+      mcogs_backlog,
+      mcogs_bugs,
+      -- Stock Manager supply chain
+      mcogs_stocktake_items,
+      mcogs_stocktakes,
+      mcogs_stock_transfer_items,
+      mcogs_stock_transfers,
+      mcogs_waste_log,
+      mcogs_waste_reason_codes,
+      mcogs_credit_note_items,
+      mcogs_credit_notes,
+      mcogs_invoice_items,
+      mcogs_invoices,
+      mcogs_goods_received_items,
+      mcogs_goods_received,
+      mcogs_order_template_items,
+      mcogs_order_templates,
+      mcogs_purchase_order_items,
+      mcogs_purchase_orders,
+      mcogs_stock_movements,
+      mcogs_stock_levels,
+      mcogs_stores,
       -- Shared pages & changes (reference menus + scenarios)
       mcogs_shared_page_changes,
       mcogs_shared_pages,

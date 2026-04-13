@@ -3,6 +3,7 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,7 @@ router.post('/', async (req, res, next) => {
        manual_cost || null, image_url || null, sort_order || 0, qty != null ? qty : 1]
     );
     const full = await fetchFull(rows[0].id);
+    logAudit(pool, req, { action: 'create', entity_type: 'sales_item', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(full);
   } catch (err) { next(err); }
 });
@@ -167,6 +169,7 @@ router.post('/', async (req, res, next) => {
 router.put('/:id', async (req, res, next) => {
   try {
     const { name, display_name, category_id, description, recipe_id, ingredient_id, combo_id, manual_cost, image_url, sort_order, qty } = req.body;
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_sales_items WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_sales_items
        SET name=$1, display_name=$2, category_id=$3, description=$4, recipe_id=$5, ingredient_id=$6, combo_id=$7,
@@ -177,6 +180,7 @@ router.put('/:id', async (req, res, next) => {
        manual_cost || null, image_url || null, sort_order || 0, qty != null ? qty : 1, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Sales item not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'sales_item', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'display_name', 'item_type', 'recipe_id', 'ingredient_id', 'category_id', 'manual_cost', 'combo_id']) });
     const full = await fetchFull(rows[0].id);
     res.json(full);
   } catch (err) { next(err); }
@@ -256,8 +260,10 @@ router.post('/bulk/add-modifier', async (req, res, next) => {
 // ─── DELETE /sales-items/:id ──────────────────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_sales_items WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query('DELETE FROM mcogs_sales_items WHERE id=$1', [req.params.id]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Sales item not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'sales_item', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

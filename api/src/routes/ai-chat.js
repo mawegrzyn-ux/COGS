@@ -1565,6 +1565,20 @@ Returns items with their urls and metadata.`,
       required: [],
     },
   },
+
+  // ── FAQ Knowledge Base ────────────────────────────────────────────────────
+  {
+    name: 'search_faq',
+    description: 'Search the FAQ knowledge base for answers to common questions about COGS Manager features. Use when the user asks a how-to question, needs help, or wants to know how something works. Check FAQ first before giving a general answer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:    { type: 'string', description: 'Search query (keywords or natural question)' },
+        category: { type: 'string', description: 'Optional category filter (e.g. "Recipes", "Menus & COGS", "Stock Manager")' },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3665,6 +3679,25 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       return { entity_type, entity_id, history: rows };
     }
 
+    case 'search_faq': {
+      const { query, category } = input;
+      const conditions = ['is_published = TRUE'];
+      const faqParams = [];
+      let fi = 1;
+      conditions.push(`(question ILIKE '%' || $${fi} || '%' OR answer ILIKE '%' || $${fi} || '%' OR tags::text ILIKE '%' || $${fi} || '%')`);
+      faqParams.push(query);
+      fi++;
+      if (category) { conditions.push(`category = $${fi++}`); faqParams.push(category); }
+      const { rows } = await pool.query(`
+        SELECT id, question, answer, category
+        FROM   mcogs_faq
+        WHERE  ${conditions.join(' AND ')}
+        ORDER BY sort_order, id LIMIT 5
+      `, faqParams);
+      if (!rows.length) return { message: 'No FAQ entries found matching that query. Try different keywords or answer from your own knowledge.' };
+      return { count: rows.length, results: rows };
+    }
+
     case 'get_audit_stats': {
       const { from, to } = input;
       const conditions = [], params = [];
@@ -3916,7 +3949,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 95 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), and **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats).
+You have 96 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats), and **FAQ** (search_faq — searches the FAQ knowledge base for how-to answers).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.

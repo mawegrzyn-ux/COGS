@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // ── Helper: recalculate credit note total after item changes ─────────────────
 async function recalcTotal(client, creditNoteId) {
@@ -123,6 +124,7 @@ router.post('/', async (req, res) => {
     const { rows: [result] } = await client.query('SELECT * FROM mcogs_credit_notes WHERE id=$1', [cn.id]);
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'credit_note', entity_id: result.id, entity_label: result.credit_number });
     res.status(201).json(result);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -298,6 +300,7 @@ router.post('/:id/submit', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Credit note not found or not in draft status' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'credit_note', entity_id: row.id, entity_label: row.credit_number, field_changes: { status: { old: 'draft', new: 'submitted' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -314,6 +317,7 @@ router.post('/:id/approve', async (req, res) => {
       RETURNING *
     `, [req.params.id]);
     if (!row) return res.status(400).json({ error: { message: 'Credit note not found or not in submitted status' } });
+    logAudit(pool, req, { action: 'status_change', entity_type: 'credit_note', entity_id: row.id, entity_label: row.credit_number, field_changes: { status: { old: 'submitted', new: 'approved' } } });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -368,6 +372,7 @@ router.post('/:id/apply', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'status_change', entity_type: 'credit_note', entity_id: cn.id, entity_label: cn.credit_number, field_changes: { status: { old: 'approved', new: 'applied' } } });
     res.json(cn);
   } catch (err) {
     await client.query('ROLLBACK');

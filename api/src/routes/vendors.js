@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /vendors?country_id=
 router.get('/', async (req, res) => {
@@ -47,6 +48,7 @@ router.post('/', async (req, res) => {
       INSERT INTO mcogs_vendors (name, country_id, contact, email, phone, notes)
       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
     `, [name.trim(), country_id || null, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null]);
+    logAudit(pool, req, { action: 'create', entity_type: 'vendor', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -59,12 +61,14 @@ router.put('/:id', async (req, res) => {
   const { name, country_id, contact, email, phone, notes } = req.body;
   if (!name?.trim())  return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_vendors WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(`
       UPDATE mcogs_vendors
       SET name=$1, country_id=$2, contact=$3, email=$4, phone=$5, notes=$6, updated_at=NOW()
       WHERE id=$7 RETURNING *
     `, [name.trim(), country_id || null, contact?.trim() || null, email?.trim() || null, phone?.trim() || null, notes?.trim() || null, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'vendor', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'country_id', 'contact', 'email', 'phone', 'notes']) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -75,10 +79,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /vendors/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_vendors WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_vendors WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'vendor', entity_id: old?.id, entity_label: old?.name });
     res.status(204).send();
   } catch (err) {
     // FK violation — vendor has price quotes

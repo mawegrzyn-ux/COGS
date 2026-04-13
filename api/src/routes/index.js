@@ -117,6 +117,9 @@ router.use('/audit',              ...can('settings', 'read'),                   
 // ── Pepper Memory (pinned notes + user profile) ──────────────────────────────
 router.use('/memory',             auth,                                               require('./memory'));
 
+// ── FAQ Knowledge Base ───────────────────────────────────────────────────────
+router.use('/faq',                auth,                                               require('./faq'));
+
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);
 

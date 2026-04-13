@@ -1,5 +1,6 @@
 const router  = require('express').Router();
 const pool = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /countries
 router.get('/', async (req, res) => {
@@ -25,6 +26,7 @@ router.post('/', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -40,6 +42,7 @@ router.put('/:id', async (req, res) => {
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_countries WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_countries
        SET name=$1, currency_code=$2, currency_symbol=$3, exchange_rate=$4,
@@ -48,6 +51,7 @@ router.put('/:id', async (req, res) => {
       [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'currency_code', 'currency_symbol', 'exchange_rate', 'default_price_level_id']) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -64,11 +68,13 @@ router.patch('/:id', async (req, res) => {
   const sets   = fields.map((f, i) => `${f} = $${i + 1}`);
   const values = fields.map(f => req.body[f] === '' ? null : req.body[f]);
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_countries WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_countries SET ${sets.join(', ')}, updated_at=NOW() WHERE id=$${fields.length+1} RETURNING *`,
       [...values, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], fields) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -79,8 +85,10 @@ router.patch('/:id', async (req, res) => {
 // DELETE /countries/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_countries WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(`DELETE FROM mcogs_countries WHERE id=$1`, [req.params.id]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'country', entity_id: old?.id, entity_label: old?.name });
     res.status(204).send();
   } catch (err) {
     console.error(err);
