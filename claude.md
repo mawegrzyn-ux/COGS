@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 78 tables (all prefixed `mcogs_`), 107 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 81 tables (all prefixed `mcogs_`), 118 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -131,12 +131,14 @@ COGS/
 │           ├── MediaLibraryPage.tsx # Media library manager (images, S3/local)
 │           ├── PosTesterPage.tsx   # POS functional mockup (System → POS Mockup)
 │           ├── SharedMenuPage.tsx  # Public shared menu page (no auth, /share/:slug)
-│           └── HelpPage.tsx        # Help & documentation
+│           └── HelpPage.tsx        # Help & documentation (Guide + Library + FAQ tabs)
 │
 ├── api/                            # Node.js/Express API
 │   ├── package.json
 │   ├── .env                        # NOT in git — see env vars section
 │   └── src/
+│       ├── jobs/
+│       │   └── consolidateMemory.js  # Nightly memory consolidation job (cron + manual trigger)
 │       ├── index.js                # Express entry point
 │       ├── db/
 │       │   ├── pool.js             # PostgreSQL connection pool (supports local + standalone)
@@ -148,7 +150,7 @@ COGS/
 │       │   ├── audit.js            # Audit logger: logAudit() + diffFields()
 │       │   └── github.js           # GitHub REST API wrapper (PAT-based)
 │       └── routes/
-│           ├── index.js            # Route registry (53+ routes)
+│           ├── index.js            # Route registry (57+ routes)
 │           ├── health.js
 │           ├── me.js               # Current user profile + permissions
 │           ├── users.js            # User management (approve/disable/role)
@@ -185,7 +187,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # Pepper AI chat (95 tools)
+│           ├── ai-chat.js          # Pepper AI chat (96 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── db-config.js        # Database management (local ↔ standalone switch)
@@ -518,6 +520,9 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 76 | `mcogs_user_profiles` | 103 | Pepper memory: user profile (user_sub UNIQUE, display_name, profile_json JSONB, long_term_summary TEXT) |
 | 77 | `mcogs_bugs` | 107 | Bug tracker (key, summary, priority, status, severity, labels JSONB) |
 | 78 | `mcogs_backlog` | 107 | Feature backlog (key, summary, item_type, priority, status, story_points) |
+| 79 | `mcogs_memory_daily` | 117 | Nightly AI memory consolidation: daily summaries per user (user_sub, summary_date, summary, topics JSONB, tools_used JSONB) |
+| 80 | `mcogs_memory_monthly` | 117 | Monthly AI memory consolidation: monthly overviews per user (user_sub, summary_month, summary, themes JSONB, focus_shifts JSONB, is_quarterly) |
+| 81 | `mcogs_faq` | 118 | FAQ knowledge base: searchable Q&A entries (question, answer, category, tags JSONB, sort_order, is_published) |
 
 ### Key Schema Details
 
@@ -656,7 +661,7 @@ All routes registered in `api/src/routes/index.js`.
 | `GET /api/import/job/:id` | `import.js` | ✅ Active — fetch staged job data |
 | `POST /api/import/execute/:id` | `import.js` | ✅ Active — write staged job to DB |
 | `POST /api/import/from-text` | `import.js` | ✅ Active — text content → AI extraction (used by Pepper) |
-| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 95 tools (includes web search, GitHub, Excel export, and audit log) |
+| `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 96 tools (includes web search, GitHub, Excel export, audit log, and FAQ search) |
 | `GET /api/ai-chat/my-usage` | `ai-chat.js` | ✅ Active — current period token usage stats |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
 | `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
@@ -684,6 +689,10 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/bugs` | `bugs.js` | ✅ Active — bug tracker CRUD |
 | `GET/POST/PUT/DELETE /api/backlog` | `backlog.js` | ✅ Active — feature backlog CRUD |
 | `GET/POST /api/category-groups` | `category-groups.js` | ✅ Active — category groups CRUD |
+| `GET/POST/PUT/DELETE /api/faq` | `faq.js` | ✅ Active — FAQ knowledge base CRUD + search |
+| `GET /api/faq/search` | `faq.js` | ✅ Active — FAQ full-text search (`?q=`) |
+| `POST /api/memory/consolidate` | `memory.js` | ✅ Active — admin-only manual memory consolidation trigger |
+| `GET /api/memory/consolidation-status` | `memory.js` | ✅ Active — last consolidation run status |
 
 ### Exchange Rate Sync
 
@@ -1224,7 +1233,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 95
+### Tool Count: 96
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1287,6 +1296,9 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 `get_entity_audit_history` — full change history for a specific entity (e.g. ingredient #5). Shows all changes over time
 `get_audit_stats` — summary statistics: total changes, breakdown by action/entity type, most active users. Supports date range filtering
 
+**FAQ (1):**
+`search_faq` — searches the FAQ knowledge base (70+ entries across 12 categories). ILIKE on question + answer + tags, returns top 5 matches. Used when user asks how-to questions.
+
 ### Memory System
 
 Pepper has a persistent memory system that survives across sessions. Two storage mechanisms:
@@ -1295,6 +1307,22 @@ Pepper has a persistent memory system that survives across sessions. Two storage
 2. **User Profile** (`mcogs_user_profiles`) — `display_name`, `profile_json` (JSONB for structured preferences like primary markets, response style), and `long_term_summary` (TEXT for evolving context). Managed via `GET/PUT /api/memory/profile`.
 
 Both are loaded into the system prompt at the start of every conversation (~100 tokens per note). If memory loading fails, chat works normally without it (graceful degradation). The memory API is at `/api/memory/notes` and `/api/memory/profile`.
+
+3. **Nightly Memory Consolidation** (`api/src/jobs/consolidateMemory.js`) — A cron job (02:07 UTC daily via `node-cron`) that:
+   - Reads each user's conversations from `mcogs_ai_chat_log` for the previous day
+   - Reads their audit log changes from `mcogs_audit_log`
+   - Calls Claude Haiku to generate a JSON summary (summary, topics, profile_updates)
+   - Stores in `mcogs_memory_daily` (UNIQUE per user+date, idempotent via ON CONFLICT)
+   - Additively merges profile updates into `mcogs_user_profiles.profile_json` (arrays unioned, strings overwritten only if non-null)
+   - On 1st of month: consolidates daily summaries into `mcogs_memory_monthly`; on quarter boundaries updates `long_term_summary`
+   - Admin can trigger manually via `POST /api/memory/consolidate` with optional `{ date, forceMonthly }`
+   - Status tracked in `mcogs_settings.data.memory_consolidation`
+
+4. **System Prompt Injection** — At session start, the memory block now includes:
+   - User profile (display_name, primary_markets, response_preference, recurring_focus, long_term_summary)
+   - Pinned notes
+   - Last 3 daily summaries from `mcogs_memory_daily`
+   - Activity digest: recent changes from `mcogs_audit_log` since the user's last conversation
 
 ### GitHub Integration
 
@@ -2351,15 +2379,19 @@ Each entry stores:
 
 ### Wired Routes
 
-Audit logging is integrated into:
-- `ingredients.js` — create, update (field diff), delete
-- `recipes.js` — create, update (diff), delete, add/update/delete recipe items
-- `price-quotes.js` — create, update (diff), delete
-- `purchase-orders.js` — create, submit, cancel
-- `goods-received.js` — confirm (with related PO/store/vendor)
-- `stock-levels.js` — manual adjustments
-- `waste.js` — waste logging
-- `stocktakes.js` — approval
+Audit logging is integrated into **48 route files** with **209 logAudit calls** covering every write operation:
+
+**Core data:** `ingredients.js`, `recipes.js`, `price-quotes.js`, `categories.js`, `category-groups.js`, `vendors.js`, `brand-partners.js`, `countries.js`, `country-level-tax.js`, `locations.js`, `location-groups.js`, `units.js`, `price-levels.js`, `tax-rates.js`, `settings.js`, `preferred-vendors.js`
+
+**Menu/Sales:** `menus.js`, `menu-items.js`, `menu-item-prices.js`, `menu-sales-items.js`, `sales-items.js`, `modifier-groups.js`, `combos.js`, `combo-templates.js`, `scenarios.js`, `shared-pages.js`
+
+**Stock Manager:** `purchase-orders.js`, `goods-received.js`, `invoices.js`, `credit-notes.js`, `stock-levels.js`, `stock-stores.js`, `stock-transfers.js`, `order-templates.js`, `waste.js`, `stocktakes.js`
+
+**RBAC & Users:** `users.js`, `roles.js`
+
+**Compliance:** `allergens.js`, `haccp.js`
+
+**System:** `ai-config.js`, `db-config.js`, `media.js`, `docs-library.js`, `feedback.js`, `bugs.js`, `backlog.js`, `faq.js`
 
 ### Helper
 
@@ -2376,10 +2408,10 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 
 ---
 
-*README last updated: April 2026 (session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects. Removed System Admin from Pages Remaining (now built). Added two-database architecture docs.)*
+*README last updated: April 2026 (session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (81 entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Pepper keyboard shortcut Ctrl+Shift+P, user message text colour fix in renderMd, test data clearData fixed (30 missing tables added), end-of-session protocol documented. DB: 78→81 tables, 107→118 migration steps, tools: 92→96.)*
 
-*README previous session: POS Mockup + Smart Scenario + CalcInput + Pepper docking redesign + modifier enhancements — POS Mockup built, Smart Scenario built, CalcInput component, Pepper docking (left/right/bottom), allow_repeat_selection + auto_show modifier flags, PO improvements, security fixes, 20+ bug fixes, docs: SECURITY_AUDIT.md, AI_MEMORY_REVIEW.md*
+*README previous session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects.*
 
-*README two sessions ago: UAT fixes + AI Memory + granular Stock RBAC — Pepper memory system (migration steps 102-103), 3 new Pepper tools, /api/memory routes, RBAC expanded 13→19 features, Stores→Centres rename, Audit Log, 3 UAT bug fixes*
+*README two sessions ago: POS Mockup + Smart Scenario + CalcInput + Pepper docking redesign + modifier enhancements — POS Mockup built, Smart Scenario built, CalcInput component, Pepper docking (left/right/bottom), allow_repeat_selection + auto_show modifier flags, PO improvements, security fixes, 20+ bug fixes, docs: SECURITY_AUDIT.md, AI_MEMORY_REVIEW.md*
 
 *README three sessions ago: Stock Manager module — 20 new DB tables (mcogs_stores through mcogs_audit_log, migration steps 86-101), 11 new API route files, StockManagerPage.tsx with 8 tabs, stock_manager RBAC feature, audit helper + logging wired into 8 routes, auto-generated PO/GRN/INV/CN/TRF numbers, dual-write stock consistency, PO smart item form with quote-lookup auto-populate*
