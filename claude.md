@@ -2052,6 +2052,43 @@ SELECT
 
 This pattern is used by `GET /ingredients/stats` for the Inventory page header badges. One round-trip, milliseconds, no joins.
 
+### Start-of-Session (SOS) Checklist
+
+When a new session begins, Claude should perform these checks **before** diving into the user's request:
+
+**1. Orient — read the room:**
+- Read `CLAUDE.md` (loaded automatically via system context)
+- Read `MEMORY.md` at `~/.claude/projects/C--GitHubReps-COGS/memory/MEMORY.md` for session-persistent notes
+- Check if there's a compacted session summary — if so, verify claims against actual codebase before referencing old items as "pending" or "incomplete"
+
+**2. Verify codebase state:**
+- `git log --oneline -5` — check recent commits to understand what changed since last session
+- Scan for any uncommitted changes (`git status`) — the user may have WIP from manual edits
+- If the user mentions a previous session's work, **grep the codebase** to confirm it exists before assuming it's still pending
+
+**3. Fetch live data from production (via WebFetch + internal API key from MEMORY.md):**
+- **Open bugs:** `WebFetch` → `https://cogs.macaroonie.com/api/internal/bugs?status=open&key=<CLAUDE_CODE_API_KEY>` — shows unresolved bugs
+- **In-progress backlog:** `WebFetch` → `https://cogs.macaroonie.com/api/internal/backlog?status=in_progress&key=<CLAUDE_CODE_API_KEY>` — shows active work items
+- **Latest changelog:** `WebFetch` → `https://cogs.macaroonie.com/api/changelog` (no key needed, auth route but changelog is also seeded in migrate.js — check migrate.js directly if auth blocks the fetch)
+- Report findings to user: "There are X open bugs, Y in-progress backlog items. Last changelog: [version] — [title]"
+
+**4. Check for issues:**
+- Scan for any TypeScript build errors if frontend was recently modified
+- Check if migration steps are sequential (no gaps, no duplicates)
+- Cross-reference WebFetch results with codebase — if a bug is marked "open" in production but the fix exists in local code, flag it
+
+**5. Review open items:**
+- Use the WebFetch results from step 3 as the source of truth (live DB), NOT session summaries
+- Do NOT assume items from a session summary are still open — **always verify against live data or codebase**
+- If WebFetch fails (server down, key changed), fall back to checking migration seed data in `migrate.js`
+
+**6. Establish session context:**
+- Ask the user what they want to work on (don't assume)
+- If the user provides a task list, create a TodoWrite immediately
+- Note the current date for changelog entries and migration step references
+
+**Critical rule:** Never reference backlog items, bugs, or features from a previous session summary as "pending" without first checking the codebase. The session summary may be stale. **Always verify.**
+
 ### Git / Deploy Workflow — Claude Does Not Run Git Commands
 
 The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
