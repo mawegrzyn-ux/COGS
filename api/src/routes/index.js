@@ -120,6 +120,9 @@ router.use('/memory',             auth,                                         
 // ── FAQ Knowledge Base ───────────────────────────────────────────────────────
 router.use('/faq',                auth,                                               require('./faq'));
 
+// ── Change Log (read-only) ───────────────────────────────────────────────────
+router.use('/changelog',          auth,                                               require('./changelog'));
+
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);
 

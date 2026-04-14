@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 81 tables (all prefixed `mcogs_`), 118 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 82 tables (all prefixed `mcogs_`), 120 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -187,7 +187,7 @@ COGS/
 │           ├── locations.js
 │           ├── location-groups.js
 │           ├── import.js           # AI import pipeline — exports { router, stageFileContent }
-│           ├── ai-chat.js          # Pepper AI chat (96 tools)
+│           ├── ai-chat.js          # Pepper AI chat (97 tools)
 │           ├── ai-upload.js        # File upload → AI extraction (multipart)
 │           ├── ai-config.js        # AI feature flag / config
 │           ├── db-config.js        # Database management (local ↔ standalone switch)
@@ -523,6 +523,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 79 | `mcogs_memory_daily` | 117 | Nightly AI memory consolidation: daily summaries per user (user_sub, summary_date, summary, topics JSONB, tools_used JSONB) |
 | 80 | `mcogs_memory_monthly` | 117 | Monthly AI memory consolidation: monthly overviews per user (user_sub, summary_month, summary, themes JSONB, focus_shifts JSONB, is_quarterly) |
 | 81 | `mcogs_faq` | 118 | FAQ knowledge base: searchable Q&A entries (question, answer, category, tags JSONB, sort_order, is_published) |
+| 82 | `mcogs_changelog` | 120 | Project change log: version, title, entries JSONB array of {type, description}. Read-only in UI, updated at EOS. |
 
 ### Key Schema Details
 
@@ -1233,7 +1234,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 96
+### Tool Count: 97
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1298,6 +1299,9 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 
 **FAQ (1):**
 `search_faq` — searches the FAQ knowledge base (70+ entries across 12 categories). ILIKE on question + answer + tags, returns top 5 matches. Used when user asks how-to questions.
+
+**Change Log (1):**
+`get_changelog` — returns the project change log. Shows what was added, changed, fixed, or removed per session. Supports version filter and limit. Updated as part of the EOS protocol.
 
 ### Memory System
 
@@ -2052,7 +2056,7 @@ This pattern is used by `GET /ingredients/stats` for the Inventory page header b
 
 The user commits and pushes all changes themselves from their local machine. **Claude should never end a response with instructions to run `git add`, `git commit`, `git push`, or any terminal commands.** Once Claude has finished editing files, the work is done. The user pushes when ready, and `deploy.yml` (GitHub Actions) automatically builds the frontend and deploys to the Lightsail server.
 
-### End-of-Session Protocol
+### End-of-Session (EOS) Protocol
 
 When the user initiates end of session (e.g. "wrap up", "end session", "that's all"), Claude must perform the following steps **in order**:
 
@@ -2081,6 +2085,12 @@ When the user initiates end of session (e.g. "wrap up", "end session", "that's a
 - Highlight security considerations if applicable
 - Recommend specific actions for the user (e.g. "test the X flow manually", "run migration on staging first", "review Y before deploying")
 - Present as a clear, actionable list
+
+**5. Update the Change Log:**
+- Append an entry to `mcogs_changelog` via migration seed or direct INSERT in the session's migration step
+- Each entry: `version` (date-based, e.g. `2026-04-14`), `title` (session summary), `entries` JSONB array of `{ type: 'added'|'changed'|'fixed'|'removed', description: string }`
+- The Change Log is read-only in the UI (System → Bugs & Backlog → Change Log tab) and queryable by Pepper via `get_changelog` tool
+- Format follows Keep a Changelog conventions: Added, Changed, Fixed, Removed
 
 ### Media Library Selection Behaviour
 
@@ -2408,7 +2418,7 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 
 ---
 
-*README last updated: April 2026 (session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (81 entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Pepper keyboard shortcut Ctrl+Shift+P, user message text colour fix in renderMd, test data clearData fixed (30 missing tables added), end-of-session protocol documented. DB: 78→81 tables, 107→118 migration steps, tools: 92→96.)*
+*README last updated: April 2026 (session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5, Pepper keyboard shortcut Ctrl+Shift+P, user message text colour fix in renderMd, test data clearData fixed (30 missing tables added), EOS protocol documented. DB: 78→82 tables, 107→120 migration steps, tools: 92→97.)*
 
 *README previous session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects.*
 

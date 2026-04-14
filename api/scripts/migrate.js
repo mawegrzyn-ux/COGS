@@ -2727,6 +2727,92 @@ const migrations = [
 
     ON CONFLICT DO NOTHING;
   END $$`,
+
+  // ── Step 119: Seed backlog — RAID log, server monitoring, AWS backups ──────
+  `DO $$ DECLARE sort_n INTEGER; eid INTEGER;
+   BEGIN
+     SELECT COALESCE(MAX(sort_order), 0) + 1 INTO sort_n FROM mcogs_backlog;
+
+     -- Epic: Infrastructure & Ops
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+     VALUES ('BACK-1400', 'Infrastructure & Ops',
+       'Server monitoring, AWS backups, health checks, and operational tooling for Pepper and the API.',
+       'epic', 'high', 'backlog', '["infrastructure","ops","devops"]'::jsonb, sort_n)
+     ON CONFLICT (key) DO NOTHING;
+
+     SELECT id INTO eid FROM mcogs_backlog WHERE key = 'BACK-1400';
+
+     INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id) VALUES
+       ('BACK-1401', 'RAID Log — Risks, Assumptions, Issues, Dependencies tracker',
+        'New tab in System page. CRUD table with columns: type (R/A/I/D), summary, description, status (open/mitigated/closed), owner, priority, impact, due_date. Filter by type/status. Pepper tool to query/create RAID items. Migration for mcogs_raid_log table.',
+        'story', 'medium', 'backlog', '["system","tracking","raid"]'::jsonb, sort_n+1, eid),
+
+       ('BACK-1402', 'Server Monitoring Tier 1 — Local vitals via Pepper tools',
+        'Pepper tools that read /proc/meminfo (RAM), df (disk), PM2 status (process health), pg_stat_activity (DB connections), Certbot cert expiry. No AWS SDK needed. Zero cost. User asks "how is the server?" and gets real-time vitals.',
+        'story', 'high', 'backlog', '["infrastructure","monitoring","pepper"]'::jsonb, sort_n+2, eid),
+
+       ('BACK-1403', 'Server Monitoring Tier 2 — CloudWatch integration',
+        'Add @aws-sdk/client-cloudwatch. Pepper tools for historical metrics: CPU, memory, network, disk. IAM scoped to cloudwatch:GetMetricData read-only. Works for both Lightsail and EC2. Historical graphs via data export.',
+        'story', 'medium', 'backlog', '["infrastructure","monitoring","aws","cloudwatch"]'::jsonb, sort_n+3, eid),
+
+       ('BACK-1404', 'AWS Lightsail Backup — Pepper-triggered snapshots',
+        'Add @aws-sdk/client-lightsail or aws-cli. Pepper tool: trigger_backup calls CreateInstanceSnapshotCommand. Confirmation required before execution. IAM scoped to Lightsail snapshots only. Optional: schedule daily snapshot via node-cron (same infra as memory consolidation).',
+        'story', 'medium', 'backlog', '["infrastructure","backup","aws","lightsail"]'::jsonb, sort_n+4, eid),
+
+       ('BACK-1405', 'Database backup — pg_dump to S3',
+        'Alternative to full Lightsail snapshots. Pepper tool or cron job runs pg_dump, compresses, uploads to S3. Cheaper and faster than instance snapshots. Retention policy: keep last 7 daily + 4 weekly.',
+        'story', 'medium', 'backlog', '["infrastructure","backup","database","s3"]'::jsonb, sort_n+5, eid),
+
+       ('BACK-1406', 'Nightly health check in consolidation cron',
+        'Extend the 02:07 UTC cron job to also check: disk usage > 80%, memory > 90%, PM2 restart count, SSL cert expiry < 14 days. Log alerts to mcogs_settings or a new mcogs_health_alerts table. Surface in System page.',
+        'task', 'medium', 'backlog', '["infrastructure","monitoring","cron","health"]'::jsonb, sort_n+6, eid)
+
+     ON CONFLICT (key) DO NOTHING;
+
+     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1410));
+   END $$`,
+
+  // ── Step 120: Change Log table ─────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_changelog (
+    id          SERIAL PRIMARY KEY,
+    version     VARCHAR(20) NOT NULL,
+    title       VARCHAR(500) NOT NULL,
+    entries     JSONB NOT NULL DEFAULT '[]',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_changelog_version ON mcogs_changelog(version DESC)`,
+
+  // ── Step 120b: Seed changelog + SSH terminal backlog ───────────────────────
+  `DO $$ BEGIN
+    -- Seed this session's changelog entry
+    INSERT INTO mcogs_changelog (version, title, entries) VALUES
+    ('2026-04-14', 'HTML Validator + Memory Consolidation + FAQ + Audit Expansion', '${JSON.stringify([
+      { type: 'added', description: 'HTML Content Validator — scans uploaded HTML for security violations, shows report card with Ask Pepper escalation button' },
+      { type: 'added', description: 'FAQ Knowledge Base — 70+ searchable FAQ entries across 12 categories, HelpPage FAQ tab with instant search and category filters' },
+      { type: 'added', description: 'Pepper search_faq tool — searches FAQ knowledge base for how-to answers (tool #96)' },
+      { type: 'added', description: 'Pepper audit log tools — query_audit_log, get_entity_audit_history, get_audit_stats (3 new tools)' },
+      { type: 'added', description: 'Memory Consolidation MVP — nightly cron job (02:07 UTC) reads chat + audit logs, summarises via Claude Haiku, stores daily/monthly summaries, auto-updates user profiles' },
+      { type: 'added', description: 'Pepper keyboard shortcut — Ctrl+Shift+P opens and focuses the chat input' },
+      { type: 'added', description: 'System prompt now includes: last 3 daily summaries + activity digest (changes since last conversation)' },
+      { type: 'added', description: 'Change Log table and System page tab (read-only, updated as part of EOD protocol)' },
+      { type: 'changed', description: 'Audit logging expanded from 10 to 48 route files (209 logAudit calls) — full coverage of every write operation' },
+      { type: 'changed', description: 'End-of-Session Protocol updated with step 5: update the Change Log' },
+      { type: 'fixed', description: 'Pepper user message text colour — renderMd now uses color:inherit for user messages instead of hardcoded dark colours on green background' },
+      { type: 'fixed', description: 'Test data clearData — added 30 missing tables (stock manager, media, docs, bugs, backlog, memory, FAQ) to both seed scripts' }
+    ]).replace(/'/g, "''")}')
+    ON CONFLICT DO NOTHING;
+
+    -- SSH Terminal backlog item
+    INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order, epic_id)
+    VALUES ('BACK-1407', 'Web SSH Terminal — xterm.js + node-pty in System page',
+      'Full interactive browser-based terminal. Frontend: xterm.js terminal emulator in a System page tab. Backend: WebSocket endpoint spawns PTY shell via node-pty. Gated by is_dev. Major security surface — needs careful access control.',
+      'story', 'low', 'backlog', '["infrastructure","system","terminal","ssh"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mcogs_backlog),
+      (SELECT id FROM mcogs_backlog WHERE key = 'BACK-1400'))
+    ON CONFLICT (key) DO NOTHING;
+
+    PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1410));
+  END $$`,
 ];
 
 async function runMigrations(pool) {

@@ -1579,6 +1579,20 @@ Returns items with their urls and metadata.`,
       required: ['query'],
     },
   },
+
+  // ── Change Log ────────────────────────────────────────────────────────────
+  {
+    name: 'get_changelog',
+    description: 'Get the project change log — shows what was added, changed, fixed, or removed in each session/release. Use when user asks "what changed recently?", "what\'s new?", or "show me the changelog".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        version: { type: 'string', description: 'Optional: specific version/date to look up (e.g. "2026-04-14")' },
+        limit:   { type: 'integer', description: 'Max entries to return (default 5)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3698,6 +3712,21 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       return { count: rows.length, results: rows };
     }
 
+    case 'get_changelog': {
+      const { version, limit } = input;
+      if (version) {
+        const { rows } = await pool.query(
+          'SELECT * FROM mcogs_changelog WHERE version = $1 ORDER BY id', [version]
+        );
+        return rows.length ? rows : { message: `No changelog entry for version ${version}` };
+      }
+      const cap = Math.min(limit || 5, 20);
+      const { rows } = await pool.query(
+        'SELECT * FROM mcogs_changelog ORDER BY version DESC, id DESC LIMIT $1', [cap]
+      );
+      return { count: rows.length, entries: rows };
+    }
+
     case 'get_audit_stats': {
       const { from, to } = input;
       const conditions = [], params = [];
@@ -3949,7 +3978,7 @@ Warning users: these operations cannot be undone and will delete real data. Only
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 96 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats), and **FAQ** (search_faq — searches the FAQ knowledge base for how-to answers).
+You have 97 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats), **FAQ** (search_faq — searches the FAQ knowledge base for how-to answers), and **Change Log** (get_changelog — project change history by version/date).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
