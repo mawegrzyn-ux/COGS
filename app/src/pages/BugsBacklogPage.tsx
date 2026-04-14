@@ -65,7 +65,13 @@ interface ItemComment {
   comment: string; parent_id: number | null; created_at: string
 }
 
-type Tab = 'bugs' | 'backlog'
+type Tab = 'bugs' | 'backlog' | 'changelog'
+
+interface ChangelogEntry {
+  id: number; version: string; title: string
+  entries: { type: 'added' | 'changed' | 'fixed' | 'removed'; description: string }[]
+  created_at: string
+}
 
 const BUG_STATUSES  = ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] as const
 const BUG_PRIORITIES = ['highest', 'high', 'medium', 'low', 'lowest'] as const
@@ -249,6 +255,11 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [deleteBacklog, setDeleteBacklog] = useState<BacklogItem | null>(null)
   const [epics, setEpics] = useState<EpicSummary[]>([])
 
+  // ── Changelog state ─────────────────────────────────────────────────
+  const [changelog, setChangelog] = useState<ChangelogEntry[]>([])
+  const [changelogLoading, setChangelogLoading] = useState(false)
+  const [changelogSearch, setChangelogSearch] = useState('')
+
   // ── Comments state ────────────────────────────────────────────────────
   const [comments, setComments] = useState<ItemComment[]>([])
   const [commentsLoading, setCommentsLoading] = useState(false)
@@ -343,10 +354,20 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     } finally { setJiraSyncing(null) }
   }
 
+  const loadChangelog = useCallback(async () => {
+    setChangelogLoading(true)
+    try {
+      const data = await api.get('/changelog')
+      setChangelog(data || [])
+    } catch { /* ignore */ }
+    finally { setChangelogLoading(false) }
+  }, [api])
+
   useEffect(() => { loadBugs() }, [loadBugs])
   useEffect(() => { loadBacklog() }, [loadBacklog])
   useEffect(() => { loadEpics() }, [loadEpics])
   useEffect(() => { loadJiraStatus() }, [loadJiraStatus])
+  useEffect(() => { if (tab === 'changelog' && !changelog.length) loadChangelog() }, [tab, loadChangelog, changelog.length])
   useEffect(() => { localStorage.setItem('bb_tab', tab) }, [tab])
 
   // ── Bug handlers ────────────────────────────────────────────────────────
@@ -546,6 +567,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: 'bugs', label: 'Bugs', count: bugsTotal },
     { key: 'backlog', label: 'Backlog', count: backlogTotal },
+    { key: 'changelog', label: 'Change Log', count: changelog.length },
   ]
 
   return (
@@ -1159,6 +1181,63 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               userSub={user?.sub} isDev={isDev} />
           </div>
         </Modal>
+      )}
+
+      {/* ═══ CHANGELOG TAB ═══ */}
+      {tab === 'changelog' && (
+        <div className="space-y-3">
+          <input className="input w-full max-w-md" placeholder="Search changelog..."
+            value={changelogSearch} onChange={e => setChangelogSearch(e.target.value)} />
+
+          {changelogLoading ? (
+            <div className="text-center py-8 text-text-3 text-sm">Loading changelog...</div>
+          ) : (
+            <div className="space-y-4">
+              {(changelogSearch.trim()
+                ? changelog.filter(c => {
+                    const q = changelogSearch.toLowerCase()
+                    return c.version.includes(q) || c.title.toLowerCase().includes(q) ||
+                      c.entries.some(e => e.description.toLowerCase().includes(q))
+                  })
+                : changelog
+              ).map(c => {
+                const TYPE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+                  added:   { bg: 'bg-green-50',  text: 'text-green-700', label: 'Added' },
+                  changed: { bg: 'bg-blue-50',   text: 'text-blue-700',  label: 'Changed' },
+                  fixed:   { bg: 'bg-amber-50',  text: 'text-amber-700', label: 'Fixed' },
+                  removed: { bg: 'bg-red-50',    text: 'text-red-700',   label: 'Removed' },
+                }
+                return (
+                  <div key={c.id} className="border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border)' }}>
+                    <div className="px-4 py-3 bg-surface-2 border-b" style={{ borderColor: 'var(--border)' }}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold font-mono text-accent">{c.version}</span>
+                        <span className="text-sm font-medium text-text-1">{c.title}</span>
+                      </div>
+                      <div className="text-xs text-text-3 mt-0.5">{new Date(c.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <div className="px-4 py-3 space-y-1.5">
+                      {c.entries.map((e, i) => {
+                        const style = TYPE_STYLES[e.type] || TYPE_STYLES.changed
+                        return (
+                          <div key={i} className="flex items-start gap-2">
+                            <span className={`${style.bg} ${style.text} text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 uppercase`}>
+                              {style.label}
+                            </span>
+                            <span className="text-sm text-text-2">{e.description}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              {!changelog.length && (
+                <div className="text-center py-8 text-text-3 text-sm">No changelog entries yet</div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Confirm delete dialogs */}
