@@ -21,6 +21,7 @@ import SharedMenuPage       from './pages/SharedMenuPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
+import { MarketProvider }   from './contexts/MarketContext'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth0()
@@ -40,6 +41,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <PermissionsProvider>
+        <MarketProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 
@@ -77,6 +79,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </MarketProvider>
       </PermissionsProvider>
     </BrowserRouter>
   )

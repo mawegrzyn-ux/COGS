@@ -1,0 +1,76 @@
+import { Template, WidgetMeta, WidgetId } from './types'
+
+export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
+  'kpi-ingredients':   { id: 'kpi-ingredients',   label: 'Ingredients',     description: 'Count of ingredients in the catalog', defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: false },
+  'kpi-recipes':       { id: 'kpi-recipes',       label: 'Recipes',         description: 'Count of recipes',                    defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: false },
+  'kpi-menus':         { id: 'kpi-menus',         label: 'Menus',           description: 'Count of menus',                      defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: true  },
+  'kpi-markets':       { id: 'kpi-markets',       label: 'Markets',         description: 'Count of franchise markets',          defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: false },
+  'kpi-vendors':       { id: 'kpi-vendors',       label: 'Vendors',         description: 'Count of suppliers',                  defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: true  },
+  'kpi-active-quotes': { id: 'kpi-active-quotes', label: 'Active Quotes',   description: 'Current active price quotes',         defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: true  },
+  'kpi-categories':    { id: 'kpi-categories',    label: 'Categories',      description: 'Count of categories',                 defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: false },
+  'kpi-coverage':      { id: 'kpi-coverage',      label: 'Coverage %',      description: 'Percentage of ingredients with active quotes', defaultSize: 'sm', allowedSizes: ['sm'], marketScoped: false },
+
+  'coverage-bar':      { id: 'coverage-bar',      label: 'Quote Coverage Bar', description: 'Progress bar showing quote coverage', defaultSize: 'xl', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false },
+  'menu-tiles':        { id: 'menu-tiles',        label: 'Menu COGS Tiles',    description: 'Menus with COGS % per price level',   defaultSize: 'xl', allowedSizes: ['lg', 'xl'],        marketScoped: true  },
+  'missing-quotes':    { id: 'missing-quotes',    label: 'Missing Price Quotes', description: 'Ingredients with no active quote',  defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false },
+  'recent-quotes':     { id: 'recent-quotes',     label: 'Recent Price Quotes',  description: 'Latest price quote updates',        defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true  },
+  'quick-links':       { id: 'quick-links',       label: 'Quick Links',       description: 'Shortcut tiles to main sections',     defaultSize: 'xl', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false },
+
+  'market-picker':     { id: 'market-picker',     label: 'Market Picker',     description: 'Grid of markets with quick stats',   defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
+  'market-stats':      { id: 'market-stats',      label: 'Market Snapshot',   description: 'Headline stats for selected market', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true },
+  'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
+}
+
+// ── Templates ──────────────────────────────────────────────────────────────────
+
+export const TEMPLATES: Template[] = [
+  {
+    id: 'executive',
+    name: 'Executive',
+    description: 'High-level KPIs, menu COGS across all markets, and recent activity.',
+    slots: [
+      { widgetId: 'kpi-ingredients',   size: 'sm' },
+      { widgetId: 'kpi-recipes',       size: 'sm' },
+      { widgetId: 'kpi-menus',         size: 'sm' },
+      { widgetId: 'kpi-coverage',      size: 'sm' },
+      { widgetId: 'menu-tiles',        size: 'xl' },
+      { widgetId: 'coverage-bar',      size: 'xl' },
+      { widgetId: 'recent-quotes',     size: 'md' },
+      { widgetId: 'missing-quotes',    size: 'md' },
+    ],
+  },
+  {
+    id: 'finance',
+    name: 'Finance / Cost',
+    description: 'Quote coverage, missing quotes, and menu cost margins.',
+    slots: [
+      { widgetId: 'kpi-coverage',      size: 'sm' },
+      { widgetId: 'kpi-active-quotes', size: 'sm' },
+      { widgetId: 'kpi-vendors',       size: 'sm' },
+      { widgetId: 'kpi-ingredients',   size: 'sm' },
+      { widgetId: 'coverage-bar',      size: 'xl' },
+      { widgetId: 'missing-quotes',    size: 'md' },
+      { widgetId: 'recent-quotes',     size: 'md' },
+      { widgetId: 'menu-tiles',        size: 'xl' },
+    ],
+  },
+  {
+    id: 'market-explorer',
+    name: 'Market Explorer',
+    description: 'Drill into a specific market. Starts with a market picker; stats update as you select.',
+    slots: [
+      { widgetId: 'market-header',     size: 'xl' },
+      { widgetId: 'market-picker',     size: 'xl' },
+      { widgetId: 'market-stats',      size: 'md' },
+      { widgetId: 'menu-tiles',        size: 'md' },
+      { widgetId: 'recent-quotes',     size: 'md' },
+      { widgetId: 'quick-links',       size: 'md' },
+    ],
+  },
+]
+
+export const DEFAULT_TEMPLATE_ID = 'executive'
+
+export function getTemplate(id: string): Template {
+  return TEMPLATES.find(t => t.id === id) ?? TEMPLATES[0]
+}

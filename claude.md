@@ -969,10 +969,16 @@ Three tabs:
 - Mix Manager modal pre-populates with existing quantities when qty fields are already filled
 - Currency symbol shown in column headers (e.g. `Cost/ptn (£)`)
 - Categories are collapsible — click category row to collapse/expand items; "▼ All" / "▶ All" button next to Item column header
-- **Price overrides** — type a new price into any Price cell to override the live price for this scenario only; does not affect the live menu price until "Push Prices" is used
-- **Push Prices** — permanently writes scenario price overrides back to the live menu
-- **What If tool** — apply a % change to all prices or all costs in one step
-- **Scenarios** — save/load/delete named snapshots of qty_data + price_overrides + notes, stored in `mcogs_menu_scenarios`
+- **Per-level Qty Sold** — in All Levels view, each price level has its own Qty Sold column (keys: `{nat_key}__l{level_id}`)
+- **Inline editable prices** — type a new price into any Price cell to override for this scenario only; amber styling when overridden with ↺ reset button; does not affect the live menu price until "Push Prices" is used
+- **Inline editable costs** — Cost/ptn cells are also editable with the same amber override pattern
+- **Push Prices** — permanently writes scenario price overrides back to the live menu via `POST /scenarios/push-prices`
+- **What If modal** — apply a ±% change to all prices and/or all costs in one step
+- **Reset Prices / Reset Costs** — buttons appear when overrides exist; clear all price or cost overrides respectively
+- **History modal** — tracks all scenario actions (resets, pushes, What If changes) with timestamps
+- **Scenario modal** — replaces old dropdown selector; modal with scenario list (search, Load/Delete per row), active scenario highlighted, save form with name input + Save/Update/New buttons
+- **Generate Mix + Reset Qty** — always visible when a menu is selected (not just when data is loaded)
+- **Scenarios** — save/load/delete named snapshots of qty_data + price_overrides + cost_overrides + history, stored in `mcogs_menu_scenarios`
 
 **Notes / History / Comments panel (clock icon in ME):**
 - **Notes tab** — free-text scratchpad saved with the scenario

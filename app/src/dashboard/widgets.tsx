@@ -1,0 +1,465 @@
+import { useMemo, ReactElement } from 'react'
+import { useDashboardData } from './DashboardData'
+import { useMarket } from '../contexts/MarketContext'
+import { WidgetId } from './types'
+
+// ── Shared UI bits ─────────────────────────────────────────────────────────────
+
+function Skeleton({ className = '' }: { className?: string }) {
+  return <div className={`bg-surface-2 rounded animate-pulse ${className}`} />
+}
+
+function EmptyState({ message }: { message: string }) {
+  return <div className="py-6 text-center text-text-3 text-sm">{message}</div>
+}
+
+function SectionHeader({ title, count }: { title: string; count?: number }) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">{title}</h2>
+      {count !== undefined && (
+        <span className="text-xs font-medium text-text-3 bg-surface-2 px-2 py-0.5 rounded-full">{count}</span>
+      )}
+    </div>
+  )
+}
+
+function timeSince(dateStr: string) {
+  const d = new Date(dateStr)
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
+function fmt(n: number) { return n.toLocaleString() }
+
+// ── KPI widget (generic) ──────────────────────────────────────────────────────
+
+function KpiCard({ label, value, accent = false, sub }: {
+  label: string; value: number | string; accent?: boolean; sub?: string
+}) {
+  return (
+    <div className={`card p-5 h-full flex flex-col justify-between ${accent ? 'border-accent/30 bg-accent-dim' : ''}`}>
+      <span className="text-text-3 text-xs font-medium uppercase tracking-wide">{label}</span>
+      <div>
+        <div className={`text-3xl font-bold tabular-nums ${accent ? 'text-accent' : 'text-text-1'}`}>{value}</div>
+        {sub && <div className="text-text-3 text-xs mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+function KpiIngredients() {
+  const { ingredients, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  return <KpiCard label="Ingredients" value={fmt(ingredients.length)} />
+}
+
+function KpiRecipes() {
+  const { recipes, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  return <KpiCard label="Recipes" value={fmt(recipes.length)} />
+}
+
+function KpiMenus() {
+  const { menus, loading } = useDashboardData()
+  const { countryId } = useMarket()
+  if (loading) return <Skeleton className="h-28" />
+  const scoped = countryId == null ? menus : menus.filter(m => m.country_id === countryId)
+  return <KpiCard label="Menus" value={fmt(scoped.length)} sub={countryId ? 'In selected market' : undefined} />
+}
+
+function KpiMarkets() {
+  const { countries, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  return <KpiCard label="Markets" value={fmt(countries.length)} sub="Franchise markets" />
+}
+
+function KpiVendors() {
+  const { vendors, loading } = useDashboardData()
+  const { countryId } = useMarket()
+  if (loading) return <Skeleton className="h-28" />
+  const scoped = countryId == null ? vendors : vendors.filter(v => v.country_id === countryId)
+  return <KpiCard label="Vendors" value={fmt(scoped.length)} sub={countryId ? 'In selected market' : undefined} />
+}
+
+function KpiActiveQuotes() {
+  const { quotes, vendors, loading } = useDashboardData()
+  const { countryId } = useMarket()
+  const vendorCountry = useMemo(() => {
+    const m: Record<number, number> = {}
+    for (const v of vendors) m[v.id] = v.country_id
+    return m
+  }, [vendors])
+  if (loading) return <Skeleton className="h-28" />
+  const active = quotes.filter(q => q.is_active)
+  const scoped = countryId == null ? active : active.filter(q => {
+    const vid = (q as unknown as { vendor_id?: number }).vendor_id
+    return vid ? vendorCountry[vid] === countryId : true
+  })
+  return <KpiCard label="Active Quotes" value={fmt(scoped.length)} accent />
+}
+
+function KpiCategories() {
+  const { categories, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  return <KpiCard label="Categories" value={fmt(categories.length)} />
+}
+
+function KpiCoverage() {
+  const { ingredients, quotes, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  const quotedIds = new Set(quotes.filter(q => q.is_active).map(q => q.ingredient_id))
+  const pct = ingredients.length
+    ? Math.round((quotedIds.size / ingredients.length) * 100)
+    : 0
+  return (
+    <KpiCard label="Coverage" value={`${pct}%`} accent={pct >= 80}
+      sub={pct >= 80 ? 'All major ingredients priced' : 'Some ingredients unpriced'} />
+  )
+}
+
+// ── Coverage bar ───────────────────────────────────────────────────────────────
+
+function CoverageBar() {
+  const { ingredients, quotes, loading } = useDashboardData()
+  if (loading) return <Skeleton className="h-28" />
+  const quotedIds = new Set(quotes.filter(q => q.is_active).map(q => q.ingredient_id))
+  const pct = ingredients.length ? Math.round((quotedIds.size / ingredients.length) * 100) : 0
+  const color = pct >= 80 ? '#146A34' : pct >= 50 ? '#D97706' : '#DC2626'
+  const label = pct >= 80 ? 'Good' : pct >= 50 ? 'Partial' : 'Low'
+  return (
+    <div className="card p-6 h-full flex flex-col justify-center gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-text-2">Price Quote Coverage</span>
+        <span className="text-sm font-bold" style={{ color }}>{pct}% — {label}</span>
+      </div>
+      <div className="h-2.5 rounded-full bg-surface-2 overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, backgroundColor: color }} />
+      </div>
+      <p className="text-text-3 text-xs">Percentage of ingredients with at least one active price quote</p>
+    </div>
+  )
+}
+
+// ── Menu tiles ─────────────────────────────────────────────────────────────────
+
+function MenuTiles() {
+  const { menuTiles, menuTilesLoading, cogsThresholds, menus } = useDashboardData()
+  const { countryId } = useMarket()
+  function cogsColor(pct: number | null) {
+    if (pct == null) return 'text-text-3'
+    if (!cogsThresholds) return 'text-text-1'
+    if (pct <= cogsThresholds.excellent) return 'text-emerald-600'
+    if (pct <= cogsThresholds.acceptable) return 'text-amber-500'
+    return 'text-red-500'
+  }
+  const scopedCount = countryId == null ? menus.length : menus.filter(m => m.country_id === countryId).length
+  return (
+    <div className="card p-5 h-full">
+      <div className="flex items-center justify-between mb-3">
+        <SectionHeader title={countryId ? 'Menus in market' : 'Menus'} count={scopedCount} />
+        {cogsThresholds && (
+          <div className="flex items-center gap-3 text-xs text-text-3">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"/>≤{cogsThresholds.excellent}%</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block"/>≤{cogsThresholds.acceptable}%</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>above</span>
+          </div>
+        )}
+      </div>
+      {menuTilesLoading && menuTiles.length === 0 ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: Math.max(1, scopedCount) }).map((_, i) => <Skeleton key={i} className="h-32" />)}
+        </div>
+      ) : menuTiles.length === 0 ? (
+        <EmptyState message={countryId ? 'No menus for this market' : 'No menus yet'} />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {menuTiles.map(tile => (
+            <a key={tile.menu_id} href="/menus"
+              className="block rounded-xl border border-border bg-surface hover:border-accent/40 hover:shadow-sm transition-all group">
+              <div className="px-4 pt-3 pb-2 border-b border-border/60">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-semibold text-sm text-text-1 group-hover:text-accent transition-colors leading-tight">{tile.menu_name}</div>
+                  <span className="flex-shrink-0 text-[10px] font-medium bg-surface-2 text-text-3 px-1.5 py-0.5 rounded-full whitespace-nowrap">{tile.item_count} items</span>
+                </div>
+                <div className="text-xs text-text-3 mt-0.5">{tile.country_name}</div>
+              </div>
+              <div className="px-4 py-2 space-y-1">
+                {tile.levels.map(level => (
+                  <div key={level.id} className="flex items-center justify-between">
+                    <span className="text-xs text-text-2 flex items-center gap-1">
+                      {level.name}
+                      {level.is_default && <span className="text-[9px] font-bold bg-accent-dim text-accent px-1 py-0 rounded-full leading-4">default</span>}
+                    </span>
+                    <span className={`text-xs font-semibold tabular-nums ${cogsColor(level.cogs_pct)}`}>
+                      {level.cogs_pct != null ? `${level.cogs_pct.toFixed(1)}%` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Missing quotes ─────────────────────────────────────────────────────────────
+
+function MissingQuotes() {
+  const { ingredients, quotes, loading } = useDashboardData()
+  const quotedIds = useMemo(() => new Set(quotes.filter(q => q.is_active).map(q => q.ingredient_id)), [quotes])
+  const missing = useMemo(() => ingredients.filter(i => !quotedIds.has(i.id)).slice(0, 10), [ingredients, quotedIds])
+  return (
+    <div className="card p-5 h-full">
+      <SectionHeader title="Missing Price Quotes" count={missing.length} />
+      {loading ? (
+        <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : missing.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-6">
+          <span className="badge-green text-sm">✓ Full coverage</span>
+          <p className="text-text-3 text-sm">All ingredients have at least one active price quote</p>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {missing.map(item => (
+            <div key={item.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2">
+              <span className="text-amber-500">⚠</span>
+              <span className="text-text-1 text-sm flex-1 truncate">{item.name}</span>
+              <span className="text-text-3 text-xs">No quote</span>
+            </div>
+          ))}
+          {missing.length === 10 && (
+            <p className="text-text-3 text-xs text-center pt-2">Showing first 10 — visit Inventory for full list</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Recent quotes ──────────────────────────────────────────────────────────────
+
+function RecentQuotes() {
+  const { quotes, vendors, loading } = useDashboardData()
+  const { countryId } = useMarket()
+  const vendorCountry = useMemo(() => {
+    const m: Record<number, number> = {}
+    for (const v of vendors) m[v.id] = v.country_id
+    return m
+  }, [vendors])
+  const rows = useMemo(() => {
+    const active = quotes.filter(q => q.is_active)
+    const scoped = countryId == null ? active : active.filter(q => {
+      const vid = (q as unknown as { vendor_id?: number }).vendor_id
+      return vid ? vendorCountry[vid] === countryId : true
+    })
+    return [...scoped].sort((a, b) =>
+      new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
+    ).slice(0, 8)
+  }, [quotes, countryId, vendorCountry])
+  return (
+    <div className="card p-5 h-full">
+      <SectionHeader title="Recent Price Quotes" count={rows.length} />
+      {loading ? (
+        <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : rows.length === 0 ? (
+        <EmptyState message="No active price quotes yet" />
+      ) : (
+        <div className="space-y-1">
+          {rows.map(q => (
+            <div key={q.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-text-1 text-sm truncate font-medium">{q.ingredient_name ?? `#${q.id}`}</p>
+                <p className="text-text-3 text-xs truncate">{q.vendor_name ?? '—'}{q.country_name ? ` · ${q.country_name}` : ''}</p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-text-1 text-sm font-mono">{q.currency_code ?? ''} {typeof q.unit_price === 'number' ? q.unit_price.toFixed(2) : '—'}</p>
+                <p className="text-text-3 text-xs">{q.updated_at ? timeSince(q.updated_at) : ''}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Quick links ────────────────────────────────────────────────────────────────
+
+function QuickLinks() {
+  const links = [
+    { label: 'Inventory',   href: '/inventory' },
+    { label: 'Recipes',     href: '/recipes' },
+    { label: 'Menus',       href: '/menus' },
+    { label: 'Sales Items', href: '/sales-items' },
+    { label: 'Stock',       href: '/stock-manager' },
+    { label: 'HACCP',       href: '/haccp' },
+    { label: 'Allergens',   href: '/allergens' },
+    { label: 'Config',      href: '/configuration' },
+  ]
+  return (
+    <div className="card p-5 h-full">
+      <SectionHeader title="Quick Links" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {links.map(l => (
+          <a key={l.label} href={l.href}
+            className="flex items-center justify-center py-3 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center text-xs font-medium text-text-2 hover:text-accent">
+            {l.label}
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Market picker — grid of markets with quick stats ──────────────────────────
+
+function MarketPicker() {
+  const { countries, setCountryId, countryId } = useMarket()
+  const { menus, vendors, menuTiles } = useDashboardData()
+  return (
+    <div className="card p-5 h-full">
+      <SectionHeader title="Markets" count={countries.length} />
+      {countries.length === 0 ? (
+        <EmptyState message="No markets available" />
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {countries.map(c => {
+            const menuCount = menus.filter(m => m.country_id === c.id).length
+            const vendorCount = vendors.filter(v => v.country_id === c.id).length
+            const selected = countryId === c.id
+            const countryMenuTiles = menuTiles.filter(t => t.country_id === c.id)
+            const avg = countryMenuTiles.length
+              ? countryMenuTiles.flatMap(t => t.levels.map(l => l.cogs_pct).filter((p): p is number => p != null))
+              : []
+            const avgCogs = avg.length ? avg.reduce((s, n) => s + n, 0) / avg.length : null
+            return (
+              <button
+                key={c.id}
+                onClick={() => setCountryId(selected ? null : c.id)}
+                className={`text-left rounded-xl border p-3 transition-all ${
+                  selected
+                    ? 'border-accent bg-accent-dim shadow-sm'
+                    : 'border-border bg-surface hover:border-accent/40 hover:shadow-sm'
+                }`}
+              >
+                <div className="flex items-start justify-between mb-1.5">
+                  <div className="font-semibold text-sm text-text-1">{c.name}</div>
+                  <span className="text-xs font-mono text-text-3">{c.currency_symbol}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-text-3">
+                  <span>{menuCount} menu{menuCount !== 1 ? 's' : ''}</span>
+                  <span>·</span>
+                  <span>{vendorCount} vendor{vendorCount !== 1 ? 's' : ''}</span>
+                </div>
+                {avgCogs != null && (
+                  <div className="mt-1 text-xs">
+                    <span className="text-text-3">Avg COGS </span>
+                    <span className="font-semibold tabular-nums text-text-1">{avgCogs.toFixed(1)}%</span>
+                  </div>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Market stats snapshot ──────────────────────────────────────────────────────
+
+function MarketStats() {
+  const { selected } = useMarket()
+  const { menus, vendors, menuTiles, loading } = useDashboardData()
+  if (!selected) {
+    return (
+      <div className="card p-5 h-full flex items-center justify-center text-center">
+        <div>
+          <p className="text-sm font-medium text-text-2 mb-1">No market selected</p>
+          <p className="text-xs text-text-3">Pick a market to see its snapshot here</p>
+        </div>
+      </div>
+    )
+  }
+  if (loading) return <Skeleton className="h-40" />
+  const scopedMenus = menus.filter(m => m.country_id === selected.id)
+  const scopedVendors = vendors.filter(v => v.country_id === selected.id)
+  const tiles = menuTiles.filter(t => t.country_id === selected.id)
+  const avg = tiles.flatMap(t => t.levels.map(l => l.cogs_pct).filter((p): p is number => p != null))
+  const avgCogs = avg.length ? (avg.reduce((s, n) => s + n, 0) / avg.length).toFixed(1) + '%' : '—'
+  return (
+    <div className="card p-5 h-full">
+      <SectionHeader title={`${selected.name} — Snapshot`} />
+      <div className="grid grid-cols-2 gap-3">
+        <Stat label="Menus"    value={scopedMenus.length}   />
+        <Stat label="Vendors"  value={scopedVendors.length} />
+        <Stat label="Avg COGS" value={avgCogs}              />
+        <Stat label="Currency" value={`${selected.currency_code} (${selected.currency_symbol})`} />
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-lg bg-surface-2 p-3">
+      <div className="text-[10px] uppercase tracking-wide text-text-3 font-medium">{label}</div>
+      <div className="text-lg font-bold text-text-1 tabular-nums mt-0.5">{value}</div>
+    </div>
+  )
+}
+
+// ── Market header banner ──────────────────────────────────────────────────────
+
+function MarketHeader() {
+  const { selected } = useMarket()
+  return (
+    <div className="card p-6 h-full bg-gradient-to-br from-accent-dim to-surface">
+      {selected ? (
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">Active market</div>
+            <h2 className="text-3xl font-bold text-text-1">{selected.name}</h2>
+            <p className="text-sm text-text-2 mt-0.5">
+              {selected.currency_code} · {selected.currency_symbol} · exchange rate {selected.exchange_rate.toFixed(2)}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="text-xs uppercase tracking-wider text-text-3 font-semibold mb-1">No market selected</div>
+          <h2 className="text-2xl font-bold text-text-1">All markets</h2>
+          <p className="text-sm text-text-2 mt-0.5">Pick a market below to scope the dashboard.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Registry mapping WidgetId → component ─────────────────────────────────────
+
+export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
+  'kpi-ingredients':   KpiIngredients,
+  'kpi-recipes':       KpiRecipes,
+  'kpi-menus':         KpiMenus,
+  'kpi-markets':       KpiMarkets,
+  'kpi-vendors':       KpiVendors,
+  'kpi-active-quotes': KpiActiveQuotes,
+  'kpi-categories':    KpiCategories,
+  'kpi-coverage':      KpiCoverage,
+  'coverage-bar':      CoverageBar,
+  'menu-tiles':        MenuTiles,
+  'missing-quotes':    MissingQuotes,
+  'recent-quotes':     RecentQuotes,
+  'quick-links':       QuickLinks,
+  'market-picker':     MarketPicker,
+  'market-stats':      MarketStats,
+  'market-header':     MarketHeader,
+}

@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import AiChat, { type PepperMode } from './AiChat'
 import MediaLibrary from './MediaLibrary'
+import MarketSwitcher from './MarketSwitcher'
 
 const PANEL_WIDTH_KEY   = 'pepper-panel-width'
 const MIN_PANEL_WIDTH   = 280
@@ -390,8 +391,14 @@ export default function AppLayout() {
       */}
       <div className={`flex flex-1 min-w-0 ${isBottom ? 'flex-col' : 'flex-row'}`}>
         {/* Main content — order:2 in row mode (left=1, right=3), order:1 in col mode */}
-        <main className="flex-1 overflow-y-auto min-w-0" style={{ order: isBottom ? 1 : 2 }}>
-          <Outlet />
+        <main className="flex-1 overflow-y-auto min-w-0 flex flex-col" style={{ order: isBottom ? 1 : 2 }}>
+          {/* Thin top bar — holds the global MarketSwitcher. Sits above all pages. */}
+          <div className="flex-shrink-0 flex items-center justify-end gap-2 px-6 py-2 border-b border-border bg-surface print:hidden">
+            <MarketSwitcher />
+          </div>
+          <div className="flex-1 min-h-0">
+            <Outlet />
+          </div>
         </main>
 
         {/*
