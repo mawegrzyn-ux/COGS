@@ -17,6 +17,7 @@ export type WidgetId =
   | 'market-stats'
   | 'market-header'
   | 'market-map'
+  | 'menu-top-items'
 
 // Widget size — maps to CSS grid col-span (out of 12)
 export type WidgetSize = 'sm' | 'md' | 'lg' | 'xl'

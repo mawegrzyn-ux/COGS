@@ -20,6 +20,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'market-stats':      { id: 'market-stats',      label: 'Market Snapshot',   description: 'Headline stats for selected market', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true },
   'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
   'market-map':        { id: 'market-map',        label: 'World Map',         description: '2D world map — click a country to set the active market', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
+  'menu-top-items':    { id: 'menu-top-items',    label: 'Top 10 Items / Menu', description: 'Bar chart of top 10 items per menu in the active market (by cost, revenue or COGS%)', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ export const TEMPLATES: Template[] = [
       { widgetId: 'kpi-menus',         size: 'sm' },
       { widgetId: 'kpi-coverage',      size: 'sm' },
       { widgetId: 'menu-tiles',        size: 'xl' },
+      { widgetId: 'menu-top-items',    size: 'xl' },
       { widgetId: 'coverage-bar',      size: 'xl' },
       { widgetId: 'recent-quotes',     size: 'md' },
       { widgetId: 'missing-quotes',    size: 'md' },

@@ -13,6 +13,16 @@ function MarketMapWidget() {
   )
 }
 
+// Lazy-load the top-items chart — only fetches /cogs when visible
+const MenuTopItemsChart = lazy(() => import('./MenuTopItemsChart'))
+function MenuTopItemsWidget() {
+  return (
+    <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
+      <MenuTopItemsChart />
+    </Suspense>
+  )
+}
+
 // ── Shared UI bits ─────────────────────────────────────────────────────────────
 
 function Skeleton({ className = '' }: { className?: string }) {
@@ -303,15 +313,15 @@ function RecentQuotes() {
 // ── Quick links ────────────────────────────────────────────────────────────────
 
 function QuickLinks() {
-  const links = [
-    { label: 'Inventory',   href: '/inventory' },
-    { label: 'Recipes',     href: '/recipes' },
-    { label: 'Menus',       href: '/menus' },
-    { label: 'Sales Items', href: '/sales-items' },
-    { label: 'Stock',       href: '/stock-manager' },
-    { label: 'HACCP',       href: '/haccp' },
-    { label: 'Allergens',   href: '/allergens' },
-    { label: 'Config',      href: '/configuration' },
+  const links: { label: string; href: string; icon: ReactElement }[] = [
+    { label: 'Inventory',   href: '/inventory',     icon: <IconInventory /> },
+    { label: 'Recipes',     href: '/recipes',       icon: <IconRecipe /> },
+    { label: 'Menus',       href: '/menus',         icon: <IconMenu /> },
+    { label: 'Sales Items', href: '/sales-items',   icon: <IconSales /> },
+    { label: 'Stock',       href: '/stock-manager', icon: <IconStock /> },
+    { label: 'HACCP',       href: '/haccp',         icon: <IconHaccp /> },
+    { label: 'Allergens',   href: '/allergens',     icon: <IconAllergen /> },
+    { label: 'Config',      href: '/configuration', icon: <IconConfig /> },
   ]
   return (
     <div className="card p-5 h-full">
@@ -319,14 +329,74 @@ function QuickLinks() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {links.map(l => (
           <a key={l.label} href={l.href}
-            className="flex items-center justify-center py-3 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center text-xs font-medium text-text-2 hover:text-accent">
-            {l.label}
+            className="flex flex-col items-center gap-1.5 py-3 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center text-xs font-medium text-text-2 hover:text-accent group">
+            <span className="w-8 h-8 rounded-lg bg-surface-2 group-hover:bg-accent/15 flex items-center justify-center text-text-2 group-hover:text-accent transition-colors">
+              {l.icon}
+            </span>
+            <span>{l.label}</span>
           </a>
         ))}
       </div>
     </div>
   )
 }
+
+// ── Quick-link icons ─────────────────────────────────────────────────────────
+
+const iconProps = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
+
+function IconInventory() { return (
+  <svg {...iconProps}>
+    <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/>
+    <path d="M12 6v6l4 2"/>
+  </svg>
+)}
+function IconRecipe() { return (
+  <svg {...iconProps}>
+    <path d="M9 11l3 3L22 4"/>
+    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+  </svg>
+)}
+function IconMenu() { return (
+  <svg {...iconProps}>
+    <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+    <rect x="9" y="3" width="6" height="4" rx="1"/>
+    <line x1="9" y1="12" x2="15" y2="12"/>
+    <line x1="9" y1="16" x2="13" y2="16"/>
+  </svg>
+)}
+function IconSales() { return (
+  <svg {...iconProps}>
+    <circle cx="9" cy="21" r="1"/>
+    <circle cx="20" cy="21" r="1"/>
+    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"/>
+  </svg>
+)}
+function IconStock() { return (
+  <svg {...iconProps}>
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+    <line x1="12" y1="22.08" x2="12" y2="12"/>
+  </svg>
+)}
+function IconHaccp() { return (
+  <svg {...iconProps}>
+    <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4 4 0 1 0 5 0z"/>
+  </svg>
+)}
+function IconAllergen() { return (
+  <svg {...iconProps}>
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/>
+    <line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+)}
+function IconConfig() { return (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </svg>
+)}
 
 // ── Market picker — grid of markets with quick stats ──────────────────────────
 
@@ -473,4 +543,5 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'market-stats':      MarketStats,
   'market-header':     MarketHeader,
   'market-map':        MarketMapWidget,
+  'menu-top-items':    MenuTopItemsWidget,
 }
