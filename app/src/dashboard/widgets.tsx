@@ -1,7 +1,17 @@
-import { useMemo, ReactElement } from 'react'
+import { useMemo, ReactElement, lazy, Suspense } from 'react'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { WidgetId } from './types'
+
+// Lazy-load the map widget so react-simple-maps + d3-geo only load when used
+const MarketMap = lazy(() => import('./MarketMap'))
+function MarketMapWidget() {
+  return (
+    <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
+      <MarketMap />
+    </Suspense>
+  )
+}
 
 // ── Shared UI bits ─────────────────────────────────────────────────────────────
 
@@ -462,4 +472,5 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'market-picker':     MarketPicker,
   'market-stats':      MarketStats,
   'market-header':     MarketHeader,
+  'market-map':        MarketMapWidget,
 }

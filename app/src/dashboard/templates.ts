@@ -19,6 +19,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'market-picker':     { id: 'market-picker',     label: 'Market Picker',     description: 'Grid of markets with quick stats',   defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
   'market-stats':      { id: 'market-stats',      label: 'Market Snapshot',   description: 'Headline stats for selected market', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true },
   'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
+  'market-map':        { id: 'market-map',        label: 'World Map',         description: '2D world map — click a country to set the active market', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────
@@ -57,12 +58,13 @@ export const TEMPLATES: Template[] = [
   {
     id: 'market-explorer',
     name: 'Market Explorer',
-    description: 'Drill into a specific market. Starts with a market picker; stats update as you select.',
+    description: 'Drill into a specific market. Pick on the map or card grid; stats update as you select.',
     slots: [
       { widgetId: 'market-header',     size: 'xl' },
-      { widgetId: 'market-picker',     size: 'xl' },
+      { widgetId: 'market-map',        size: 'xl' },
       { widgetId: 'market-stats',      size: 'md' },
-      { widgetId: 'menu-tiles',        size: 'md' },
+      { widgetId: 'market-picker',     size: 'md' },
+      { widgetId: 'menu-tiles',        size: 'xl' },
       { widgetId: 'recent-quotes',     size: 'md' },
       { widgetId: 'quick-links',       size: 'md' },
     ],

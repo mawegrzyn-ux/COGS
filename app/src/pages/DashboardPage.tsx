@@ -220,21 +220,21 @@ function DashboardInner() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Template selector */}
-            <label className="text-xs text-text-3 font-medium uppercase tracking-wide">Template</label>
-            <select
-              value={config.templateId}
-              onChange={e => applyTemplate(e.target.value)}
-              className="text-sm border border-border rounded-lg px-2 py-1.5 bg-surface"
-            >
-              {TEMPLATES.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-
-            {editing && <AddWidgetButton onAdd={addWidget} existing={existingIds} />}
             {editing && (
-              <button onClick={resetToTemplate} className="btn-outline text-sm py-1.5 px-3">↺ Reset</button>
+              <>
+                <label className="text-xs text-text-3 font-medium uppercase tracking-wide">Template</label>
+                <select
+                  value={config.templateId}
+                  onChange={e => applyTemplate(e.target.value)}
+                  className="text-sm border border-border rounded-lg px-2 py-1.5 bg-surface"
+                >
+                  {TEMPLATES.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <AddWidgetButton onAdd={addWidget} existing={existingIds} />
+                <button onClick={resetToTemplate} className="btn-outline text-sm py-1.5 px-3">↺ Reset</button>
+              </>
             )}
             <button
               onClick={() => setEditing(e => !e)}
@@ -252,10 +252,12 @@ function DashboardInner() {
           </div>
         </div>
 
-        {/* Template description */}
-        <div className="text-xs text-text-3 italic">
-          {getTemplate(config.templateId).description}
-        </div>
+        {/* Template description — only shown in edit mode */}
+        {editing && (
+          <div className="text-xs text-text-3 italic">
+            {getTemplate(config.templateId).description}
+          </div>
+        )}
 
         {/* Widget grid */}
         {loading && config.slots.length === 0 ? (
