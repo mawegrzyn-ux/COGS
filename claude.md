@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 82 tables (all prefixed `mcogs_`), 120 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 82 tables (all prefixed `mcogs_`), 121 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -1063,15 +1063,52 @@ Switching between items resets the panel tab to Details.
 | `mcogs_menu_sales_items` | Menu ↔ sales_items link (sort_order, allergen_notes, qty) |
 | `mcogs_menu_sales_item_prices` | Per-menu price overrides per sales item × price level |
 
-### ✅ Dashboard Page (`/dashboard`)
+### ✅ Dashboard Page (`/dashboard`) — Configurable Widget Grid
 
-- 8 KPI cards: ingredients, recipes, vendors, markets, active quotes, categories, coverage %, plus menu tiles
-- The **Price Levels** tile has been replaced with **Menu Tiles**. Menu tiles section shows all menus as clickable cards linking to `/menus`, each card showing: Menu Name, Market, item count, and a list of price level name → COGS% rows. Menu tile COGS data loaded in background.
-- Price quote coverage progress bar (green/amber/red)
-- Missing quotes panel: top 10 ingredients with no active price quote
-- Recent active quotes list
-- Quick links to all main pages
-- Refresh button (silent re-fetch, shows last-updated time)
+The Dashboard is a **template-driven, user-customisable widget grid** (not a fixed layout). Users pick a template, then optionally add/remove/reorder/resize widgets. Config is persisted per-browser in `localStorage` under `cogs-dashboard-config-v1`.
+
+**Templates (shipped):**
+- **Executive** — default. KPIs + Menu Tiles + Menu Top Items chart + Coverage Bar + Recent/Missing Quotes.
+- **Finance / Cost** — coverage-focused. KPIs + Coverage Bar + Missing Quotes + Recent Quotes + Menu Tiles.
+- **Market Explorer** — Market Header banner + World Map + Market Stats + Market Picker + Menu Tiles + Recent Quotes + Quick Links.
+
+**Widgets (17):**
+| Category | Widgets |
+|---|---|
+| KPI tiles (¼ width) | `kpi-ingredients`, `kpi-recipes`, `kpi-menus`, `kpi-markets`, `kpi-vendors`, `kpi-active-quotes`, `kpi-categories`, `kpi-coverage` |
+| Full-width cards | `coverage-bar`, `menu-tiles`, `quick-links` (with SVG icons), `market-header`, `market-picker`, `market-map`, `menu-top-items` |
+| Half-width cards | `missing-quotes`, `recent-quotes`, `market-stats` |
+
+**Customise mode:**
+- `✎ Customise` toggle in header → shows per-widget controls (↑ ↓ reorder, size selector ¼/½/¾/Full, ✕ remove)
+- `+ Add widget` dropdown (edit mode only) lists widgets not yet on the board
+- Template selector + `↺ Reset` button (edit mode only) — Reset restores the current template's default slot list
+- In view mode, header is clean: just Dashboard title · Customise · Refresh
+
+**Widget grid:** 12-col CSS grid. Sizes map to col-spans: `sm=3 (¼)`, `md=6 (½)`, `lg=9 (¾)`, `xl=12 (full)`. Sizes gracefully collapse to 12 on mobile, 6 on tablet.
+
+**Market scope integration:** Widgets marked `marketScoped: true` auto-filter by the global market selection (top-bar `MarketSwitcher`). Non-scoped widgets (categories, recipes, markets count) always show global data. The market filter respects RBAC `allowedCountries`.
+
+**Key files:**
+- `app/src/pages/DashboardPage.tsx` — shell, template selector, customise mode, slot rendering
+- `app/src/dashboard/types.ts` — `WidgetId`, `WidgetSize`, `SlotConfig`, `DashboardConfig`, `Template`
+- `app/src/dashboard/templates.ts` — `WIDGET_REGISTRY` (meta per widget) + 3 `TEMPLATES`
+- `app/src/dashboard/DashboardData.tsx` — shared data provider (one fetch, all widgets subscribe). Loads ingredients, recipes, vendors, countries, menus, categories, price-levels, quotes, settings. Also computes per-menu COGS tiles scoped to the active market.
+- `app/src/dashboard/widgets.tsx` — 15 widget components + registry mapping `WidgetId → Component`. `MarketMap` and `MenuTopItemsChart` are lazy-loaded.
+- `app/src/dashboard/MarketMap.tsx` — 2D world map (react-simple-maps + d3-geo, natural-earth topojson from jsDelivr CDN). Countries shaded by avg COGS% (green ≤30%, amber ≤40%, red >40%, accent-dim if no data, pale grey if outside RBAC scope). Click to set market, ZoomableGroup for zoom/pan. Name matching uses an alias table for USA/UK/Czechia/Myanmar/etc.
+- `app/src/dashboard/MenuTopItemsChart.tsx` — horizontal bar chart showing top 10 items per menu. Metric toggle (Cost / Revenue / COGS%). Per-menu price-level override dropdown when >1 level exists. Data from `/cogs/menu-sales/:id?price_level_id=X`.
+
+**Dependencies added:** `react-simple-maps ^3.0.0`, `d3-geo ^3.1.1` (plus their `@types/*`). Lazy-loaded so bundle stays lean when map isn't used.
+
+### Global Market Switcher
+
+Top-bar dropdown in `AppLayout` (right side) — the central control for scoping the app to a single market. Provided by `MarketContext` (`app/src/contexts/MarketContext.tsx`).
+
+- **Persistence:** selected `countryId` saved to `localStorage['cogs-market-country-id']`, restored on page load
+- **RBAC-aware:** the dropdown only lists countries in the user's `allowedCountries`. If a stored selection falls outside scope after a role change, it auto-clears
+- **Search:** built-in search input in the dropdown when ≥6 countries
+- **"All markets" default** — `countryId === null` means global view
+- **Consumers:** Dashboard widgets (`useMarket().countryId`), `MarketMap`, `MarketPicker`, `MarketStats`, `MarketHeader`, `MenuTopItemsChart`. Other pages can opt in by calling `useMarket()`.
 
 ### ✅ Allergen Matrix Page (`/allergens`)
 

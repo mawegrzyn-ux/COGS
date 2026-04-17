@@ -2813,6 +2813,55 @@ const migrations = [
 
     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1410));
   END $$`,
+
+  // ── Step 121: Configurable Dashboard + MarketContext + Map/Chart widgets ──
+  `DO $$ BEGIN
+    INSERT INTO mcogs_changelog (version, title, entries) VALUES
+    ('2026-04-18', 'Configurable Dashboard + Global Market Switcher + World Map widget', '${JSON.stringify([
+      { type: 'added', description: 'Configurable dashboard — 3 templates (Executive, Finance, Market Explorer), per-widget reorder/resize/remove, + Add widget dropdown, localStorage persistence (cogs-dashboard-config-v1)' },
+      { type: 'added', description: 'Dashboard widget framework — 17 widgets in a 12-col grid with ¼/½/¾/Full sizes. New files: dashboard/types.ts, dashboard/templates.ts, dashboard/DashboardData.tsx, dashboard/widgets.tsx' },
+      { type: 'added', description: 'Global Market Switcher — top-bar dropdown in AppLayout scoping the app to a selected country. Persisted to localStorage, RBAC-aware (allowedCountries), auto-clamps stale selections' },
+      { type: 'added', description: 'MarketContext provider — app/src/contexts/MarketContext.tsx. Wrapped routes in App.tsx. Consumable via useMarket() hook in any page' },
+      { type: 'added', description: 'World Map widget (market-map) — 2D world map via react-simple-maps + d3-geo. Countries shaded by avg COGS% (green/amber/red), click to set market, hover tooltip, zoom/pan. Lazy-loaded' },
+      { type: 'added', description: 'Menu Top Items widget (menu-top-items) — bar chart of top 10 items per menu in market scope. Metric toggle (Cost / Revenue / COGS%), per-menu price-level override. Lazy-loaded' },
+      { type: 'added', description: 'Market widgets — market-picker (country card grid), market-stats (snapshot), market-header (active-market banner)' },
+      { type: 'changed', description: 'Dashboard Quick Links — each link now has an SVG icon in a rounded badge above the label (Inventory, Recipes, Menus, Sales Items, Stock, HACCP, Allergens, Config)' },
+      { type: 'changed', description: 'Dashboard header — template selector, + Add widget, Reset buttons are visible only in Customise mode. View mode is clean: title · Customise · Refresh' },
+      { type: 'changed', description: 'Dependencies — react-simple-maps ^3.0.0 + d3-geo ^3.1.1 added to app/package.json (with @types/*)' }
+    ]).replace(/'/g, "''")}')
+    ON CONFLICT DO NOTHING;
+
+    -- Backlog items uncovered during this session
+    INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+    VALUES
+    ('BACK-1410', 'Dashboard config sync across devices (DB-backed)',
+      'Current dashboard config is per-browser (localStorage). Add an optional DB-backed user dashboard table (mcogs_user_dashboards) + API route so configs sync across devices. Keep localStorage as write-through cache.',
+      'story', 'low', 'backlog', '["dashboard","ux","enhancement"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mcogs_backlog)),
+    ('BACK-1411', 'Market-scoped API — inject country_id on list endpoints',
+      'MarketContext currently only scopes the dashboard. Extend useApi() to inject ?country_id=X on list endpoints when the global market is set, and update list routes (inventory, menus, vendors, stock) to respect it. Completes the "market-driven UX" vision.',
+      'story', 'medium', 'backlog', '["api","ux","market-scope"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 2 FROM mcogs_backlog)),
+    ('BACK-1412', 'Role-driven dashboard view modes (Operator / Manager / Admin)',
+      'Three simplified view modes gated by RBAC role: Operator (task-focused tiles, hides admin config), Manager (current layout minus System/Config admin), Admin (full layout = current default). Layer on top of the existing template system.',
+      'story', 'medium', 'backlog', '["rbac","ux","dashboard"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 3 FROM mcogs_backlog)),
+    ('BACK-1413', 'Map tooltip enhancements — show menu count + vendor count',
+      'Currently the map hover tooltip shows country name, currency and avg COGS. Add menu count, vendor count, and item-count rolled up.',
+      'task', 'low', 'backlog', '["dashboard","map","enhancement"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 4 FROM mcogs_backlog)),
+    ('BACK-1414', 'Menu Top Items — use scenario qty data for revenue metric',
+      'Revenue metric currently uses qty from /cogs/menu-sales response. When no scenario exists, qty is 0 → revenue shows zero. Fall back to the active scenario qty when one is loaded, or average across all scenarios for the menu.',
+      'task', 'low', 'backlog', '["dashboard","chart","enhancement"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 5 FROM mcogs_backlog)),
+    ('BACK-1415', 'Cross-market Reports page',
+      'Dedicated /reports page for power users with cross-market comparisons: COGS% comparison for the same recipe across markets, missing quotes per market, waste spend by location/period, stock value by market, sales mix rollup. Uses existing tables — no new schema.',
+      'story', 'medium', 'backlog', '["reports","analytics"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 6 FROM mcogs_backlog))
+    ON CONFLICT (key) DO NOTHING;
+
+    PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1416));
+  END $$`,
 ];
 
 async function runMigrations(pool) {

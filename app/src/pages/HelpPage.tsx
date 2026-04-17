@@ -407,21 +407,57 @@ export default function HelpPage() {
         {/* ═══════════════════════════════════ DASHBOARD */}
         <H2 id="dashboard" icon="📊" title="Dashboard" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The Dashboard gives a live health snapshot of your COGS data. Hit the <strong>Refresh</strong> button
-          (top-right) to re-fetch all metrics. The last-updated timestamp is shown next to the button.
+          The Dashboard is a <strong>configurable widget grid</strong>. Pick a <strong>template</strong>, add the widgets
+          you care about, reorder them, resize them, and your layout is saved to your browser.
         </p>
 
-        <H3 id="kpi-cards">KPI Cards</H3>
+        <H3 id="market-switcher">Global Market Switcher</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          The top-bar market switcher (right of the logo) scopes the whole app to a single market. Pick a country to
+          filter all market-aware widgets (menus, vendors, quotes, menu tiles, top items, market stats). Pick{' '}
+          <strong>All markets</strong> to reset. Your selection is remembered across sessions.
+        </p>
+
+        <H3 id="templates">Templates</H3>
+        <div className="grid grid-cols-1 gap-2.5 my-3">
+          {[
+            { label: 'Executive',       desc: 'High-level KPIs, menu COGS tiles, top-10 items chart, coverage, recent/missing quotes.' },
+            { label: 'Finance / Cost',  desc: 'Coverage-focused: quote coverage bar, missing quotes, recent quotes, menu tiles.' },
+            { label: 'Market Explorer', desc: 'World map, market banner, market picker, market snapshot, menu tiles for the active market.' },
+          ].map(k => (
+            <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
+              <p className="text-xs font-bold text-[#146A34]">{k.label}</p>
+              <p className="text-xs text-[#6B7F74] mt-0.5 leading-snug">{k.desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <H3 id="customise">Customise Mode</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Click <strong>✎ Customise</strong> (top-right). In edit mode you can:
+        </p>
+        <ul className="list-disc pl-5 space-y-1 text-sm text-[#2D4A38]">
+          <li>Change <strong>template</strong> — replaces the layout (your customisations for the new template persist).</li>
+          <li>Click <strong>+ Add widget</strong> to add any widget not already on the board.</li>
+          <li>Use the per-widget ↑ ↓ arrows to reorder, the dropdown to resize (¼ / ½ / ¾ / Full), or ✕ to remove.</li>
+          <li>Click <strong>↺ Reset</strong> to restore the template's default layout.</li>
+          <li>Click <strong>✓ Done</strong> to exit edit mode. Your layout is saved automatically.</li>
+        </ul>
+
+        <H3 id="kpi-cards">Widget Catalog</H3>
         <div className="grid grid-cols-2 gap-2.5 my-3">
           {[
-            { label: 'Ingredients',   desc: 'Total distinct ingredients in the master library' },
-            { label: 'Recipes',       desc: 'Total recipes built in the system' },
-            { label: 'Vendors',       desc: 'Total supplier records across all markets' },
-            { label: 'Markets',       desc: 'Active country/market configurations' },
-            { label: 'Active Quotes', desc: 'Live price quotes from vendors (is_active = true)' },
-            { label: 'Categories',    desc: 'Ingredient and recipe category count' },
-            { label: 'Menu Tiles',    desc: 'One clickable tile per menu — shows market, item count, and COGS% per price level, loaded in background' },
-            { label: 'Coverage %',    desc: 'Percentage of ingredients with at least one active preferred-vendor quote' },
+            { label: 'KPI tiles',        desc: '8 quarter-width tiles: Ingredients, Recipes, Menus, Markets, Vendors, Active Quotes, Categories, Coverage %.' },
+            { label: 'Coverage Bar',     desc: 'Full-width green/amber/red progress bar showing price-quote coverage.' },
+            { label: 'Menu Tiles',       desc: 'Clickable tiles, one per menu in scope. Shows item count and COGS% per price level.' },
+            { label: 'Menu Top Items',   desc: 'Bar chart of the top 10 items per menu. Toggle between Cost / Revenue / COGS% and per-level price.' },
+            { label: 'Missing Quotes',   desc: 'Top 10 ingredients with no active price quote.' },
+            { label: 'Recent Quotes',    desc: 'Latest 8 active price-quote updates, scoped to the active market.' },
+            { label: 'Quick Links',      desc: 'Shortcut tiles with icons for Inventory, Recipes, Menus, Sales Items, Stock, HACCP, Allergens, Config.' },
+            { label: 'World Map',        desc: '2D world map — click any country in your scope to set it as the active market. Countries shaded by avg COGS%.' },
+            { label: 'Market Picker',    desc: 'Card grid of all markets with menu/vendor counts and avg COGS%.' },
+            { label: 'Market Stats',     desc: 'Snapshot of the selected market (menus, vendors, avg COGS, currency).' },
+            { label: 'Market Header',    desc: 'Large banner showing the active market name, currency, exchange rate.' },
           ].map(k => (
             <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
               <p className="text-xs font-bold text-[#146A34]">{k.label}</p>
