@@ -1,13 +1,20 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // GET /api/price-levels
 router.get('/', async (req, res, next) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const pName = lang ? `COALESCE(p.translations->$1->>'name', p.name)` : `p.name`;
     const { rows } = await pool.query(
-      `SELECT * FROM mcogs_price_levels ORDER BY name`
+      `SELECT p.id, ${pName} AS name, p.description, p.is_default, p.translations,
+              p.created_at, p.updated_at
+       FROM mcogs_price_levels p ORDER BY name`,
+      lang ? [lang] : []
     );
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) { next(err); }
 });

@@ -1600,6 +1600,14 @@ Returns items with their urls and metadata.`,
 // Helper: ensure category name exists in mcogs_categories (mirrors ingredients.js)
 
 async function executeTool(name, input, send = null, userCtx = {}) {
+  // Translation helpers — when the user has a non-English language, every read
+  // tool that returns entity name/description should resolve via COALESCE so
+  // Pepper sees the translated string and can quote it back naturally.
+  const _lang = userCtx?.language && userCtx.language !== 'en' ? userCtx.language : null;
+  const _tSel = (alias, field, paramIdx) =>
+    _lang ? `COALESCE(${alias}.translations->$${paramIdx}->>'${field}', ${alias}.${field})`
+          : `${alias}.${field}`;
+
   switch (name) {
 
     // ── Read / Lookup (existing) ───────────────────────────────────────────────
@@ -1630,27 +1638,42 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'list_ingredients': {
       const { search } = input;
-      const q = search
-        ? `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id WHERE i.name ILIKE $1 ORDER BY i.name LIMIT 100`
-        : `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id ORDER BY i.name LIMIT 100`;
-      const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
+      // Language-aware: when _lang is set, $1 is lang and $2 is the search term
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (search) { params.push(`%${search}%`); where = `WHERE i.name ILIKE $${params.length}`; }
+      const iName = _lang ? `COALESCE(i.translations->$1->>'name', i.name)` : `i.name`;
+      const catName = _lang ? `COALESCE(cat.translations->$1->>'name', cat.name)` : `cat.name`;
+      const { rows } = await pool.query(
+        `SELECT i.id, ${iName} AS name, ${catName} AS category, i.waste_pct, i.base_unit_id
+         FROM mcogs_ingredients i
+         LEFT JOIN mcogs_categories cat ON cat.id = i.category_id
+         ${where} ORDER BY name LIMIT 100`,
+        params
+      );
       return rows;
     }
 
     case 'get_ingredient': {
       const { id } = input;
+      const iSel = _lang ? `COALESCE(i.translations->$2->>'name', i.name) AS name, COALESCE(i.translations->$2->>'notes', i.notes) AS notes` : `i.name, i.notes`;
+      const vSel = _lang ? `COALESCE(v.translations->$2->>'name', v.name) AS vendor_name` : `v.name AS vendor_name`;
+      const ingArgs = _lang ? [id, _lang] : [id];
       const [ing, quotes, allergens] = await Promise.all([
         pool.query(`
-          SELECT i.*, u.name as base_unit_name, u.abbreviation as base_unit_abbr
+          SELECT i.id, ${iSel}, i.category_id, i.base_unit_id, i.waste_pct,
+                 i.default_prep_unit, i.default_prep_to_base_conversion,
+                 i.image_url, i.allergen_notes, i.translations,
+                 u.name as base_unit_name, u.abbreviation as base_unit_abbr
           FROM mcogs_ingredients i
           LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
-          WHERE i.id = $1`, [id]),
+          WHERE i.id = $1`, ingArgs),
         pool.query(`
-          SELECT pq.*, v.name as vendor_name, co.name as country_name, co.currency_symbol
+          SELECT pq.*, ${vSel}, co.name as country_name, co.currency_symbol
           FROM mcogs_price_quotes pq
           JOIN mcogs_vendors v ON v.id = pq.vendor_id
           LEFT JOIN mcogs_countries co ON co.id = v.country_id
-          WHERE pq.ingredient_id = $1 ORDER BY v.name`, [id]),
+          WHERE pq.ingredient_id = $1 ORDER BY v.name`, ingArgs),
         pool.query(`
           SELECT a.name, a.code, ia.status
           FROM mcogs_ingredient_allergens ia
@@ -1663,41 +1686,55 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'list_recipes': {
       const { search } = input;
-      const q = search
-        ? `SELECT id, name, description FROM mcogs_recipes WHERE name ILIKE $1 ORDER BY name LIMIT 100`
-        : `SELECT id, name, description FROM mcogs_recipes ORDER BY name LIMIT 100`;
-      const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (search) { params.push(`%${search}%`); where = `WHERE r.name ILIKE $${params.length}`; }
+      const rName = _lang ? `COALESCE(r.translations->$1->>'name', r.name)` : `r.name`;
+      const rDesc = _lang ? `COALESCE(r.translations->$1->>'description', r.description)` : `r.description`;
+      const { rows } = await pool.query(
+        `SELECT r.id, ${rName} AS name, ${rDesc} AS description FROM mcogs_recipes r ${where} ORDER BY name LIMIT 100`,
+        params
+      );
       return rows;
     }
 
     case 'get_recipe': {
       const { id } = input;
+      const rArgs = _lang ? [id, _lang] : [id];
+      const rName = _tSel('r', 'name', 2);
+      const rDesc = _tSel('r', 'description', 2);
+      const iName = _tSel('i', 'name', 2);
+      const srName = _tSel('sr', 'name', 2);
       const [rec, items] = await Promise.all([
         pool.query(`
-          SELECT r.*, u.abbreviation as yield_unit_abbr
+          SELECT r.id, ${rName} AS name, ${rDesc} AS description,
+                 r.category_id, r.yield_qty, r.yield_unit_id, r.yield_unit_text,
+                 r.translations,
+                 u.abbreviation as yield_unit_abbr
           FROM mcogs_recipes r
           LEFT JOIN mcogs_units u ON u.id = r.yield_unit_id
-          WHERE r.id = $1`, [id]),
+          WHERE r.id = $1`, rArgs),
         pool.query(`
-          SELECT ri.*, i.name as ingredient_name, u.abbreviation as unit_abbr,
-                 sr.name as sub_recipe_name
+          SELECT ri.*, ${iName} as ingredient_name, u.abbreviation as unit_abbr,
+                 ${srName} as sub_recipe_name
           FROM mcogs_recipe_items ri
           LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
           LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
           LEFT JOIN mcogs_recipes sr ON sr.id = ri.recipe_item_id
           WHERE ri.recipe_id = $1
-          ORDER BY ri.id ASC`, [id]),
+          ORDER BY ri.id ASC`, rArgs),
       ]);
       if (!rec.rows.length) return { error: 'Recipe not found' };
       return { ...rec.rows[0], items: items.rows };
     }
 
     case 'list_menus': {
+      const mName = _tSel('m', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT m.id, m.name, c.name as market, c.currency_symbol
+        SELECT m.id, ${mName} AS name, c.name as market, c.currency_symbol
         FROM mcogs_menus m LEFT JOIN mcogs_countries c ON c.id = m.country_id
-        ORDER BY c.name, m.name
-      `);
+        ORDER BY c.name, name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -2114,21 +2151,30 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'list_vendors': {
       const { country_id } = input;
-      const q = country_id
-        ? `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id WHERE v.country_id = $1 ORDER BY v.name`
-        : `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id ORDER BY v.name`;
-      const { rows } = await pool.query(q, country_id ? [country_id] : []);
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (country_id) { params.push(country_id); where = `WHERE v.country_id = $${params.length}`; }
+      const vName = _tSel('v', 'name', 1);
+      const { rows } = await pool.query(
+        `SELECT v.id, ${vName} AS name, c.name as country_name, c.currency_symbol
+         FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id ${where} ORDER BY name`,
+        params
+      );
       return rows;
     }
 
     case 'list_markets': {
+      // Country names are intentionally not translated (they're proper nouns,
+      // stored in English by design). Price-level name IS translatable.
+      const plName = _tSel('pl', 'name', 1);
       const { rows } = await pool.query(`
         SELECT c.id, c.name, c.currency_code, c.currency_symbol, c.exchange_rate,
-               c.default_price_level_id, pl.name AS default_price_level_name
+               c.default_price_level_id, ${plName} AS default_price_level_name,
+               c.default_language_code
         FROM   mcogs_countries c
         LEFT JOIN mcogs_price_levels pl ON pl.id = c.default_price_level_id
         ORDER BY c.name
-      `);
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -2139,14 +2185,15 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       if (for_recipes)     conditions.push('c.for_recipes = true');
       if (for_sales_items) conditions.push('c.for_sales_items = true');
       const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : '';
+      const cName = _tSel('c', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT c.id, c.name, c.sort_order, c.for_ingredients, c.for_recipes, c.for_sales_items,
+        SELECT c.id, ${cName} AS name, c.sort_order, c.for_ingredients, c.for_recipes, c.for_sales_items,
                c.group_id, g.name AS group_name
         FROM mcogs_categories c
         LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
         ${where}
-        ORDER BY c.name
-      `);
+        ORDER BY name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -2158,23 +2205,27 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'list_price_levels': {
+      const plName = _tSel('pl', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT id, name, description, is_default FROM mcogs_price_levels ORDER BY name
-      `);
+        SELECT pl.id, ${plName} AS name, pl.description, pl.is_default
+        FROM mcogs_price_levels pl ORDER BY name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
     case 'list_price_quotes': {
       const { ingredient_id, vendor_id, is_active } = input;
+      const vals = _lang ? [_lang] : [];
       const conditions = [];
-      const vals = [];
       if (ingredient_id !== undefined) conditions.push(`pq.ingredient_id = $${vals.push(ingredient_id)}`);
       if (vendor_id     !== undefined) conditions.push(`pq.vendor_id = $${vals.push(vendor_id)}`);
       if (is_active     !== undefined) conditions.push(`pq.is_active = $${vals.push(is_active)}`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const iName = _tSel('i', 'name', 1);
+      const vName = _tSel('v', 'name', 1);
       const { rows } = await pool.query(`
         SELECT pq.id, pq.ingredient_id, pq.vendor_id,
-               i.name as ingredient_name, v.name as vendor_name,
+               ${iName} as ingredient_name, ${vName} as vendor_name,
                pq.purchase_price, pq.qty_in_base_units, pq.purchase_unit,
                pq.is_active, pq.vendor_product_code,
                ROUND((pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))::numeric, 4) as price_per_base_unit
@@ -2182,7 +2233,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
         JOIN mcogs_ingredients i ON i.id = pq.ingredient_id
         JOIN mcogs_vendors v ON v.id = pq.vendor_id
         ${where}
-        ORDER BY i.name, v.name
+        ORDER BY ingredient_name, vendor_name
         LIMIT 200
       `, vals);
       return rows;
@@ -3749,8 +3800,23 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-async function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false) {
+async function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false, userLanguage = 'en') {
   const page = context?.currentPage || 'unknown';
+
+  // ── Language directive ───────────────────────────────────────────────────
+  // When the user has a non-English preference, instruct Pepper to respond in
+  // that language. Tool results will still come back in the resolved language
+  // (via the COALESCE pattern in route handlers); Pepper reads them and
+  // naturally re-uses those translated strings in its prose.
+  let languageBlock = '';
+  if (userLanguage && userLanguage !== 'en') {
+    const languageNames = {
+      fr: 'French', es: 'Spanish', de: 'German', it: 'Italian', nl: 'Dutch',
+      pl: 'Polish', pt: 'Portuguese', hi: 'Hindi',
+    };
+    const name = languageNames[userLanguage] || userLanguage;
+    languageBlock = `\n\n## User Language\nThe user's preferred language is ${name} (${userLanguage}). Respond to the user in ${name}. When you present data (ingredient names, recipe names, categories, etc.) use the translations returned by the tools — do not re-translate them yourself. Keep keyboard shortcuts, feature names like "Dashboard" / "Pepper" / URLs, and SQL/technical identifiers in English where appropriate.\n`;
+  }
 
   // ── Memory context (pinned notes + profile) ──────────────────────────────
   let memoryBlock = '';
@@ -3838,7 +3904,7 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
   return `You are Pepper — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
 Your name is Pepper. When users greet you or ask your name, introduce yourself as Pepper.
-${memoryBlock}
+${languageBlock}${memoryBlock}
 ## Memory Tools
 
 You have persistent memory across conversations via pinned notes. When the user says things like:
@@ -4082,7 +4148,7 @@ router.post('/', async (req, res) => {
   // Inject userSub into context so buildSystemPrompt can load memory
   context.userSub = context.userSub || userSub || req.user?.sub;
 
-  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false);
+  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false, req.language || 'en');
 
   // Build messages array (enforce max 20 history items)
   const messages = [
@@ -4091,7 +4157,10 @@ router.post('/', async (req, res) => {
   ];
 
   // Bind user context (allowedCountries, etc.) into executeTool for this request
-  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, req.user || {});
+  // Inject req.language into userCtx so every tool executor that resolves
+  // translatable fields can COALESCE via the user's preferred language.
+  const userCtxWithLang = { ...(req.user || {}), language: req.language || 'en' };
+  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, userCtxWithLang);
 
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
     await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });

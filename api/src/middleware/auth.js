@@ -18,6 +18,36 @@ const INTERNAL_SERVICE_KEY = crypto.randomBytes(32).toString('hex');
 const tokenCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// ── Active language cache (small, 5-minute TTL) ──────────────────────────────
+// Avoids querying mcogs_languages for every request. Cleared on language CRUD.
+let activeLanguagesCache = null;
+let activeLanguagesCacheExpires = 0;
+const LANG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getActiveLanguages() {
+  if (activeLanguagesCache && Date.now() < activeLanguagesCacheExpires) return activeLanguagesCache;
+  try {
+    const { rows } = await pool.query(
+      "SELECT code, is_default FROM mcogs_languages WHERE is_active = TRUE ORDER BY sort_order, code"
+    );
+    activeLanguagesCache = {
+      codes: rows.map(r => r.code),
+      defaultCode: (rows.find(r => r.is_default) || rows[0] || { code: 'en' }).code,
+    };
+    activeLanguagesCacheExpires = Date.now() + LANG_CACHE_TTL_MS;
+  } catch {
+    // Table may not exist yet (pre-migration) — degrade gracefully
+    activeLanguagesCache = { codes: ['en'], defaultCode: 'en' };
+    activeLanguagesCacheExpires = Date.now() + 10_000;
+  }
+  return activeLanguagesCache;
+}
+
+function invalidateLanguagesCache() {
+  activeLanguagesCache = null;
+  activeLanguagesCacheExpires = 0;
+}
+
 function getCached(token) {
   const entry = tokenCache.get(token);
   if (!entry) return null;
@@ -153,6 +183,7 @@ async function requireAuth(req, res, next) {
                          settings:'write', import:'write', ai_chat:'write', users:'write' },
       allowedCountries: null, // unrestricted — tool executor applies user scope itself
     };
+    req.language = (req.headers['x-language'] || 'en').toString().toLowerCase();
     return next();
   }
 
@@ -200,6 +231,40 @@ async function requireAuth(req, res, next) {
       allowedCountries, // null = unrestricted, number[] = restricted
     };
 
+    // ── Resolve preferred language ──────────────────────────────────────────
+    // Priority: X-Language header > user profile preferred_language > first
+    // allowed country's default_language_code > system default > 'en'
+    try {
+      const langs = await getActiveLanguages();
+      const headerLang = (req.headers['x-language'] || '').toString().toLowerCase();
+      let resolved = null;
+
+      if (headerLang && langs.codes.includes(headerLang)) resolved = headerLang;
+
+      if (!resolved) {
+        // user profile
+        const { rows: [profile] } = await pool.query(
+          'SELECT profile_json FROM mcogs_user_profiles WHERE user_sub = $1 LIMIT 1',
+          [dbUser.auth0_sub]
+        ).catch(() => ({ rows: [] }));
+        const prefLang = profile?.profile_json?.preferred_language;
+        if (prefLang && langs.codes.includes(prefLang)) resolved = prefLang;
+      }
+
+      if (!resolved && allowedCountries && allowedCountries.length) {
+        const { rows: [countryRow] } = await pool.query(
+          'SELECT default_language_code FROM mcogs_countries WHERE id = $1 LIMIT 1',
+          [allowedCountries[0]]
+        ).catch(() => ({ rows: [] }));
+        const cLang = countryRow?.default_language_code;
+        if (cLang && langs.codes.includes(cLang)) resolved = cLang;
+      }
+
+      req.language = resolved || langs.defaultCode || 'en';
+    } catch {
+      req.language = 'en';
+    }
+
     next();
   } catch (err) {
     console.error('[auth] requireAuth error:', err.message);
@@ -229,4 +294,8 @@ function applyMarketScope(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requirePermission, applyMarketScope, INTERNAL_SERVICE_KEY };
+module.exports = {
+  requireAuth, requirePermission, applyMarketScope,
+  INTERNAL_SERVICE_KEY,
+  getActiveLanguages, invalidateLanguagesCache,
+};

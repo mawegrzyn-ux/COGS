@@ -19,13 +19,21 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Language', 'X-Internal-Service'],
+  exposedHeaders: ['Content-Language'],
   credentials: true,
 }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Vary: X-Language on every response — prevents CDN/proxy caches from
+// serving a French response to an English user (and vice versa).
+app.use((_req, res, next) => {
+  res.append('Vary', 'X-Language');
+  next();
+});
 
 // Note: local uploads are served via GET /api/media/file/:filename route
 // (in api/src/routes/media.js) so they flow through the /api Nginx proxy.
@@ -73,6 +81,23 @@ app.use(express.urlencoded({ extended: true }));
           }
         }, { timezone: 'UTC' });
         console.log('[cron] Memory consolidation scheduled at 02:07 UTC daily');
+
+        // ── Nightly translation pre-warm — 02:15 UTC daily ─────────────────
+        try {
+          const { runTranslation } = require('./jobs/translateEntities');
+          cron.schedule('15 2 * * *', async () => {
+            console.log('[cron] Starting entity translation pre-warm...');
+            try {
+              const result = await runTranslation();
+              console.log('[cron] Translation pre-warm complete:', JSON.stringify(result));
+            } catch (err) {
+              console.error('[cron] Translation pre-warm failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Translation pre-warm scheduled at 02:15 UTC daily');
+        } catch (err) {
+          console.warn('[cron] Translation pre-warm disabled:', err.message);
+        }
       } catch (err) {
         console.warn('[cron] node-cron not available — memory consolidation disabled:', err.message);
       }

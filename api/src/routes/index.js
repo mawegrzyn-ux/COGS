@@ -123,6 +123,10 @@ router.use('/faq',                auth,                                         
 // ── Change Log (read-only) ───────────────────────────────────────────────────
 router.use('/changelog',          auth,                                               require('./changelog'));
 
+// ── Languages + Translations (i18n) ───────────────────────────────────────────
+router.use('/languages',          auth,                                               require('./languages'));
+router.use('/translations',       auth,                                               require('./translations'));
+
 // ── Import ─────────────────────────────────────────────────────────────────────
 router.use('/import',             ...can('import', 'read'),      write('import'),      require('./import').router);
 

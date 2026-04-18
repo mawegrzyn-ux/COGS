@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds, type CogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1641,6 +1642,17 @@ function MenuFormModal({ menu, countries, onSave, onClose }: {
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={description} onChange={e => setDescription(e.target.value)} />
         </Field>
+
+        {/* Translations — only for existing menus */}
+        {menu && (
+          <TranslationEditor
+            entityType="menu"
+            entityId={menu.id}
+            fields={['name', 'description']}
+            compact
+          />
+        )}
+
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button

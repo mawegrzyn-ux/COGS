@@ -2862,6 +2862,124 @@ const migrations = [
 
     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1416));
   END $$`,
+
+  // ── Step 122: Multi-language support — Phase 1 Foundation ──────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_languages (
+    code        VARCHAR(10) PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL,
+    native_name VARCHAR(100),
+    is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+    is_rtl      BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_languages_active ON mcogs_languages(is_active)`,
+
+  // Seed English as default + 9 additional languages (inactive by default — admin can enable)
+  `INSERT INTO mcogs_languages (code, name, native_name, is_default, is_rtl, is_active, sort_order) VALUES
+    ('en', 'English',    'English',    TRUE,  FALSE, TRUE,  0),
+    ('fr', 'French',     'Français',   FALSE, FALSE, FALSE, 10),
+    ('es', 'Spanish',    'Español',    FALSE, FALSE, FALSE, 20),
+    ('de', 'German',     'Deutsch',    FALSE, FALSE, FALSE, 30),
+    ('it', 'Italian',    'Italiano',   FALSE, FALSE, FALSE, 40),
+    ('nl', 'Dutch',      'Nederlands', FALSE, FALSE, FALSE, 50),
+    ('pl', 'Polish',     'Polski',     FALSE, FALSE, FALSE, 60),
+    ('pt', 'Portuguese', 'Português',  FALSE, FALSE, FALSE, 70),
+    ('hi', 'Hindi',      'हिन्दी',      FALSE, FALSE, FALSE, 80)
+   ON CONFLICT (code) DO NOTHING`,
+
+  // Translations JSONB column on 11 entities
+  `ALTER TABLE mcogs_ingredients        ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_recipes            ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_sales_items        ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_modifier_groups    ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_modifier_options   ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_combo_steps        ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_combo_step_options ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_categories         ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_vendors            ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_price_levels       ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  `ALTER TABLE mcogs_menus              ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+
+  // default_language_code on countries (FK to languages)
+  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS default_language_code VARCHAR(10)
+    REFERENCES mcogs_languages(code) ON DELETE SET NULL`,
+
+  // Seed changelog entry for Phase 1
+  `DO $$ BEGIN
+    INSERT INTO mcogs_changelog (version, title, entries) VALUES
+    ('2026-04-18b', 'Multi-Language Support — Foundation + Backend AI + FE skeleton', '${JSON.stringify([
+      { type: 'added', description: 'mcogs_languages reference table seeded with 10 languages (EN active, FR ES DE IT NL PL PT HI inactive by default)' },
+      { type: 'added', description: 'translations JSONB column on 11 entities (ingredients, recipes, sales_items, modifier_groups, modifier_options, combo_steps, combo_step_options, categories, vendors, price_levels, menus)' },
+      { type: 'added', description: 'default_language_code on mcogs_countries (FK to mcogs_languages)' },
+      { type: 'added', description: 'resolveLanguage middleware — chain: X-Language header > user profile > country default > system default > en' },
+      { type: 'added', description: 'Translation helpers (api/src/helpers/translate.js) — tCol() for COALESCE, hashText() for staleness detection, mergeTranslations() for safe writes' },
+      { type: 'added', description: 'CRUD routes: GET/POST/PUT/DELETE /api/languages + GET/PUT/DELETE /api/translations/:entityType/:entityId/:lang + POST /api/translations/warm' },
+      { type: 'added', description: 'Nightly cron job translateEntities.js — runs at 02:15 UTC, uses Claude Haiku, never overwrites human-reviewed translations' },
+      { type: 'added', description: 'Ingredients route — COALESCE translation resolution on GET (pilot for other entities)' },
+      { type: 'added', description: 'Pepper AI — system prompt injects user_language, respects req.language for responses' },
+      { type: 'added', description: 'Frontend: LanguageContext + LanguageSwitcher in sidebar + X-Language header in useApi + TranslationEditor component (wired to Ingredients edit form as pilot)' },
+      { type: 'added', description: 'CORS: X-Language added to allowed headers' }
+    ]).replace(/'/g, "''")}')
+    ON CONFLICT DO NOTHING;
+
+    -- Follow-up backlog items for the remaining 10 entities and Phase 4
+    INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order)
+    VALUES
+    ('BACK-1420', 'Translations: extend COALESCE to recipes/menus/sales-items/categories/vendors routes',
+      'Phase 1 shipped with Ingredients as the COALESCE pilot. Apply the same pattern to recipes.js, menus.js, sales-items.js, categories.js, vendors.js, price-levels.js, modifier-groups.js, combos.js using the tCol() helper.',
+      'story', 'high', 'todo', '["i18n","backend"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mcogs_backlog)),
+    ('BACK-1421', 'Translations: wire TranslationEditor into remaining edit forms',
+      'Component built and wired for ingredients. Apply to recipes edit, menus edit, sales items edit (Details tab), categories, vendors. Each needs the fields prop customised.',
+      'story', 'medium', 'todo', '["i18n","frontend"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 2 FROM mcogs_backlog)),
+    ('BACK-1422', 'Translations: Pepper tool executor language support',
+      'Pepper system prompt now respects user language, but tool SELECT queries still return English names. Update the 15 read tools in ai-chat.js to use tCol() pattern so tool results are returned in the user language.',
+      'story', 'medium', 'todo', '["i18n","pepper"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 3 FROM mcogs_backlog)),
+    ('BACK-1423', 'i18next UI localisation (Phase 4)',
+      'Install i18next + react-i18next. Extract ~200 hardcoded UI strings into namespaces (common/nav/pages). Generate FR/ES/DE locale JSONs via Haiku. Progressive t() rollout starting with Sidebar + ui.tsx.',
+      'story', 'medium', 'backlog', '["i18n","frontend","ux"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 4 FROM mcogs_backlog)),
+    ('BACK-1424', 'Translations: Vary: X-Language response header',
+      'If CDN caching is enabled on /api/* responses, add Vary: X-Language to prevent cross-language cache contamination. Not a concern right now but critical for scale-out.',
+      'task', 'low', 'backlog', '["i18n","infrastructure"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 5 FROM mcogs_backlog)),
+    ('BACK-1425', 'Import wizard: Source Language dropdown',
+      'When a non-English operator imports data, the canonical name is in their language. Add Source Language selector to import wizard. If not English, AI generates English base name and stores operator value as the translation.',
+      'story', 'medium', 'backlog', '["i18n","import"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 6 FROM mcogs_backlog)),
+    ('BACK-1426', 'Shared pages language support',
+      '/share/:slug needs language resolution without auth: ?lang URL param > Accept-Language > country default > en. Scope includes translating the price-change form and comment feed UI.',
+      'story', 'low', 'backlog', '["i18n","shared-pages"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 7 FROM mcogs_backlog)),
+    ('BACK-1427', 'RTL layout support (Arabic/Hebrew)',
+      'Deferred until RTL market is confirmed. Est. 7-10 days: Tailwind rtl: variants, sidebar mirroring, Pepper dock positioning, DataGrid sticky column flip, ms-/me- conversion across ~300 class occurrences.',
+      'epic', 'low', 'backlog', '["i18n","rtl","deferred"]'::jsonb,
+      (SELECT COALESCE(MAX(sort_order), 0) + 8 FROM mcogs_backlog))
+    ON CONFLICT (key) DO NOTHING;
+
+    PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1428));
+  END $$`,
+
+  // ── Step 123: Complete BACK-1420 through BACK-1424 ─────────────────────────
+  `DO $$ BEGIN
+    INSERT INTO mcogs_changelog (version, title, entries) VALUES
+    ('2026-04-18c', 'i18n follow-ups — COALESCE across entities, Pepper tools, TranslationEditor in all edit forms, i18next skeleton, Vary header', '${JSON.stringify([
+      { type: 'added', description: 'BACK-1420 shipped — COALESCE translation resolution added to recipes, menus, categories, vendors, sales-items (fetchFull + list), price-levels, modifier-groups routes. Plus getLangContext() / setContentLanguage() helpers.' },
+      { type: 'added', description: 'BACK-1421 shipped — TranslationEditor wired into recipes edit modal, menus edit modal, sales-items edit panel (new Translations tab), vendors edit modal, categories edit modal.' },
+      { type: 'added', description: 'BACK-1422 shipped — Pepper tool executors now apply COALESCE via userCtx.language. Updated: list_ingredients, get_ingredient, list_recipes, get_recipe, list_menus, list_vendors, list_markets (price_level_name), list_categories, list_price_levels, list_price_quotes. ai-chat + ai-upload thread req.language into userCtx.' },
+      { type: 'added', description: 'BACK-1423 shipped — i18next + react-i18next + i18next-browser-languagedetector installed. i18n skeleton with 9 locales (EN FR ES DE IT NL PL PT HI), common + nav namespaces, ~50 keys each. Sidebar nav labels now use t(). LanguageContext syncs i18n.changeLanguage() on switch.' },
+      { type: 'added', description: 'BACK-1424 shipped — Vary: X-Language response header added globally via middleware. Prevents CDN cache contamination across languages.' },
+      { type: 'changed', description: 'Dependencies added to app/package.json: i18next ^23.15.1, react-i18next ^15.0.2, i18next-browser-languagedetector ^8.0.0.' }
+    ]).replace(/'/g, "''")}')
+    ON CONFLICT DO NOTHING;
+
+    -- Mark follow-up backlog items as done
+    UPDATE mcogs_backlog SET status = 'done' WHERE key IN ('BACK-1420', 'BACK-1421', 'BACK-1422', 'BACK-1423', 'BACK-1424');
+  END $$`,
 ];
 
 async function runMigrations(pool) {

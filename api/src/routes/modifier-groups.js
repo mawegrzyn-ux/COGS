@@ -4,16 +4,24 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // ─── GET /modifier-groups ─────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mgName = lang ? `COALESCE(mg.translations->$1->>'name', mg.name)` : `mg.name`;
+    const mgDesc = lang ? `COALESCE(mg.translations->$1->>'description', mg.description)` : `mg.description`;
     const { rows } = await pool.query(
-      `SELECT mg.*,
+      `SELECT mg.id, ${mgName} AS name, mg.display_name, ${mgDesc} AS description,
+              mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show,
+              mg.translations, mg.created_at, mg.updated_at,
               (SELECT COUNT(*) FROM mcogs_modifier_options WHERE modifier_group_id = mg.id) AS option_count
        FROM   mcogs_modifier_groups mg
-       ORDER BY mg.name`
+       ORDER BY name`,
+      lang ? [lang] : []
     );
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) { next(err); }
 });
@@ -21,17 +29,30 @@ router.get('/', async (req, res, next) => {
 // ─── GET /modifier-groups/:id ─────────────────────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mgName = lang ? `COALESCE(mg.translations->$2->>'name', mg.name)` : `mg.name`;
+    const mgDesc = lang ? `COALESCE(mg.translations->$2->>'description', mg.description)` : `mg.description`;
+    const moName = lang ? `COALESCE(mo.translations->$2->>'name', mo.name)` : `mo.name`;
+    const rName  = lang ? `COALESCE(r.translations->$2->>'name', r.name)` : `r.name`;
+    const iName  = lang ? `COALESCE(ing.translations->$2->>'name', ing.name)` : `ing.name`;
+
     const { rows: groups } = await pool.query(
-      'SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]
+      `SELECT mg.id, ${mgName} AS name, mg.display_name, ${mgDesc} AS description,
+              mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show,
+              mg.translations, mg.created_at, mg.updated_at
+       FROM mcogs_modifier_groups mg WHERE mg.id=$1`,
+      lang ? [req.params.id, lang] : [req.params.id]
     );
     if (!groups.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
 
     const { rows: options } = await pool.query(
-      `SELECT mo.*,
-              r.name           AS recipe_name,
+      `SELECT mo.id, ${moName} AS name,
+              mo.modifier_group_id, mo.item_type, mo.recipe_id, mo.ingredient_id, mo.manual_cost,
+              mo.price_addon, mo.qty, mo.sort_order, mo.translations,
+              ${rName}         AS recipe_name,
               r.yield_qty      AS recipe_yield_qty,
               u_r.abbreviation AS recipe_yield_unit_abbr,
-              ing.name         AS ingredient_name,
+              ${iName}         AS ingredient_name,
               u_i.abbreviation AS ingredient_unit_abbr
        FROM   mcogs_modifier_options mo
        LEFT JOIN mcogs_recipes     r   ON r.id   = mo.recipe_id
@@ -39,8 +60,9 @@ router.get('/:id', async (req, res, next) => {
        LEFT JOIN mcogs_ingredients ing ON ing.id = mo.ingredient_id
        LEFT JOIN mcogs_units       u_i ON u_i.id = ing.base_unit_id
        WHERE  mo.modifier_group_id=$1 ORDER BY mo.sort_order, mo.id`,
-      [req.params.id]
+      lang ? [req.params.id, lang] : [req.params.id]
     );
+    setContentLanguage(res, req);
     res.json({ ...groups[0], options });
   } catch (err) { next(err); }
 });

@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 82 tables (all prefixed `mcogs_`), 121 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 83 tables (all prefixed `mcogs_`), 123 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -2495,6 +2495,132 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 - Filter bar: search, action dropdown, entity type dropdown, user input, date range
 - Paginated table (30 per page)
 - Expandable rows showing field changes (old→new with color coding), context, related entities, metadata
+
+---
+
+## 23. Multi-Language Support (i18n)
+
+**Status:** Phases 1–3 shipped + i18next skeleton for static UI strings. Ingredients was the original COALESCE pilot; **all core entity routes now apply COALESCE** (recipes, menus, categories, vendors, sales-items, price-levels, modifier-groups). **TranslationEditor** is wired into every major edit form. **Pepper read tools** respect `userCtx.language`. Design: [`docs/LANGUAGE_IMPLEMENTATION_PLAN.md`](./docs/LANGUAGE_IMPLEMENTATION_PLAN.md).
+
+### Storage
+- **`mcogs_languages`** — reference table (code, name, native_name, is_default, is_rtl, is_active, sort_order). Seeded with 10 languages: EN (active, default), FR ES DE IT NL PL PT HI (inactive until admin enables).
+- **`translations JSONB`** column added to 11 entities: `mcogs_ingredients`, `mcogs_recipes`, `mcogs_sales_items`, `mcogs_modifier_groups`, `mcogs_modifier_options`, `mcogs_combo_steps`, `mcogs_combo_step_options`, `mcogs_categories`, `mcogs_vendors`, `mcogs_price_levels`, `mcogs_menus`.
+- **`mcogs_countries.default_language_code`** — optional FK to `mcogs_languages(code)`.
+
+JSONB shape:
+```json
+{ "fr": { "name": "Poulet", "notes": "...",
+          "_meta": { "source": "ai", "hash": "<sha256>", "reviewed": false, "updated_at": "..." } } }
+```
+
+Human translations (`source: 'human'`) are **never** overwritten by AI. `hash` is SHA-256 of the English source; when the base changes, AI entries are flagged stale and retranslated on the next cron run.
+
+### Language resolution chain (backend)
+
+In `requireAuth` at the end of every authenticated request:
+```
+X-Language header > user profile preferred_language > first allowedCountry default_language_code > system default > 'en'
+```
+Result is attached as `req.language`. In-memory 5-minute cache for the active-languages list (`getActiveLanguages()`) avoids hitting `mcogs_languages` every request.
+
+### API routes
+
+| Route | Purpose |
+|---|---|
+| `GET /api/languages` | List active/inactive languages (all authenticated users) |
+| `POST/PUT/DELETE /api/languages/:code` | Admin CRUD. Refuses to delete `en` or the default. Invalidates language cache on mutate. |
+| `GET /api/translations/:entityType/:entityId` | Fetch base + translations JSONB for an entity |
+| `PUT /api/translations/:entityType/:entityId/:lang` | Save human translation (stamps `source:'human'`, `reviewed:true`) |
+| `DELETE /api/translations/:entityType/:entityId/:lang` | Remove one language entry |
+| `POST /api/translations/warm` | Admin-triggered synchronous AI pre-warm for a language |
+
+Entity slugs accepted: `ingredient`, `recipe`, `sales_item`, `modifier_group`, `modifier_option`, `combo_step`, `combo_step_option`, `category`, `vendor`, `price_level`, `menu`.
+
+### AI pre-warm cron
+
+`api/src/jobs/translateEntities.js` — scheduled at **02:15 UTC daily** (right after memory consolidation). Uses Claude Haiku 4.5 with a food-service-aware prompt. Processes rows where the AI hash no longer matches the base English text, in batches of 50. Never touches `source:'human'` entries. Results logged to `mcogs_settings.translation_jobs`.
+
+### Query pattern (COALESCE)
+
+Every SELECT that returns a translatable field wraps it:
+```sql
+SELECT COALESCE(i.translations->$1->>'name', i.name) AS name
+FROM mcogs_ingredients i
+```
+When `req.language === 'en'` or null, the COALESCE is skipped (fallback to the base column directly — no extra bind parameter).
+
+Helper: `api/src/helpers/translate.js` → `tCol(alias, field, paramIdx, [outAs])`, `hashText(text)`, `mergeTranslations(existing, lang, fields, meta)`, `isStale(entry, sourceText)`, `staleLanguages(row, codes, sourceText)`.
+
+**Coverage:** COALESCE applied in `ingredients.js` (pilot), `recipes.js`, `menus.js`, `categories.js`, `vendors.js`, `sales-items.js` (fetchFull + list, includes nested modifier_groups/prices), `price-levels.js`, `modifier-groups.js` (group + option names, with cross-JOINs to translated recipe/ingredient names). Every translated response sets a `Content-Language` header and a global `Vary: X-Language` middleware ensures CDN safety. `combos.js` remains English-only for now (rare translation use case).
+
+**Helpers for route authors:**
+- `tCol(alias, field, paramIdx, outAs?)` — returns `COALESCE(alias.translations->$n->>'field', alias.field) AS outAs`
+- `getLangContext(req, baseParams)` — returns `{ active, lang, paramIdx, params }`; when `active` is false, the SQL skips the COALESCE entirely (uses base column, no extra bind parameter)
+- `setContentLanguage(res, req)` — sets the `Content-Language` header when serving non-English data
+
+### Pepper language support
+
+`buildSystemPrompt()` now accepts `userLanguage` and injects:
+```
+## User Language
+The user's preferred language is {Name} ({code}). Respond to the user in {Name}.
+When you present data (ingredient names, recipe names, categories, etc.) use the
+translations returned by the tools — do not re-translate them yourself.
+```
+**Tool-level translation is active.** `executeTool()` reads `userCtx.language` and applies COALESCE to the SELECT queries in the key read tools: `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `list_vendors`, `list_markets` (translates `default_price_level_name`), `list_categories`, `list_price_levels`, `list_price_quotes`. `ai-chat` and `ai-upload` both thread `req.language` into `userCtxWithLang` before calling `executeTool`.
+
+Country names are intentionally NOT translated — they're proper nouns, stored in English for system interoperability. Same for vendor names when they are brand/company names (operators can still override per-language via the TranslationEditor).
+
+### Frontend
+
+- **`app/src/contexts/LanguageContext.tsx`** — wraps the app, persists selection to `localStorage('mcogs-language')` and writes through to `mcogs_user_profiles.profile_json.preferred_language`.
+- **`app/src/hooks/useApi.ts`** — injects `X-Language: <code>` header on every request (unless English).
+- **`app/src/components/LanguageSwitcher.tsx`** — compact dropdown in the Sidebar footer. Globe icon + uppercase code. Picking a language soft-reloads so cached queries re-run.
+- **`app/src/components/TranslationEditor.tsx`** — reusable tabbed editor. Props: `entityType`, `entityId`, `fields`. Per-language tab shows the English base as reference, saves trigger `PUT /api/translations/:type/:id/:lang`. Visual indicator: green dot = human-reviewed, amber dot = AI draft.
+- **TranslationEditor wired in:**
+  - Ingredients edit modal → Translations tab (`name`, `notes`)
+  - Recipes edit modal → inline below form (`name`, `description`)
+  - Menus edit modal → inline below form (`name`, `description`)
+  - Sales Items edit panel → new Translations tab (`name`, `display_name`, `description`)
+  - Vendors edit modal → inline below form (`name`, `notes`)
+  - Categories edit modal → inline below form (`name`)
+
+### Static UI strings (i18next)
+
+Separate from entity data translation. Uses `i18next` + `react-i18next` + `i18next-browser-languagedetector` (installed in `app/package.json`).
+
+- **Entry point:** `app/src/i18n/index.ts` — initialises i18n with 9 resource files (en, fr, es, de, it, nl, pl, pt, hi). Imported once at the top of `main.tsx`.
+- **Locale files:** `app/src/i18n/locales/*.ts` — each file exports `{ common: {...}, nav: {...} }` with ~45 shared keys. EN is the source; other locales key-mirror it.
+- **LanguageContext** calls `i18n.changeLanguage(code)` when the user picks a new language, so UI strings update live without a page reload.
+- **Current surfaces using `t()`:**
+  - Sidebar nav labels (Dashboard, Inventory, Recipes, Sales Items, Menus, Allergens, HACCP, Stock Manager, Configuration, System, Help)
+  - Sign-out tooltip, Change-language tooltip
+
+**To translate another surface:**
+```tsx
+import { useTranslation } from 'react-i18next'
+const { t } = useTranslation()
+<button>{t('common.save')}</button>
+// or from a specific namespace:
+const { t } = useTranslation('nav')
+<span>{t('dashboard')}</span>
+```
+
+Adding keys is additive — add to `en.ts` first, mirror to the other 8 locales. Out-of-scope surfaces still render English and degrade gracefully.
+
+### CORS
+
+`X-Language` and `X-Internal-Service` added to `allowedHeaders`. `Content-Language` added to `exposedHeaders` so the frontend can inspect which language the server actually served.
+
+### Follow-ups still in backlog
+
+- **BACK-1425** — Import wizard: Source-Language dropdown (for non-English operators importing catalogs in their own language)
+- **BACK-1426** — Shared-page language support (public `/share/:slug`, no auth: URL `?lang=` → `Accept-Language` → country default → English)
+- **BACK-1427** — RTL layout (deferred until Arabic / Hebrew market confirmed)
+- **combos.js** — intentionally not COALESCE'd; can be added if translation of combo step names becomes a visible gap
+- **Full i18next string extraction** — current coverage is Sidebar + a few common keys. Page-specific surfaces (Dashboard widgets, Menus, Inventory labels) still use hardcoded English. Extraction is additive work against `common.ts` / `nav.ts` / new namespaces
+
+BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 

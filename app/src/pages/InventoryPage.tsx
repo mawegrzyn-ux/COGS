@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
@@ -341,6 +342,19 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
           <Field label="Notes">
             <textarea className="input w-full" rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes…" />
           </Field>
+
+          {/* Translations — only shown for existing vendors */}
+          {modal !== 'new' && typeof modal === 'object' && modal?.id != null && (
+            <div className="mt-3">
+              <TranslationEditor
+                entityType="vendor"
+                entityId={modal.id}
+                fields={['name', 'notes']}
+                compact
+              />
+            </div>
+          )}
+
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Vendor'}</button>
@@ -558,7 +572,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [selectedIngId,  setSelectedIngId]  = useState<number | null>(null)
 
   // Phase 4 — allergen & nutrition state
-  type IngModalTab = 'details' | 'allergens' | 'nutrition'
+  type IngModalTab = 'details' | 'allergens' | 'nutrition' | 'translations'
   const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
   const [allAllergens,   setAllAllergens]   = useState<Allergen[]>([])
   const [ingAllergens,   setIngAllergens]   = useState<IngAllergen[]>([])
@@ -1138,7 +1152,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   </div>
                   {/* Panel tabs */}
                   <div className="flex gap-0 border-b border-border px-3 pt-1 shrink-0">
-                    {(['details', 'allergens', 'nutrition'] as const).map(t => (
+                    {(['details', 'allergens', 'nutrition', 'translations'] as const).map(t => (
                       <button
                         key={t}
                         onClick={() => setIngModalTab(t)}
@@ -1240,6 +1254,13 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                         saving={savingNut}
                         onClose={() => { setSelectedIngId(null); setModal(null) }}
                         ingredientName={ing.name}
+                      />
+                    )}
+                    {ingModalTab === 'translations' && (
+                      <TranslationEditor
+                        entityType="ingredient"
+                        entityId={selectedIngId}
+                        fields={['name', 'notes']}
                       />
                     )}
                   </div>

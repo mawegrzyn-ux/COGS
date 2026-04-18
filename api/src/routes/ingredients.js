@@ -20,18 +20,40 @@ router.get('/stats', async (_req, res) => {
 })
 
 // GET /ingredients?category_id=
+// Returns ingredient name + category name resolved via translations JSONB when
+// the request language (req.language) is non-English. Base column is the
+// fallback if no translation exists.
 router.get('/', async (req, res) => {
   try {
     const { category_id } = req.query
-    // Use a LATERAL subquery instead of LEFT JOIN + GROUP BY to count quotes.
-    // The LATERAL runs one tiny indexed scan per ingredient (idx_price_quotes_ingredient)
-    // rather than joining all price_quote rows then collapsing with a hash aggregate.
-    let query = `
-      SELECT i.*,
+    const lang = req.language && req.language !== 'en' ? req.language : null
+
+    // Build translation-aware SELECT expressions. When lang is null, skip the
+    // COALESCE and use the base column directly — cheaper on the hot path.
+    const iName = lang ? `COALESCE(i.translations->$LANG->>'name', i.name)` : `i.name`
+    const iNotes = lang ? `COALESCE(i.translations->$LANG->>'notes', i.notes)` : `i.notes`
+    const cName = lang ? `COALESCE(c.translations->$LANG->>'name', c.name)` : `c.name`
+
+    const vals = []
+    if (lang) vals.push(lang)
+    let whereIdx = null
+    if (category_id) { vals.push(category_id); whereIdx = vals.length }
+
+    // Assemble the query with numbered placeholders
+    const langIdx = lang ? 1 : null
+    const substitutePlaceholders = (sql) => sql.replace(/\$LANG/g, `$${langIdx}`)
+
+    let query = substitutePlaceholders(`
+      SELECT i.id, ${iName} AS name, ${iNotes} AS notes,
+             i.category_id, i.base_unit_id, i.waste_pct,
+             i.default_prep_unit, i.default_prep_to_base_conversion,
+             i.image_url, i.allergen_notes, i.nutrition_json,
+             i.translations,
+             i.created_at, i.updated_at,
              u.name        AS base_unit_name,
              u.abbreviation AS base_unit_abbr,
-             c.name        AS category_name,
-             g.name        AS category_group_name,
+             ${cName}       AS category_name,
+             g.name         AS category_group_name,
              pq_stats.quote_count,
              pq_stats.active_quote_count
       FROM mcogs_ingredients i
@@ -44,11 +66,11 @@ router.get('/', async (req, res) => {
         FROM   mcogs_price_quotes
         WHERE  ingredient_id = i.id
       ) pq_stats ON true
-    `
-    const vals = []
-    if (category_id) { query += ` WHERE i.category_id = $1`; vals.push(category_id) }
-    query += ` ORDER BY i.name ASC`
+    `)
+    if (whereIdx) query += ` WHERE i.category_id = $${whereIdx}`
+    query += ` ORDER BY name ASC`
     const { rows } = await pool.query(query, vals)
+    if (lang) res.setHeader('Content-Language', lang)
     res.json(rows)
   } catch (err) {
     console.error(err)
@@ -59,19 +81,33 @@ router.get('/', async (req, res) => {
 // GET /ingredients/:id
 router.get('/:id', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null
+    const iName = lang ? `COALESCE(i.translations->$2->>'name', i.name)` : `i.name`
+    const iNotes = lang ? `COALESCE(i.translations->$2->>'notes', i.notes)` : `i.notes`
+    const cName = lang ? `COALESCE(c.translations->$2->>'name', c.name)` : `c.name`
+
+    const vals = [req.params.id]
+    if (lang) vals.push(lang)
+
     const { rows } = await pool.query(`
-      SELECT i.*,
+      SELECT i.id, ${iName} AS name, ${iNotes} AS notes,
+             i.category_id, i.base_unit_id, i.waste_pct,
+             i.default_prep_unit, i.default_prep_to_base_conversion,
+             i.image_url, i.allergen_notes, i.nutrition_json,
+             i.translations,
+             i.created_at, i.updated_at,
              u.name          AS base_unit_name,
              u.abbreviation  AS base_unit_abbr,
-             c.name          AS category_name,
+             ${cName}        AS category_name,
              g.name          AS category_group_name
       FROM mcogs_ingredients i
       LEFT JOIN mcogs_units           u ON u.id = i.base_unit_id
       LEFT JOIN mcogs_categories      c ON c.id = i.category_id
       LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       WHERE i.id = $1
-    `, [req.params.id])
+    `, vals)
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } })
+    if (lang) res.setHeader('Content-Language', lang)
     res.json(rows[0])
   } catch (err) {
     console.error(err)

@@ -4,6 +4,7 @@ import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
+import TranslationEditor from '../components/TranslationEditor'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -2034,6 +2035,17 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
             Also create a Sales Item linked to this recipe
           </label>
         )}
+
+        {/* Translations — only shown for existing recipes */}
+        {recipe && (
+          <TranslationEditor
+            entityType="recipe"
+            entityId={recipe.id}
+            fields={['name', 'description']}
+            compact
+          />
+        )}
+
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>

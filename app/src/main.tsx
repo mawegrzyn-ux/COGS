@@ -4,6 +4,7 @@ import { Auth0Provider } from '@auth0/auth0-react'
 import { auth0Config } from './config/auth0'
 import App from './App'
 import './index.css'
+import './i18n'  // initialises i18next before React renders
 
 const root = document.getElementById('root')!
 

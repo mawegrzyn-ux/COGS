@@ -22,6 +22,7 @@ import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
 import { MarketProvider }   from './contexts/MarketContext'
+import { LanguageProvider } from './contexts/LanguageContext'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth0()
@@ -41,6 +42,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <PermissionsProvider>
+        <LanguageProvider>
         <MarketProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -80,6 +82,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
         </MarketProvider>
+        </LanguageProvider>
       </PermissionsProvider>
     </BrowserRouter>
   )

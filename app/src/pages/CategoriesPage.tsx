@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -595,6 +596,16 @@ function CategoryManager() {
                 ))}
               </div>
             </Field>
+
+            {/* Translations — only for existing categories */}
+            {catModal !== 'new' && typeof catModal === 'object' && catModal?.id != null && (
+              <TranslationEditor
+                entityType="category"
+                entityId={catModal.id}
+                fields={['name']}
+                compact
+              />
+            )}
           </div>
 
           <div className="flex gap-3 justify-end pt-4">

@@ -1,16 +1,23 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // GET /menus
 router.get('/', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mName = lang ? `COALESCE(m.translations->$1->>'name', m.name)` : `m.name`;
+    const mDesc = lang ? `COALESCE(m.translations->$1->>'description', m.description)` : `m.description`;
     const { rows } = await pool.query(`
-      SELECT m.*, c.name AS country_name
+      SELECT m.id, ${mName} AS name, ${mDesc} AS description,
+             m.country_id, m.created_at, m.updated_at, m.translations,
+             c.name AS country_name
       FROM   mcogs_menus m
       LEFT JOIN mcogs_countries c ON c.id = m.country_id
-      ORDER BY m.name ASC
-    `);
+      ORDER BY name ASC
+    `, lang ? [lang] : []);
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -21,13 +28,19 @@ router.get('/', async (req, res) => {
 // GET /menus/:id
 router.get('/:id', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mName = lang ? `COALESCE(m.translations->$2->>'name', m.name)` : `m.name`;
+    const mDesc = lang ? `COALESCE(m.translations->$2->>'description', m.description)` : `m.description`;
     const { rows: [row] } = await pool.query(`
-      SELECT m.*, c.name AS country_name
+      SELECT m.id, ${mName} AS name, ${mDesc} AS description,
+             m.country_id, m.created_at, m.updated_at, m.translations,
+             c.name AS country_name
       FROM   mcogs_menus m
       LEFT JOIN mcogs_countries c ON c.id = m.country_id
       WHERE  m.id = $1
-    `, [req.params.id]);
+    `, lang ? [req.params.id, lang] : [req.params.id]);
     if (!row) return res.status(404).json({ error: { message: 'Menu not found' } });
+    setContentLanguage(res, req);
     res.json(row);
   } catch (err) {
     console.error(err);

@@ -1,20 +1,35 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // GET /vendors?country_id=
 router.get('/', async (req, res) => {
   try {
     const { country_id } = req.query;
-    let query = `
-      SELECT v.*, c.name as country_name, c.currency_code, c.currency_symbol
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const vName = lang ? `COALESCE(v.translations->$LANG->>'name', v.name)` : `v.name`;
+    const vNotes = lang ? `COALESCE(v.translations->$LANG->>'notes', v.notes)` : `v.notes`;
+
+    const vals = [];
+    if (lang) vals.push(lang);
+    let whereIdx = null;
+    if (country_id) { vals.push(country_id); whereIdx = vals.length; }
+    const langIdx = lang ? 1 : null;
+    const sub = (sql) => sql.replace(/\$LANG/g, `$${langIdx}`);
+
+    let query = sub(`
+      SELECT v.id, ${vName} AS name, ${vNotes} AS notes,
+             v.country_id, v.contact, v.email, v.phone, v.translations,
+             v.created_at, v.updated_at,
+             c.name as country_name, c.currency_code, c.currency_symbol
       FROM mcogs_vendors v
       LEFT JOIN mcogs_countries c ON c.id = v.country_id
-    `;
-    const vals = [];
-    if (country_id) { query += ` WHERE v.country_id = $1`; vals.push(country_id); }
-    query += ` ORDER BY v.name ASC`;
+    `);
+    if (whereIdx) query += ` WHERE v.country_id = $${whereIdx}`;
+    query += ` ORDER BY name ASC`;
     const { rows } = await pool.query(query, vals);
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -25,13 +40,23 @@ router.get('/', async (req, res) => {
 // GET /vendors/:id
 router.get('/:id', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const vName = lang ? `COALESCE(v.translations->$2->>'name', v.name)` : `v.name`;
+    const vNotes = lang ? `COALESCE(v.translations->$2->>'notes', v.notes)` : `v.notes`;
+    const vals = [req.params.id];
+    if (lang) vals.push(lang);
+
     const { rows } = await pool.query(`
-      SELECT v.*, c.name as country_name, c.currency_code, c.currency_symbol
+      SELECT v.id, ${vName} AS name, ${vNotes} AS notes,
+             v.country_id, v.contact, v.email, v.phone, v.translations,
+             v.created_at, v.updated_at,
+             c.name as country_name, c.currency_code, c.currency_symbol
       FROM mcogs_vendors v
       LEFT JOIN mcogs_countries c ON c.id = v.country_id
       WHERE v.id = $1
-    `, [req.params.id]);
+    `, vals);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    setContentLanguage(res, req);
     res.json(rows[0]);
   } catch (err) {
     console.error(err);

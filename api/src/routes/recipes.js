@@ -2,14 +2,22 @@ const router  = require('express').Router();
 const pool = require('../db/pool');
 const { loadAllRecipeItemsDeep } = require('./cogs');
 const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // ── GET /recipes  (list with item count) ──────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const rName = lang ? `COALESCE(r.translations->$1->>'name', r.name)` : `r.name`;
+    const rDesc = lang ? `COALESCE(r.translations->$1->>'description', r.description)` : `r.description`;
+    const cName = lang ? `COALESCE(c.translations->$1->>'name', c.name)` : `c.name`;
+
     const { rows } = await pool.query(`
-      SELECT r.*,
+      SELECT r.id, ${rName} AS name, ${rDesc} AS description,
+             r.category_id, r.yield_qty, r.yield_unit_id, r.yield_unit_text,
+             r.created_at, r.updated_at, r.translations,
              COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr,
-             c.name AS category_name,
+             ${cName} AS category_name,
              g.name AS category_group_name,
              COUNT(ri.id) FILTER (WHERE ri.variation_id IS NULL AND ri.pl_variation_id IS NULL AND ri.market_pl_variation_id IS NULL)::int AS item_count
       FROM   mcogs_recipes r
@@ -17,9 +25,10 @@ router.get('/', async (req, res) => {
       LEFT JOIN mcogs_categories        c  ON c.id = r.category_id
       LEFT JOIN mcogs_category_groups   g  ON g.id = c.group_id
       LEFT JOIN mcogs_recipe_items      ri ON ri.recipe_id = r.id
-      GROUP BY r.id, u.abbreviation, c.name, g.name
-      ORDER BY r.name ASC
-    `);
+      GROUP BY r.id, u.abbreviation, c.name, c.translations, g.name
+      ORDER BY name ASC
+    `, lang ? [lang] : []);
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -30,24 +39,34 @@ router.get('/', async (req, res) => {
 // ── GET /recipes/:id  (with full items + variations + COGS per country) ──────
 router.get('/:id', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const rName = lang ? `COALESCE(r.translations->$2->>'name', r.name)` : `r.name`;
+    const rDesc = lang ? `COALESCE(r.translations->$2->>'description', r.description)` : `r.description`;
+
     // Recipe header
     const { rows: [recipe] } = await pool.query(`
-      SELECT r.*, COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr
+      SELECT r.id, ${rName} AS name, ${rDesc} AS description,
+             r.category_id, r.yield_qty, r.yield_unit_id, r.yield_unit_text,
+             r.created_at, r.updated_at, r.translations,
+             COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr
       FROM   mcogs_recipes r
       LEFT JOIN mcogs_units u ON u.id = r.yield_unit_id
       WHERE  r.id = $1
-    `, [req.params.id]);
+    `, lang ? [req.params.id, lang] : [req.params.id]);
     if (!recipe) return res.status(404).json({ error: { message: 'Recipe not found' } });
+    if (lang) res.setHeader('Content-Language', lang);
 
     // Global recipe items (variation_id IS NULL)
+    const iName = lang ? `COALESCE(i.translations->$2->>'name', i.name)` : `i.name`;
+    const srName = lang ? `COALESCE(sr.translations->$2->>'name', sr.name)` : `sr.name`;
     const { rows: globalItems } = await pool.query(`
       SELECT ri.*,
-             i.name                           AS ingredient_name,
+             ${iName}                         AS ingredient_name,
              i.base_unit_id,
              i.waste_pct,
              i.default_prep_unit,
              ub.abbreviation                  AS base_unit_abbr,
-             sr.name                          AS sub_recipe_name,
+             ${srName}                        AS sub_recipe_name,
              sr.yield_qty                     AS sub_recipe_yield_qty
       FROM   mcogs_recipe_items ri
       LEFT JOIN mcogs_ingredients i  ON i.id  = ri.ingredient_id
@@ -55,7 +74,7 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
       WHERE  ri.recipe_id = $1 AND ri.variation_id IS NULL AND ri.pl_variation_id IS NULL AND ri.market_pl_variation_id IS NULL
       ORDER BY COALESCE(ri.sort_order, ri.id) ASC, ri.id ASC
-    `, [req.params.id]);
+    `, lang ? [req.params.id, lang] : [req.params.id]);
 
     // Variations with their items
     const { rows: varRows } = await pool.query(`

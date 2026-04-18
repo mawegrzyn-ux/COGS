@@ -18,6 +18,10 @@ export function useApi() {
     } catch {
       // No audience configured — skip auth header (dev mode)
     }
+    // Inject the user's preferred language. Server chain:
+    //   X-Language > user profile preferred_language > country default > 'en'
+    const lang = localStorage.getItem('mcogs-language')
+    if (lang && lang !== 'en') headers['X-Language'] = lang
     const res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,

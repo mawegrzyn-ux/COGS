@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -403,7 +404,7 @@ export default function SalesItemsPage() {
   const [panelComboOpen,     setPanelComboOpen]     = useState(false)
   const [panelMarkets,     setPanelMarkets]     = useState<number[]>([])
   const [panelMktSaving,   setPanelMktSaving]   = useState(false)
-  const [panelTab,         setPanelTab]         = useState<'details' | 'markets' | 'modifiers'>('details')
+  const [panelTab,         setPanelTab]         = useState<'details' | 'markets' | 'modifiers' | 'translations'>('details')
 
   // Populate form when selection changes
   useEffect(() => {
@@ -1157,10 +1158,10 @@ export default function SalesItemsPage() {
 
                 {/* Panel tab bar */}
                 <div className="flex border-b border-border bg-white shrink-0">
-                  {(['details', 'markets', 'modifiers'] as const).map(t => (
+                  {(['details', 'markets', 'modifiers', 'translations'] as const).map(t => (
                     <button key={t} onClick={() => setPanelTab(t)}
                       className={`flex-1 py-2 text-xs font-medium transition-colors border-b-2 ${panelTab === t ? 'border-accent text-accent' : 'border-transparent text-text-3 hover:text-text-1'}`}>
-                      {t === 'details' ? 'Details' : t === 'markets' ? 'Markets' : 'Modifiers'}
+                      {t === 'details' ? 'Details' : t === 'markets' ? 'Markets' : t === 'modifiers' ? 'Modifiers' : 'Translations'}
                     </button>
                   ))}
                 </div>
@@ -1437,6 +1438,17 @@ export default function SalesItemsPage() {
                     )}
                   </div>
                   )}{/* end modifiers tab */}
+
+                  {/* ── TRANSLATIONS TAB ── */}
+                  {panelTab === 'translations' && (
+                    <div className="p-4">
+                      <TranslationEditor
+                        entityType="sales_item"
+                        entityId={selectedSiId}
+                        fields={['name', 'display_name', 'description']}
+                      />
+                    </div>
+                  )}
 
                   </div>
                 )}

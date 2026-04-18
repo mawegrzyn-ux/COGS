@@ -1,6 +1,7 @@
 const router = require('express').Router()
 const pool   = require('../db/pool')
 const { logAudit, diffFields } = require('../helpers/audit')
+const { getLangContext, setContentLanguage } = require('../helpers/translate')
 
 // GET /categories
 //   ?for_ingredients=true   filter to ingredient-scoped categories
@@ -17,16 +18,20 @@ router.get('/', async (req, res) => {
 
     const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : ''
 
+    const { lang, active, params } = getLangContext(req)
+    const cName = active ? `COALESCE(c.translations->$1->>'name', c.name)` : `c.name`
+
     const { rows } = await pool.query(`
-      SELECT c.id, c.name, c.sort_order,
+      SELECT c.id, ${cName} AS name, c.sort_order,
              c.for_ingredients, c.for_recipes, c.for_sales_items,
-             c.group_id,
+             c.group_id, c.translations,
              g.name AS group_name
       FROM mcogs_categories c
       LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
       ${where}
-      ORDER BY g.name ASC NULLS LAST, c.sort_order ASC, c.name ASC
-    `)
+      ORDER BY g.name ASC NULLS LAST, c.sort_order ASC, name ASC
+    `, params)
+    setContentLanguage(res, req)
     res.json(rows)
   } catch (err) {
     console.error(err)

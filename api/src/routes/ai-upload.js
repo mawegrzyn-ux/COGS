@@ -238,7 +238,7 @@ router.post('/', (req, res, next) => {
   // Inject userSub into context so buildSystemPrompt can load memory
   context.userSub = context.userSub || userSub || req.user?.sub;
 
-  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode);
+  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false, req.language || 'en');
 
   // Build the user content array
   const userContent = [];
@@ -327,8 +327,9 @@ router.post('/', (req, res, next) => {
     file_type: file?.mimetype     || null,
   };
 
-  // Bind user context (allowedCountries, etc.) into executeTool for this request
-  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, req.user || {});
+  // Bind user context (allowedCountries, language, etc.) into executeTool for this request
+  const userCtxWithLang = { ...(req.user || {}), language: req.language || 'en' };
+  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, userCtxWithLang);
 
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
     await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
