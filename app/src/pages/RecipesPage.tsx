@@ -5,6 +5,7 @@ import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 import TranslationEditor from '../components/TranslationEditor'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,8 @@ export default function RecipesPage() {
   const api            = useApi()
   const cogsThresholds = useCogsThresholds()
   const navigate       = useNavigate()
+  const { flags }      = useFeatureFlags()
+  const variationsEnabled = flags.variations
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -1285,8 +1288,8 @@ export default function RecipesPage() {
                           ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
                           : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
                     }
-                    {/* Variant mode toggle */}
-                    {priceLevels.length > 0 && (
+                    {/* Variant mode toggle — hidden when variations feature flag is off */}
+                    {variationsEnabled && priceLevels.length > 0 && (
                       <div className="flex items-center gap-1">
                         <button
                           className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
@@ -1999,6 +2002,14 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           <input className="input" value={form.name} onChange={set('name')} placeholder="e.g. Pad Thai" autoFocus />
         </Field>
 
+        {!recipe && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-600 -mt-1">
+            <input type="checkbox" checked={form.createSalesItem ?? false}
+              onChange={e => setForm(f => ({ ...f, createSalesItem: e.target.checked }))} />
+            This is a Sales Item
+          </label>
+        )}
+
         {/* Category select */}
         <Field label="Category">
           <select className="select w-full" value={form.category_id} onChange={set('category_id')}>
@@ -2027,14 +2038,6 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
           formKey="recipe"
         />
-
-        {!recipe && (
-          <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-600">
-            <input type="checkbox" checked={form.createSalesItem ?? false}
-              onChange={e => setForm(f => ({ ...f, createSalesItem: e.target.checked }))} />
-            Also create a Sales Item linked to this recipe
-          </label>
-        )}
 
         {/* Translations — only shown for existing recipes */}
         {recipe && (

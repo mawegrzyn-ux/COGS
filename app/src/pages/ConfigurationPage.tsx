@@ -8,6 +8,7 @@ import MediaLibrary   from '../components/MediaLibrary'
 import { usePermissions } from '../hooks/usePermissions'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner } from '../components/ui'
+import { useFeatureFlags, FeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Section definitions ────────────────────────────────────────────────────────
 
@@ -44,6 +45,116 @@ const SECTIONS: SectionDef[] = [
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
   { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'settings' },
 ]
+
+// ── Feature Toggles card ──────────────────────────────────────────────────────
+
+interface FlagDef {
+  key:         keyof FeatureFlags
+  label:       string
+  description: string
+  icon:        string
+}
+
+const FEATURE_FLAG_DEFS: FlagDef[] = [
+  { key: 'stock_manager', icon: '📦', label: 'Stock Management', description: 'Purchase orders, goods received, invoices, waste, transfers, stocktake. When off, the Stock Manager nav item is hidden.' },
+  { key: 'haccp',         icon: '🛡️', label: 'HACCP',             description: 'Food safety compliance — temperature logs, CCP logs, equipment register. When off, the HACCP nav item is hidden.' },
+  { key: 'allergens',     icon: '⚠️', label: 'Allergens',          description: 'EU/UK FIC 14-allergen matrix for ingredients and menu items. When off, the Allergens nav item is hidden.' },
+  { key: 'variations',    icon: '🌍', label: 'Recipe Variations', description: 'Market, price-level, and market+PL recipe variations. When off, recipes use a single global ingredient list only.' },
+]
+
+function FeatureFlagsCard() {
+  const { flags, loading, update } = useFeatureFlags()
+  const { can } = usePermissions()
+  const canEdit = can('settings', 'write')
+  const [savingKey, setSavingKey] = useState<keyof FeatureFlags | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+
+  const toggle = async (key: keyof FeatureFlags) => {
+    if (!canEdit || savingKey) return
+    setSavingKey(key)
+    try {
+      await update({ [key]: !flags[key] })
+      setToast(`${FEATURE_FLAG_DEFS.find(d => d.key === key)?.label} ${!flags[key] ? 'enabled' : 'disabled'}`)
+      setTimeout(() => setToast(null), 2500)
+    } catch {
+      setToast('Failed to save — please try again')
+      setTimeout(() => setToast(null), 3000)
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
+  return (
+    <div className="card p-5 mb-4">
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-text-1 mb-1">Feature Toggles</h3>
+        <p className="text-xs text-text-3">
+          Enable or disable top-level modules. Disabled modules disappear from the sidebar and their URLs redirect to the dashboard.
+          These toggles apply system-wide and do not change per-user RBAC permissions.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-4"><Spinner /></div>
+      ) : (
+        <div className="space-y-2">
+          {FEATURE_FLAG_DEFS.map(def => {
+            const enabled = flags[def.key]
+            const isSaving = savingKey === def.key
+            return (
+              <label
+                key={def.key}
+                className={`flex items-start gap-3 p-3 rounded-lg border transition-colors select-none
+                  ${enabled ? 'bg-accent-dim/40 border-accent/30' : 'bg-surface-2 border-border'}
+                  ${canEdit ? 'cursor-pointer hover:bg-white' : 'cursor-not-allowed opacity-80'}`}
+              >
+                <span className="text-lg leading-none mt-0.5">{def.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium ${enabled ? 'text-text-1' : 'text-text-2'}`}>{def.label}</span>
+                    {enabled
+                      ? <span className="text-xs px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">Enabled</span>
+                      : <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">Disabled</span>
+                    }
+                  </div>
+                  <p className="text-xs text-text-3 mt-1">{def.description}</p>
+                </div>
+                {/* Toggle switch */}
+                <button
+                  type="button"
+                  onClick={() => toggle(def.key)}
+                  disabled={!canEdit || isSaving}
+                  role="switch"
+                  aria-checked={enabled}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors
+                    ${enabled ? 'bg-accent' : 'bg-gray-300'}
+                    ${canEdit && !isSaving ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform
+                      ${enabled ? 'translate-x-[18px]' : 'translate-x-[2px]'}`}
+                  />
+                </button>
+              </label>
+            )
+          })}
+        </div>
+      )}
+
+      {!canEdit && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mt-3">
+          You need settings write access to change these toggles.
+        </p>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-accent text-white px-4 py-3 rounded-lg shadow-lg text-sm font-semibold">
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Global Config section ─────────────────────────────────────────────────────
 
@@ -119,6 +230,9 @@ function GlobalConfigSection() {
     <div className="p-6 max-w-2xl">
       <h2 className="text-lg font-semibold text-text-1 mb-1">Global Config</h2>
       <p className="text-sm text-text-3 mb-6">System-wide operations and bulk actions.</p>
+
+      {/* ── Feature toggles card ── */}
+      <FeatureFlagsCard />
 
       {/* ── Bulk create card ── */}
       <div className="card p-5 mb-4">

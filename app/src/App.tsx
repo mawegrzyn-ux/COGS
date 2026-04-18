@@ -23,6 +23,7 @@ import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
 import { MarketProvider }   from './contexts/MarketContext'
 import { LanguageProvider } from './contexts/LanguageContext'
+import { FeatureFlagsProvider, useFeatureFlags } from './contexts/FeatureFlagsContext'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth0()
@@ -35,6 +36,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// Redirect to /dashboard if a feature flag is disabled. Used to hide
+// whole modules (Stock Manager, HACCP, Allergens) from users without
+// changing RBAC. Waits for flags to load to avoid flash-of-redirect.
+function FeatureRoute({ flag, children }: { flag: keyof import('./contexts/FeatureFlagsContext').FeatureFlags; children: React.ReactNode }) {
+  const { flags, loading } = useFeatureFlags()
+  if (loading) return <LoadingScreen />
+  if (!flags[flag]) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   const { isLoading } = useAuth0()
   if (isLoading) return <LoadingScreen />
@@ -42,6 +53,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <PermissionsProvider>
+        <FeatureFlagsProvider>
         <LanguageProvider>
         <MarketProvider>
         <Routes>
@@ -66,9 +78,9 @@ export default function App() {
             <Route path="recipes"       element={<RecipesPage />} />
             <Route path="sales-items"   element={<SalesItemsPage />} />
             <Route path="menus"         element={<MenusPage />} />
-            <Route path="allergens"     element={<AllergenMatrixPage />} />
-            <Route path="haccp"         element={<HACCPPage />} />
-            <Route path="stock-manager" element={<StockManagerPage />} />
+            <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
+            <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
+            <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
             <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
             <Route path="media"         element={<MediaLibraryPage />} />
             <Route path="help"          element={<HelpPage />} />
@@ -83,6 +95,7 @@ export default function App() {
         </Routes>
         </MarketProvider>
         </LanguageProvider>
+        </FeatureFlagsProvider>
       </PermissionsProvider>
     </BrowserRouter>
   )
