@@ -17,6 +17,10 @@ import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
 import PosTesterPage        from './pages/PosTesterPage'
+import AuditsPage           from './pages/audits/AuditsPage'
+import AuditRunnerPage      from './pages/audits/AuditRunnerPage'
+import AuditReportPage      from './pages/audits/AuditReportPage'
+import AuditTemplatesPage   from './pages/audits/AuditTemplatesPage'
 import SharedMenuPage       from './pages/SharedMenuPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
@@ -80,6 +84,10 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
             <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
+            <Route path="audits"               element={<AuditsPage />} />
+            <Route path="audits/templates"     element={<AuditTemplatesPage />} />
+            <Route path="audits/:id/run"       element={<AuditRunnerPage />} />
+            <Route path="audits/:id/report"    element={<AuditReportPage />} />
             <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
             <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
             <Route path="media"         element={<MediaLibraryPage />} />

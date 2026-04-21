@@ -8,6 +8,7 @@ export type Feature =
   | 'stock_overview' | 'stock_purchase_orders' | 'stock_goods_in'
   | 'stock_invoices' | 'stock_waste' | 'stock_transfers' | 'stock_stocktake'
   | 'bugs' | 'backlog' | 'docs'
+  | 'audits' | 'audits_admin'
 
 export interface MeUser {
   id:              number
