@@ -1593,6 +1593,34 @@ Returns items with their urls and metadata.`,
       required: [],
     },
   },
+
+  // ── QSC Audits ────────────────────────────────────────────────────────────
+  {
+    name: 'list_audits',
+    description: 'List QSC (Quality/Service/Cleanliness) audits performed at restaurant locations. Use when the user asks about recent audits, audit scores, or audit history for a location. Returns audit key, type (external/internal), location, status, score, and rating.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        audit_type:  { type: 'string', enum: ['external', 'internal'], description: 'Filter by type' },
+        status:      { type: 'string', enum: ['in_progress', 'completed', 'cancelled'], description: 'Filter by status' },
+        location_id: { type: 'integer', description: 'Filter to one location' },
+        limit:       { type: 'integer', description: 'Max rows (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_audit_report',
+    description: 'Get the full scored report for one QSC audit — overall score and rating, department/category breakdowns, critical findings, list of non-compliant items with comments and photos, and repeat findings. Use when the user asks "how did audit X go?", "show me the last audit for location Y", or wants remediation suggestions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        audit_id: { type: 'integer', description: 'Primary key id of the audit' },
+        audit_key:{ type: 'string',  description: 'Audit key (e.g. AUD-1001)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3776,6 +3804,59 @@ async function executeTool(name, input, send = null, userCtx = {}) {
         'SELECT * FROM mcogs_changelog ORDER BY version DESC, id DESC LIMIT $1', [cap]
       );
       return { count: rows.length, entries: rows };
+    }
+
+    case 'list_audits': {
+      const { audit_type, status, location_id, limit } = input;
+      const where = [], params = [];
+      if (audit_type)  { params.push(audit_type);   where.push(`a.audit_type = $${params.length}`); }
+      if (status)      { params.push(status);       where.push(`a.status = $${params.length}`); }
+      if (location_id) { params.push(location_id);  where.push(`a.location_id = $${params.length}`); }
+      params.push(Math.min(limit || 20, 100));
+      const { rows } = await pool.query(
+        `SELECT a.id, a.key, a.audit_type, a.status, a.overall_score, a.overall_rating,
+                a.auto_unacceptable, a.started_at, a.completed_at, a.auditor_name,
+                l.name AS location_name
+         FROM   mcogs_qsc_audits a
+         LEFT JOIN mcogs_locations l ON l.id = a.location_id
+         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+         ORDER  BY a.started_at DESC LIMIT $${params.length}`,
+        params
+      );
+      return { count: rows.length, audits: rows };
+    }
+
+    case 'get_audit_report': {
+      const { audit_id, audit_key } = input;
+      if (!audit_id && !audit_key) return { error: 'Provide audit_id or audit_key' };
+      const audit = await pool.query(
+        audit_id
+          ? `SELECT a.*, l.name AS location_name FROM mcogs_qsc_audits a LEFT JOIN mcogs_locations l ON l.id = a.location_id WHERE a.id = $1`
+          : `SELECT a.*, l.name AS location_name FROM mcogs_qsc_audits a LEFT JOIN mcogs_locations l ON l.id = a.location_id WHERE a.key = $1`,
+        [audit_id || audit_key]
+      );
+      if (!audit.rows.length) return { error: 'Audit not found' };
+      const a = audit.rows[0];
+      const nc = await pool.query(
+        `SELECT r.question_code, r.comment, r.points_deducted, r.is_repeat,
+                q.title, q.risk_level, q.department, q.category
+         FROM   mcogs_qsc_responses r
+         JOIN   mcogs_qsc_questions q ON q.code = r.question_code AND q.version = $2
+         WHERE  r.audit_id = $1 AND r.status = 'not_compliant'
+         ORDER  BY q.sort_order`,
+        [a.id, a.question_version]
+      );
+      return {
+        audit: {
+          key: a.key, type: a.audit_type, status: a.status,
+          location: a.location_name, auditor: a.auditor_name,
+          started_at: a.started_at, completed_at: a.completed_at,
+          overall_score: a.overall_score, overall_rating: a.overall_rating,
+          auto_unacceptable: a.auto_unacceptable, notes: a.notes,
+        },
+        non_compliant_count: nc.rows.length,
+        non_compliant:       nc.rows,
+      };
     }
 
     case 'get_audit_stats': {

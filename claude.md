@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 83 tables (all prefixed `mcogs_`), 123 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 88 tables (all prefixed `mcogs_`), 130 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -524,6 +524,11 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 80 | `mcogs_memory_monthly` | 117 | Monthly AI memory consolidation: monthly overviews per user (user_sub, summary_month, summary, themes JSONB, focus_shifts JSONB, is_quarterly) |
 | 81 | `mcogs_faq` | 118 | FAQ knowledge base: searchable Q&A entries (question, answer, category, tags JSONB, sort_order, is_published) |
 | 82 | `mcogs_changelog` | 120 | Project change log: version, title, entries JSONB array of {type, description}. Read-only in UI, updated at EOS. |
+| 83 | `mcogs_qsc_questions` | 124-125 | QSC audit question bank (150 seeded from Wingstop spec v1). Fields: code, version, department, category, title, risk_level, points, repeat_points, policy, auto_unacceptable, photo_required, temperature_input, cross_refs JSONB, sort_order, active. UNIQUE(code, version). |
+| 84 | `mcogs_qsc_templates` | 126, 128 | Named subsets used for internal ad-hoc audits (7 system templates seeded). Fields: name, description, question_codes JSONB, is_system, created_by. |
+| 85 | `mcogs_qsc_audits` | 127 | Audit runs. key (AUD-1001+), audit_type (external/internal), location_id FK, template_id FK, question_version (pinned at start), auditor_sub/name, status, overall_score, overall_rating, auto_unacceptable, notes. |
+| 86 | `mcogs_qsc_responses` | 127 | One row per answered question per audit. status (compliant/not_compliant/not_observed/not_applicable/informational), is_repeat, points_deducted, comment, temperature_value/unit, product_name. UNIQUE(audit_id, question_code). |
+| 87 | `mcogs_qsc_response_photos` | 127 | 0..N photos per response (url + caption). |
 
 ### Key Schema Details
 
@@ -689,6 +694,16 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST /api/feedback` | `feedback.js` | ✅ Active — user feedback |
 | `GET/POST/PUT/DELETE /api/bugs` | `bugs.js` | ✅ Active — bug tracker CRUD |
 | `GET/POST/PUT/DELETE /api/backlog` | `backlog.js` | ✅ Active — feature backlog CRUD |
+| `GET/PUT /api/qsc/questions[/:code]` | `qsc.js` | ✅ Active — QSC question bank (150 seeded). PUT gated by `audits_admin:write`. |
+| `GET/POST/PUT/DELETE /api/qsc/templates[/:id]` | `qsc.js` | ✅ Active — audit templates for internal ad-hoc audits. System templates read-only. |
+| `GET/POST/PUT/DELETE /api/qsc/audits[/:id]` | `qsc.js` | ✅ Active — audit lifecycle: in_progress → completed/cancelled. Delete refuses completed (immutable). |
+| `GET /api/qsc/audits/:id/report` | `qsc.js` | ✅ Active — precomputed report: by department, by category, critical/NC/repeat findings, informational. |
+| `GET /api/qsc/audits/:id/export.csv` | `qsc.js` | ✅ Active — one row per response CSV export. |
+| `POST /api/qsc/audits/:id/complete` | `qsc.js` | ✅ Active — finalize: scoring engine, auto-unacceptable check, rating band. External audits require all scored questions answered. |
+| `POST /api/qsc/audits/:id/cancel` | `qsc.js` | ✅ Active — cancel in-progress audit. |
+| `PUT/DELETE /api/qsc/audits/:id/responses/:code` | `qsc.js` | ✅ Active — upsert/clear a single response (auto-save). |
+| `POST/DELETE /api/qsc/audits/:id/responses/:code/photos` | `qsc.js` | ✅ Active — attach/detach pre-uploaded photo URL (upload via `/api/upload` first). |
+| `GET /api/qsc/locations/:id/last-external` | `qsc.js` | ✅ Active — previous external audit for repeat-finding suggestion. |
 | `GET/POST /api/category-groups` | `category-groups.js` | ✅ Active — category groups CRUD |
 | `GET/POST/PUT/DELETE /api/faq` | `faq.js` | ✅ Active — FAQ knowledge base CRUD + search |
 | `GET /api/faq/search` | `faq.js` | ✅ Active — FAQ full-text search (`?q=`) |
@@ -773,6 +788,10 @@ Generic data grid with:
   /menus          → MenusPage
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
+  /audits                → AuditsPage            (QSC audit dashboard + list)
+  /audits/templates      → AuditTemplatesPage    (internal-audit template CRUD)
+  /audits/:id/run        → AuditRunnerPage       (question-by-question, auto-save, photo, temp)
+  /audits/:id/report     → AuditReportPage       (scored report with print/CSV export)
   /stock-manager  → StockManagerPage
   /bugs-backlog   → redirects to /system (Bugs & Backlog embedded in SystemPage)
   /media          → MediaLibraryPage
@@ -797,6 +816,7 @@ Menus              feature: menus
 ─────────────────
 Allergens          feature: allergens
 HACCP              feature: haccp
+Audits             feature: audits
 Stock Manager      features: stock_overview + 6 granular stock features
 ─────────────────
 Configuration      feature: settings
@@ -1239,6 +1259,39 @@ Public password-protected page for external reviewers (no auth required).
 - Price changes logged and surfaced in Menu Engineer History tab
 - Comments posted via shared links appear in Menu Engineer Comments tab
 
+### ✅ QSC Audits (`/audits`, `/audits/templates`, `/audits/:id/run`, `/audits/:id/report`)
+
+Wingstop-style **Quality / Service / Cleanliness** audit tool. Two modes sharing the same question bank (150 items seeded from [`docs/wingstop_audit_tool_spec.md`](docs/wingstop_audit_tool_spec.md)):
+
+1. **External audit** — formal evaluation. Every scored question must be answered before finalize. Feeds the `is_repeat` flag on future audits.
+2. **Internal audit** — ad-hoc self-check. Optional template from 7 seeded (Line Check, Walk-in & Cold Hold, Personal Hygiene, Expiration Sweep, Cleaning & Sanitizer, Opening Checklist, Front-of-House). Partial completion allowed; unanswered items record as `not_observed`.
+
+**Scoring engine** ([`api/src/helpers/qsc-scoring.js`](api/src/helpers/qsc-scoring.js)):
+- 100-point deduct; per-question weight by risk level (5/3/1 for First/Second/Third Priority, 0 for Information Only).
+- Auto-unacceptable triggers — `A105`, `A127`, `A139`, `A141`, `A143`, `OF101`. Any NC on these forces overall rating to `Unacceptable` regardless of score.
+- Rating bands: `≥ 90 Acceptable`, `70–89.9 Needs Improvement`, `< 70 Unacceptable`.
+
+**Pages:**
+- [`AuditsPage.tsx`](app/src/pages/audits/AuditsPage.tsx) — dashboard: stat cards, filterable list, "Start audit" modal with audit-type + location + template pickers.
+- [`AuditRunnerPage.tsx`](app/src/pages/audits/AuditRunnerPage.tsx) — single-question runner. Sticky progress strip. Left sidebar groups questions by Department → Category with compliance dots. Main pane: risk chip, collapsible policy, 4 status buttons, repeat-finding checkbox (pre-flagged from previous external NC codes), optional temperature entry, product name, comment, photo upload, cross-ref chips.
+- [`AuditReportPage.tsx`](app/src/pages/audits/AuditReportPage.tsx) — summary banner (score + rating), department/category tables, critical findings, all NC items with photos + cross-refs, repeat findings, informational observations. "Export CSV" button + `window.print()` (print stylesheet included).
+- [`AuditTemplatesPage.tsx`](app/src/pages/audits/AuditTemplatesPage.tsx) — system templates + custom template CRUD. Editor lists all questions with dept/search filter and checkbox selection.
+
+**Pepper tools:**
+- `list_audits` — query audits by type/status/location.
+- `get_audit_report` — full scored report for one audit (by id or key).
+
+**Photos** — use the existing `/api/upload` endpoint (S3 or local disk). Attach returned URL via `POST /api/qsc/audits/:id/responses/:code/photos`. Max 5 MB.
+
+**Repeat-finding detection** — when the runner loads, it calls `GET /qsc/locations/:id/last-external` to pre-flag NC codes from the location's previous external audit. Auditor confirms on the NC screen via the "Repeat finding" checkbox.
+
+**Out of scope for v1** (tracked in [BACK-1500](https://cogs.macaroonie.com)):
+- Offline-first service worker + IndexedDB queue (runner currently online-only).
+- Escalation emails for A139/A141/A143.
+- Branded Puppeteer PDF (current output is `window.print()`).
+- Per-location RBAC scope via `mcogs_user_locations` junction (users today filter by country via brand partners).
+- Admin UI for question-bank editing (endpoint exists; UI deferred).
+
 ---
 
 ## 13. Pages Remaining to Build
@@ -1277,7 +1330,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 97
+### Tool Count: 99
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1447,9 +1500,13 @@ Three system roles are seeded automatically and cannot be deleted:
 
 Custom roles can be created in Configuration → Users & Roles and assigned any combination.
 
-### Features (21)
+### Features (23)
 
-`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake` · `bugs` · `backlog`
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake` · `bugs` · `backlog` · `audits` · `audits_admin`
+
+**QSC Audits feature gates:**
+- `audits` — Admin/Operator get `write` (create audits, edit templates, answer questions), Viewer gets `read` (view reports). Seeded in migration step 129.
+- `audits_admin` — Admin only gets `write`. Used to gate the question-bank editing endpoint (`PUT /api/qsc/questions/:code`). Non-admin attempts return 403.
 
 > **Note:** The original single `stock_manager` feature was replaced by 7 granular stock features to allow per-tab RBAC control within the Stock Manager module. `bugs` and `backlog` were added in migration step 107b.
 
@@ -2624,7 +2681,9 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5, Pepper keyboard shortcut Ctrl+Shift+P, user message text colour fix in renderMd, test data clearData fixed (30 missing tables added), EOS protocol documented. DB: 78→82 tables, 107→120 migration steps, tools: 92→97.)*
+*README last updated: April 2026 (session: QSC Audit Tool v1 — all phases. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 2 new Pepper tools (list_audits, get_audit_report). 2 new RBAC features (audits, audits_admin). Migration steps 124-130. DB: 82→87 tables, 123→130 migration steps, tools: 97→99, features: 21→23.)*
+
+*README previous session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5.*
 
 *README previous session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects.*
 

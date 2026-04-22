@@ -11,6 +11,55 @@
 // from the /api/db-config/migrate admin endpoint) it only exports `migrations`
 // so the caller can run them against the live pool.
 
+// ── QSC question bank — loaded once at module load time ────────────────────
+// Fixture is produced by api/scripts/parse-qsc-spec.js from the Wingstop spec.
+// If the fixture is missing (e.g. fresh clone before parser runs) the seed
+// step becomes a no-op so migrations still succeed.
+const path = require('path');
+const fs   = require('fs');
+let QSC_QUESTIONS = [];
+try {
+  const fixturePath = path.resolve(__dirname, 'fixtures/qsc-questions.json');
+  if (fs.existsSync(fixturePath)) {
+    QSC_QUESTIONS = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+  }
+} catch (e) {
+  console.warn('[migrate] QSC fixture load failed:', e.message);
+}
+
+// PostgreSQL literal escape: 'that''s' — replaces each apostrophe with two.
+const sqlEscape = (s) => (s == null ? '' : String(s).replace(/'/g, "''"));
+
+function buildQscSeedSql() {
+  if (!QSC_QUESTIONS.length) {
+    return `-- QSC fixture not found; skip seed (parse-qsc-spec.js must be run)
+            SELECT 1`;
+  }
+  const values = QSC_QUESTIONS.map(q => {
+    const crossRefs = JSON.stringify(q.cross_refs || []).replace(/'/g, "''");
+    return `('${sqlEscape(q.code)}', ${q.version | 0},
+             ${q.department ? `'${sqlEscape(q.department)}'` : 'NULL'},
+             ${q.category   ? `'${sqlEscape(q.category)}'`   : 'NULL'},
+             '${sqlEscape(q.title)}',
+             '${sqlEscape(q.risk_level)}',
+             ${q.points | 0}, ${q.repeat_points | 0},
+             '${sqlEscape(q.policy)}',
+             ${q.auto_unacceptable ? 'TRUE' : 'FALSE'},
+             ${q.photo_required    ? 'TRUE' : 'FALSE'},
+             ${q.temperature_input ? 'TRUE' : 'FALSE'},
+             '${crossRefs}'::jsonb,
+             ${q.sort_order | 0}, TRUE)`;
+  }).join(',\n        ');
+
+  return `INSERT INTO mcogs_qsc_questions
+      (code, version, department, category, title, risk_level, points, repeat_points,
+       policy, auto_unacceptable, photo_required, temperature_input, cross_refs,
+       sort_order, active)
+    VALUES
+        ${values}
+    ON CONFLICT (code, version) DO NOTHING`;
+}
+
 const migrations = [
 
   // ── 1. Units ───────────────────────────────────────────────────────────────
@@ -2979,6 +3028,164 @@ const migrations = [
 
     -- Mark follow-up backlog items as done
     UPDATE mcogs_backlog SET status = 'done' WHERE key IN ('BACK-1420', 'BACK-1421', 'BACK-1422', 'BACK-1423', 'BACK-1424');
+  END $$`,
+
+  // ── Step 124: QSC Audit Tool — Question bank ─────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_qsc_questions (
+    id                SERIAL PRIMARY KEY,
+    code              VARCHAR(10)  NOT NULL,
+    version           INTEGER      NOT NULL DEFAULT 1,
+    department        VARCHAR(50),
+    category          VARCHAR(100),
+    title             TEXT         NOT NULL,
+    risk_level        VARCHAR(40)  NOT NULL,
+    points            INTEGER      NOT NULL DEFAULT 0,
+    repeat_points     INTEGER      NOT NULL DEFAULT 0,
+    policy            TEXT,
+    auto_unacceptable BOOLEAN      NOT NULL DEFAULT FALSE,
+    photo_required    BOOLEAN      NOT NULL DEFAULT FALSE,
+    temperature_input BOOLEAN      NOT NULL DEFAULT FALSE,
+    cross_refs        JSONB        NOT NULL DEFAULT '[]',
+    sort_order        INTEGER      NOT NULL DEFAULT 0,
+    active            BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    UNIQUE (code, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_q_dept    ON mcogs_qsc_questions(department, category)`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_q_version ON mcogs_qsc_questions(version)`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_q_active  ON mcogs_qsc_questions(active, sort_order)`,
+
+  // ── Step 125: Seed QSC question bank from fixture ───────────────────────
+  buildQscSeedSql(),
+
+  // ── Step 126: QSC Audit templates (for internal ad-hoc audits) ──────────
+  `CREATE TABLE IF NOT EXISTS mcogs_qsc_templates (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    question_codes  JSONB        NOT NULL DEFAULT '[]',
+    is_system       BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_by      VARCHAR(200),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+
+  // ── Step 127: Audit runs + responses + photos ───────────────────────────
+  `CREATE SEQUENCE IF NOT EXISTS mcogs_qsc_audit_number_seq START 1001`,
+  `CREATE TABLE IF NOT EXISTS mcogs_qsc_audits (
+    id                SERIAL PRIMARY KEY,
+    key               VARCHAR(20)  NOT NULL UNIQUE,
+    audit_type        VARCHAR(20)  NOT NULL CHECK (audit_type IN ('external','internal')),
+    location_id       INTEGER      REFERENCES mcogs_locations(id) ON DELETE SET NULL,
+    template_id       INTEGER      REFERENCES mcogs_qsc_templates(id) ON DELETE SET NULL,
+    question_version  INTEGER      NOT NULL DEFAULT 1,
+    auditor_sub       VARCHAR(200),
+    auditor_name      VARCHAR(200),
+    started_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    completed_at      TIMESTAMPTZ,
+    status            VARCHAR(20)  NOT NULL DEFAULT 'in_progress'
+                        CHECK (status IN ('in_progress','completed','cancelled')),
+    overall_score     NUMERIC(6,2),
+    overall_rating    VARCHAR(30),
+    auto_unacceptable BOOLEAN      NOT NULL DEFAULT FALSE,
+    notes             TEXT,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_audits_location      ON mcogs_qsc_audits(location_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_audits_type_status   ON mcogs_qsc_audits(audit_type, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_audits_completed     ON mcogs_qsc_audits(completed_at DESC) WHERE completed_at IS NOT NULL`,
+
+  `CREATE TABLE IF NOT EXISTS mcogs_qsc_responses (
+    id                SERIAL PRIMARY KEY,
+    audit_id          INTEGER NOT NULL REFERENCES mcogs_qsc_audits(id) ON DELETE CASCADE,
+    question_code     VARCHAR(10) NOT NULL,
+    status            VARCHAR(20) NOT NULL
+                        CHECK (status IN ('compliant','not_compliant','not_observed','not_applicable','informational')),
+    is_repeat         BOOLEAN NOT NULL DEFAULT FALSE,
+    points_deducted   INTEGER NOT NULL DEFAULT 0,
+    comment           TEXT,
+    temperature_value NUMERIC(8,2),
+    temperature_unit  VARCHAR(2) CHECK (temperature_unit IN ('F','C')),
+    product_name      VARCHAR(200),
+    answered_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (audit_id, question_code)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_resp_audit ON mcogs_qsc_responses(audit_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_resp_code  ON mcogs_qsc_responses(question_code)`,
+
+  `CREATE TABLE IF NOT EXISTS mcogs_qsc_response_photos (
+    id           SERIAL PRIMARY KEY,
+    response_id  INTEGER NOT NULL REFERENCES mcogs_qsc_responses(id) ON DELETE CASCADE,
+    url          TEXT NOT NULL,
+    caption      VARCHAR(500),
+    uploaded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_qsc_photos_response ON mcogs_qsc_response_photos(response_id)`,
+
+  // ── Step 128: Seed v1 internal audit templates ──────────────────────────
+  `INSERT INTO mcogs_qsc_templates (name, description, question_codes, is_system) VALUES
+    ('Line Check (Peak)',
+     'Quick peak-service line check across cooking, sauce and make stations.',
+     '["KM201","KM202","KM203","KM204","KM205","KM206","KL201","KL208","KC201","KC202","KC203"]'::jsonb, TRUE),
+    ('Walk-in & Cold Hold',
+     'Cold hold and walk-in cooler deep dive.',
+     '["A101","A105","B211","C305","C307"]'::jsonb, TRUE),
+    ('Personal Hygiene Spot Check',
+     'Hand-washing, glove use, and general hygiene standards.',
+     '["A131","A133","A135","B219","B221","B221a","C330","C331"]'::jsonb, TRUE),
+    ('Expiration Date Sweep',
+     'Product-dating and rotation compliance sweep.',
+     '["A119","A119a","B225","B225a","B225b","B225c","B225d"]'::jsonb, TRUE),
+    ('Cleaning & Sanitizer',
+     'Sanitizer concentration + cleanliness of food-contact surfaces.',
+     '["A125","A127","B235","B237","B239","C315","C319","C321","C325","C329"]'::jsonb, TRUE),
+    ('Opening Checklist',
+     'Pre-open standards across dining room, front counter, line.',
+     '["DR301","FC301","KL301","KL302","KM301","KC302"]'::jsonb, TRUE),
+    ('Front-of-House Guest Experience',
+     'Dining room + front counter guest experience standards.',
+     '["DR201","DR204","FC203","FC204","FC205","FC206"]'::jsonb, TRUE)
+   ON CONFLICT DO NOTHING`,
+
+  // ── Step 129: RBAC — seed audits + audits_admin features ────────────────
+  `DO $$ DECLARE r RECORD; BEGIN
+    FOR r IN SELECT id, name FROM mcogs_roles LOOP
+      -- audits: admin/operator get write, viewer gets read
+      INSERT INTO mcogs_role_permissions (role_id, feature, access)
+      VALUES (r.id, 'audits',
+        CASE WHEN r.name IN ('Admin','Operator') THEN 'write' ELSE 'read' END)
+      ON CONFLICT (role_id, feature) DO NOTHING;
+
+      -- audits_admin: only Admin gets write (edit question bank)
+      INSERT INTO mcogs_role_permissions (role_id, feature, access)
+      VALUES (r.id, 'audits_admin',
+        CASE WHEN r.name = 'Admin' THEN 'write' ELSE 'none' END)
+      ON CONFLICT (role_id, feature) DO NOTHING;
+    END LOOP;
+  END $$`,
+
+  // ── Step 130: Changelog entry + backlog epic for QSC rollout ────────────
+  `DO $$ BEGIN
+    INSERT INTO mcogs_changelog (version, title, entries) VALUES
+    ('2026-04-21-qsc', 'QSC Audit Tool v1 — all phases', '${JSON.stringify([
+      { type: 'added', description: 'QSC Audit Tool — new Audits module at /audits with external and internal modes, question-by-question runner, photo/temperature capture, auto-save, report view, CSV export, print-friendly PDF.' },
+      { type: 'added', description: '5 new tables: mcogs_qsc_questions (150 seeded from Wingstop spec), mcogs_qsc_templates (7 seeded), mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos.' },
+      { type: 'added', description: 'Scoring engine: 100-point deduct, auto-unacceptable triggers (A105/A127/A139/A141/A143/OF101), rating bands (Acceptable ≥90, Needs Improvement 70-89.9, Unacceptable <70).' },
+      { type: 'added', description: 'RBAC: 2 new features — audits (admin/operator write, viewer read) and audits_admin (admin only, for question-bank editing).' },
+      { type: 'added', description: 'Pepper tools: list_audits, get_audit_report.' },
+      { type: 'added', description: 'Sidebar nav link under the HACCP block; legacy /audits routes redirect through standard ProtectedRoute.' }
+    ]).replace(/'/g, "''")}'::jsonb)
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+    ('BACK-1500', 'QSC Audit Tool — v2 follow-ups',
+     'Offline-first service worker + IndexedDB queue; scheduling & evaluator role; escalation emails for A139/A141/A143; branded PDF via Puppeteer; question-bank admin UI; per-location RBAC scope (mcogs_user_locations junction); reconcile question count against xlsx source.',
+     'epic', 'medium', 'backlog', '["qsc","v2"]'::jsonb,
+     (SELECT COALESCE(MAX(sort_order), 0) + 10 FROM mcogs_backlog))
+    ON CONFLICT (key) DO NOTHING;
+
+    PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1500));
   END $$`,
 ];
 

@@ -114,6 +114,11 @@ router.use('/stocktakes',         ...can('stock_stocktake', 'read'),         wri
 // ── Audit Log ─────────────────────────────────────────────────────────────────
 router.use('/audit',              ...can('settings', 'read'),                          require('./audit'));
 
+// ── QSC Audit Tool (Wingstop Quality / Service / Cleanliness audits) ─────────
+// `audits` feature: admin/operator write, viewer read.
+// `audits_admin` feature (for question-bank edits) is enforced inside the route.
+router.use('/qsc',                ...can('audits', 'read'),      write('audits'),     require('./qsc'));
+
 // ── Pepper Memory (pinned notes + user profile) ──────────────────────────────
 router.use('/memory',             auth,                                               require('./memory'));
 

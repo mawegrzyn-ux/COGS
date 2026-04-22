@@ -46,6 +46,7 @@ export default {
     menus: 'Menus',
     allergens: 'Allergens',
     haccp: 'HACCP',
+    audits: 'Audits',
     stock_manager: 'Stock Manager',
     configuration: 'Configuration',
     system: 'System',
