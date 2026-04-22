@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 88 tables (all prefixed `mcogs_`), 130 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 88 tables (all prefixed `mcogs_`), 131 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -1277,9 +1277,14 @@ Wingstop-style **Quality / Service / Cleanliness** audit tool. Two modes sharing
 - [`AuditReportPage.tsx`](app/src/pages/audits/AuditReportPage.tsx) — summary banner (score + rating), department/category tables, critical findings, all NC items with photos + cross-refs, repeat findings, informational observations. "Export CSV" button + `window.print()` (print stylesheet included).
 - [`AuditTemplatesPage.tsx`](app/src/pages/audits/AuditTemplatesPage.tsx) — system templates + custom template CRUD. Editor lists all questions with dept/search filter and checkbox selection.
 
-**Pepper tools:**
+**Pepper tools (7 read-only):**
 - `list_audits` — query audits by type/status/location.
 - `get_audit_report` — full scored report for one audit (by id or key).
+- `list_qsc_questions` — search the 150-question bank by department/category/risk/text.
+- `get_qsc_question` — full detail for a single code including policy text.
+- `list_audit_templates` — all templates with their code lists and question counts.
+- `get_audit_nc_trends` — aggregates most frequently failed codes across completed audits (with date/location/type filters). Useful for remediation priorities.
+- `get_location_audit_history` — chronological audit list for one location + running average score + rating distribution.
 
 **Photos** — use the existing `/api/upload` endpoint (S3 or local disk). Attach returned URL via `POST /api/qsc/audits/:id/responses/:code/photos`. Max 5 MB.
 
@@ -1330,7 +1335,7 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 99
+### Tool Count: 104
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -2681,7 +2686,7 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session: QSC Audit Tool v1 — all phases. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 2 new Pepper tools (list_audits, get_audit_report). 2 new RBAC features (audits, audits_admin). Migration steps 124-130. DB: 82→87 tables, 123→130 migration steps, tools: 97→99, features: 21→23.)*
+*README last updated: April 2026 (session: QSC Audit Tool v1 — all phases + full docs + expanded Pepper toolkit. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 7 new Pepper tools (list_audits, get_audit_report, list_qsc_questions, get_qsc_question, list_audit_templates, get_audit_nc_trends, get_location_audit_history). 2 new RBAC features (audits, audits_admin) + global feature-flag switch. 11 QSC FAQ entries seeded. User guide section added. Migration steps 124-131. DB: 82→87 tables, 123→131 migration steps, tools: 97→104, features: 21→23.)*
 
 *README previous session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5.*
 

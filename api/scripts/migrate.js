@@ -3187,6 +3187,56 @@ const migrations = [
 
     PERFORM setval('mcogs_backlog_number_seq', GREATEST(nextval('mcogs_backlog_number_seq'), 1500));
   END $$`,
+
+  // ── Step 131: FAQ entries for QSC Audits ───────────────────────────────────
+  `DO $$ BEGIN
+    INSERT INTO mcogs_faq (question, answer, category, tags, sort_order) VALUES
+
+    ('What is the QSC Audit Tool?',
+     'QSC stands for Quality, Service, Cleanliness — a Wingstop audit framework. The module at /audits lets you run scored audits against a bank of 150 questions covering Food Safety and Brand Standards. Two modes: External (formal, scored, every question required) and Internal (ad-hoc, optional template, partial completion OK).',
+     'Audits', '["qsc","audits","overview","wingstop"]'::jsonb, 100),
+
+    ('How do I start a QSC audit?',
+     'Go to /audits and click "+ Start audit" (top right). Pick a type (External or Internal), choose a location, optionally pick a template for internal audits, and enter the auditor name. Clicking Start creates an AUD-xxxx key and drops you into the question runner.',
+     'Audits', '["qsc","start","audit","beginner"]'::jsonb, 101),
+
+    ('What is the difference between external and internal audits?',
+     'External = formal evaluation, every scored question must be answered before finalize, score is the audit-of-record for the location. Internal = ad-hoc self-check, can use a template or custom selection, partial completion allowed (unanswered items record as Not Observed), tagged visually with an Internal badge and never replaces the external score.',
+     'Audits', '["external","internal","difference"]'::jsonb, 102),
+
+    ('How is the audit score calculated?',
+     'Start at 100 points. Each Not Compliant answer deducts points by risk level: First Priority = 5, Second Priority = 3, Third Priority = 1, Information Only = 0. If the same code was NC on the previous external audit, the "Repeat finding" checkbox adds the same deduction (kept as a separate field for future divergence). Ratings: >= 90 Acceptable, 70-89.9 Needs Improvement, < 70 Unacceptable.',
+     'Audits', '["score","scoring","rating","calculation"]'::jsonb, 103),
+
+    ('What is an auto-unacceptable trigger?',
+     'Six codes force the overall rating to Unacceptable regardless of the numeric score: A105 (walk-in cooler TCS foods out of temp due to equipment), A127 (no sanitizer available), A139 (sewage backup / no working toilet), A141 (no potable water), A143 (live rodents or roaches), and OF101. Marking any of them Not Compliant flips the rating at finalize.',
+     'Audits', '["auto-unacceptable","critical","A105","A127","A139","A141","A143"]'::jsonb, 104),
+
+    ('Can I attach photos to an audit response?',
+     'Yes. On any question, click "+ Attach photo" to upload an image (max 5 MB). Photos are stored via the same media upload path as the rest of the app (local disk or S3). Some questions are marked with a "Photo required" badge — for those, a photo is strongly encouraged and flagged in the report if missing.',
+     'Audits', '["photo","upload","evidence","attach"]'::jsonb, 105),
+
+    ('How does repeat-finding detection work?',
+     'When you start an audit for a location, the runner fetches the previous external audit at that same location and preloads its Not Compliant codes. When you mark one of those codes NC this time, the "Repeat finding" checkbox is pre-suggested. You can accept it or uncheck it if the context differs.',
+     'Audits', '["repeat","previous","location","history"]'::jsonb, 106),
+
+    ('How do I export an audit report?',
+     'On the report page (/audits/:id/report) use the two top-right buttons: "Export CSV" downloads one row per response for spreadsheet analysis; "Print / PDF" opens your browser print dialog with a clean single-column layout — save as PDF from there. Branded PDF via Puppeteer is planned for v2.',
+     'Audits', '["export","csv","pdf","print","report"]'::jsonb, 107),
+
+    ('Can I create my own audit templates?',
+     'Yes — Admin and Operator users can create, edit, and delete custom templates at /audits/templates. 7 system templates ship with the product (Line Check Peak, Walk-in & Cold Hold, Personal Hygiene, Expiration Sweep, Cleaning & Sanitizer, Opening Checklist, Front-of-House); these cannot be deleted and only developers can edit them.',
+     'Audits', '["template","custom","system","create"]'::jsonb, 108),
+
+    ('How do I hide the Audits module entirely?',
+     'An Admin can turn the module off at Configuration -> Global Config -> Feature Toggles -> QSC Audits. When off, the Audits sidebar entry disappears for everyone and /audits/* routes redirect to the dashboard. RBAC permissions (audits feature) still apply on top of this when the module is on.',
+     'Audits', '["global","switch","toggle","disable","feature-flag"]'::jsonb, 109),
+
+    ('What can Pepper do with audit data?',
+     'Pepper has seven read-only QSC tools: list_audits (filter by type/status/location), get_audit_report (full scored report), list_qsc_questions (search the 150-question bank), get_qsc_question (single code detail), list_audit_templates, get_audit_nc_trends (most frequently failed codes across audits for remediation priorities), and get_location_audit_history (timeline for one location). Ask "which codes fail most often?" or "show me the audit history for London Victoria".',
+     'Audits', '["pepper","ai","tools","query","trends"]'::jsonb, 110)
+    ON CONFLICT DO NOTHING;
+  END $$`,
 ];
 
 async function runMigrations(pool) {

@@ -1621,6 +1621,68 @@ Returns items with their urls and metadata.`,
       required: [],
     },
   },
+  {
+    name: 'list_qsc_questions',
+    description: 'Query the QSC question bank (150 Wingstop audit questions). Filter by department, category, risk level, or text search. Use when the user asks "show me all Critical First Priority questions", "what do we check for in Personal Hygiene?", or "which questions mention walk-in coolers?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        department: { type: 'string', enum: ['Food Safety', 'Brand Standards'], description: 'Filter by department' },
+        category:   { type: 'string', description: 'Filter by category (e.g. "Temperature Control", "Dining Room")' },
+        risk_level: { type: 'string', description: 'Filter by risk level (e.g. "Critical First Priority", "First Priority", "Second Priority", "Third Priority", "Information Only")' },
+        search:     { type: 'string', description: 'Text search on code or title' },
+        limit:      { type: 'integer', description: 'Max rows (default 25, max 100)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_qsc_question',
+    description: 'Get the full detail for one QSC question by its code (e.g. A101, DR201). Returns title, full policy text, risk level, points, repeat points, auto-unacceptable flag, photo-required flag, temperature-input flag, and cross-referenced codes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Question code (e.g. "A101")' },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: 'list_audit_templates',
+    description: 'List the saved audit templates (7 system + any custom). Each template is a named subset of question codes used for internal ad-hoc audits (e.g. "Line Check Peak", "Walk-in & Cold Hold"). Use when the user asks "what templates are available?" or "what does the Line Check template cover?".',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_audit_nc_trends',
+    description: 'Aggregate non-compliance trends across completed audits — returns the most frequently failed question codes with their NC count and points deducted. Use when the user asks "which codes fail most often?", "what are our recurring issues?", or wants remediation priorities.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'integer', description: 'Optional: limit to one location' },
+        audit_type:  { type: 'string', enum: ['external', 'internal'], description: 'Optional: limit to one audit type' },
+        from:        { type: 'string', description: 'Optional: only audits completed on or after this date (ISO format)' },
+        to:          { type: 'string', description: 'Optional: only audits completed on or before this date (ISO format)' },
+        limit:       { type: 'integer', description: 'Top N codes to return (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_location_audit_history',
+    description: 'Get the audit timeline for one location — a chronological list of every audit plus a running average score and rating distribution. Use when the user asks "show me the audit history for location X" or wants to see a location\'s trajectory over time.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'integer', description: 'Location primary key id' },
+        limit:       { type: 'integer', description: 'Max audits to return (default 10)' },
+      },
+      required: ['location_id'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -3856,6 +3918,124 @@ async function executeTool(name, input, send = null, userCtx = {}) {
         },
         non_compliant_count: nc.rows.length,
         non_compliant:       nc.rows,
+      };
+    }
+
+    case 'list_qsc_questions': {
+      const { department, category, risk_level, search, limit } = input;
+      const where = ['active = TRUE'];
+      const params = [];
+      if (department) { params.push(department);                         where.push(`department = $${params.length}`); }
+      if (category)   { params.push(category);                           where.push(`category = $${params.length}`); }
+      if (risk_level) { params.push(risk_level);                         where.push(`risk_level = $${params.length}`); }
+      if (search)     {
+        params.push(`%${search}%`);
+        where.push(`(code ILIKE $${params.length} OR title ILIKE $${params.length})`);
+      }
+      params.push(Math.min(limit || 25, 100));
+      const { rows } = await pool.query(
+        `SELECT code, department, category, title, risk_level, points, repeat_points,
+                auto_unacceptable, photo_required, temperature_input
+         FROM   mcogs_qsc_questions
+         WHERE  ${where.join(' AND ')}
+         ORDER  BY sort_order LIMIT $${params.length}`,
+        params
+      );
+      return { count: rows.length, questions: rows };
+    }
+
+    case 'get_qsc_question': {
+      const { code } = input;
+      if (!code) return { error: 'code is required' };
+      const { rows } = await pool.query(
+        `SELECT * FROM mcogs_qsc_questions WHERE code = $1 AND active = TRUE ORDER BY version DESC LIMIT 1`,
+        [code]
+      );
+      if (!rows.length) return { error: `Question ${code} not found` };
+      return rows[0];
+    }
+
+    case 'list_audit_templates': {
+      const { rows } = await pool.query(
+        `SELECT id, name, description, is_system, question_codes,
+                jsonb_array_length(question_codes) AS question_count
+         FROM   mcogs_qsc_templates
+         ORDER  BY is_system DESC, name`
+      );
+      return { count: rows.length, templates: rows };
+    }
+
+    case 'get_audit_nc_trends': {
+      const { location_id, audit_type, from, to, limit } = input;
+      const where = [`a.status = 'completed'`, `r.status = 'not_compliant'`];
+      const params = [];
+      if (location_id) { params.push(location_id); where.push(`a.location_id = $${params.length}`); }
+      if (audit_type)  { params.push(audit_type);  where.push(`a.audit_type = $${params.length}`); }
+      if (from)        { params.push(from);        where.push(`a.completed_at >= $${params.length}`); }
+      if (to)          { params.push(to);          where.push(`a.completed_at < ($${params.length})::date + 1`); }
+      params.push(Math.min(limit || 20, 50));
+      const { rows } = await pool.query(
+        `SELECT r.question_code,
+                q.title, q.risk_level, q.department, q.category,
+                COUNT(*)::int AS nc_count,
+                SUM(r.points_deducted)::int AS total_points_deducted,
+                COUNT(*) FILTER (WHERE r.is_repeat)::int AS repeat_count
+         FROM   mcogs_qsc_responses r
+         JOIN   mcogs_qsc_audits    a ON a.id   = r.audit_id
+         JOIN   mcogs_qsc_questions q ON q.code = r.question_code AND q.version = a.question_version
+         WHERE  ${where.join(' AND ')}
+         GROUP  BY r.question_code, q.title, q.risk_level, q.department, q.category
+         ORDER  BY nc_count DESC, total_points_deducted DESC
+         LIMIT $${params.length}`,
+        params
+      );
+      // Also return how many audits were in the filter window for denominator context
+      const denomWhere = where.filter(w => !w.includes('r.status'));
+      const denomParams = params.slice(0, params.length - 1);
+      const denom = await pool.query(
+        `SELECT COUNT(DISTINCT a.id)::int AS audit_count
+         FROM   mcogs_qsc_audits a
+         ${denomWhere.length ? 'WHERE ' + denomWhere.join(' AND ').replace(/r\.status = 'not_compliant' AND /, '') : ''}`,
+        denomParams
+      );
+      return {
+        audit_count: denom.rows[0]?.audit_count ?? 0,
+        trend_count: rows.length,
+        trends:      rows,
+      };
+    }
+
+    case 'get_location_audit_history': {
+      const { location_id, limit } = input;
+      if (!location_id) return { error: 'location_id is required' };
+      const cap = Math.min(limit || 10, 50);
+      const { rows } = await pool.query(
+        `SELECT a.id, a.key, a.audit_type, a.status,
+                a.started_at, a.completed_at,
+                a.overall_score, a.overall_rating, a.auto_unacceptable,
+                a.auditor_name,
+                (SELECT COUNT(*)::int FROM mcogs_qsc_responses WHERE audit_id = a.id AND status = 'not_compliant') AS nc_count
+         FROM   mcogs_qsc_audits a
+         WHERE  a.location_id = $1
+         ORDER  BY COALESCE(a.completed_at, a.started_at) DESC
+         LIMIT  $2`,
+        [location_id, cap]
+      );
+      const completed = rows.filter(r => r.status === 'completed' && r.overall_score != null);
+      const avg = completed.length
+        ? Math.round((completed.reduce((s, r) => s + Number(r.overall_score), 0) / completed.length) * 10) / 10
+        : null;
+      const ratingDist = completed.reduce((acc, r) => {
+        acc[r.overall_rating || 'Unknown'] = (acc[r.overall_rating || 'Unknown'] || 0) + 1;
+        return acc;
+      }, {});
+      return {
+        location_id,
+        audit_count:          rows.length,
+        completed_count:      completed.length,
+        average_score:        avg,
+        rating_distribution:  ratingDist,
+        audits:               rows,
       };
     }
 
