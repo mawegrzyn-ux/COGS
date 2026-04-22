@@ -33,6 +33,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Main bundle crossed 2 MiB after the QSC Audit module landed.
+        // Raise the precache cap to 4 MiB so the PWA installs cleanly.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         // Cache static assets
         runtimeCaching: [
           {

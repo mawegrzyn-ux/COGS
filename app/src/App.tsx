@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage            from './pages/LoginPage'
@@ -17,10 +18,13 @@ import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
 import PosTesterPage        from './pages/PosTesterPage'
-import AuditsPage           from './pages/audits/AuditsPage'
-import AuditRunnerPage      from './pages/audits/AuditRunnerPage'
-import AuditReportPage      from './pages/audits/AuditReportPage'
-import AuditTemplatesPage   from './pages/audits/AuditTemplatesPage'
+// QSC Audits — lazy-loaded to keep the main bundle small.
+// These pages pull in the full 150-question bank + runner/report UI; they
+// only matter to users who have `audits:read` access.
+const AuditsPage          = lazy(() => import('./pages/audits/AuditsPage'))
+const AuditRunnerPage     = lazy(() => import('./pages/audits/AuditRunnerPage'))
+const AuditReportPage     = lazy(() => import('./pages/audits/AuditReportPage'))
+const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage'))
 import SharedMenuPage       from './pages/SharedMenuPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
@@ -84,10 +88,10 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
             <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
-            <Route path="audits"               element={<AuditsPage />} />
-            <Route path="audits/templates"     element={<AuditTemplatesPage />} />
-            <Route path="audits/:id/run"       element={<AuditRunnerPage />} />
-            <Route path="audits/:id/report"    element={<AuditReportPage />} />
+            <Route path="audits"               element={<Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense>} />
+            <Route path="audits/templates"     element={<Suspense fallback={<LoadingScreen />}><AuditTemplatesPage /></Suspense>} />
+            <Route path="audits/:id/run"       element={<Suspense fallback={<LoadingScreen />}><AuditRunnerPage /></Suspense>} />
+            <Route path="audits/:id/report"    element={<Suspense fallback={<LoadingScreen />}><AuditReportPage /></Suspense>} />
             <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
             <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
             <Route path="media"         element={<MediaLibraryPage />} />
