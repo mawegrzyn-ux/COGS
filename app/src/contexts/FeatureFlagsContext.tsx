@@ -11,6 +11,7 @@ export interface FeatureFlags {
   haccp:         boolean
   allergens:     boolean
   variations:    boolean
+  audits:        boolean
 }
 
 export const DEFAULT_FLAGS: FeatureFlags = {
@@ -18,6 +19,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   haccp:         true,
   allergens:     true,
   variations:    true,
+  audits:        true,
 }
 
 interface FeatureFlagsContextValue {
