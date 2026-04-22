@@ -160,6 +160,9 @@ router.use('/internal/feedback',                                                
 // ── Jira integration (admin-only) ────────────────────────────────────────────
 router.use('/jira',              ...can('settings', 'write'),                           require('./jira'));
 
+// ── Tests (dev-only — triggers GitHub Actions test.yml workflow) ─────────────
+router.use('/tests',             auth,                                                  require('./tests'));
+
 // ── Doc Library ──────────────────────────────────────────────────────────────
 router.use('/docs-library',      ...can('docs', 'read'),    write('docs'),             require('./docs-library'));
 

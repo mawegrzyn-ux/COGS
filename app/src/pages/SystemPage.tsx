@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import SettingsPage from './SettingsPage'
 import PosTesterPage from './PosTesterPage'
 import BugsBacklogPage from './BugsBacklogPage'
@@ -1223,6 +1223,336 @@ function ClaudeDocSection() {
   )
 }
 
+// ── Tests Section ────────────────────────────────────────────────────────────
+// Triggers the GitHub Actions test.yml workflow and polls its status. Requires
+// a configured GitHub PAT (Settings → AI → GitHub). Dev-only.
+
+type TestRun = {
+  id: number
+  name?: string
+  display_title?: string
+  status: 'queued' | 'in_progress' | 'completed'
+  conclusion: 'success' | 'failure' | 'cancelled' | 'skipped' | 'action_required' | 'timed_out' | 'neutral' | null
+  event: string
+  head_branch: string
+  head_sha: string
+  actor?: string
+  run_number: number
+  run_attempt: number
+  created_at: string
+  updated_at: string
+  run_started_at: string
+  html_url: string
+}
+
+type TestJob = {
+  id: number
+  name: string
+  status: 'queued' | 'in_progress' | 'completed'
+  conclusion: TestRun['conclusion']
+  started_at: string | null
+  completed_at: string | null
+  html_url: string
+}
+
+type TestArtifact = {
+  id: number
+  name: string
+  size_in_bytes: number
+  expired: boolean
+  created_at: string
+  archive_download_url: string
+}
+
+function runBadge(run: Pick<TestRun, 'status' | 'conclusion'>) {
+  if (run.status !== 'completed') {
+    return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-blue-100 text-blue-700">⏳ {run.status.replace('_', ' ')}</span>
+  }
+  const c = run.conclusion
+  if (c === 'success')   return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-green-100 text-green-700">✓ passed</span>
+  if (c === 'failure' || c === 'timed_out') return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-700">✗ {c}</span>
+  if (c === 'cancelled') return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">⊘ cancelled</span>
+  if (c === 'skipped')   return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">skipped</span>
+  return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{c || '—'}</span>
+}
+
+function formatDuration(start: string | null, end: string | null) {
+  if (!start) return '—'
+  const s = new Date(start).getTime()
+  const e = end ? new Date(end).getTime() : Date.now()
+  const secs = Math.max(0, Math.round((e - s) / 1000))
+  if (secs < 60) return `${secs}s`
+  const m = Math.floor(secs / 60), r = secs % 60
+  return r ? `${m}m ${r}s` : `${m}m`
+}
+
+function formatRelative(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime()
+  const s = Math.round(diff / 1000)
+  if (s < 60)   return `${s}s ago`
+  const m = Math.round(s / 60)
+  if (m < 60)   return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24)   return `${h}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
+
+function TestsSection() {
+  const api = useApi()
+  const [runs, setRuns]       = useState<TestRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
+  const [ref, setRef]         = useState('main')
+  const [triggering, setTriggering] = useState(false)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [detail, setDetail]   = useState<Record<number, { jobs: TestJob[]; artifacts: TestArtifact[] }>>({})
+  const [detailLoading, setDetailLoading] = useState<number | null>(null)
+
+  const loadRuns = useCallback(async () => {
+    try {
+      const data = await api.get('/tests/runs?per_page=10') as TestRun[] | null
+      setRuns(data || [])
+      setError(null)
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load runs')
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { loadRuns() }, [loadRuns])
+
+  // Auto-poll while any run is queued or in progress.
+  const anyInFlight = useMemo(
+    () => runs.some(r => r.status !== 'completed'),
+    [runs]
+  )
+  useEffect(() => {
+    if (!anyInFlight) return
+    const t = setInterval(loadRuns, 10_000)
+    return () => clearInterval(t)
+  }, [anyInFlight, loadRuns])
+
+  // Also refresh the currently-expanded run's detail while it's running.
+  useEffect(() => {
+    if (expandedId == null) return
+    const run = runs.find(r => r.id === expandedId)
+    if (!run || run.status === 'completed') return
+    const t = setInterval(() => { loadDetail(expandedId, true) }, 10_000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId, runs])
+
+  async function loadDetail(id: number, silent = false) {
+    if (!silent) setDetailLoading(id)
+    try {
+      const d = await api.get(`/tests/runs/${id}`) as { run: TestRun; jobs: TestJob[]; artifacts: TestArtifact[] }
+      setDetail(prev => ({ ...prev, [id]: { jobs: d.jobs, artifacts: d.artifacts } }))
+    } catch (e: any) {
+      if (!silent) setError(e?.message || 'Failed to load run detail')
+    } finally {
+      if (!silent) setDetailLoading(null)
+    }
+  }
+
+  async function toggleExpand(id: number) {
+    if (expandedId === id) { setExpandedId(null); return }
+    setExpandedId(id)
+    if (!detail[id]) await loadDetail(id)
+  }
+
+  async function triggerRun() {
+    if (!ref.trim()) return
+    setTriggering(true)
+    setError(null)
+    try {
+      await api.post('/tests/run', { ref: ref.trim() })
+      // Workflow_dispatch returns no run id, so poll a few times to pick up the
+      // freshly queued run. GitHub usually surfaces it within 2–5 seconds.
+      for (let i = 0; i < 6; i++) {
+        await new Promise(r => setTimeout(r, 1500))
+        await loadRuns()
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Failed to trigger run')
+    } finally {
+      setTriggering(false)
+    }
+  }
+
+  if (loading) return <div className="p-6"><Spinner /></div>
+
+  return (
+    <div className="p-6 max-w-5xl space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-text-1 flex items-center gap-2">
+          <span className="text-xl">✅</span> Tests
+        </h2>
+        <p className="text-sm text-text-3 mt-1">
+          Trigger the <code className="text-xs bg-surface-2 px-1 rounded">test.yml</code> workflow on GitHub Actions and watch its progress. Requires a GitHub PAT in System → AI → GitHub with <em>actions: write</em> scope.
+        </p>
+      </div>
+
+      {error && (
+        <div className="card p-3 bg-red-50 border-red-200 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      {/* Trigger bar */}
+      <div className="card p-4 flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[180px]">
+          <label className="block text-xs font-semibold text-text-2 mb-1">Branch / tag / SHA</label>
+          <input
+            className="input text-sm"
+            value={ref}
+            onChange={e => setRef(e.target.value)}
+            placeholder="main"
+            disabled={triggering}
+          />
+        </div>
+        <button
+          className="btn-primary text-sm px-4 py-2"
+          onClick={triggerRun}
+          disabled={triggering || !ref.trim()}
+        >
+          {triggering ? 'Triggering…' : '▶ Run tests'}
+        </button>
+        <button
+          className="btn-ghost text-sm px-3 py-2"
+          onClick={loadRuns}
+          disabled={triggering}
+        >
+          ↻ Refresh
+        </button>
+      </div>
+
+      {/* Runs table */}
+      <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b border-border bg-surface-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-1">Recent runs</h3>
+          {anyInFlight && <span className="text-xs text-text-3">Auto-refreshing every 10s</span>}
+        </div>
+        {runs.length === 0 ? (
+          <div className="p-8 text-center text-sm text-text-3">No runs yet. Trigger one above.</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-text-3 bg-surface-2 border-b border-border">
+                <th className="px-4 py-2 font-semibold">#</th>
+                <th className="px-4 py-2 font-semibold">Status</th>
+                <th className="px-4 py-2 font-semibold">Event</th>
+                <th className="px-4 py-2 font-semibold">Branch / SHA</th>
+                <th className="px-4 py-2 font-semibold">Actor</th>
+                <th className="px-4 py-2 font-semibold">Started</th>
+                <th className="px-4 py-2 font-semibold">Duration</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map(r => {
+                const expanded = expandedId === r.id
+                const d = detail[r.id]
+                return (
+                  <Fragment key={r.id}>
+                    <tr
+                      className={`border-b border-border hover:bg-surface-2 cursor-pointer ${expanded ? 'bg-surface-2' : ''}`}
+                      onClick={() => toggleExpand(r.id)}
+                    >
+                      <td className="px-4 py-2 font-mono text-xs text-text-3">{r.run_number}{r.run_attempt > 1 ? `.${r.run_attempt}` : ''}</td>
+                      <td className="px-4 py-2">{runBadge(r)}</td>
+                      <td className="px-4 py-2 text-xs">{r.event}</td>
+                      <td className="px-4 py-2 text-xs">
+                        <span className="font-mono">{r.head_branch}</span>
+                        <span className="text-text-3"> · {r.head_sha.slice(0, 7)}</span>
+                      </td>
+                      <td className="px-4 py-2 text-xs">{r.actor || '—'}</td>
+                      <td className="px-4 py-2 text-xs text-text-3" title={r.run_started_at}>
+                        {formatRelative(r.run_started_at)}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-text-3">
+                        {formatDuration(r.run_started_at, r.status === 'completed' ? r.updated_at : null)}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-right">
+                        <a
+                          href={r.html_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="text-accent hover:underline"
+                        >
+                          GitHub ↗
+                        </a>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="border-b border-border bg-surface-2">
+                        <td colSpan={8} className="px-4 py-4">
+                          {detailLoading === r.id ? (
+                            <Spinner />
+                          ) : d ? (
+                            <div className="space-y-3">
+                              <div>
+                                <div className="text-xs font-semibold text-text-2 mb-1.5">Jobs</div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                  {d.jobs.map(j => (
+                                    <div key={j.id} className="flex items-center justify-between bg-surface px-3 py-1.5 rounded border border-border">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        {runBadge(j)}
+                                        <span className="text-sm truncate">{j.name}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-xs text-text-3 shrink-0">
+                                        <span>{formatDuration(j.started_at, j.completed_at)}</span>
+                                        <a href={j.html_url} target="_blank" rel="noreferrer" className="text-accent hover:underline">log ↗</a>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              {d.artifacts.length > 0 && (
+                                <div>
+                                  <div className="text-xs font-semibold text-text-2 mb-1.5">Artifacts</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {d.artifacts.map(a => (
+                                      <a
+                                        key={a.id}
+                                        href={r.html_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className={`text-xs px-2 py-1 rounded border ${a.expired ? 'text-text-3 border-border' : 'text-accent border-accent-dim hover:bg-accent-dim'}`}
+                                        title={a.expired ? 'Expired' : `${(a.size_in_bytes / 1024).toFixed(0)} KB — download via GitHub run page`}
+                                      >
+                                        📦 {a.name}{a.expired ? ' (expired)' : ''}
+                                      </a>
+                                    ))}
+                                  </div>
+                                  <p className="text-[11px] text-text-3 mt-1.5">
+                                    Artifact downloads require a GitHub login — click through to the run page.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-text-3">No detail loaded.</div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card p-4 text-xs text-text-3 leading-relaxed">
+        <strong className="text-text-2">Tip:</strong> E2E (Playwright) only runs on push to <code className="bg-surface-2 px-1 rounded">main</code> in the default CI config — a manual dispatch on any branch will execute typecheck, lint, api-test and app-test. Adjust <code className="bg-surface-2 px-1 rounded">.github/workflows/test.yml</code> if you want E2E on feature branches too.
+      </div>
+    </div>
+  )
+}
+
 // ── Jira Sync Section ─────────────────────────────────────────────────────────
 
 function JiraSyncSection() {
@@ -1381,6 +1711,7 @@ type Section =
   | 'storage'        // Media storage config (local vs S3) — admin-only
   | 'database'       // DB connection config (local vs standalone/AWS RDS) — admin-only
   | 'test-data'      // Seeding + clearing dummy data — dev-only, date-confirmed
+  | 'tests'          // In-app CI test runner (dispatches test.yml) — dev-only
   | 'architecture'
   | 'api-reference'
   | 'security'
@@ -1410,6 +1741,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'storage',          icon: '☁️', label: 'Storage',           gate: 'admin' },
   { id: 'database',         icon: '🗄️', label: 'Database',         gate: 'admin' },
   { id: 'test-data',        icon: '🧪', label: 'Test Data',        gate: 'dev'   },
+  { id: 'tests',            icon: '✅', label: 'Tests',            gate: 'dev'   },
   { id: 'doc-library',      icon: '📄', label: 'Doc Library' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
   { id: 'localization',     icon: '🌍', label: 'Localization' },
@@ -1465,6 +1797,9 @@ export default function SystemPage() {
                                   : <GatedFallback reason="admin" />
       case 'test-data':        return isDev
                                   ? <SettingsPage embedded initialTab="test-data" />
+                                  : <GatedFallback reason="dev" />
+      case 'tests':            return isDev
+                                  ? <TestsSection />
                                   : <GatedFallback reason="dev" />
       case 'architecture':     return <ArchitectureSection />
       case 'api-reference':    return <ApiReferenceSection />

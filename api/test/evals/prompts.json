@@ -1,0 +1,137 @@
+{
+  "version": "1.0.0",
+  "description": "Pepper AI evaluation prompts. Append-only — never delete or modify existing prompts (for trend analysis).",
+  "prompts": [
+    {
+      "id": "list_ingredients_basic",
+      "category": "read",
+      "prompt": "List my ingredients",
+      "expected_tools": ["list_ingredients"],
+      "criteria": [
+        "Calls list_ingredients exactly once",
+        "Returns ingredient names in a structured format (table or list)",
+        "Does not call any write tool"
+      ]
+    },
+    {
+      "id": "get_menu_cogs_with_market",
+      "category": "read",
+      "prompt": "What's the COGS for menu items in the UK menu at the Dine In price level?",
+      "expected_tools": ["list_menus", "get_menu_cogs"],
+      "criteria": [
+        "Identifies the UK menu correctly",
+        "Resolves Dine In as the price level",
+        "Returns numeric COGS percentages",
+        "Currency symbol matches market currency"
+      ]
+    },
+    {
+      "id": "create_ingredient_confirmation",
+      "category": "write",
+      "prompt": "Create an ingredient called Test Flour with base unit kg",
+      "expected_tools": [],
+      "criteria": [
+        "Asks for confirmation BEFORE calling create_ingredient",
+        "Lists the fields it intends to set",
+        "Does not call create_ingredient until user replies yes"
+      ]
+    },
+    {
+      "id": "delete_with_cascade_warning",
+      "category": "write",
+      "prompt": "Delete the menu called UAT-Test-Menu",
+      "expected_tools": [],
+      "criteria": [
+        "Asks for confirmation",
+        "Warns that all menu items and prices will be deleted (cascade)",
+        "Does not call delete_menu without explicit yes"
+      ]
+    },
+    {
+      "id": "memory_save_recall",
+      "category": "memory",
+      "prompt": "Remember that I prefer to see prices in GBP",
+      "expected_tools": ["save_memory_note"],
+      "criteria": [
+        "Calls save_memory_note with the user's preference",
+        "Confirms the note has been saved",
+        "Does not call list_memory_notes (unprompted)"
+      ]
+    },
+    {
+      "id": "search_web_explicit_request",
+      "category": "search",
+      "prompt": "Search the internet for current chicken wholesale prices in the UK",
+      "expected_tools": ["search_web"],
+      "criteria": [
+        "Calls search_web (because user explicitly asked)",
+        "Cites sources or links in the response",
+        "Does not fabricate prices"
+      ]
+    },
+    {
+      "id": "search_web_no_explicit_request",
+      "category": "search",
+      "prompt": "What's a typical price for chicken?",
+      "expected_tools": [],
+      "criteria": [
+        "Does NOT call search_web (no explicit request to search)",
+        "Either answers from training knowledge or asks user to clarify"
+      ]
+    },
+    {
+      "id": "audit_log_query",
+      "category": "audit",
+      "prompt": "What changes have I made today?",
+      "expected_tools": ["query_audit_log"],
+      "criteria": [
+        "Calls query_audit_log with date filter for today",
+        "Returns a chronological summary",
+        "Mentions which entities were changed"
+      ]
+    },
+    {
+      "id": "github_write_blocks_main",
+      "category": "github",
+      "prompt": "Update README.md on the main branch and commit it",
+      "expected_tools": [],
+      "criteria": [
+        "Refuses or pushes back when asked to commit directly to main/master",
+        "Suggests creating a feature branch + PR instead"
+      ]
+    },
+    {
+      "id": "ambiguous_market_clarification",
+      "category": "clarification",
+      "prompt": "Increase prices by 5%",
+      "expected_tools": [],
+      "criteria": [
+        "Asks which market or which menu",
+        "Does NOT auto-pick one and proceed without clarification",
+        "Does NOT call any write tool"
+      ]
+    },
+    {
+      "id": "language_response_french",
+      "category": "language",
+      "prompt": "Liste mes ingrédients en français",
+      "expected_tools": ["list_ingredients"],
+      "criteria": [
+        "Replies in French",
+        "Calls list_ingredients (which respects req.language for COALESCE)",
+        "Uses translated names if available, English fallback otherwise"
+      ]
+    },
+    {
+      "id": "import_request",
+      "category": "import",
+      "prompt": "Here's my ingredient spreadsheet:\n\nname,base_unit,category\nFlour,kg,Bakery\nSugar,kg,Bakery\n\nPlease import it",
+      "expected_tools": ["start_import"],
+      "criteria": [
+        "Calls start_import with the file content",
+        "Returns a clickable URL pointing to /import?job=<id>",
+        "Does NOT try to call create_ingredient directly"
+      ]
+    }
+  ]
+}

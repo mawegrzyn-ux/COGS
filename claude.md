@@ -48,7 +48,7 @@ Migrated from a WordPress plugin (v3.3.0) to a modern React + Node.js + PostgreS
 | **Web Server** | Nginx (reverse proxy → Node API on port 3001) |
 | **Process Manager** | PM2 running as `ubuntu` user (process name: `menu-cogs-api`) |
 | **Auth** | Auth0 — tenant: `obscurekitty.uk.auth0.com` |
-| **Database** | PostgreSQL 16 — database: `mcogs`, 83 tables (all prefixed `mcogs_`), 123 migration steps |
+| **Database** | PostgreSQL 16 — database: `mcogs`, 88 tables (all prefixed `mcogs_`), 131 migration steps |
 | **CI/CD** | GitHub Actions — push to `main` → build → deploy → health check |
 | **Repo** | `github.com/mawegrzyn-ux/COGS` |
 
@@ -524,6 +524,11 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 80 | `mcogs_memory_monthly` | 117 | Monthly AI memory consolidation: monthly overviews per user (user_sub, summary_month, summary, themes JSONB, focus_shifts JSONB, is_quarterly) |
 | 81 | `mcogs_faq` | 118 | FAQ knowledge base: searchable Q&A entries (question, answer, category, tags JSONB, sort_order, is_published) |
 | 82 | `mcogs_changelog` | 120 | Project change log: version, title, entries JSONB array of {type, description}. Read-only in UI, updated at EOS. |
+| 83 | `mcogs_qsc_questions` | 124-125 | QSC audit question bank (150 seeded from Wingstop spec v1). Fields: code, version, department, category, title, risk_level, points, repeat_points, policy, auto_unacceptable, photo_required, temperature_input, cross_refs JSONB, sort_order, active. UNIQUE(code, version). |
+| 84 | `mcogs_qsc_templates` | 126, 128 | Named subsets used for internal ad-hoc audits (7 system templates seeded). Fields: name, description, question_codes JSONB, is_system, created_by. |
+| 85 | `mcogs_qsc_audits` | 127 | Audit runs. key (AUD-1001+), audit_type (external/internal), location_id FK, template_id FK, question_version (pinned at start), auditor_sub/name, status, overall_score, overall_rating, auto_unacceptable, notes. |
+| 86 | `mcogs_qsc_responses` | 127 | One row per answered question per audit. status (compliant/not_compliant/not_observed/not_applicable/informational), is_repeat, points_deducted, comment, temperature_value/unit, product_name. UNIQUE(audit_id, question_code). |
+| 87 | `mcogs_qsc_response_photos` | 127 | 0..N photos per response (url + caption). |
 
 ### Key Schema Details
 
@@ -689,6 +694,16 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST /api/feedback` | `feedback.js` | ✅ Active — user feedback |
 | `GET/POST/PUT/DELETE /api/bugs` | `bugs.js` | ✅ Active — bug tracker CRUD |
 | `GET/POST/PUT/DELETE /api/backlog` | `backlog.js` | ✅ Active — feature backlog CRUD |
+| `GET/PUT /api/qsc/questions[/:code]` | `qsc.js` | ✅ Active — QSC question bank (150 seeded). PUT gated by `audits_admin:write`. |
+| `GET/POST/PUT/DELETE /api/qsc/templates[/:id]` | `qsc.js` | ✅ Active — audit templates for internal ad-hoc audits. System templates read-only. |
+| `GET/POST/PUT/DELETE /api/qsc/audits[/:id]` | `qsc.js` | ✅ Active — audit lifecycle: in_progress → completed/cancelled. Delete refuses completed (immutable). |
+| `GET /api/qsc/audits/:id/report` | `qsc.js` | ✅ Active — precomputed report: by department, by category, critical/NC/repeat findings, informational. |
+| `GET /api/qsc/audits/:id/export.csv` | `qsc.js` | ✅ Active — one row per response CSV export. |
+| `POST /api/qsc/audits/:id/complete` | `qsc.js` | ✅ Active — finalize: scoring engine, auto-unacceptable check, rating band. External audits require all scored questions answered. |
+| `POST /api/qsc/audits/:id/cancel` | `qsc.js` | ✅ Active — cancel in-progress audit. |
+| `PUT/DELETE /api/qsc/audits/:id/responses/:code` | `qsc.js` | ✅ Active — upsert/clear a single response (auto-save). |
+| `POST/DELETE /api/qsc/audits/:id/responses/:code/photos` | `qsc.js` | ✅ Active — attach/detach pre-uploaded photo URL (upload via `/api/upload` first). |
+| `GET /api/qsc/locations/:id/last-external` | `qsc.js` | ✅ Active — previous external audit for repeat-finding suggestion. |
 | `GET/POST /api/category-groups` | `category-groups.js` | ✅ Active — category groups CRUD |
 | `GET/POST/PUT/DELETE /api/faq` | `faq.js` | ✅ Active — FAQ knowledge base CRUD + search |
 | `GET /api/faq/search` | `faq.js` | ✅ Active — FAQ full-text search (`?q=`) |
@@ -773,6 +788,10 @@ Generic data grid with:
   /menus          → MenusPage
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
+  /audits                → AuditsPage            (QSC audit dashboard + list)
+  /audits/templates      → AuditTemplatesPage    (internal-audit template CRUD)
+  /audits/:id/run        → AuditRunnerPage       (question-by-question, auto-save, photo, temp)
+  /audits/:id/report     → AuditReportPage       (scored report with print/CSV export)
   /stock-manager  → StockManagerPage
   /bugs-backlog   → redirects to /system (Bugs & Backlog embedded in SystemPage)
   /media          → MediaLibraryPage
@@ -797,6 +816,7 @@ Menus              feature: menus
 ─────────────────
 Allergens          feature: allergens
 HACCP              feature: haccp
+Audits             feature: audits
 Stock Manager      features: stock_overview + 6 granular stock features
 ─────────────────
 Configuration      feature: settings
@@ -808,6 +828,32 @@ To activate a new page route:
 1. Create the page component in `app/src/pages/`
 2. Import it in `App.tsx`
 3. Replace the `<Navigate>` placeholder with the new component
+
+### Global App Switches
+
+Two app-wide context switches live in `AppLayout` and persist across navigation. Both are user-controlled, scope what the rest of the app sees, and are consumed by both the frontend and the API. **All new pages and tools should respect them automatically by using the standard hooks (`useMarket`, `useApi`).**
+
+| Switch | Mounted in | File / Context | Storage | Server signal | Default |
+|---|---|---|---|---|---|
+| **Market** | `AppLayout` top-bar (right) | `app/src/components/MarketSwitcher.tsx` + `contexts/MarketContext.tsx` | `localStorage['cogs-market-country-id']` | Frontend filter only — widgets/pages call `useMarket().countryId` and pass it as a query param where relevant | `null` ("All markets") |
+| **Language** | `AppLayout` Sidebar footer | `app/src/components/LanguageSwitcher.tsx` + `contexts/LanguageContext.tsx` | `localStorage['mcogs-language']` + `mcogs_user_profiles.profile_json.preferred_language` | `X-Language: <code>` header injected by `useApi.ts` on every request → resolved server-side into `req.language` (chain: header → profile → first allowedCountry default → system default → `'en'`) | `'en'` |
+
+#### Market Switcher
+- **RBAC-aware:** dropdown only lists countries in the user's `allowedCountries`. If a stored selection falls outside scope after a role change, it auto-clears.
+- **Search:** built-in search input when ≥6 countries are visible.
+- **Frontend consumers:** Dashboard widgets marked `marketScoped: true` (KPIs, MarketMap, MarketPicker, MarketStats, MarketHeader, MenuTopItemsChart). Other pages opt in by calling `useMarket()`.
+- **Pepper integration:** market scope is enforced server-side via `req.user.allowedCountries` (RBAC), not via the dropdown selection — the AI sees the user's full permitted scope, not the currently focused market. See §14.
+
+#### Language Switcher
+- **Soft reload on change:** picking a new language reloads the SPA so cached query results re-run with the new `X-Language` header.
+- **Static UI strings:** also calls `i18n.changeLanguage(code)` so `react-i18next` swaps Sidebar nav labels and other `t()`-wrapped strings live (no reload needed for those).
+- **Backend coverage:** every translatable SELECT wraps the field in `COALESCE(translations->$lang->>'field', field)`. Helpers in `api/src/helpers/translate.js` (`tCol`, `getLangContext`, `setContentLanguage`). Response carries `Content-Language: <code>` and global middleware sets `Vary: X-Language` for CDN safety.
+- **Pepper integration:** `req.language` threads into `userCtxWithLang` and `executeTool()` applies COALESCE to all key read tools (list_ingredients, list_recipes, list_menus, etc.). System prompt also instructs Pepper to reply in the user's language. See §23.
+
+#### Co-existence rules
+- **No race condition:** Market changes are pure client-side state updates; Language changes trigger a soft reload. If both are toggled in quick succession, the language reload wins and the new market selection is preserved via localStorage.
+- **All-markets + non-English language** is fully supported — the global view shows all permitted markets with translated labels.
+- **Per-market default language** (`mcogs_countries.default_language_code`) is consulted only when the user has no explicit language preference; once they pick a language manually it overrides the country default.
 
 ### Page Pattern
 
@@ -1102,13 +1148,9 @@ The Dashboard is a **template-driven, user-customisable widget grid** (not a fix
 
 ### Global Market Switcher
 
-Top-bar dropdown in `AppLayout` (right side) — the central control for scoping the app to a single market. Provided by `MarketContext` (`app/src/contexts/MarketContext.tsx`).
+> **Full reference:** see §10 → "Global App Switches" for the consolidated description of all global switches (Market + Language), their storage keys, server signals, and Pepper integration.
 
-- **Persistence:** selected `countryId` saved to `localStorage['cogs-market-country-id']`, restored on page load
-- **RBAC-aware:** the dropdown only lists countries in the user's `allowedCountries`. If a stored selection falls outside scope after a role change, it auto-clears
-- **Search:** built-in search input in the dropdown when ≥6 countries
-- **"All markets" default** — `countryId === null` means global view
-- **Consumers:** Dashboard widgets (`useMarket().countryId`), `MarketMap`, `MarketPicker`, `MarketStats`, `MarketHeader`, `MenuTopItemsChart`. Other pages can opt in by calling `useMarket()`.
+Quick recap: top-bar dropdown in `AppLayout`, provided by `MarketContext` (`app/src/contexts/MarketContext.tsx`), persisted to `localStorage['cogs-market-country-id']`, RBAC-aware (filtered to `allowedCountries`), `null` = "All markets". Consumed by Dashboard widgets and any page that calls `useMarket()`.
 
 ### ✅ Allergen Matrix Page (`/allergens`)
 
@@ -1239,6 +1281,44 @@ Public password-protected page for external reviewers (no auth required).
 - Price changes logged and surfaced in Menu Engineer History tab
 - Comments posted via shared links appear in Menu Engineer Comments tab
 
+### ✅ QSC Audits (`/audits`, `/audits/templates`, `/audits/:id/run`, `/audits/:id/report`)
+
+Wingstop-style **Quality / Service / Cleanliness** audit tool. Two modes sharing the same question bank (150 items seeded from [`docs/wingstop_audit_tool_spec.md`](docs/wingstop_audit_tool_spec.md)):
+
+1. **External audit** — formal evaluation. Every scored question must be answered before finalize. Feeds the `is_repeat` flag on future audits.
+2. **Internal audit** — ad-hoc self-check. Optional template from 7 seeded (Line Check, Walk-in & Cold Hold, Personal Hygiene, Expiration Sweep, Cleaning & Sanitizer, Opening Checklist, Front-of-House). Partial completion allowed; unanswered items record as `not_observed`.
+
+**Scoring engine** ([`api/src/helpers/qsc-scoring.js`](api/src/helpers/qsc-scoring.js)):
+- 100-point deduct; per-question weight by risk level (5/3/1 for First/Second/Third Priority, 0 for Information Only).
+- Auto-unacceptable triggers — `A105`, `A127`, `A139`, `A141`, `A143`, `OF101`. Any NC on these forces overall rating to `Unacceptable` regardless of score.
+- Rating bands: `≥ 90 Acceptable`, `70–89.9 Needs Improvement`, `< 70 Unacceptable`.
+
+**Pages:**
+- [`AuditsPage.tsx`](app/src/pages/audits/AuditsPage.tsx) — dashboard: stat cards, filterable list, "Start audit" modal with audit-type + location + template pickers.
+- [`AuditRunnerPage.tsx`](app/src/pages/audits/AuditRunnerPage.tsx) — single-question runner. Sticky progress strip. Left sidebar groups questions by Department → Category with compliance dots. Main pane: risk chip, collapsible policy, 4 status buttons, repeat-finding checkbox (pre-flagged from previous external NC codes), optional temperature entry, product name, comment, photo upload, cross-ref chips.
+- [`AuditReportPage.tsx`](app/src/pages/audits/AuditReportPage.tsx) — summary banner (score + rating), department/category tables, critical findings, all NC items with photos + cross-refs, repeat findings, informational observations. "Export CSV" button + `window.print()` (print stylesheet included).
+- [`AuditTemplatesPage.tsx`](app/src/pages/audits/AuditTemplatesPage.tsx) — system templates + custom template CRUD. Editor lists all questions with dept/search filter and checkbox selection.
+
+**Pepper tools (7 read-only):**
+- `list_audits` — query audits by type/status/location.
+- `get_audit_report` — full scored report for one audit (by id or key).
+- `list_qsc_questions` — search the 150-question bank by department/category/risk/text.
+- `get_qsc_question` — full detail for a single code including policy text.
+- `list_audit_templates` — all templates with their code lists and question counts.
+- `get_audit_nc_trends` — aggregates most frequently failed codes across completed audits (with date/location/type filters). Useful for remediation priorities.
+- `get_location_audit_history` — chronological audit list for one location + running average score + rating distribution.
+
+**Photos** — use the existing `/api/upload` endpoint (S3 or local disk). Attach returned URL via `POST /api/qsc/audits/:id/responses/:code/photos`. Max 5 MB.
+
+**Repeat-finding detection** — when the runner loads, it calls `GET /qsc/locations/:id/last-external` to pre-flag NC codes from the location's previous external audit. Auditor confirms on the NC screen via the "Repeat finding" checkbox.
+
+**Out of scope for v1** (tracked in [BACK-1500](https://cogs.macaroonie.com)):
+- Offline-first service worker + IndexedDB queue (runner currently online-only).
+- Escalation emails for A139/A141/A143.
+- Branded Puppeteer PDF (current output is `window.print()`).
+- Per-location RBAC scope via `mcogs_user_locations` junction (users today filter by country via brand partners).
+- Admin UI for question-bank editing (endpoint exists; UI deferred).
+
 ---
 
 ## 13. Pages Remaining to Build
@@ -1274,10 +1354,11 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **File support:** CSV/text (injected as text block), PNG/JPEG/WEBP (injected as base64 vision block); max 5MB; PDF not supported
 - **Web search config:** `BRAVE_SEARCH_API_KEY` stored via `GET/PUT /api/ai-config` — if set, `search_web` tool uses Brave Search; otherwise DuckDuckGo instant answer fallback
 - **GitHub config:** `GITHUB_PAT` and `GITHUB_REPO` stored via `GET/PUT /api/ai-config` — enables 8 GitHub tools when set. Helper: `api/src/helpers/github.js`
-- **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`
+- **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`. Note: this is the user's **RBAC scope**, not the top-bar Market Switcher selection — Pepper sees everything the user is allowed to see, regardless of which market is currently focused in the UI. See §10 → "Global App Switches" for the relationship between the two.
+- **Language:** `req.language` is threaded into `userCtxWithLang` and applied as a COALESCE bind param on translatable SELECTs in tools like `list_ingredients`, `list_recipes`, `list_menus`, `list_categories`, `list_price_levels`, `list_price_quotes`. The system prompt also instructs Pepper to reply in the user's language. See §10 → "Global App Switches" and §23 for the resolution chain.
 - **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
 
-### Tool Count: 97
+### Tool Count: 104
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1447,9 +1528,13 @@ Three system roles are seeded automatically and cannot be deleted:
 
 Custom roles can be created in Configuration → Users & Roles and assigned any combination.
 
-### Features (21)
+### Features (23)
 
-`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake` · `bugs` · `backlog`
+`dashboard` · `inventory` · `recipes` · `menus` · `allergens` · `haccp` · `markets` · `categories` · `settings` · `import` · `ai_chat` · `users` · `stock_overview` · `stock_purchase_orders` · `stock_goods_in` · `stock_invoices` · `stock_waste` · `stock_transfers` · `stock_stocktake` · `bugs` · `backlog` · `audits` · `audits_admin`
+
+**QSC Audits feature gates:**
+- `audits` — Admin/Operator get `write` (create audits, edit templates, answer questions), Viewer gets `read` (view reports). Seeded in migration step 129.
+- `audits_admin` — Admin only gets `write`. Used to gate the question-bank editing endpoint (`PUT /api/qsc/questions/:code`). Non-admin attempts return 403.
 
 > **Note:** The original single `stock_manager` feature was replaced by 7 granular stock features to allow per-tab RBAC control within the Stock Manager module. `bugs` and `backlog` were added in migration step 107b.
 
@@ -1905,6 +1990,87 @@ Tab resets to Details whenever a different sales item is selected. Delete button
 **File:** `api/src/routes/invoices.js`
 
 ---
+
+## 16a. Testing — Test Suite & QA Strategy
+
+> **Full guide:** [`docs/TESTING.md`](./docs/TESTING.md). UAT scripts: [`docs/UAT/`](./docs/UAT/). Staging setup: [`docs/STAGING.md`](./docs/STAGING.md).
+
+The project has a phased automated test suite plus a manual UAT process. **Every new feature, bug fix, and route should land with at least one regression test.**
+
+### Layers in place
+
+| Layer | Tool | Location | When it runs |
+|---|---|---|---|
+| Unit (API) | Vitest | `api/test/unit/` | Every PR + push |
+| Integration (API + real Postgres) | Vitest + Supertest | `api/test/integration/` | Every PR + push |
+| Schema validation (Pepper tools) | Vitest | `api/test/schema/` | Every PR + push |
+| Unit/component (frontend) | Vitest + RTL | `app/test/unit/` | Every PR + push |
+| E2E | Playwright | `app/test/e2e/` | Push to main only |
+| Accessibility | axe-playwright | `app/test/e2e/a11y.spec.ts` | Push to main only |
+| Pepper evals | Custom runner | `api/test/evals/` | Manual / weekly cron (not in CI) |
+| Performance smoke | k6 | `api/test/perf/` | Manual / on demand |
+| UAT | Markdown scripts | `docs/UAT/` | Pre-release, by humans |
+
+### Critical files
+
+- `.github/workflows/test.yml` — CI test pipeline (typecheck, lint, api-test, app-test, e2e)
+- `.github/workflows/smoke-after-deploy.yml` — post-deploy smoke check on prod
+- `api/vitest.config.js` + `app/vitest.config.ts` — vitest configs with coverage thresholds
+- `app/playwright.config.ts` — Playwright with Auth0 storageState caching
+- `api/scripts/test-setup.js` — creates `mcogs_test` DB + runs migration
+- `api/test/setup.js` — vitest global setup (env vars, DB probe, pool teardown)
+- `api/test/helpers/db.js` — `withTx()` for transaction-rolled isolation
+- `api/test/helpers/factories.js` — `makeIngredient()`, `makeRecipe()`, etc.
+- `api/test/helpers/auth.js` — `bypassAuthMiddleware()` for Supertest
+
+### Test database
+
+- Separate database `mcogs_test` (default, override via `TEST_DB_*` env vars)
+- One-time setup: `cd api && npm run test:setup`
+- Per-test isolation via `BEGIN ... ROLLBACK` (`withTx()` helper) — 100x faster than truncating
+- Migration runs once before the suite; migration-idempotency test verifies re-running is safe
+
+### Auth in tests
+
+- **API tests**: `bypassAuthMiddleware()` injects `req.user` directly. Refuses to run unless `NODE_ENV=test`
+- **E2E tests**: `auth.setup.ts` logs in once via real Auth0 + saves storageState; all other specs reuse it
+
+### Coverage thresholds (current baseline)
+
+- API: `lines: 25%, functions: 25%, branches: 20%`
+- Frontend: `lines: 10%`
+
+**Rule:** every meaningful test addition should bump the threshold by 1–2% so we never regress. Threshold drops are blocked by CI.
+
+### Required test additions (the policy)
+
+| Trigger | Required new tests |
+|---|---|
+| Bug fix | At least one regression test in the same PR |
+| New API route | Unit test + integration test |
+| New page | At least one Playwright E2E happy-path |
+| New Pepper tool | Schema test entry + add to `api/test/evals/prompts.json` |
+| New migration step | Update expected count in `migration-idempotent.test.js` |
+| New shared helper | Unit test |
+| Security-sensitive change (RBAC, auth, token validation) | Integration test of the gate |
+
+### Staging environment (NEW REQUIREMENT)
+
+**Currently missing — must be set up before UAT can run.** See [`docs/STAGING.md`](./docs/STAGING.md) for the step-by-step Lightsail provision + DNS + Auth0 + auto-deploy guide. Cost: $10/mo. Unblocks: pre-deploy UAT, safe destructive testing, schema validation, Pepper experimentation, demo environment.
+
+### UAT process
+
+7 scripts in `docs/UAT/`, ~3 hours total per full pass. Run by 2 independent testers against staging before each major release. Severity scale: P1 (blocks release), P2 (mitigation required), P3 (capture for next sprint). All issues land in `mcogs_bugs` or `mcogs_backlog`.
+
+### Cost & cadence
+
+| Activity | Cost | Cadence |
+|---|---|---|
+| Unit + integration suite | Free (CI minutes only) | Every PR |
+| E2E in CI | Free, ~5 min | Every push to main |
+| Pepper evals | ~$0.10/run | Weekly cron (Sundays 03:00 UTC) |
+| k6 perf smoke | Free | Pre-release manual |
+| Full UAT pass | 3 hr × 2 testers | Pre-release |
 
 ## 17. Critical Gotchas & Lessons Learned
 
@@ -2500,6 +2666,8 @@ System → Audit Log (admin-only, gated by `settings:read`). Features:
 
 ## 23. Multi-Language Support (i18n)
 
+> **See also:** §10 → "Global App Switches" for the consolidated user-facing description of the Language Switcher (location, storage, server signal, soft-reload behaviour) and how it co-exists with the Market Switcher. This section covers the i18n implementation details: storage schema, AI translation cron, COALESCE query pattern, helpers, and Pepper integration.
+
 **Status:** Phases 1–3 shipped + i18next skeleton for static UI strings. Ingredients was the original COALESCE pilot; **all core entity routes now apply COALESCE** (recipes, menus, categories, vendors, sales-items, price-levels, modifier-groups). **TranslationEditor** is wired into every major edit form. **Pepper read tools** respect `userCtx.language`. Design: [`docs/LANGUAGE_IMPLEMENTATION_PLAN.md`](./docs/LANGUAGE_IMPLEMENTATION_PLAN.md).
 
 ### Storage
@@ -2624,7 +2792,9 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5, Pepper keyboard shortcut Ctrl+Shift+P, user message text colour fix in renderMd, test data clearData fixed (30 missing tables added), EOS protocol documented. DB: 78→82 tables, 107→120 migration steps, tools: 92→97.)*
+*README last updated: April 2026 (session: QSC Audit Tool v1 — all phases + full docs + expanded Pepper toolkit. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 7 new Pepper tools (list_audits, get_audit_report, list_qsc_questions, get_qsc_question, list_audit_templates, get_audit_nc_trends, get_location_audit_history). 2 new RBAC features (audits, audits_admin) + global feature-flag switch. 11 QSC FAQ entries seeded. User guide section added. Migration steps 124-131. DB: 82→87 tables, 123→131 migration steps, tools: 97→104, features: 21→23.)*
+
+*README previous session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5.*
 
 *README previous session: Full documentation audit — updated all 22 sections of CLAUDE.md to reflect current codebase state. Added 27 missing DB tables (78 total), 25+ missing API routes, 6 missing pages (Configuration, System, MediaLibrary, BugsBacklog, PosTester, SharedMenu). Updated repository structure with 20+ missing files. Added config store architecture, db-config API, sidebar navigation. Updated RBAC features 19→21 (bugs, backlog). Updated router structure with legacy redirects.*
 

@@ -1,0 +1,156 @@
+# Test pipeline.
+#
+# Runs on every push and PR to main. Independent of deploy.yml so that
+# test results are visible BEFORE the deploy job decides whether to ship.
+#
+# Jobs (run in parallel):
+#   - typecheck   — tsc --noEmit on the frontend (catches type drift)
+#   - lint        — ESLint on the frontend
+#   - api-test    — vitest unit + integration against a real Postgres
+#   - app-test    — vitest component tests
+#   - e2e         — Playwright against the deployed staging URL (only on push to main)
+#
+# IMPORTANT: this workflow does NOT block deploy.yml. Once the suite is
+# proven stable, change deploy.yml to `needs: [api-test, app-test]` so
+# failed tests block production deploys.
+
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    name: Frontend typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci || npm install
+      - working-directory: app
+        run: npm run typecheck
+
+  lint:
+    name: Frontend lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci || npm install
+      - working-directory: app
+        # Lint must not block initially — many existing files may have warnings.
+        # Switch to fail-on-error once the codebase is clean.
+        run: npm run lint || true
+
+  api-test:
+    name: API tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DB_HOST: localhost
+      TEST_DB_PORT: '5432'
+      TEST_DB_NAME: mcogs_test
+      TEST_DB_USER: postgres
+      TEST_DB_PASSWORD: postgres
+      CONFIG_STORE_SECRET: ${{ secrets.TEST_CONFIG_STORE_SECRET || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - working-directory: api
+        run: npm ci || npm install
+      - working-directory: api
+        run: npm run test:setup
+      - working-directory: api
+        run: npm test -- --reporter=verbose
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: api/coverage
+          retention-days: 7
+
+  app-test:
+    name: Frontend unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci || npm install
+      - working-directory: app
+        run: npm test -- --reporter=verbose
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-coverage
+          path: app/coverage
+          retention-days: 7
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    # Only run E2E on push to main, not on every PR (cost-saving).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [api-test, app-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci || npm install
+      - working-directory: app
+        run: npx playwright install --with-deps chromium
+      - working-directory: app
+        env:
+          # Run against staging if configured, else fall back to prod (read-only smoke).
+          PLAYWRIGHT_BASE_URL: ${{ secrets.PLAYWRIGHT_BASE_URL || 'https://cogs.macaroonie.com' }}
+          E2E_TEST_USER_EMAIL:    ${{ secrets.E2E_TEST_USER_EMAIL }}
+          E2E_TEST_USER_PASSWORD: ${{ secrets.E2E_TEST_USER_PASSWORD }}
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: app/playwright-report
+          retention-days: 14

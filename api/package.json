@@ -7,7 +7,14 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "migrate": "node scripts/migrate.js",
-    "migrate:data": "node scripts/import-data.js mcogs-export.json"
+    "migrate:data": "node scripts/import-data.js mcogs-export.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:setup": "node scripts/test-setup.js",
+    "test:coverage": "vitest run --coverage",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:schema": "vitest run test/schema"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
@@ -29,6 +36,9 @@
   },
   "devDependencies": {
     "mysql2": "^3.10.0",
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "vitest": "^2.1.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "supertest": "^7.0.0"
   }
 }
