@@ -108,7 +108,9 @@ describe('COGS engine — integration', () => {
          WHERE pv.ingredient_id = $1 AND pv.country_id = $2`,
         [ing.id, country.id]
       );
-      expect(rows[0].purchase_price).toBe('5.00');  // pg returns NUMERIC as string
+      // pg returns NUMERIC as a string; the column is NUMERIC(18,4) so the
+      // raw value is "5.0000". Compare numerically to stay precision-agnostic.
+      expect(Number(rows[0].purchase_price)).toBe(5);
     });
   });
 
