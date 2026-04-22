@@ -82,7 +82,13 @@
       "PowerShell(node --check test/helpers/factories.js 2>&1)",
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://obscurekitty.uk.auth0.com/.well-known/openid-configuration\" -Method GET -UseBasicParsing -TimeoutSec 10; Write-Host \"Status: $\\($r.StatusCode\\)\"; Write-Host \"Length: $\\($r.Content.Length\\) bytes\"; if \\($r.StatusCode -eq 200\\) { Write-Host \"TENANT IS REACHABLE\" } } catch { Write-Host \"ERROR:\"; Write-Host $_.Exception.Message; Write-Host \"StatusCode: $\\($_.Exception.Response.StatusCode\\)\" })",
       "PowerShell(node --check api/test/helpers/factories.js)",
-      "PowerShell(node --check api/test/integration/stock-movements.test.js)"
+      "PowerShell(node --check api/test/integration/stock-movements.test.js)",
+      "PowerShell(node --check api/test/integration/cogs-engine.test.js)",
+      "PowerShell($m = Get-Content 'api/scripts/migrate.js'; Write-Host \"Last 5 Step comments:\"; Select-String -InputObject $m -Pattern '^  // ── Step ' -AllMatches | Select-Object -Last 5 | ForEach-Object { $_.Line.Trim\\(\\) }; Write-Host \"\"; Write-Host \"End-of-array marker line numbers:\"; \\(Select-String -InputObject $m -Pattern '^\\\\];$' -AllMatches\\).LineNumber)",
+      "PowerShell(node --check api/src/routes/price-levels.js)",
+      "PowerShell(node --check api/src/routes/country-price-levels.js)",
+      "PowerShell(*)",
+      "Bash(*)"
     ]
   },
   "disableAllHooks": true,

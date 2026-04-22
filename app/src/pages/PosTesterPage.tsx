@@ -4,7 +4,7 @@ import { useApi } from '../hooks/useApi'
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
 
-interface Menu   { id: number; name: string; country_name?: string }
+interface Menu   { id: number; name: string; country_id?: number; country_name?: string }
 interface PLevel { id: number; name: string }
 
 interface CogsItem {
@@ -173,6 +173,28 @@ export default function PosTesterPage() {
   }, [api])
 
   useEffect(() => { loadInit() }, [loadInit])
+
+  // Refilter price levels by the selected menu's country so disabled levels
+  // never appear in the POS selector. See Configuration → Price Levels for
+  // the per-country enablement matrix.
+  const selectedMenuCountryId = menus.find(m => m.id === selectedMenuId)?.country_id ?? null
+  useEffect(() => {
+    if (selectedMenuCountryId == null) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const scoped = await api.get(`/price-levels?country_id=${selectedMenuCountryId}`) as PLevel[] | null
+        if (cancelled) return
+        setLevels(scoped || [])
+        // If the currently-selected level was disabled in this country, drop it.
+        if (scoped && selectedLevelId && !scoped.some(l => l.id === selectedLevelId)) {
+          setSelectedLevelId(scoped[0]?.id ?? null)
+        }
+      } catch { /* non-fatal */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMenuCountryId, api])
 
   /* ── load menu items when menu/level change ────────────────────────────────── */
 

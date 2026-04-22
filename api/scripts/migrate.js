@@ -3237,6 +3237,32 @@ const migrations = [
      'Audits', '["pepper","ai","tools","query","trends"]'::jsonb, 110)
     ON CONFLICT DO NOTHING;
   END $$`,
+
+  // ── Step 132: Per-country price-level enablement ──────────────────────────
+  // Lets admins disable specific price levels for specific countries. Every
+  // component that renders price-level columns (Menus, Menu Engineer, Shared
+  // pages, POS tester, dashboard charts) respects this by filtering
+  // /price-levels?country_id=X. Missing junction row defaults to enabled, so
+  // pre-feature behaviour is preserved on upgrade.
+  `CREATE TABLE IF NOT EXISTS mcogs_country_price_levels (
+     id              SERIAL PRIMARY KEY,
+     country_id      INTEGER NOT NULL REFERENCES mcogs_countries(id) ON DELETE CASCADE,
+     price_level_id  INTEGER NOT NULL REFERENCES mcogs_price_levels(id) ON DELETE CASCADE,
+     is_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     UNIQUE (country_id, price_level_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_cpl_country ON mcogs_country_price_levels(country_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_cpl_level   ON mcogs_country_price_levels(price_level_id)`,
+
+  // Seed: every existing (country, price_level) pair is enabled by default so
+  // the first deploy doesn't change any visible behaviour.
+  `INSERT INTO mcogs_country_price_levels (country_id, price_level_id, is_enabled)
+   SELECT c.id, p.id, TRUE
+   FROM   mcogs_countries c
+   CROSS JOIN mcogs_price_levels p
+   ON CONFLICT (country_id, price_level_id) DO NOTHING`,
 ];
 
 async function runMigrations(pool) {

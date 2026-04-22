@@ -53,6 +53,7 @@ router.use('/roles',             require('./roles'));
 router.use('/settings',           ...can('settings', 'read'),    write('settings'),    require('./settings'));
 router.use('/units',              ...can('settings', 'read'),    write('settings'),    require('./units'));
 router.use('/price-levels',       ...can('settings', 'read'),    write('settings'),    require('./price-levels'));
+router.use('/country-price-levels', ...can('settings', 'read'),  write('settings'),    require('./country-price-levels'));
 router.use('/sync-exchange-rates',...can('settings', 'write'),                         require('./sync-exchange-rates'));
 
 // ── Markets ────────────────────────────────────────────────────────────────────

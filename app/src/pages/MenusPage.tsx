@@ -291,6 +291,26 @@ export default function MenusPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Refetch price levels filtered to the selected menu's country whenever the
+  // selection changes. Admins can disable specific price levels per country
+  // (Configuration → Price Levels → per-country matrix); this pulls only the
+  // enabled set so downstream render + save paths never see hidden levels.
+  const selectedMenuCountryId = menus.find(m => m.id === selectedMenuId)?.country_id ?? null
+  useEffect(() => {
+    if (selectedMenuCountryId == null) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const scoped = await api.get(`/price-levels?country_id=${selectedMenuCountryId}`) as PriceLevel[] | null
+        if (cancelled) return
+        setPriceLevels(scoped || [])
+      } catch {
+        // non-fatal — fall back to whatever is currently loaded
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selectedMenuCountryId, api])
+
   // ── Auto-open menu from ?menu=<id> URL param (e.g. linked from Recipes page) ─
   useEffect(() => {
     if (loading) return

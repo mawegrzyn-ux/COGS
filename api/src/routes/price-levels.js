@@ -4,16 +4,39 @@ const { logAudit, diffFields } = require('../helpers/audit');
 const { setContentLanguage } = require('../helpers/translate');
 
 // GET /api/price-levels
+// Query params:
+//   country_id — if present, filters to price levels enabled for that country
+//                (see mcogs_country_price_levels). Missing junction row is
+//                treated as enabled, so pre-feature behaviour is preserved
+//                for countries whose matrix hasn't been curated yet.
 router.get('/', async (req, res, next) => {
   try {
     const lang = req.language && req.language !== 'en' ? req.language : null;
-    const pName = lang ? `COALESCE(p.translations->$1->>'name', p.name)` : `p.name`;
-    const { rows } = await pool.query(
-      `SELECT p.id, ${pName} AS name, p.description, p.is_default, p.translations,
-              p.created_at, p.updated_at
-       FROM mcogs_price_levels p ORDER BY name`,
-      lang ? [lang] : []
-    );
+    const countryId = req.query.country_id ? parseInt(req.query.country_id, 10) : null;
+
+    const params = [];
+    let pName = `p.name`;
+    if (lang) { params.push(lang); pName = `COALESCE(p.translations->$${params.length}->>'name', p.name)`; }
+
+    // When country_id is supplied, LEFT JOIN mcogs_country_price_levels and
+    // drop rows that are explicitly disabled. Missing row -> COALESCE to TRUE.
+    let sql;
+    if (countryId) {
+      params.push(countryId);
+      sql = `SELECT p.id, ${pName} AS name, p.description, p.is_default, p.translations,
+                    p.created_at, p.updated_at
+             FROM   mcogs_price_levels p
+             LEFT   JOIN mcogs_country_price_levels cpl
+                    ON cpl.price_level_id = p.id AND cpl.country_id = $${params.length}
+             WHERE  COALESCE(cpl.is_enabled, TRUE) = TRUE
+             ORDER  BY name`;
+    } else {
+      sql = `SELECT p.id, ${pName} AS name, p.description, p.is_default, p.translations,
+                    p.created_at, p.updated_at
+             FROM   mcogs_price_levels p
+             ORDER  BY name`;
+    }
+    const { rows } = await pool.query(sql, params);
     setContentLanguage(res, req);
     res.json(rows);
   } catch (err) { next(err); }

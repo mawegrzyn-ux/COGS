@@ -470,8 +470,138 @@ function PriceLevelsTab() {
         />
       )}
 
+      {/* Per-country enablement matrix — lets admins hide specific price levels in specific markets */}
+      <div className="mt-10">
+        <CountryPriceLevelsMatrix />
+      </div>
+
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </>
+  )
+}
+
+// ── Country × Price-level enablement matrix ──────────────────────────────────
+// Lets an admin disable a specific price level for a specific country. Every
+// component that renders a country-scoped price list (Menus, Menu Engineer,
+// Shared pages, POS tester, dashboard charts) respects this by calling
+// GET /price-levels?country_id=X.
+
+type CplRow = {
+  country_id:       number
+  country_name:     string
+  price_level_id:   number
+  price_level_name: string
+  is_enabled:       boolean
+}
+
+function CountryPriceLevelsMatrix() {
+  const api = useApi()
+  const [rows, setRows]       = useState<CplRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [toast, setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true)
+      const data = await api.get('/country-price-levels') as CplRow[] | null
+      setRows(data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  async function toggle(countryId: number, levelId: number, next: boolean) {
+    const key = `${countryId}-${levelId}`
+    setSavingKey(key)
+    // Optimistic update — revert if the server rejects.
+    const prev = rows
+    setRows(rows.map(r =>
+      r.country_id === countryId && r.price_level_id === levelId
+        ? { ...r, is_enabled: next }
+        : r
+    ))
+    try {
+      await api.put(`/country-price-levels/${countryId}/${levelId}`, { is_enabled: next })
+    } catch (err: any) {
+      setRows(prev)
+      setToast({ message: err?.message || 'Failed to update', type: 'error' })
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
+  if (loading) return <Spinner />
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-sm text-text-3 p-4 bg-surface-2 rounded border border-border">
+        Add a country and a price level first, then come back to toggle enablement.
+      </div>
+    )
+  }
+
+  // Pivot: unique countries down the rows, unique price levels across the columns.
+  const countries = Array.from(
+    new Map(rows.map(r => [r.country_id, { id: r.country_id, name: r.country_name }])).values()
+  )
+  const levels = Array.from(
+    new Map(rows.map(r => [r.price_level_id, { id: r.price_level_id, name: r.price_level_name }])).values()
+  )
+  const byKey = new Map(rows.map(r => [`${r.country_id}-${r.price_level_id}`, r.is_enabled]))
+
+  return (
+    <div>
+      <div className="mb-3">
+        <h3 className="text-sm font-bold text-text-1">Per-country enablement</h3>
+        <p className="text-xs text-text-3 mt-0.5">
+          Uncheck a box to hide that price level from menus, scenarios and POS in the selected country.
+          Existing prices are preserved — disabling simply hides the column until you re-enable it.
+        </p>
+      </div>
+
+      <div className="bg-surface rounded-lg border border-border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-200 border-b border-gray-300">
+              <th className="text-left px-4 py-2.5 font-semibold text-text-2 sticky left-0 bg-gray-200">Country</th>
+              {levels.map(l => (
+                <th key={l.id} className="text-center px-4 py-2.5 font-semibold text-text-2 whitespace-nowrap">{l.name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {countries.map(c => (
+              <tr key={c.id} className="border-b border-border last:border-0 hover:bg-surface-2">
+                <td className="px-4 py-2 font-medium text-text-1 sticky left-0 bg-surface">{c.name}</td>
+                {levels.map(l => {
+                  const key = `${c.id}-${l.id}`
+                  const checked = byKey.get(key) ?? true
+                  const saving = savingKey === key
+                  return (
+                    <td key={l.id} className="px-4 py-2 text-center">
+                      <label className={`inline-flex items-center justify-center ${saving ? 'opacity-50' : 'cursor-pointer'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving}
+                          onChange={e => toggle(c.id, l.id, e.target.checked)}
+                          className="w-4 h-4 accent-accent"
+                        />
+                      </label>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
   )
 }
 

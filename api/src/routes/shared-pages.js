@@ -879,7 +879,17 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
       });
     }
 
-    const { rows: levels } = await pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`);
+    // Scope to the menu's country so levels disabled per-country (see
+    // mcogs_country_price_levels) don't leak into the public shared view.
+    const { rows: levels } = await pool.query(
+      `SELECT p.*
+       FROM   mcogs_price_levels p
+       LEFT   JOIN mcogs_country_price_levels cpl
+              ON cpl.price_level_id = p.id AND cpl.country_id = $1
+       WHERE  COALESCE(cpl.is_enabled, TRUE) = TRUE
+       ORDER  BY name`,
+      [countryId]
+    );
 
     // All level prices in one query (from menu-sales-item prices table)
     const msiIds = items.map(i => i.id);

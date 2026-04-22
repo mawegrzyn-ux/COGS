@@ -47,6 +47,28 @@ export default function MenuTopItemsChart() {
   // Per-menu price level override (for users who want to compare levels)
   const [levelByMenu, setLevelByMenu] = useState<Record<number, number>>({})
 
+  // Load the per-country enablement matrix so we can filter each menu's
+  // level dropdown. Map key = `${country_id}-${price_level_id}`. Missing row
+  // defaults to enabled (preserves pre-feature behaviour).
+  const [cplMatrix, setCplMatrix] = useState<Map<string, boolean>>(new Map())
+  useEffect(() => {
+    let cancelled = false
+    api.get('/country-price-levels')
+      .then((rows: any) => {
+        if (cancelled) return
+        const m = new Map<string, boolean>()
+        ;(rows || []).forEach((r: any) => m.set(`${r.country_id}-${r.price_level_id}`, !!r.is_enabled))
+        setCplMatrix(m)
+      })
+      .catch(() => { /* non-fatal; all levels stay visible */ })
+    return () => { cancelled = true }
+  }, [api])
+
+  function levelsForMenu(menuCountryId: number | null | undefined) {
+    if (menuCountryId == null || cplMatrix.size === 0) return priceLevels
+    return priceLevels.filter(p => cplMatrix.get(`${menuCountryId}-${p.id}`) !== false)
+  }
+
   // Fetch cogs for each scoped menu
   useEffect(() => {
     if (!defaultLevelId) return
@@ -130,17 +152,21 @@ export default function MenuTopItemsChart() {
                     <span>{menu.name}</span>
                     <span className="text-xs text-text-3">· {menu.country_name}</span>
                   </div>
-                  {priceLevels.length > 1 && (
-                    <select
-                      value={levelId ?? ''}
-                      onChange={e => setLevelByMenu(prev => ({ ...prev, [menu.id]: Number(e.target.value) }))}
-                      className="text-xs border border-border rounded px-1.5 py-0.5 bg-surface text-text-2"
-                    >
-                      {priceLevels.map(p => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                  )}
+                  {(() => {
+                    const visibleLevels = levelsForMenu(menu.country_id)
+                    if (visibleLevels.length <= 1) return null
+                    return (
+                      <select
+                        value={levelId ?? ''}
+                        onChange={e => setLevelByMenu(prev => ({ ...prev, [menu.id]: Number(e.target.value) }))}
+                        className="text-xs border border-border rounded px-1.5 py-0.5 bg-surface text-text-2"
+                      >
+                        {visibleLevels.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    )
+                  })()}
                 </div>
 
                 {/* Chart */}
