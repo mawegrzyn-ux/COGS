@@ -688,6 +688,133 @@ The Report tab generates a summary of all equipment records, temperature logs, a
 
 ---
 
+## QSC Audits
+
+The Audits page at `/audits` is a **Quality, Service, Cleanliness audit tool** built around the Wingstop QSC framework. It supports two modes sharing the same 150-question bank:
+
+- **External audit** — a formal scheduled evaluation (e.g. quarterly, by a third-party assessor). Every scored question must be answered before the audit can be finalized. Produces the audit of record.
+- **Internal audit** — an ad-hoc self-check a manager or GM runs any time. Can use a named template (e.g. "Line Check", "Walk-in & Cold Hold") or the full question bank. Partial completion is allowed — unanswered items record as *Not Observed*.
+
+Internal audits never replace the external score of record and are tagged with an `Internal` badge throughout the UI.
+
+### Audits Dashboard
+
+- **Stat cards** — In progress · Completed · Auto-unacceptable · Average score (across completed).
+- **Filters** — type (external/internal) and status (in progress/completed).
+- **Audit list** — key (AUD-1001+), type, location, auditor, start/complete dates, score, rating. Click **Resume** to continue an in-progress audit or **Report** to view a finalized one.
+- **+ Start audit** (top right, requires `audits:write`) — opens the start modal.
+
+### Starting an Audit
+
+In the start modal:
+
+1. **Audit type** — External (formal) or Internal (ad-hoc).
+2. **Location** — required. Every audit is bound to exactly one location.
+3. **Template** (internal only) — optional. Pick one of the 7 seeded system templates (Line Check Peak, Walk-in & Cold Hold, Personal Hygiene, Expiration Date Sweep, Cleaning & Sanitizer, Opening Checklist, Front-of-House) or leave empty for the full question bank.
+4. **Auditor name** — free text for external evaluators who aren't COGS users (e.g. "Steritech — Jane Doe").
+
+Clicking **Start audit** creates an `AUD-xxxx` key and jumps straight into the runner.
+
+### Running an Audit
+
+The runner opens at `/audits/:id/run` and has two panes:
+
+- **Left sidebar (question nav)** — all in-scope questions grouped by Department → Category. Each question shows a coloured dot indicating its response state (green = compliant, red = not compliant, amber = not observed, slate = N/A, blue = informational, grey = unanswered). Click any row to jump there.
+- **Main pane (active question)** — everything for the current question.
+
+**Top of the main pane:**
+
+- **Code** (e.g. `A101`) and **Risk level chip** — coloured by priority: red (Critical First Priority), orange (First Priority), amber (Second Priority), slate (Third Priority), blue (Information Only).
+- **Points** available, and **repeat points** (deducted if NC on the previous external audit at this location).
+- **AUTO-UNACCEPT** badge if this question is one of the 6 auto-unacceptable triggers (A105 walk-in cooler, A127 sanitizer, A139 sewage, A141 potable water, A143 rodents/roaches, OF101).
+- **Photo required** badge if the policy text mandates a photo.
+
+**Policy text** — collapsible (click "▸ Show policy / scoring guidance"). Contains the verbatim Wingstop scoring guidance for this question.
+
+**Status buttons** — Compliant · Not Compliant · Not Observed · N/A. One click saves instantly (auto-save).
+
+**When you mark Not Compliant:**
+- A **Repeat finding** checkbox appears. If the location had this same code NC on the previous external audit, the checkbox is pre-suggested with a small hint.
+- **Comment** becomes strongly recommended (required at finalize time for NC items).
+- Photos are encouraged; required for questions with the photo badge.
+
+**Temperature entry** — shown automatically for ~23 temperature-related questions. Enter the value and unit (°F/°C); validation ranges come from the policy text.
+
+**Product name** — free text for cold-hold and expiration questions (e.g. "Classic chicken", "Ranch dip"). Keeps non-compliance comments scoped to a specific product.
+
+**Photos** — click **+ Attach photo** to upload a 5 MB max image. Uses the standard media upload (local disk or S3 depending on config). Hover a photo thumbnail to show the delete × button.
+
+**Cross-references** — when a question's policy mentions another code, the code appears as a tappable chip at the bottom. Click to jump to that question.
+
+**Prev / Next** — navigate sequentially through the question list.
+
+**Notes** — top-right button opens an overall notes modal for the audit (not tied to a specific question).
+
+**Cancel** — top-right button. Responses are kept but the audit is marked cancelled and cannot be resumed.
+
+**Finalize** (top-right primary) — only enabled for external audits when all scored questions are answered. On click:
+- The scoring engine runs: 100 points − all deductions.
+- Auto-unacceptable check: any NC on a trigger code forces the overall rating to `Unacceptable`.
+- Rating bands: ≥ 90 → **Acceptable**, 70–89.9 → **Needs Improvement**, < 70 → **Unacceptable**.
+- The audit is locked (status → completed, `completed_at` stamped). Responses become read-only. Redirects to the report view.
+
+### Audit Report
+
+The report page at `/audits/:id/report` renders the scored report and exports:
+
+- **Summary banner** — overall score (to 1 decimal place), rating badge (green/amber/red), start/complete timestamps. Auto-unacceptable callout appears prominently if triggered. Auditor notes block below.
+- **Critical findings** — Critical First Priority items that were NC, displayed first with full detail.
+- **Summary by department** — points available, deducted, NC count, compliant count, Not Observed, N/A per department (Food Safety / Brand Standards).
+- **Summary by category** — same breakdown per category (Temperature Control, Food Handling, etc.).
+- **All non-compliant items** — every NC with photos, comment, points deducted, risk chip, and cross-references, grouped visually.
+- **Repeat findings** — items that were NC on both the previous external audit and this one, highlighted in amber.
+- **Informational observations** — items recorded against the 10 Information-Only codes (no points impact).
+
+**Export options:**
+
+- **Export CSV** — one row per response, ready for spreadsheet analysis or ingestion into another tool.
+- **Print / PDF** — uses `window.print()` with a custom stylesheet (clean single-column layout, no nav/header chrome). Use your browser's print dialog to save as PDF.
+
+### Templates
+
+Accessible via `/audits/templates` (or **Templates** button in the Audits header):
+
+- **System templates** — 7 shipped with the product, marked with a `System` badge. These cannot be deleted; only developers can edit them.
+- **Custom templates** — create your own. Admin/Operator can create, edit, and delete custom templates.
+- **Editor** — filterable question picker with department dropdown and search box. Check questions to include them; selected count shown in the header.
+
+### RBAC and Global Switch
+
+- **Feature**: `audits` — Admin/Operator get `write`, Viewer gets `read`.
+- **Feature**: `audits_admin` — Admin only (used to gate question-bank editing).
+- **Global switch**: Configuration → Global Config → Feature Toggles → **QSC Audits**. Turn off to hide the entire module from everyone; `/audits/*` routes redirect to the dashboard.
+
+### Auditing Pepper
+
+Pepper can query audit data through these tools:
+
+- **list_audits** — filter by type/status/location, returns a concise list.
+- **get_audit_report** — full scored report for a specific audit (by id or AUD-xxxx key).
+- **list_qsc_questions** — query the question bank by department / category / risk level / text search.
+- **get_qsc_question** — full details for a single code including policy text and cross-references.
+- **list_audit_templates** — all templates with their code lists.
+- **get_audit_nc_trends** — aggregates the most frequently failed codes across all (or filtered) completed audits — useful for remediation priorities.
+- **get_location_audit_history** — timeline of audits for one location (audit list + running average score).
+
+Ask Pepper things like "How did audit AUD-1002 score?", "Which QSC codes fail most often in completed audits?", "Show me all Critical First Priority questions", or "What's the audit history for our London Victoria location?".
+
+### Known Limitations (v1)
+
+Tracked in `BACK-1500` for v2:
+
+- Runner is online-only (no offline service worker yet). If wifi drops mid-audit, unsaved fields may not persist.
+- PDF export uses `window.print()`. For branded PDFs the v2 plan adds server-side Puppeteer rendering.
+- Escalation emails for imminent health hazards (A139 sewage, A141 potable water, A143 rodents) are not yet wired up — the events are logged now, email integration comes in v2.
+- Question-bank editing is admin-gated at the API level but has no dedicated UI yet — use `PUT /api/qsc/questions/:code` directly for ad-hoc fixes.
+- Per-location RBAC scope (restricting which users see which locations) isn't implemented — today users filter by country via brand partners, not per-location.
+
+---
+
 ## Import
 
 The Import page at `/import` provides an AI-powered data import wizard that accepts spreadsheet files and extracts structured data into COGS Manager. Use it to bulk-load ingredients, vendors, price quotes, recipes, and menus from existing spreadsheets.
