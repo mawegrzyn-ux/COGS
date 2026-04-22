@@ -74,7 +74,12 @@
       "PowerShell(Set-Location:*)",
       "PowerShell(pwd:*)",
       "PowerShell(ls:*)",
-      "PowerShell(cat:*)"
+      "PowerShell(cat:*)",
+      "PowerShell(Test-Path 'app/package-lock.json'; \\(Get-Item 'app/package-lock.json' -ErrorAction SilentlyContinue\\).Length)",
+      "PowerShell(Set-Location api; if \\(-not \\(Test-Path 'node_modules'\\)\\) { Write-Host \"installing api deps...\"; npm install 2>&1 | Select-Object -Last 3 } else { Write-Host \"api node_modules present\" })",
+      "PowerShell(npm run test:schema 2>&1)",
+      "PowerShell(node --check test/schema/tool-schemas.test.js 2>&1)",
+      "PowerShell(node --check test/helpers/factories.js 2>&1)"
     ]
   },
   "disableAllHooks": true,

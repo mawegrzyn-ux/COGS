@@ -53,13 +53,17 @@ describe('Pepper tool schemas', () => {
       expect(tool.input_schema.type).toBe('object');
       expect(tool.input_schema.properties).toBeDefined();
       expect(typeof tool.input_schema.properties).toBe('object');
-      expect(Array.isArray(tool.input_schema.required)).toBe(true);
-      // Every `required` entry must exist in `properties`
-      for (const req of tool.input_schema.required) {
-        expect(
-          Object.prototype.hasOwnProperty.call(tool.input_schema.properties, req),
-          `tool "${tool.name}": required field "${req}" not in properties`
-        ).toBe(true);
+      // `required` is optional in the Anthropic schema — tools with no required
+      // fields may omit it entirely. When present, it must be an array of
+      // strings that all reference existing properties.
+      if (tool.input_schema.required !== undefined) {
+        expect(Array.isArray(tool.input_schema.required)).toBe(true);
+        for (const req of tool.input_schema.required) {
+          expect(
+            Object.prototype.hasOwnProperty.call(tool.input_schema.properties, req),
+            `tool "${tool.name}": required field "${req}" not in properties`
+          ).toBe(true);
+        }
       }
     }
   );
@@ -71,14 +75,22 @@ describe('Pepper tool schemas', () => {
   });
 
   it('every property has a type', () => {
+    const VALID = ['string', 'integer', 'number', 'boolean', 'array', 'object', 'null'];
     for (const tool of TOOLS) {
       for (const [propName, propDef] of Object.entries(tool.input_schema.properties)) {
         expect(
           propDef.type,
           `tool "${tool.name}".${propName}: missing type`
         ).toBeDefined();
-        expect(['string', 'integer', 'number', 'boolean', 'array', 'object'])
-          .toContain(propDef.type);
+        // JSON Schema allows either a single type string or an array of types
+        // for nullable fields (e.g. ['integer', 'null']). Accept both forms.
+        const types = Array.isArray(propDef.type) ? propDef.type : [propDef.type];
+        for (const t of types) {
+          expect(
+            VALID,
+            `tool "${tool.name}".${propName}: invalid type "${t}"`
+          ).toContain(t);
+        }
       }
     }
   });

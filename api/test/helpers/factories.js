@@ -19,14 +19,13 @@ const tag = () => `__test_${Date.now()}_${++_suffix}`;
 
 async function makeUnit(c, overrides = {}) {
   const r = await c.query(
-    `INSERT INTO mcogs_units (name, abbreviation, type, is_base)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO mcogs_units (name, abbreviation, type)
+     VALUES ($1, $2, $3)
      RETURNING *`,
     [
       overrides.name         || `unit${tag()}`,
       overrides.abbreviation || 'kg',
-      overrides.type         || 'weight',
-      overrides.is_base      ?? true,
+      overrides.type         || 'mass',
     ]
   );
   return r.rows[0];
