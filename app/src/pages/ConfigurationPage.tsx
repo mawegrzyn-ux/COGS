@@ -60,6 +60,7 @@ const FEATURE_FLAG_DEFS: FlagDef[] = [
   { key: 'haccp',         icon: '🛡️', label: 'HACCP',             description: 'Food safety compliance — temperature logs, CCP logs, equipment register. When off, the HACCP nav item is hidden.' },
   { key: 'allergens',     icon: '⚠️', label: 'Allergens',          description: 'EU/UK FIC 14-allergen matrix for ingredients and menu items. When off, the Allergens nav item is hidden.' },
   { key: 'variations',    icon: '🌍', label: 'Recipe Variations', description: 'Market, price-level, and market+PL recipe variations. When off, recipes use a single global ingredient list only.' },
+  { key: 'audits',        icon: '📋', label: 'QSC Audits',         description: 'Wingstop Quality/Service/Cleanliness audits with scored reports, templates, and photo/temperature capture. When off, the Audits nav item is hidden.' },
 ]
 
 function FeatureFlagsCard() {

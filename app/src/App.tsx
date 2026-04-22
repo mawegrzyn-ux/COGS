@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage            from './pages/LoginPage'
@@ -17,6 +18,13 @@ import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
 import PosTesterPage        from './pages/PosTesterPage'
+// QSC Audits — lazy-loaded to keep the main bundle small.
+// These pages pull in the full 150-question bank + runner/report UI; they
+// only matter to users who have `audits:read` access.
+const AuditsPage          = lazy(() => import('./pages/audits/AuditsPage'))
+const AuditRunnerPage     = lazy(() => import('./pages/audits/AuditRunnerPage'))
+const AuditReportPage     = lazy(() => import('./pages/audits/AuditReportPage'))
+const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage'))
 import SharedMenuPage       from './pages/SharedMenuPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
@@ -80,6 +88,10 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
             <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
+            <Route path="audits"               element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/templates"     element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditTemplatesPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/run"       element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditRunnerPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/report"    element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditReportPage /></Suspense></FeatureRoute>} />
             <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
             <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
             <Route path="media"         element={<MediaLibraryPage />} />
