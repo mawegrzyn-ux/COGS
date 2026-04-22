@@ -88,10 +88,10 @@ export default function App() {
             <Route path="menus"         element={<MenusPage />} />
             <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
             <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
-            <Route path="audits"               element={<Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense>} />
-            <Route path="audits/templates"     element={<Suspense fallback={<LoadingScreen />}><AuditTemplatesPage /></Suspense>} />
-            <Route path="audits/:id/run"       element={<Suspense fallback={<LoadingScreen />}><AuditRunnerPage /></Suspense>} />
-            <Route path="audits/:id/report"    element={<Suspense fallback={<LoadingScreen />}><AuditReportPage /></Suspense>} />
+            <Route path="audits"               element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/templates"     element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditTemplatesPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/run"       element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditRunnerPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/report"    element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditReportPage /></Suspense></FeatureRoute>} />
             <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
             <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
             <Route path="media"         element={<MediaLibraryPage />} />
