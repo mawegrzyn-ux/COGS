@@ -79,7 +79,10 @@
       "PowerShell(Set-Location api; if \\(-not \\(Test-Path 'node_modules'\\)\\) { Write-Host \"installing api deps...\"; npm install 2>&1 | Select-Object -Last 3 } else { Write-Host \"api node_modules present\" })",
       "PowerShell(npm run test:schema 2>&1)",
       "PowerShell(node --check test/schema/tool-schemas.test.js 2>&1)",
-      "PowerShell(node --check test/helpers/factories.js 2>&1)"
+      "PowerShell(node --check test/helpers/factories.js 2>&1)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://obscurekitty.uk.auth0.com/.well-known/openid-configuration\" -Method GET -UseBasicParsing -TimeoutSec 10; Write-Host \"Status: $\\($r.StatusCode\\)\"; Write-Host \"Length: $\\($r.Content.Length\\) bytes\"; if \\($r.StatusCode -eq 200\\) { Write-Host \"TENANT IS REACHABLE\" } } catch { Write-Host \"ERROR:\"; Write-Host $_.Exception.Message; Write-Host \"StatusCode: $\\($_.Exception.Response.StatusCode\\)\" })",
+      "PowerShell(node --check api/test/helpers/factories.js)",
+      "PowerShell(node --check api/test/integration/stock-movements.test.js)"
     ]
   },
   "disableAllHooks": true,

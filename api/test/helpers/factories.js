@@ -122,14 +122,26 @@ async function makePriceQuote(c, overrides = {}) {
   return r.rows[0];
 }
 
-async function setPreferredVendor(c, { ingredient_id, country_id, quote_id }) {
+async function setPreferredVendor(c, { ingredient_id, country_id, quote_id, vendor_id }) {
+  // `vendor_id` is NOT NULL on mcogs_ingredient_preferred_vendor. Derive it from
+  // the quote when not supplied so call-sites stay terse.
+  if (!vendor_id) {
+    const { rows } = await c.query(
+      `SELECT vendor_id FROM mcogs_price_quotes WHERE id = $1`,
+      [quote_id]
+    );
+    if (!rows[0]?.vendor_id) {
+      throw new Error(`setPreferredVendor: quote ${quote_id} not found or missing vendor_id`);
+    }
+    vendor_id = rows[0].vendor_id;
+  }
   const r = await c.query(
-    `INSERT INTO mcogs_ingredient_preferred_vendor (ingredient_id, country_id, quote_id)
-     VALUES ($1, $2, $3)
+    `INSERT INTO mcogs_ingredient_preferred_vendor (ingredient_id, country_id, vendor_id, quote_id)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT (ingredient_id, country_id)
-     DO UPDATE SET quote_id = EXCLUDED.quote_id
+     DO UPDATE SET vendor_id = EXCLUDED.vendor_id, quote_id = EXCLUDED.quote_id
      RETURNING *`,
-    [ingredient_id, country_id, quote_id]
+    [ingredient_id, country_id, vendor_id, quote_id]
   );
   return r.rows[0];
 }

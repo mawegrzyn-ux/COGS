@@ -22,10 +22,10 @@ afterAll(() => closeTestPool());
 
 // Helper: perform the dual-write that every stock route must perform.
 async function applyStockMovement(c, { storeId, ingredientId, qty, type, refId }) {
-  // Step 1: append to ledger
+  // Step 1: append to ledger. Production schema uses `quantity` and `reference_id`.
   await c.query(
     `INSERT INTO mcogs_stock_movements
-       (store_id, ingredient_id, qty, movement_type, ref_id)
+       (store_id, ingredient_id, quantity, movement_type, reference_id)
      VALUES ($1, $2, $3, $4, $5)`,
     [storeId, ingredientId, qty, type, refId || null]
   );
@@ -58,7 +58,7 @@ describe('Stock movement dual-write', () => {
         `SELECT * FROM mcogs_stock_levels WHERE store_id = $1`, [store.id]
       );
       expect(movements).toHaveLength(1);
-      expect(Number(movements[0].qty)).toBe(10);
+      expect(Number(movements[0].quantity)).toBe(10);
       expect(movements[0].movement_type).toBe('goods_in');
       expect(levels).toHaveLength(1);
       expect(Number(levels[0].qty_on_hand)).toBe(10);
