@@ -9,6 +9,8 @@ export interface Country {
   currency_symbol: string
   exchange_rate: number
   country_iso?: string | null
+  /** mcogs_regions.id values this market covers; empty/undefined = whole country */
+  region_ids?: number[]
 }
 
 interface MarketContextValue {

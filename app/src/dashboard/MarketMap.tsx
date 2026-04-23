@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ComposableMap, Geographies, Geography, ZoomableGroup } from 'react-simple-maps'
+import { useApi } from '../hooks/useApi'
 import { useMarket } from '../contexts/MarketContext'
 import { useDashboardData } from './DashboardData'
 
-// world-atlas topojson (natural earth, 110m resolution, ~90kB, fetched from CDN & cached by browser)
-const GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
+// Country-level (natural earth 110m, ~90 kB) — used by the "Country" view.
+const COUNTRY_GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
 
-// world-atlas natural earth features expose both `name` (English) and `id` (ISO 3166-1 numeric).
-// mcogs_countries.name is usually the English name, so match by case-insensitive name with
-// a small alias table for the common mismatches (Natural Earth uses its own spellings).
+// Admin-1 subdivisions (50m, states/provinces of every country). ~2 MB raw /
+// ~500 kB gzipped. Only loaded when the user toggles to the "Regions" view.
+const ADMIN1_GEO_URL  = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces.geojson'
+
+// Country-name aliases — natural-earth uses its own spellings for a handful
+// of countries. Used by both views for tooltip / lookup resolution.
 const NAME_ALIASES: Record<string, string[]> = {
-  // canonical-in-topojson  : list of mcogs_countries names that should map to it
   'United States of America': ['United States', 'USA', 'US'],
   'United Kingdom':           ['UK', 'Great Britain', 'Britain'],
   'Czechia':                  ['Czech Republic'],
@@ -18,7 +21,6 @@ const NAME_ALIASES: Record<string, string[]> = {
   'Eswatini':                 ['Swaziland'],
   'Myanmar':                  ['Burma'],
   'Côte d\u2019Ivoire':       ['Ivory Coast', 'Cote d\'Ivoire'],
-  'Congo':                    ['Republic of the Congo'],
   'Dem. Rep. Congo':          ['Democratic Republic of the Congo', 'DR Congo'],
   'Russia':                   ['Russian Federation'],
   'South Korea':              ['Republic of Korea', 'Korea, Republic of'],
@@ -33,78 +35,213 @@ const NAME_ALIASES: Record<string, string[]> = {
   'Bolivia':                  ['Plurinational State of Bolivia'],
   'Venezuela':                ['Bolivarian Republic of Venezuela'],
 }
-
-// Build a reverse lookup: any variant → canonical topojson name
 const NAME_TO_CANON: Record<string, string> = {}
 for (const [canon, variants] of Object.entries(NAME_ALIASES)) {
   NAME_TO_CANON[canon.toLowerCase()] = canon
   for (const v of variants) NAME_TO_CANON[v.toLowerCase()] = canon
 }
-
 function canonicalName(name: string): string {
   return NAME_TO_CANON[name.toLowerCase()] ?? name
 }
 
+interface RegionRow {
+  id:          number
+  country_iso: string
+  name:        string
+  iso_code:    string | null
+}
+
+type MapView = 'country' | 'region'
+
 export default function MarketMap() {
+  const api = useApi()
   const { countries, countryId, setCountryId } = useMarket()
   const { menuTiles } = useDashboardData()
-  const [hovered, setHovered] = useState<string | null>(null)
-  const [topo, setTopo] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
 
-  // Fetch the topojson once on mount (browser caches future visits)
+  const [view, setView]   = useState<MapView>('country')
+  const [countryGeo, setCountryGeo] = useState<any>(null)
+  const [regionGeo, setRegionGeo]   = useState<any>(null)
+  const [regions, setRegions]       = useState<RegionRow[]>([])
+  const [hovered, setHovered]       = useState<HoverState | null>(null)
+  const [error, setError]           = useState<string | null>(null)
+
+  // Load country topojson once (tiny).
   useEffect(() => {
     let cancelled = false
-    fetch(GEO_URL)
+    fetch(COUNTRY_GEO_URL)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(j => { if (!cancelled) setTopo(j) })
+      .then(j => { if (!cancelled) setCountryGeo(j) })
       .catch(e => { if (!cancelled) setError(e.message || 'Failed to load map') })
     return () => { cancelled = true }
   }, [])
 
-  // Map canonical-name → mcogs country
-  const byCanonName = useMemo(() => {
-    const m: Record<string, typeof countries[number]> = {}
-    for (const c of countries) m[canonicalName(c.name).toLowerCase()] = c
-    return m
-  }, [countries])
+  // Lazy-load admin-1 GeoJSON only when the user switches to region view.
+  useEffect(() => {
+    if (view !== 'region' || regionGeo) return
+    let cancelled = false
+    fetch(ADMIN1_GEO_URL)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => { if (!cancelled) setRegionGeo(j) })
+      .catch(e => { if (!cancelled) setError(e.message || 'Failed to load region map') })
+    return () => { cancelled = true }
+  }, [view, regionGeo])
 
-  // Per-country average COGS % (for colour intensity)
-  const avgCogsByCountryId = useMemo(() => {
-    const m: Record<number, number> = {}
+  // Regions catalog — needed for region view to match market.region_ids → ISO 3166-2.
+  useEffect(() => {
+    let cancelled = false
+    api.get('/regions')
+      .then((rows: any) => { if (!cancelled) setRegions(rows || []) })
+      .catch(() => { /* non-fatal */ })
+  }, [api])
+
+  // Avg COGS % per market id (colour scale).
+  const avgCogsByMarket = useMemo(() => {
+    const sum: Record<number, number> = {}
+    const count: Record<number, number> = {}
     for (const tile of menuTiles) {
       const vals = tile.levels.map(l => l.cogs_pct).filter((p): p is number => p != null)
       if (!vals.length) continue
       const avg = vals.reduce((s, n) => s + n, 0) / vals.length
-      if (m[tile.country_id] == null) m[tile.country_id] = avg
-      else m[tile.country_id] = (m[tile.country_id] + avg) / 2
+      sum[tile.country_id]   = (sum[tile.country_id]   || 0) + avg
+      count[tile.country_id] = (count[tile.country_id] || 0) + 1
     }
-    return m
+    const out: Record<number, number> = {}
+    for (const k of Object.keys(sum)) {
+      const id = Number(k)
+      out[id] = sum[id] / count[id]
+    }
+    return out
   }, [menuTiles])
 
-  const hoveredCountry = hovered ? byCanonName[canonicalName(hovered).toLowerCase()] : null
-  const selected = countries.find(c => c.id === countryId) ?? null
+  // region_id → ISO 3166-2 upper-case code
+  const regionIdToIso = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const r of regions) if (r.iso_code) m.set(r.id, r.iso_code.toUpperCase())
+    return m
+  }, [regions])
+
+  // Precomputed coverage info per market: its parent ISO + the region ISO 3166-2
+  // codes it claims. A market with no region_ids covers the whole country.
+  const marketCoverage = useMemo(() => {
+    return countries.map(c => {
+      const iso = (c.country_iso || '').toUpperCase()
+      const regionIds = Array.isArray(c.region_ids) ? c.region_ids : []
+      const regionIsos = new Set<string>()
+      for (const id of regionIds) {
+        const code = regionIdToIso.get(id)
+        if (code) regionIsos.add(code)
+      }
+      return { market: c, country_iso: iso, region_isos: regionIsos, isWholeCountry: regionIsos.size === 0 }
+    })
+  }, [countries, regionIdToIso])
+
+  // ── COUNTRY-VIEW INDEXES ────────────────────────────────────────────────────
+  // Country view: any market with country_iso === X is a member of that country's
+  // polygon. Colour is the average of all member markets' COGS. Tooltip lists all.
+  const marketsByParentIso = useMemo(() => {
+    const m = new Map<string, typeof marketCoverage>()
+    for (const mc of marketCoverage) {
+      if (!mc.country_iso) continue
+      const list = m.get(mc.country_iso) ?? []
+      list.push(mc)
+      m.set(mc.country_iso, list)
+    }
+    return m
+  }, [marketCoverage])
+
+  // world-atlas countries-110m features carry ISO 3166-1 numeric code on `id`.
+  // Convert to alpha-2 for matching against mcogs country_iso.
+  // Rather than hard-coding the full map, we match by canonical English name
+  // (feature.properties.name) against our known countries' names where ISO
+  // mapping isn't available on the feature.
+
+  // ── REGION-VIEW INDEXES ─────────────────────────────────────────────────────
+  // For admin-1 view: match ISO 3166-2 (feature.iso_3166_2) against claimed
+  // region isos. If no region-level match, fall back to whole-country markets.
+  const marketsByRegionIso2 = useMemo(() => {
+    const m = new Map<string, typeof marketCoverage>()
+    for (const mc of marketCoverage) {
+      if (mc.isWholeCountry) continue
+      for (const iso2 of mc.region_isos) {
+        const list = m.get(iso2) ?? []
+        list.push(mc)
+        m.set(iso2, list)
+      }
+    }
+    return m
+  }, [marketCoverage])
+
+  const wholeCountryMarketsByIso = useMemo(() => {
+    const m = new Map<string, typeof marketCoverage>()
+    for (const mc of marketCoverage) {
+      if (!mc.isWholeCountry || !mc.country_iso) continue
+      const list = m.get(mc.country_iso) ?? []
+      list.push(mc)
+      m.set(mc.country_iso, list)
+    }
+    return m
+  }, [marketCoverage])
+
+  const selectedMarket = countries.find(c => c.id === countryId) ?? null
+
+  function fillForCogs(avg: number): string {
+    if (avg <= 30) return 'var(--accent)'
+    if (avg <= 40) return '#D97706'
+    return '#DC2626'
+  }
+
+  function fillForMatches(matches: typeof marketCoverage): string {
+    if (matches.length === 0) return 'var(--surface-2)'
+    // Average COGS across matching markets (so multi-market countries / shared
+    // regions get a blended colour rather than last-wins).
+    const vals = matches.map(m => avgCogsByMarket[m.market.id]).filter(v => v != null) as number[]
+    if (!vals.length) return 'var(--accent-dim)'
+    return fillForCogs(vals.reduce((s, n) => s + n, 0) / vals.length)
+  }
+
+  const activeGeo = view === 'country' ? countryGeo : regionGeo
+  const loading = !activeGeo && !error
 
   return (
     <div className="card p-5 h-full relative overflow-hidden">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">World Map</h2>
-          <p className="text-xs text-text-3 mt-0.5">Click a market to scope the dashboard</p>
+          <p className="text-xs text-text-3 mt-0.5">
+            {view === 'country'
+              ? 'Click a country — tooltip lists every market operating there'
+              : 'Click a region to scope to the market that claims it'}
+          </p>
         </div>
-        {selected ? (
-          <button onClick={() => setCountryId(null)}
-            className="text-xs text-accent hover:underline">✕ Clear selection</button>
-        ) : (
-          <span className="text-xs text-text-3">No market selected</span>
-        )}
+        <div className="flex items-center gap-2">
+          <div className="inline-flex bg-surface-2 rounded p-0.5 text-xs">
+            <button
+              onClick={() => setView('country')}
+              className={`px-2.5 py-1 rounded transition-colors ${view === 'country' ? 'bg-surface text-text-1 shadow-sm' : 'text-text-3 hover:text-text-1'}`}
+            >
+              Countries
+            </button>
+            <button
+              onClick={() => setView('region')}
+              className={`px-2.5 py-1 rounded transition-colors ${view === 'region' ? 'bg-surface text-text-1 shadow-sm' : 'text-text-3 hover:text-text-1'}`}
+            >
+              Regions
+            </button>
+          </div>
+          {selectedMarket ? (
+            <button onClick={() => setCountryId(null)}
+              className="text-xs text-accent hover:underline">✕ Clear</button>
+          ) : (
+            <span className="text-xs text-text-3">No market selected</span>
+          )}
+        </div>
       </div>
 
       {error ? (
         <div className="h-64 flex items-center justify-center text-sm text-text-3">
           Could not load map: {error}
         </div>
-      ) : !topo ? (
+      ) : loading ? (
         <div className="h-64 bg-surface-2 rounded-lg animate-pulse" />
       ) : (
         <div className="relative">
@@ -116,91 +253,190 @@ export default function MarketMap() {
             style={{ width: '100%', height: 'auto' }}
           >
             <ZoomableGroup center={[0, 20]}>
-              <Geographies geography={topo}>
-                {({ geographies }) => geographies.map(geo => {
-                  const name: string = geo.properties.name
-                  const mapped = byCanonName[canonicalName(name).toLowerCase()]
-                  const isAllowed = !!mapped
-                  const isSelected = mapped && mapped.id === countryId
-                  const cogs = mapped ? avgCogsByCountryId[mapped.id] : undefined
-
-                  let fill = 'var(--surface-2)'      // default: unavailable country
-                  if (isAllowed) {
-                    if (cogs != null) {
-                      // green → amber → red shading based on avg COGS (naive thresholds)
-                      fill = cogs <= 30 ? 'var(--accent)'
-                           : cogs <= 40 ? '#D97706'
-                           : '#DC2626'
-                    } else {
-                      fill = 'var(--accent-dim)'
-                    }
-                  }
-                  if (isSelected) fill = 'var(--accent-dark)'
-
-                  return (
-                    <Geography
-                      key={geo.rsmKey}
-                      geography={geo}
-                      onMouseEnter={() => setHovered(name)}
-                      onMouseLeave={() => setHovered(null)}
-                      onClick={() => { if (mapped) setCountryId(isSelected ? null : mapped.id) }}
-                      style={{
-                        default: {
-                          fill,
-                          stroke: 'var(--border)',
-                          strokeWidth: 0.4,
-                          outline: 'none',
-                          cursor: isAllowed ? 'pointer' : 'default',
-                          transition: 'fill 150ms',
-                        },
-                        hover: {
-                          fill: isAllowed ? 'var(--accent-mid)' : fill,
-                          stroke: 'var(--border)',
-                          strokeWidth: 0.6,
-                          outline: 'none',
-                          cursor: isAllowed ? 'pointer' : 'default',
-                        },
-                        pressed: {
-                          fill: 'var(--accent-dark)',
-                          outline: 'none',
-                        },
-                      }}
-                    />
-                  )
-                })}
+              <Geographies geography={activeGeo}>
+                {({ geographies }) => geographies.map(g =>
+                  view === 'country'
+                    ? renderCountryFeature(g, {
+                        marketsByParentIso,
+                        marketsByName: buildNameIndex(countries),
+                        countryId, setCountryId, fillForMatches, setHovered,
+                      })
+                    : renderRegionFeature(g, {
+                        marketsByRegionIso2, wholeCountryMarketsByIso,
+                        countryId, setCountryId, fillForMatches, setHovered,
+                      })
+                )}
               </Geographies>
             </ZoomableGroup>
           </ComposableMap>
 
-          {/* Tooltip for hovered country */}
-          {hovered && (
-            <div className="absolute top-2 left-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm pointer-events-none text-xs">
-              <div className="font-semibold text-text-1">{hoveredCountry?.name ?? hovered}</div>
-              {hoveredCountry ? (
-                <>
-                  <div className="text-text-3 mt-0.5">
-                    {hoveredCountry.currency_code} · {hoveredCountry.currency_symbol}
-                  </div>
-                  {avgCogsByCountryId[hoveredCountry.id] != null && (
-                    <div className="text-text-2 mt-0.5">
-                      Avg COGS: <span className="font-semibold">{avgCogsByCountryId[hoveredCountry.id].toFixed(1)}%</span>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="text-text-3 italic mt-0.5">Not in your markets</div>
-              )}
-            </div>
-          )}
+          {hovered && <MapTooltip hovered={hovered} avgCogsByMarket={avgCogsByMarket} />}
 
           {/* Legend */}
-          <div className="flex items-center gap-3 text-[10px] text-text-3 mt-3">
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[10px] text-text-3 mt-3">
             <Legend color="var(--accent)"     label="COGS ≤ 30%" />
             <Legend color="#D97706"           label="≤ 40%" />
             <Legend color="#DC2626"           label="> 40%" />
             <Legend color="var(--accent-dim)" label="No data" />
             <Legend color="var(--surface-2)"  label="Not in scope" />
+            <span className="ml-auto text-text-3/60">
+              {countries.length} markets{view === 'region' ? ` · ${regions.length} regions` : ''}
+            </span>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────────
+
+interface HoverState {
+  label:   string
+  subtitle?: string
+  matches: Array<{ market: { id: number; name: string; country_iso?: string | null }; isWholeCountry: boolean }>
+}
+
+// The tiny aliases only cover the most common mismatches. For the country-level
+// topojson (world-atlas) features carry `name` (English) but no ISO code — so
+// we build a name-based index from our markets list (uses each market's name
+// and its country_iso so that, e.g., "USA" and "United States" both resolve).
+function buildNameIndex(countries: Array<{ id: number; name: string; country_iso?: string | null }>) {
+  const m = new Map<string, Array<typeof countries[number]>>()
+  for (const c of countries) {
+    const names = [c.name, canonicalName(c.name)]
+    for (const n of names) {
+      const key = n.toLowerCase()
+      const list = m.get(key) ?? []
+      if (!list.some(x => x.id === c.id)) list.push(c)
+      m.set(key, list)
+    }
+  }
+  return m
+}
+
+function renderCountryFeature(
+  g: any,
+  ctx: {
+    marketsByParentIso: Map<string, any[]>
+    marketsByName:      Map<string, Array<{ id: number; name: string; country_iso?: string | null }>>
+    countryId: number | null
+    setCountryId: (id: number | null) => void
+    fillForMatches: (matches: any[]) => string
+    setHovered: (h: HoverState | null) => void
+  }
+) {
+  const props = g.properties || {}
+  const name: string = props.name || ''
+  const canonical = canonicalName(name)
+
+  // Prefer ISO match (some topojsons expose `iso_a2`), fall back to name.
+  const iso: string = (props.iso_a2 || props.ISO_A2 || '').toString().toUpperCase()
+  let matches: any[] = []
+  if (iso && ctx.marketsByParentIso.has(iso)) {
+    matches = ctx.marketsByParentIso.get(iso) || []
+  } else {
+    const byName = ctx.marketsByName.get(canonical.toLowerCase()) ?? []
+    matches = byName.map(m => ({ market: m, isWholeCountry: true, country_iso: (m.country_iso || '').toUpperCase(), region_isos: new Set<string>() }))
+  }
+
+  const primary = matches[0] || null
+  const isSelected = primary && primary.market.id === ctx.countryId
+  let fill = ctx.fillForMatches(matches)
+  if (isSelected) fill = 'var(--accent-dark)'
+
+  return (
+    <Geography
+      key={g.rsmKey}
+      geography={g}
+      onMouseEnter={() => ctx.setHovered({ label: canonical, subtitle: iso || undefined, matches })}
+      onMouseLeave={() => ctx.setHovered(null)}
+      onClick={() => { if (!primary) return; ctx.setCountryId(isSelected ? null : primary.market.id) }}
+      style={{
+        default: { fill, stroke: 'var(--border)', strokeWidth: 0.4, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
+        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: 'var(--border)', strokeWidth: 0.6, outline: 'none', cursor: primary ? 'pointer' : 'default' },
+        pressed: { fill: 'var(--accent-dark)', outline: 'none' },
+      }}
+    />
+  )
+}
+
+function renderRegionFeature(
+  g: any,
+  ctx: {
+    marketsByRegionIso2:       Map<string, any[]>
+    wholeCountryMarketsByIso:  Map<string, any[]>
+    countryId: number | null
+    setCountryId: (id: number | null) => void
+    fillForMatches: (matches: any[]) => string
+    setHovered: (h: HoverState | null) => void
+  }
+) {
+  const props = g.properties || {}
+  const iso2: string        = (props.iso_3166_2 || '').toString().toUpperCase()
+  const parentIso: string   = (props.iso_a2 || '').toString().toUpperCase()
+  const regionName: string  = props.name || props.name_en || ''
+  const countryName: string = props.admin || props.geounit || ''
+
+  const matches =
+    (iso2 && ctx.marketsByRegionIso2.get(iso2)) ||
+    ctx.wholeCountryMarketsByIso.get(parentIso) ||
+    []
+  const primary = matches[0] || null
+  const isSelected = primary && primary.market.id === ctx.countryId
+  let fill = ctx.fillForMatches(matches)
+  if (isSelected) fill = 'var(--accent-dark)'
+
+  const label = regionName && countryName
+    ? `${regionName} · ${canonicalName(countryName)}`
+    : canonicalName(countryName) || regionName
+  const subtitle = iso2 || parentIso || undefined
+
+  return (
+    <Geography
+      key={g.rsmKey}
+      geography={g}
+      onMouseEnter={() => ctx.setHovered({ label, subtitle, matches })}
+      onMouseLeave={() => ctx.setHovered(null)}
+      onClick={() => { if (!primary) return; ctx.setCountryId(isSelected ? null : primary.market.id) }}
+      style={{
+        default: { fill, stroke: 'var(--border)', strokeWidth: 0.25, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
+        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: 'var(--border)', strokeWidth: 0.5, outline: 'none', cursor: primary ? 'pointer' : 'default' },
+        pressed: { fill: 'var(--accent-dark)', outline: 'none' },
+      }}
+    />
+  )
+}
+
+function MapTooltip({
+  hovered, avgCogsByMarket,
+}: {
+  hovered: HoverState
+  avgCogsByMarket: Record<number, number>
+}) {
+  return (
+    <div className="absolute top-2 left-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm pointer-events-none text-xs max-w-[260px]">
+      <div className="font-semibold text-text-1">{hovered.label}</div>
+      {hovered.subtitle && <div className="text-[10px] font-mono text-text-3 mt-0.5">{hovered.subtitle}</div>}
+      {hovered.matches.length === 0 ? (
+        <div className="text-text-3 italic mt-0.5">Not in your markets</div>
+      ) : (
+        <div className="mt-1 space-y-0.5">
+          {hovered.matches.slice(0, 4).map((mc: any) => {
+            const avg = avgCogsByMarket[mc.market.id]
+            return (
+              <div key={mc.market.id} className="flex items-center justify-between gap-3">
+                <span className="text-text-2 truncate">
+                  {mc.market.name}
+                  {mc.isWholeCountry === false && ' · regional'}
+                </span>
+                {avg != null && <span className="font-semibold text-text-1">{avg.toFixed(1)}%</span>}
+              </div>
+            )
+          })}
+          {hovered.matches.length > 4 && (
+            <div className="text-[10px] text-text-3 italic">+ {hovered.matches.length - 4} more</div>
+          )}
         </div>
       )}
     </div>
