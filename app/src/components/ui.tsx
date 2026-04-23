@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useId, cloneElement, isValidElement } from 'react'
 import { createPortal } from 'react-dom'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
@@ -297,13 +297,31 @@ interface FieldProps {
 }
 
 export function Field({ label, hint, error, required, children }: FieldProps) {
+  // Auto-wire htmlFor + id so Playwright's getByLabel() resolves and so
+  // screen-readers announce the right label when the input is focused.
+  //
+  // Strategy:
+  //  - Generate a stable id via useId()
+  //  - If `children` is a single React element that doesn't already have an
+  //    `id` prop, clone it and inject the generated id
+  //  - For Fragments / arrays / complex children the label's htmlFor is left
+  //    off (same behaviour as before — those call sites can opt in later)
+  const autoId = useId()
+  const canWire =
+    isValidElement(children) &&
+    !(children as { props?: { id?: string } }).props?.id
+  const wiredId = canWire ? autoId : undefined
+  const wiredChildren = canWire
+    ? cloneElement(children as React.ReactElement<{ id?: string }>, { id: autoId })
+    : children
+
   return (
     <div className="mb-4">
-      <label className="block text-sm font-semibold text-text-2 mb-1.5">
+      <label htmlFor={wiredId} className="block text-sm font-semibold text-text-2 mb-1.5">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {hint && <p className="text-xs text-text-3 mb-1.5 -mt-1">{hint}</p>}
-      {children}
+      {wiredChildren}
       {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
     </div>
   )
@@ -325,6 +343,8 @@ interface CalcInputProps {
   step?: string
   min?: string
   disabled?: boolean
+  /** Forwarded to the underlying <input> so <label htmlFor=""> pairs work. */
+  id?: string
 }
 
 function safeEval(expr: string): number | null {
@@ -343,7 +363,7 @@ function safeEval(expr: string): number | null {
   }
 }
 
-export function CalcInput({ value, onChange, className = 'input w-full', placeholder, disabled }: CalcInputProps) {
+export function CalcInput({ value, onChange, className = 'input w-full', placeholder, disabled, id }: CalcInputProps) {
   const [rawText, setRawText] = useState(value)
   const [focused, setFocused] = useState(false)
 
@@ -376,6 +396,7 @@ export function CalcInput({ value, onChange, className = 'input w-full', placeho
   return (
     <div className="relative">
       <input
+        id={id}
         type="text"
         inputMode="decimal"
         className={className}

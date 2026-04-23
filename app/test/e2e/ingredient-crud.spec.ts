@@ -10,23 +10,18 @@ import { test, expect, Page } from '@playwright/test';
 
 const ts = () => `e2e_${Date.now()}_${Math.floor(Math.random() * 999)}`;
 
-// The shared `Field` component renders `<label>` as a sibling (not a wrapper)
-// of the input, so Playwright's `getByLabel` can't resolve it. Until the Field
-// component is refactored to use htmlFor/id or wrap children, target the
-// modal's name input via its autoFocus + placeholder. The add modal's name
-// input consistently renders with `placeholder="e.g. …"` and `autoFocus`.
+// The shared `Field` component now auto-wires htmlFor/id via useId + cloneElement
+// (see components/ui.tsx), so Playwright's getByLabel() resolves correctly.
+// Scope the lookup to the modal to avoid collisions with any other "Name"
+// input on the page.
 const nameInput = (page: Page) =>
-  page.locator('[role="dialog"] input[placeholder^="e.g." i]').first();
+  page.getByRole('dialog').getByLabel(/^Name$/i);
 
-// The Ingredient add-modal has Name + Base Unit both marked `required`. Saving
-// with only Name silently fails validation (the modal stays open but no visible
-// toast), so the test also needs to pick a unit. Returns true if a unit was
-// selected, false if the staging DB has no units at all (in which case the
-// test should skip). The select is the 2nd <select> inside the dialog — after
-// the Category dropdown.
+// Base Unit is required on the Ingredient add-modal. Saving with only Name
+// silently fails validation, so the test also picks a unit. Returns true if
+// a unit was selected, false when staging has no units at all.
 async function pickFirstBaseUnit(page: Page): Promise<boolean> {
-  const select = page.locator('[role="dialog"] select').nth(1);
-  // Collect the values of real (non-placeholder) options.
+  const select = page.getByRole('dialog').getByLabel(/^Base Unit$/i);
   const values = await select.locator('option').evaluateAll(opts =>
     opts.map(o => (o as HTMLOptionElement).value).filter(v => v !== '')
   );
