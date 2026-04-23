@@ -3314,6 +3314,16 @@ const migrations = [
   // a sensible default.
   `ALTER TABLE mcogs_modifier_groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 
+  // ── Step 134: Market-specific COGS thresholds ─────────────────────────────
+  // Previously COGS colour thresholds lived only in mcogs_settings.data
+  // (cogs_thresholds.excellent / .acceptable) — one global pair. Markets with
+  // different margin profiles (e.g. UK quick-serve @ 28/35 vs Indian fine
+  // dining @ 32/40) need their own cut-offs. Added as nullable columns on
+  // mcogs_countries; NULL means "inherit the global default", so the first
+  // deploy changes no behaviour.
+  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS cogs_threshold_excellent  NUMERIC(5,2)`,
+  `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS cogs_threshold_acceptable NUMERIC(5,2)`,
+
   // ── Step 133b: Seed regions for common markets ─────────────────────────────
   // Short catalog for US, UK, Canada, India, Australia — top-level subdivisions
   // only. Admins can add more via the Regions admin UI. Idempotent via

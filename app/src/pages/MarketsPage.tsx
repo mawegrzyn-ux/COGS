@@ -32,6 +32,8 @@ interface Market {
   brand_partner_id: number | null
   parent_country_id: number | null   // NULL = country-level; else regional market under the referenced country
   region_ids?: number[]              // mcogs_regions this market covers; empty for country-level
+  cogs_threshold_excellent?:  string | number | null   // NUMERIC — pg returns string; NULL inherits global
+  cogs_threshold_acceptable?: string | number | null
 }
 
 interface Region {
@@ -641,6 +643,32 @@ export default function MarketsPage() {
     }
   }
 
+  async function setMarketCogsThresholds(marketId: number, excellent: number | null, acceptable: number | null) {
+    // Validate client-side so we don't bounce through the API for obvious mistakes.
+    if (excellent != null && (excellent <= 0 || excellent >= 100)) {
+      showToast('Excellent threshold must be between 0 and 100', 'error')
+      return
+    }
+    if (acceptable != null && (acceptable <= 0 || acceptable >= 100)) {
+      showToast('Acceptable threshold must be between 0 and 100', 'error')
+      return
+    }
+    if (excellent != null && acceptable != null && excellent > acceptable) {
+      showToast('Excellent threshold must be ≤ Acceptable threshold', 'error')
+      return
+    }
+    try {
+      const updated = await api.patch(`/countries/${marketId}`, {
+        cogs_threshold_excellent:  excellent  == null ? '' : excellent,
+        cogs_threshold_acceptable: acceptable == null ? '' : acceptable,
+      })
+      setMarkets(prev => prev.map(m => m.id === marketId ? { ...m, ...updated } : m))
+      showToast('COGS thresholds updated')
+    } catch (err: any) {
+      showToast(err.message || 'Update failed', 'error')
+    }
+  }
+
   // ── Brand Partner CRUD ──────────────────────────────────────────────────────
 
   function openAddBP() {
@@ -836,6 +864,7 @@ export default function MarketsPage() {
                     onSetDefaultPriceLevel={setDefaultPriceLevel}
                     onSetLevelTax={setLevelTaxMapping}
                     onSetLevelEnabled={setLevelEnabled}
+                    onSetCogsThresholds={setMarketCogsThresholds}
                     onSetBrandPartner={setMarketBrandPartner}
                   />
                 ))}
@@ -1825,13 +1854,14 @@ interface MarketCardProps {
   onSetDefaultPriceLevel: (marketId: number, priceLevelId: number | null) => void
   onSetLevelTax:          (marketId: number, priceLevelId: number, taxRateId: number | null) => void
   onSetLevelEnabled:      (marketId: number, priceLevelId: number, isEnabled: boolean) => void
+  onSetCogsThresholds:    (marketId: number, excellent: number | null, acceptable: number | null) => void
   onSetBrandPartner:      (marketId: number, bpId: number | null) => void
 }
 
 function MarketCard({
   market, taxRates, priceLevels, levelTax, cplMatrix, regions, parentMarket, brandPartners, baseCurrency,
   onEdit, onDelete, onAddTax, onEditTax, onDeleteTax, onSetDefaultTax,
-  onSetDefaultPriceLevel, onSetLevelTax, onSetLevelEnabled, onSetBrandPartner,
+  onSetDefaultPriceLevel, onSetLevelTax, onSetLevelEnabled, onSetCogsThresholds, onSetBrandPartner,
 }: MarketCardProps) {
   const marketRegions = (market.region_ids || []).map(id => regions.find(r => r.id === id)).filter((r): r is Region => !!r)
   const flag          = isoToFlag(market.country_iso)
@@ -1924,31 +1954,8 @@ function MarketCard({
           </select>
         </div>
 
-        {/* Default Price Level */}
-        {priceLevels.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Default Price Level</span>
-              {market.default_price_level_id
-                ? <Badge label={priceLevels.find(p => p.id === market.default_price_level_id)?.name || 'Unknown'} variant="green" />
-                : <Badge label="Not set" variant="neutral" />
-              }
-            </div>
-            <select
-              className="select w-full text-xs"
-              value={market.default_price_level_id ?? ''}
-              onChange={e => onSetDefaultPriceLevel(market.id, e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">— None (manual selection) —</option>
-              {priceLevels.map(pl => (
-                <option key={pl.id} value={pl.id}>{pl.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
         {/* Tax Rates */}
-        <div>
+        <div className="border-t border-border pt-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Tax Rates</span>
             <button
@@ -1990,66 +1997,181 @@ function MarketCard({
           )}
         </div>
 
-        {/* Price Level → Tax mapping */}
-        {priceLevels.length > 0 && taxRates.length > 0 && (
-          <div className="border-t border-border pt-4">
-            <div className="mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Default Tax per Price Level</span>
-              <p className="text-xs text-text-3 mt-1">Set which tax rate applies by default for each sales channel.</p>
-            </div>
-            <div className="space-y-2">
-              {priceLevels.map(pl => {
-                const mapping = levelTax.find(lt => lt.price_level_id === pl.id)
-                return (
-                  <div key={pl.id} className="flex items-center gap-3">
-                    <span className="text-xs text-text-2 w-28 shrink-0">{pl.name}</span>
-                    <select
-                      className="select flex-1 text-xs"
-                      value={mapping?.tax_rate_id ?? ''}
-                      onChange={e => onSetLevelTax(market.id, pl.id, e.target.value ? Number(e.target.value) : null)}
-                    >
-                      <option value="">— Market default —</option>
-                      {taxRates.map(t => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({(Number(t.rate) * 100).toFixed(2)}%)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
+        {/* Per-market COGS thresholds. NULL columns fall back to the global
+            defaults configured in Configuration → COGS Thresholds. Save on
+            blur so edits commit without a dedicated button. */}
+        <MarketCogsThresholds market={market} onSave={onSetCogsThresholds} />
 
-        {/* Price-level enablement for this market. Unchecking a level hides it
-            from menus, scenarios, POS and shared pages in this country. */}
+        {/* Unified Price Levels section — combines three previously separate
+            blocks (Enabled / Default Tax per Level / Default Price Level)
+            into one table so it's visible at a glance. Each row lets you
+            toggle enablement, assign a tax rate, and flag the default. */}
         {priceLevels.length > 0 && (
           <div className="border-t border-border pt-4">
             <div className="mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Enabled Price Levels</span>
-              <p className="text-xs text-text-3 mt-1">Uncheck a level to hide it from menus and POS in this market. Existing prices are preserved.</p>
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Price Levels</span>
+              <p className="text-xs text-text-3 mt-1">
+                Enable the sales channels this market uses, assign the default tax rate per channel, and flag which level is the market default.
+              </p>
             </div>
-            <div className="space-y-1.5">
-              {priceLevels.map(pl => {
-                const key = `${market.id}-${pl.id}`
-                const enabled = cplMatrix.get(key) ?? true
-                return (
-                  <label key={pl.id} className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={e => onSetLevelEnabled(market.id, pl.id, e.target.checked)}
-                      className="w-4 h-4 accent-accent shrink-0"
-                    />
-                    <span className={`text-xs ${enabled ? 'text-text-2 group-hover:text-text-1' : 'text-text-3 line-through'}`}>
-                      {pl.name}
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-text-3 border-b border-border">
+                  <th className="pb-1.5 pr-2 font-semibold">Price Level</th>
+                  <th className="pb-1.5 px-2 font-semibold text-center w-16">Enabled</th>
+                  <th className="pb-1.5 px-2 font-semibold">Tax Rate</th>
+                  <th className="pb-1.5 pl-2 font-semibold text-center w-16">Default</th>
+                </tr>
+              </thead>
+              <tbody>
+                {priceLevels.map(pl => {
+                  const cplKey  = `${market.id}-${pl.id}`
+                  const enabled = cplMatrix.get(cplKey) ?? true
+                  const mapping = levelTax.find(lt => lt.price_level_id === pl.id)
+                  const isDefault = market.default_price_level_id === pl.id
+                  return (
+                    <tr key={pl.id} className="border-b border-border last:border-0">
+                      <td className={`py-2 pr-2 ${enabled ? 'text-text-1' : 'text-text-3 line-through'}`}>
+                        {pl.name}
+                      </td>
+                      <td className="py-2 px-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={e => onSetLevelEnabled(market.id, pl.id, e.target.checked)}
+                          className="w-4 h-4 accent-accent"
+                          aria-label={`${enabled ? 'Disable' : 'Enable'} ${pl.name}`}
+                        />
+                      </td>
+                      <td className="py-2 px-2">
+                        {taxRates.length === 0 ? (
+                          <span className="text-text-3 italic">Add tax rates first</span>
+                        ) : (
+                          <select
+                            className="select w-full text-xs"
+                            value={mapping?.tax_rate_id ?? ''}
+                            onChange={e => onSetLevelTax(market.id, pl.id, e.target.value ? Number(e.target.value) : null)}
+                            disabled={!enabled}
+                          >
+                            <option value="">— Market default —</option>
+                            {taxRates.map(t => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({(Number(t.rate) * 100).toFixed(2)}%)
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </td>
+                      <td className="py-2 pl-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => onSetDefaultPriceLevel(market.id, isDefault ? null : pl.id)}
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded transition-colors ${
+                            isDefault
+                              ? 'text-amber-500 hover:text-amber-600'
+                              : 'text-text-3 hover:text-text-1'
+                          }`}
+                          title={isDefault ? 'Remove as market default' : 'Set as market default'}
+                          aria-label={isDefault ? `${pl.name} is the market default` : `Make ${pl.name} the market default`}
+                        >
+                          {isDefault ? '★' : '☆'}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Per-market COGS threshold editor ──────────────────────────────────────────
+// Small inline form: two number inputs (excellent + acceptable) with save-on-blur
+// semantics. Leaving a value empty clears the override so the market inherits
+// the global defaults.
+
+function MarketCogsThresholds({
+  market, onSave,
+}: {
+  market: Market
+  onSave: (marketId: number, excellent: number | null, acceptable: number | null) => void
+}) {
+  // Track local string state so the user can clear inputs without the value
+  // snapping back to the saved number mid-edit.
+  const [exc, setExc] = useState<string>(market.cogs_threshold_excellent  != null ? String(market.cogs_threshold_excellent)  : '')
+  const [acc, setAcc] = useState<string>(market.cogs_threshold_acceptable != null ? String(market.cogs_threshold_acceptable) : '')
+
+  // Resync when the market prop changes (e.g. loadAll refreshed after save).
+  useEffect(() => {
+    setExc(market.cogs_threshold_excellent  != null ? String(market.cogs_threshold_excellent)  : '')
+    setAcc(market.cogs_threshold_acceptable != null ? String(market.cogs_threshold_acceptable) : '')
+  }, [market.id, market.cogs_threshold_excellent, market.cogs_threshold_acceptable])
+
+  function commit() {
+    const nextExc = exc.trim() === '' ? null : Number(exc)
+    const nextAcc = acc.trim() === '' ? null : Number(acc)
+    const savedExc = market.cogs_threshold_excellent  != null ? Number(market.cogs_threshold_excellent)  : null
+    const savedAcc = market.cogs_threshold_acceptable != null ? Number(market.cogs_threshold_acceptable) : null
+    if (nextExc === savedExc && nextAcc === savedAcc) return  // no-op
+    onSave(market.id, nextExc, nextAcc)
+  }
+
+  const hasOverride = market.cogs_threshold_excellent != null || market.cogs_threshold_acceptable != null
+
+  return (
+    <div className="border-t border-border pt-4">
+      <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-xs font-semibold uppercase tracking-wide text-text-3">COGS Thresholds</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${hasOverride ? 'bg-accent-dim text-accent' : 'bg-surface-2 text-text-3'}`}>
+          {hasOverride ? 'MARKET OVERRIDE' : 'INHERITING GLOBAL'}
+        </span>
+      </div>
+      <p className="text-xs text-text-3 mb-2">
+        COGS % cells paint green ≤ Excellent, amber ≤ Acceptable, red above. Leave blank to inherit the global defaults (<span className="font-mono">Configuration → COGS Thresholds</span>).
+      </p>
+      <div className="flex items-end gap-3">
+        <div className="flex-1">
+          <label className="text-[11px] text-text-3">Excellent (≤%)</label>
+          <input
+            type="number"
+            step="0.1"
+            min="0"
+            max="100"
+            inputMode="decimal"
+            className="input text-sm w-full"
+            value={exc}
+            onChange={e => setExc(e.target.value)}
+            onBlur={commit}
+            placeholder="Global"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="text-[11px] text-text-3">Acceptable (≤%)</label>
+          <input
+            type="number"
+            step="0.1"
+            min="0"
+            max="100"
+            inputMode="decimal"
+            className="input text-sm w-full"
+            value={acc}
+            onChange={e => setAcc(e.target.value)}
+            onBlur={commit}
+            placeholder="Global"
+          />
+        </div>
+        {hasOverride && (
+          <button
+            className="btn-ghost px-2 py-1 text-xs text-text-3 hover:text-text-1"
+            onClick={() => { setExc(''); setAcc(''); onSave(market.id, null, null) }}
+            title="Clear overrides — inherit global defaults"
+          >
+            Reset
+          </button>
         )}
       </div>
     </div>

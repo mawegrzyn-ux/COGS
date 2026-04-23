@@ -194,7 +194,6 @@ const cogsColourClass = (pct: number, thr: CogsThresholds) => {
 
 export default function MenusPage() {
   const api = useApi()
-  const cogsThresholds = useCogsThresholds()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // shared data
@@ -296,6 +295,10 @@ export default function MenusPage() {
   // (Configuration → Price Levels → per-country matrix); this pulls only the
   // enabled set so downstream render + save paths never see hidden levels.
   const selectedMenuCountryId = menus.find(m => m.id === selectedMenuId)?.country_id ?? null
+
+  // COGS colour thresholds follow the selected menu's market. Falls back to
+  // global when no menu is selected or the market hasn't set overrides.
+  const cogsThresholds = useCogsThresholds(selectedMenuCountryId)
   useEffect(() => {
     if (selectedMenuCountryId == null) return
     let cancelled = false
