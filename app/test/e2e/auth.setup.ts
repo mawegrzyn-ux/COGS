@@ -36,7 +36,13 @@ setup('authenticate via Auth0', async ({ page }) => {
 
   await page.goto('/');
 
-  // Auth0 redirect — wait for the login page hostname.
+  // The app redirects unauthenticated users to /login (the COGS landing page,
+  // not Auth0 Universal Login). We have to click the "Sign in" button there
+  // to fire loginWithRedirect() before Auth0 takes over the navigation.
+  await page.waitForURL(/\/login(\?.*)?$/, { timeout: 20_000 });
+  await page.getByRole('button', { name: /^sign in$/i }).click();
+
+  // Auth0 redirect — now wait for the tenant's universal-login page.
   await page.waitForURL(/\.auth0\.com\/u\/login/, { timeout: 30_000 });
 
   // Auth0 universal login form selectors. These can vary by tenant
