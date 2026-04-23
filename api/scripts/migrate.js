@@ -3288,6 +3288,50 @@ const migrations = [
      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
      UNIQUE (country_iso, name)
    )`,
+
+  // Legacy cleanup — if an earlier iteration of this feature left
+  // mcogs_regions with country_id (FK to mcogs_countries) instead of
+  // country_iso, upgrade in place: add country_iso, backfill from the
+  // parent country's iso, then drop country_id. Runs BEFORE the indexes
+  // on country_iso so they don't fail on a legacy schema.
+  `DO $$
+   BEGIN
+     IF EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'mcogs_regions' AND column_name = 'country_id'
+     ) THEN
+       -- Ensure country_iso column exists (nullable for now) so the backfill
+       -- has somewhere to write.
+       IF NOT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'mcogs_regions' AND column_name = 'country_iso'
+       ) THEN
+         ALTER TABLE mcogs_regions ADD COLUMN country_iso VARCHAR(10);
+       END IF;
+       -- Backfill from the legacy FK.
+       UPDATE mcogs_regions r
+       SET    country_iso = UPPER(c.country_iso)
+       FROM   mcogs_countries c
+       WHERE  r.country_id = c.id
+         AND  (r.country_iso IS NULL OR r.country_iso = '');
+       -- Drop the legacy FK column + its UNIQUE(country_id, name) via CASCADE.
+       ALTER TABLE mcogs_regions DROP COLUMN country_id CASCADE;
+       -- Enforce NOT NULL now that every row has a value.
+       IF NOT EXISTS (SELECT 1 FROM mcogs_regions WHERE country_iso IS NULL) THEN
+         ALTER TABLE mcogs_regions ALTER COLUMN country_iso SET NOT NULL;
+       END IF;
+       -- Restore the UNIQUE on the new key pair.
+       IF NOT EXISTS (
+         SELECT 1 FROM pg_constraint
+         WHERE  conname = 'mcogs_regions_country_iso_name_key'
+       ) THEN
+         ALTER TABLE mcogs_regions
+           ADD CONSTRAINT mcogs_regions_country_iso_name_key UNIQUE (country_iso, name);
+       END IF;
+     END IF;
+   END $$`,
+  `ALTER TABLE mcogs_countries DROP COLUMN IF EXISTS parent_country_id`,
+
   `CREATE INDEX IF NOT EXISTS idx_regions_country_iso ON mcogs_regions(country_iso)`,
   `CREATE INDEX IF NOT EXISTS idx_regions_iso_code    ON mcogs_regions(iso_code)`,
 
@@ -3300,25 +3344,6 @@ const migrations = [
    )`,
   `CREATE INDEX IF NOT EXISTS idx_mr_market ON mcogs_market_regions(market_id)`,
   `CREATE INDEX IF NOT EXISTS idx_mr_region ON mcogs_market_regions(region_id)`,
-
-  // Legacy cleanup — if an earlier iteration of this feature created the
-  // country_id column (FK to mcogs_countries), drop it. The new column is
-  // country_iso (VARCHAR, no FK to markets table). Also drop the old UNIQUE
-  // on (country_id, name) since UNIQUE (country_iso, name) replaces it.
-  `DO $$ BEGIN
-     IF EXISTS (
-       SELECT 1 FROM information_schema.columns
-       WHERE table_name = 'mcogs_regions' AND column_name = 'country_id'
-     ) THEN
-       -- Backfill country_iso from the legacy FK before dropping it.
-       UPDATE mcogs_regions r
-       SET    country_iso = UPPER(c.country_iso)
-       FROM   mcogs_countries c
-       WHERE  r.country_id = c.id AND (r.country_iso IS NULL OR r.country_iso = '');
-       ALTER TABLE mcogs_regions DROP COLUMN country_id CASCADE;
-     END IF;
-   END $$`,
-  `ALTER TABLE mcogs_countries DROP COLUMN IF EXISTS parent_country_id`,
 
   // ── Step 133c: Hotfix — missing updated_at on mcogs_modifier_groups ────────
   // The translations commit (904d5b6) started selecting mg.updated_at in

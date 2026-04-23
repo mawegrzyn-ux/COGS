@@ -14,6 +14,12 @@
 
 import { test as setup, expect } from '@playwright/test';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM replacement for the CommonJS `__dirname` global — the app package is
+// `"type": "module"`, so Playwright loads this file as an ES module where
+// `__dirname` is undefined.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const authFile = path.join(__dirname, '..', '..', '.auth', 'user.json');
 
