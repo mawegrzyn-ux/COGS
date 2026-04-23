@@ -279,6 +279,9 @@ export default function MarketsPage() {
   const [priceLevels,   setPriceLevels]   = useState<PriceLevel[]>([])
   const [levelTax,      setLevelTax]      = useState<MarketLevelTax[]>([])
   const [brandPartners, setBrandPartners] = useState<BrandPartner[]>([])
+  // Per-country price-level enablement map. Key = `${country_id}-${price_level_id}`,
+  // value = is_enabled. Missing entry = enabled (preserves pre-feature behaviour).
+  const [cplMatrix,     setCplMatrix]     = useState<Map<string, boolean>>(new Map())
   const [baseCurrency,  setBaseCurrency]  = useState('USD')
   const [loading,       setLoading]       = useState(true)
   const [search,        setSearch]        = useState('')
@@ -350,6 +353,17 @@ export default function MarketsPage() {
       setBaseCurrency(typeof bc === 'object' && bc !== null ? (bc.code || 'USD') : (bc || 'USD'))
       setLocations(locs  || [])
       setLocationGroups(grps || [])
+
+      // Load the per-country price-level enablement matrix. Non-fatal on
+      // failure — the matrix falls back to "all enabled", which matches the
+      // pre-feature behaviour and keeps this page working on older servers
+      // that don't have the /country-price-levels endpoint yet.
+      try {
+        const cpl = await api.get('/country-price-levels') as Array<{ country_id: number; price_level_id: number; is_enabled: boolean }>
+        const m = new Map<string, boolean>()
+        ;(cpl || []).forEach(r => m.set(`${r.country_id}-${r.price_level_id}`, !!r.is_enabled))
+        setCplMatrix(m)
+      } catch { /* older server — leave the map empty so everything shows as enabled */ }
     } catch {
       showToast('Failed to load data', 'error')
     } finally {
@@ -665,6 +679,23 @@ export default function MarketsPage() {
     }
   }
 
+  async function setLevelEnabled(marketId: number, priceLevelId: number, isEnabled: boolean) {
+    const key = `${marketId}-${priceLevelId}`
+    // Optimistic update — snapshot prev so we can revert on failure.
+    const prev = cplMatrix
+    setCplMatrix(m => {
+      const next = new Map(m)
+      next.set(key, isEnabled)
+      return next
+    })
+    try {
+      await api.put(`/country-price-levels/${marketId}/${priceLevelId}`, { is_enabled: isEnabled })
+    } catch (err: any) {
+      setCplMatrix(prev)
+      showToast(err.message || 'Update failed', 'error')
+    }
+  }
+
   // ── Brand Partner CRUD ──────────────────────────────────────────────────────
 
   function openAddBP() {
@@ -843,6 +874,7 @@ export default function MarketsPage() {
                     taxRates={taxRates.filter(t => t.country_id === market.id)}
                     priceLevels={priceLevels}
                     levelTax={levelTax.filter(lt => lt.country_id === market.id)}
+                    cplMatrix={cplMatrix}
                     brandPartners={brandPartners}
                     baseCurrency={baseCurrency}
                     onEdit={openEditMarket}
@@ -853,6 +885,7 @@ export default function MarketsPage() {
                     onSetDefaultTax={setDefaultTax}
                     onSetDefaultPriceLevel={setDefaultPriceLevel}
                     onSetLevelTax={setLevelTaxMapping}
+                    onSetLevelEnabled={setLevelEnabled}
                     onSetBrandPartner={setMarketBrandPartner}
                   />
                 ))}
@@ -1499,6 +1532,7 @@ interface MarketCardProps {
   taxRates:               TaxRate[]
   priceLevels:            PriceLevel[]
   levelTax:               MarketLevelTax[]
+  cplMatrix:              Map<string, boolean>
   brandPartners:          BrandPartner[]
   baseCurrency:           string
   onEdit:                 (m: Market) => void
@@ -1509,13 +1543,14 @@ interface MarketCardProps {
   onSetDefaultTax:        (taxId: number, marketId: number) => void
   onSetDefaultPriceLevel: (marketId: number, priceLevelId: number | null) => void
   onSetLevelTax:          (marketId: number, priceLevelId: number, taxRateId: number | null) => void
+  onSetLevelEnabled:      (marketId: number, priceLevelId: number, isEnabled: boolean) => void
   onSetBrandPartner:      (marketId: number, bpId: number | null) => void
 }
 
 function MarketCard({
-  market, taxRates, priceLevels, levelTax, brandPartners, baseCurrency,
+  market, taxRates, priceLevels, levelTax, cplMatrix, brandPartners, baseCurrency,
   onEdit, onDelete, onAddTax, onEditTax, onDeleteTax, onSetDefaultTax,
-  onSetDefaultPriceLevel, onSetLevelTax, onSetBrandPartner,
+  onSetDefaultPriceLevel, onSetLevelTax, onSetLevelEnabled, onSetBrandPartner,
 }: MarketCardProps) {
   const flag          = isoToFlag(market.country_iso)
   const rate          = Number(market.exchange_rate)
@@ -1678,6 +1713,36 @@ function MarketCard({
                       ))}
                     </select>
                   </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Price-level enablement for this market. Unchecking a level hides it
+            from menus, scenarios, POS and shared pages in this country. */}
+        {priceLevels.length > 0 && (
+          <div className="border-t border-border pt-4">
+            <div className="mb-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-3">Enabled Price Levels</span>
+              <p className="text-xs text-text-3 mt-1">Uncheck a level to hide it from menus and POS in this market. Existing prices are preserved.</p>
+            </div>
+            <div className="space-y-1.5">
+              {priceLevels.map(pl => {
+                const key = `${market.id}-${pl.id}`
+                const enabled = cplMatrix.get(key) ?? true
+                return (
+                  <label key={pl.id} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      onChange={e => onSetLevelEnabled(market.id, pl.id, e.target.checked)}
+                      className="w-4 h-4 accent-accent shrink-0"
+                    />
+                    <span className={`text-xs ${enabled ? 'text-text-2 group-hover:text-text-1' : 'text-text-3 line-through'}`}>
+                      {pl.name}
+                    </span>
+                  </label>
                 )
               })}
             </div>
