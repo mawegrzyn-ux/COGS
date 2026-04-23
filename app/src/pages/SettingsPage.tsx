@@ -1308,6 +1308,7 @@ interface AiKeyStatus {
   jira_email_set:      boolean
   jira_token_set:      boolean
   jira_project_set:    boolean
+  mapbox_token_set:    boolean
 }
 
 interface UsageSummary {
@@ -2208,7 +2209,7 @@ function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false, mapbox_token_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
@@ -2220,6 +2221,7 @@ function AiTab() {
   const [jiraProject,  setJiraProject]  = useState('')
   const [jiraTesting,  setJiraTesting]  = useState(false)
   const [jiraTestResult, setJiraTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [mapboxToken,  setMapboxToken]  = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
@@ -2297,6 +2299,7 @@ function AiTab() {
     if (jiraEmail.trim())  payload.JIRA_EMAIL           = jiraEmail.trim()
     if (jiraToken.trim())  payload.JIRA_API_TOKEN       = jiraToken.trim()
     if (jiraProject.trim()) payload.JIRA_PROJECT_KEY    = jiraProject.trim().toUpperCase()
+    if (mapboxToken.trim()) payload.MAPBOX_ACCESS_TOKEN = mapboxToken.trim()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -2307,6 +2310,7 @@ function AiTab() {
       setBrave('')
       setGithubPat('')
       setGithubRepo('')
+      setMapboxToken('')
       setToast({ message: 'Keys saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
@@ -2315,7 +2319,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY' | 'MAPBOX_ACCESS_TOKEN') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -2556,11 +2560,39 @@ function AiTab() {
         )}
       </div>
 
+      {/* ── Mapbox Integration ── */}
+      <div className="mt-6 pt-5 border-t border-border">
+        <h3 className="text-sm font-semibold text-text-1 mb-1 flex items-center gap-2">
+          <span>🗺️</span> Mapbox Integration
+        </h3>
+        <p className="text-xs text-text-3 mb-3">
+          Provides the tile + vector-boundary data for the Dashboard map widgets. Use a <strong>PUBLIC</strong> access token (starts with <code className="text-[10px] bg-surface-2 px-1 rounded">pk.</code>) from <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">account.mapbox.com</a>. Restrict the token to your production domain in the Mapbox dashboard for safety — it gets embedded in the browser by design.
+        </p>
+        <Field label="Public access token">
+          <input
+            type="password"
+            className="input w-full"
+            value={mapboxToken}
+            onChange={e => setMapboxToken(e.target.value)}
+            placeholder={status.mapbox_token_set ? '••••••••  (leave blank to keep existing)' : 'pk.eyJ1Ij…'}
+            autoComplete="off"
+          />
+          <div className="text-[10px] text-text-3 mt-0.5 flex items-center gap-2">
+            {status.mapbox_token_set
+              ? <span className="text-green-600">✓ Configured — maps use Mapbox tiles</span>
+              : <span>Not set — map widgets show a "configure token" prompt</span>}
+            {status.mapbox_token_set && (
+              <button onClick={() => handleClear('MAPBOX_ACCESS_TOKEN')} className="text-red-500 hover:underline">Clear</button>
+            )}
+          </div>
+        </Field>
+      </div>
+
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim() && !mapboxToken.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>

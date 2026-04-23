@@ -13,16 +13,26 @@ import { WORLD_COUNTRIES } from '../data/worldCountries'
 // solid country shape rather than a blank ocean.
 const COUNTRY_GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
 
-// Admin-1 subdivisions (10m — full global coverage, every country). ~25 MB
-// raw / ~5 MB gzipped. Only fetched when the user toggles to the "Regions"
-// view and loads in the background — the country base layer renders first
-// so the world is never blank while admin-1 streams in. Browser caches the
-// response after first load, so subsequent visits are near-instant.
+// Admin-1 subdivisions. jsDelivr enforces a 20 MB limit on GitHub-sourced
+// files; the 10m version is ~25 MB and returns 403. The 50m file is 2 MB
+// and serves cleanly, but only covers 9 countries (US, Canada, Brazil,
+// Russia, China, India, Indonesia, Australia, South Africa) — the natural-
+// earth-vector repo never expanded the 50m set beyond that.
 //
-// The 50m variant from the same repo is a 9-country subset (confirmed
-// 2026-04-23) — unusable for global region rendering. The 10m file is the
-// actual comprehensive dataset.
-const ADMIN1_GEO_URL  = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_admin_1_states_provinces.geojson'
+// Strategy:
+//   - Fetch the 50m file (always works)
+//   - Rely on the country base layer for everywhere else — so France, UK,
+//     Germany, Mexico, etc. render as country shapes with market colouring,
+//     just without sub-country region breakdown
+//
+// To get full global admin-1 (all states/provinces worldwide), the 10m file
+// needs self-hosting (see docs/MAP_DATA.md — TODO). That's a ~5 MB gzipped
+// static asset in app/public/, not practical to commit to git without LFS.
+// Admin-1 GeoJSON URL — kept as a reference for when the region view is
+// re-enabled (currently disabled, see MarketMap below). Prefixed with an
+// underscore so TS doesn't complain about the unused binding.
+const _ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces.geojson'
+void _ADMIN1_GEO_URL
 
 // Country-name aliases — natural-earth uses its own spellings for a handful
 // of countries. Used by both views for tooltip / lookup resolution.
@@ -97,10 +107,14 @@ export default function MarketMap() {
   const { countries, countryId, setCountryId } = useMarket()
   const { menuTiles } = useDashboardData()
 
-  const [view, setView]   = useState<MapView>('country')
+  // Region view has been disabled — the map is country-level only. The
+  // region-view toggle was removed; see Mapbox widget for an alternative.
+  // `view` is typed as the full MapView union (not the literal 'country')
+  // so the still-present region-rendering code paths below continue to
+  // compile — at runtime they are unreachable because view never changes.
+  const [view] = useState<MapView>('country')
   const [countryGeo, setCountryGeo] = useState<any>(null)
-  const [regionGeo, setRegionGeo]   = useState<any>(null)
-  const [regionsLoading, setRegionsLoading] = useState(false)
+  const regionGeo: any = null
   const [regions, setRegions]       = useState<RegionRow[]>([])
   const [hovered, setHovered]       = useState<HoverState | null>(null)
   const [error, setError]           = useState<string | null>(null)
@@ -129,30 +143,8 @@ export default function MarketMap() {
     return () => { cancelled = true }
   }, [])
 
-  // Lazy-load the 10m admin-1 GeoJSON (~25 MB, covers every country) only
-  // when the user opens the Regions view. Uses AbortController so the
-  // download is cancelled if the user navigates away before it finishes —
-  // the rest of the app is never blocked waiting for this.
-  //
-  // Country base layer renders instantly while this streams in, so the world
-  // is visible the moment Regions is opened; admin-1 polygons overlay on top
-  // as soon as the fetch + parse completes.
-  useEffect(() => {
-    if (view !== 'region' || regionGeo) return
-    const ctrl = new AbortController()
-    setRegionsLoading(true)
-    fetch(ADMIN1_GEO_URL, { signal: ctrl.signal })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(j => { setRegionGeo(j); setRegionsLoading(false) })
-      .catch(e => {
-        if (e?.name === 'AbortError') return           // user navigated away — normal
-        setError(e.message || 'Failed to load region map')
-        setRegionsLoading(false)
-      })
-    return () => ctrl.abort()
-  }, [view, regionGeo])
-
-  // Regions catalog — needed for region view to match market.region_ids → ISO 3166-2.
+  // Regions catalog — still loaded so any remaining region-related helpers
+  // continue to compile; not used in the country-only view but cheap to keep.
   useEffect(() => {
     let cancelled = false
     api.get('/regions')
@@ -298,35 +290,10 @@ export default function MarketMap() {
         <div>
           <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">{useWidgetLabel('World Map')}</h2>
           <p className="text-xs text-text-3 mt-0.5">
-            {view === 'country'
-              ? 'Click a country — tooltip lists every market operating there'
-              : 'Click a region to scope to the market that claims it'}
+            Click a country — tooltip lists every market operating there
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="inline-flex bg-surface-2 rounded p-0.5 text-xs">
-            <button
-              onClick={() => setView('country')}
-              className={`px-2.5 py-1 rounded transition-colors ${view === 'country' ? 'bg-surface text-text-1 shadow-sm' : 'text-text-3 hover:text-text-1'}`}
-            >
-              Countries
-            </button>
-            <button
-              onClick={() => setView('region')}
-              className={`px-2.5 py-1 rounded transition-colors ${view === 'region' ? 'bg-surface text-text-1 shadow-sm' : 'text-text-3 hover:text-text-1'}`}
-            >
-              Regions
-            </button>
-          </div>
-          {regionsLoading && (
-            <span
-              className="inline-flex items-center gap-1.5 text-[10px] text-text-3 px-2 py-0.5 rounded-full bg-surface-2 border border-border"
-              title="Downloading detailed region data (~5 MB gzipped). You can keep using the rest of the app — this streams in the background."
-            >
-              <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
-              Loading detailed regions…
-            </span>
-          )}
           {selectedMarket ? (
             <button onClick={() => setCountryId(null)}
               className="text-xs text-accent hover:underline">✕ Clear</button>
@@ -410,7 +377,7 @@ export default function MarketMap() {
             <Legend color="var(--accent-dim)" label="No data" />
             <Legend color="#CBD5E1"           label="Not in scope" />
             <span className="ml-auto text-text-3/60">
-              {countries.length} markets{view === 'region' ? ` · ${regions.length} regions` : ''}
+              {countries.length} markets
             </span>
           </div>
         </div>

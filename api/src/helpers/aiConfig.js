@@ -23,6 +23,7 @@ const _keys = {
   JIRA_EMAIL:           null,
   JIRA_API_TOKEN:       null,
   JIRA_PROJECT_KEY:     null,
+  MAPBOX_ACCESS_TOKEN:  null,
 };
 
 // One-time migration: pre-feature, AI keys lived in mcogs_settings.data->ai_keys
@@ -130,6 +131,7 @@ function status() {
     jira_email_set:       !!_keys.JIRA_EMAIL,
     jira_token_set:       !!_keys.JIRA_API_TOKEN,
     jira_project_set:     !!_keys.JIRA_PROJECT_KEY,
+    mapbox_token_set:     !!_keys.MAPBOX_ACCESS_TOKEN,
   };
 }
 

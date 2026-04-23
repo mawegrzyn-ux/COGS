@@ -21,6 +21,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'market-stats':      { id: 'market-stats',      label: 'Market Snapshot',   description: 'Headline stats for selected market', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true },
   'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
   'market-map':        { id: 'market-map',        label: 'World Map',         description: '2D world map — click a country to set the active market', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
+  'mapbox-map':        { id: 'mapbox-map',        label: 'Mapbox World Map',  description: 'Vector-tile world map powered by Mapbox GL JS. Requires a Mapbox public token set in System → AI → Mapbox Integration.', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
   'menu-top-items':    { id: 'menu-top-items',    label: 'Top 10 Items / Menu', description: 'Bar chart of top 10 items per menu in the active market (by cost, revenue or COGS%)', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true },
 
   'new-ingredient':    { id: 'new-ingredient',    label: 'New Ingredient',    description: 'Quick-add card — create a new ingredient (optionally with a first price quote) without leaving the dashboard.', defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false },

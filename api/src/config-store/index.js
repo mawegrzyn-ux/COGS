@@ -33,6 +33,11 @@ const AI_KEY_NAMES = [
   'JIRA_EMAIL',
   'JIRA_API_TOKEN',
   'JIRA_PROJECT_KEY',
+  // Mapbox public access token for the dashboard map widgets. By design this
+  // is a PUBLIC token (pk.xxx) meant for browser use — restrict it to the
+  // production domain + localhost in the Mapbox dashboard so a leak is a
+  // non-issue. Stored here alongside other keys for consistent admin UX.
+  'MAPBOX_ACCESS_TOKEN',
 ];
 
 // ── DB connection ────────────────────────────────────────────────────────────

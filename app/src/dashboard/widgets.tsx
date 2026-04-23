@@ -46,6 +46,17 @@ function CountryRegionMapWidget() {
   )
 }
 
+// Lazy-load the Mapbox map (mapbox-gl is a large dependency, only pulled in
+// when this widget actually renders).
+const MapboxMap = lazy(() => import('./MapboxMap'))
+function MapboxMapWidget() {
+  return (
+    <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
+      <MapboxMap />
+    </Suspense>
+  )
+}
+
 // Lazy-load the top-items chart — only fetches /cogs when visible
 const MenuTopItemsChart = lazy(() => import('./MenuTopItemsChart'))
 function MenuTopItemsWidget() {
@@ -1125,6 +1136,7 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'market-stats':      MarketStats,
   'market-header':     MarketHeader,
   'market-map':        MarketMapWidget,
+  'mapbox-map':        MapboxMapWidget,
   'menu-top-items':    MenuTopItemsWidget,
   'new-ingredient':    NewIngredientWidget,
   'new-price-quote':   NewPriceQuoteWidget,

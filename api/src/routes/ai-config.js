@@ -106,4 +106,14 @@ router.get('/claude-code-key', async (_req, res) => {
   }
 });
 
+// GET /ai-config/mapbox-token — return the Mapbox PUBLIC token so the dashboard
+// map widgets can initialise Mapbox GL JS. Public tokens (pk.xxx) are meant
+// for browser use and are expected to be URL-restricted in the Mapbox
+// dashboard, so exposing them to authenticated users is safe by design.
+// If no token is configured the frontend falls back to a "not configured"
+// message pointing the admin at System → AI → Integrations.
+router.get('/mapbox-token', (_req, res) => {
+  res.json({ token: aiConfig.get('MAPBOX_ACCESS_TOKEN') || null });
+});
+
 module.exports = router;

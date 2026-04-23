@@ -90,7 +90,7 @@ function WidgetShell({
   }
 
   return (
-    <div className={`${sizeSpan[slot.size]} relative`}>
+    <div className={`${sizeSpan[slot.size]} relative group`}>
       {editing && (
         <div className="absolute inset-0 rounded-xl border-2 border-dashed border-accent/40 bg-accent-dim/30 z-10 pointer-events-none" />
       )}
@@ -102,16 +102,15 @@ function WidgetShell({
           <Component />
         </WidgetLabelProvider>
 
-        {/* Always-visible pop-out button (top-right, subtle until hover) */}
+        {/* Pop-out button — fades in on widget hover (Tailwind group-hover
+            from the outer div). Hidden in edit mode because the toolbar
+            already has its own pop-out button. */}
         {!editing && (
           <button
             onClick={popOut}
             title="Open in a standalone window"
             aria-label="Open widget in a standalone window"
-            className="absolute top-2 right-2 z-10 w-7 h-7 rounded bg-surface/60 hover:bg-surface border border-transparent hover:border-border text-text-3 hover:text-text-1 transition flex items-center justify-center text-sm"
-            style={{ opacity: 0 }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0' }}
+            className="absolute top-2 right-2 z-10 w-7 h-7 rounded bg-surface/80 hover:bg-surface border border-border text-text-2 hover:text-text-1 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity flex items-center justify-center text-sm shadow-sm"
           >
             ⤢
           </button>

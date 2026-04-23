@@ -6,10 +6,12 @@ import { useMarket } from '../contexts/MarketContext'
 import { useDashboardData } from './DashboardData'
 import { useWidgetLabel } from './widgets'
 
-// Same admin-1 GeoJSON used by MarketMap — 10m variant is the full global
-// dataset (~25 MB, ~5 MB gzipped). Cached by the browser after first load;
-// fetched async via AbortController so nothing else blocks.
-const ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_admin_1_states_provinces.geojson'
+// Same admin-1 GeoJSON used by MarketMap. See the comment in MarketMap.tsx —
+// 50m is used because jsDelivr rejects the 25 MB 10m file with a 403. 50m
+// covers 9 countries (US, CA, BR, RU, CN, IN, ID, AU, ZA); other countries
+// still show at country level via the main map's base layer but won't have
+// sub-country regional breakdown here.
+const ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces.geojson'
 
 interface RegionRow { id: number; country_iso: string; name: string; iso_code: string | null }
 interface Location  { id: number; name: string; country_id: number; latitude: number | null; longitude: number | null }
