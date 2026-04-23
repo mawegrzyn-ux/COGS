@@ -3,97 +3,16 @@ import { useApi } from '../hooks/useApi'
 import { usePermissions } from '../hooks/usePermissions'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
 import { StoresTab } from './StockManagerPage'
+import { WORLD_COUNTRIES, WorldCountry } from '../data/worldCountries'
 
-// ── World Countries (predefined list with ISO alpha-2 codes) ──────────────────
+// Re-export so the rest of this file's types can still reference them without
+// further import churn. The 249-country catalog itself lives in ../data.
+export type { WorldCountry }
 
-interface WorldCountry {
-  iso: string
-  name: string
-  currency_code: string
-  currency_symbol: string
-}
+// (The pre-feature inline WORLD_COUNTRIES array has been moved to
+// app/src/data/worldCountries.ts so the picker can cover all 249 ISO 3166-1
+// countries without bloating this page.)
 
-const WORLD_COUNTRIES: WorldCountry[] = [
-  { iso: 'AF', name: 'Afghanistan',           currency_code: 'AFN', currency_symbol: '؋'    },
-  { iso: 'AL', name: 'Albania',               currency_code: 'ALL', currency_symbol: 'L'    },
-  { iso: 'DZ', name: 'Algeria',               currency_code: 'DZD', currency_symbol: 'DA'   },
-  { iso: 'AR', name: 'Argentina',             currency_code: 'ARS', currency_symbol: 'AR$'  },
-  { iso: 'AU', name: 'Australia',             currency_code: 'AUD', currency_symbol: 'A$'   },
-  { iso: 'AT', name: 'Austria',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'AZ', name: 'Azerbaijan',            currency_code: 'AZN', currency_symbol: '₼'    },
-  { iso: 'BH', name: 'Bahrain',               currency_code: 'BHD', currency_symbol: 'BD'   },
-  { iso: 'BD', name: 'Bangladesh',            currency_code: 'BDT', currency_symbol: '৳'    },
-  { iso: 'BE', name: 'Belgium',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'BR', name: 'Brazil',                currency_code: 'BRL', currency_symbol: 'R$'   },
-  { iso: 'BG', name: 'Bulgaria',              currency_code: 'BGN', currency_symbol: 'лв'   },
-  { iso: 'CA', name: 'Canada',                currency_code: 'CAD', currency_symbol: 'CA$'  },
-  { iso: 'CL', name: 'Chile',                 currency_code: 'CLP', currency_symbol: 'CL$'  },
-  { iso: 'CN', name: 'China',                 currency_code: 'CNY', currency_symbol: '¥'    },
-  { iso: 'CO', name: 'Colombia',              currency_code: 'COP', currency_symbol: 'CO$'  },
-  { iso: 'HR', name: 'Croatia',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'CY', name: 'Cyprus',                currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'CZ', name: 'Czech Republic',        currency_code: 'CZK', currency_symbol: 'Kč'   },
-  { iso: 'DK', name: 'Denmark',               currency_code: 'DKK', currency_symbol: 'kr'   },
-  { iso: 'EG', name: 'Egypt',                 currency_code: 'EGP', currency_symbol: 'E£'   },
-  { iso: 'FI', name: 'Finland',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'FR', name: 'France',                currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'GE', name: 'Georgia',               currency_code: 'GEL', currency_symbol: '₾'    },
-  { iso: 'DE', name: 'Germany',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'GH', name: 'Ghana',                 currency_code: 'GHS', currency_symbol: 'GH₵'  },
-  { iso: 'GR', name: 'Greece',                currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'HK', name: 'Hong Kong',             currency_code: 'HKD', currency_symbol: 'HK$'  },
-  { iso: 'HU', name: 'Hungary',               currency_code: 'HUF', currency_symbol: 'Ft'   },
-  { iso: 'IN', name: 'India',                 currency_code: 'INR', currency_symbol: '₹'    },
-  { iso: 'ID', name: 'Indonesia',             currency_code: 'IDR', currency_symbol: 'Rp'   },
-  { iso: 'IE', name: 'Ireland',               currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'IL', name: 'Israel',                currency_code: 'ILS', currency_symbol: '₪'    },
-  { iso: 'IT', name: 'Italy',                 currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'JP', name: 'Japan',                 currency_code: 'JPY', currency_symbol: '¥'    },
-  { iso: 'JO', name: 'Jordan',                currency_code: 'JOD', currency_symbol: 'JD'   },
-  { iso: 'KZ', name: 'Kazakhstan',            currency_code: 'KZT', currency_symbol: '₸'    },
-  { iso: 'KE', name: 'Kenya',                 currency_code: 'KES', currency_symbol: 'KSh'  },
-  { iso: 'KW', name: 'Kuwait',                currency_code: 'KWD', currency_symbol: 'KD'   },
-  { iso: 'LB', name: 'Lebanon',               currency_code: 'LBP', currency_symbol: 'L£'   },
-  { iso: 'MY', name: 'Malaysia',              currency_code: 'MYR', currency_symbol: 'RM'   },
-  { iso: 'MX', name: 'Mexico',                currency_code: 'MXN', currency_symbol: 'MX$'  },
-  { iso: 'MA', name: 'Morocco',               currency_code: 'MAD', currency_symbol: 'MAD'  },
-  { iso: 'NL', name: 'Netherlands',           currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'NZ', name: 'New Zealand',           currency_code: 'NZD', currency_symbol: 'NZ$'  },
-  { iso: 'NG', name: 'Nigeria',               currency_code: 'NGN', currency_symbol: '₦'    },
-  { iso: 'NO', name: 'Norway',                currency_code: 'NOK', currency_symbol: 'kr'   },
-  { iso: 'OM', name: 'Oman',                  currency_code: 'OMR', currency_symbol: 'OMR'  },
-  { iso: 'PK', name: 'Pakistan',              currency_code: 'PKR', currency_symbol: '₨'    },
-  { iso: 'PE', name: 'Peru',                  currency_code: 'PEN', currency_symbol: 'S/'   },
-  { iso: 'PH', name: 'Philippines',           currency_code: 'PHP', currency_symbol: '₱'    },
-  { iso: 'PL', name: 'Poland',                currency_code: 'PLN', currency_symbol: 'zł'   },
-  { iso: 'PT', name: 'Portugal',              currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'QA', name: 'Qatar',                 currency_code: 'QAR', currency_symbol: 'QR'   },
-  { iso: 'RO', name: 'Romania',               currency_code: 'RON', currency_symbol: 'lei'  },
-  { iso: 'RU', name: 'Russia',                currency_code: 'RUB', currency_symbol: '₽'    },
-  { iso: 'SA', name: 'Saudi Arabia',          currency_code: 'SAR', currency_symbol: 'SR'   },
-  { iso: 'SG', name: 'Singapore',             currency_code: 'SGD', currency_symbol: 'S$'   },
-  { iso: 'SK', name: 'Slovakia',              currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'SI', name: 'Slovenia',              currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'ZA', name: 'South Africa',          currency_code: 'ZAR', currency_symbol: 'R'    },
-  { iso: 'KR', name: 'South Korea',           currency_code: 'KRW', currency_symbol: '₩'    },
-  { iso: 'ES', name: 'Spain',                 currency_code: 'EUR', currency_symbol: '€'    },
-  { iso: 'SE', name: 'Sweden',                currency_code: 'SEK', currency_symbol: 'kr'   },
-  { iso: 'CH', name: 'Switzerland',           currency_code: 'CHF', currency_symbol: 'CHF'  },
-  { iso: 'TW', name: 'Taiwan',                currency_code: 'TWD', currency_symbol: 'NT$'  },
-  { iso: 'TZ', name: 'Tanzania',              currency_code: 'TZS', currency_symbol: 'TSh'  },
-  { iso: 'TH', name: 'Thailand',              currency_code: 'THB', currency_symbol: '฿'    },
-  { iso: 'TN', name: 'Tunisia',               currency_code: 'TND', currency_symbol: 'DT'   },
-  { iso: 'TR', name: 'Turkey',                currency_code: 'TRY', currency_symbol: '₺'    },
-  { iso: 'UG', name: 'Uganda',                currency_code: 'UGX', currency_symbol: 'USh'  },
-  { iso: 'UA', name: 'Ukraine',               currency_code: 'UAH', currency_symbol: '₴'    },
-  { iso: 'AE', name: 'United Arab Emirates',  currency_code: 'AED', currency_symbol: 'AED'  },
-  { iso: 'GB', name: 'United Kingdom',        currency_code: 'GBP', currency_symbol: '£'    },
-  { iso: 'US', name: 'United States',         currency_code: 'USD', currency_symbol: '$'    },
-  { iso: 'UZ', name: 'Uzbekistan',            currency_code: 'UZS', currency_symbol: "so'm" },
-  { iso: 'VN', name: 'Vietnam',               currency_code: 'VND', currency_symbol: '₫'    },
-  { iso: 'ZM', name: 'Zambia',                currency_code: 'ZMW', currency_symbol: 'ZK'   },
-  { iso: 'ZW', name: 'Zimbabwe',              currency_code: 'ZWL', currency_symbol: 'Z$'   },
-].sort((a, b) => a.name.localeCompare(b.name))
 
 function isoToFlag(iso: string | null | undefined): string {
   if (!iso || iso.length !== 2) return '🌐'
@@ -111,6 +30,15 @@ interface Market {
   default_price_level_id: number | null
   country_iso: string | null
   brand_partner_id: number | null
+  parent_country_id: number | null   // NULL = country-level; else regional market under the referenced country
+  region_ids?: number[]              // mcogs_regions this market covers; empty for country-level
+}
+
+interface Region {
+  id: number
+  country_id: number
+  name: string
+  iso_code: string | null
 }
 
 interface TaxRate {
@@ -171,7 +99,7 @@ interface LocationGroup {
 
 // ── Blank forms ───────────────────────────────────────────────────────────────
 
-const blankMarket   = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '' }
+const blankMarket   = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '', parent_country_id: '' as string | number }
 const blankTax      = { name: '', rate: '' }
 const blankBP       = { name: '', contact: '', email: '', phone: '', notes: '' }
 const blankLocation = { name: '', country_id: '', group_id: '', address: '', email: '', phone: '', contact_name: '', contact_email: '', contact_phone: '', is_active: 'true' }
@@ -273,7 +201,7 @@ function CountryPicker({ value, onChange, error }: CountryPickerProps) {
 
 export default function MarketsPage() {
   const api = useApi()
-  const [activeTab, setActiveTab]   = useState<'Brand Partners' | 'Markets' | 'Locations' | 'Centres'>('Brand Partners')
+  const [activeTab, setActiveTab]   = useState<'Brand Partners' | 'Markets' | 'Regions' | 'Locations' | 'Centres'>('Brand Partners')
   const [markets,       setMarkets]       = useState<Market[]>([])
   const [taxRates,      setTaxRates]      = useState<TaxRate[]>([])
   const [priceLevels,   setPriceLevels]   = useState<PriceLevel[]>([])
@@ -282,6 +210,12 @@ export default function MarketsPage() {
   // Per-country price-level enablement map. Key = `${country_id}-${price_level_id}`,
   // value = is_enabled. Missing entry = enabled (preserves pre-feature behaviour).
   const [cplMatrix,     setCplMatrix]     = useState<Map<string, boolean>>(new Map())
+  // Catalog of all sub-country regions, grouped by country_id. Loaded once;
+  // regional markets pick from this list via multi-select in the create/edit modal.
+  const [regions,       setRegions]       = useState<Region[]>([])
+  // Region ids selected in the currently-open market modal (when creating /
+  // editing a regional market). Reset every time the modal opens.
+  const [marketRegionIds, setMarketRegionIds] = useState<number[]>([])
   const [baseCurrency,  setBaseCurrency]  = useState('USD')
   const [loading,       setLoading]       = useState(true)
   const [search,        setSearch]        = useState('')
@@ -334,7 +268,7 @@ export default function MarketsPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [c, t, pl, clt, v, settings, locs, grps] = await Promise.all([
+      const [c, t, pl, clt, v, settings, locs, grps, rgn] = await Promise.all([
         api.get('/countries'),
         api.get('/tax-rates'),
         api.get('/price-levels'),
@@ -343,6 +277,7 @@ export default function MarketsPage() {
         api.get('/settings').catch(() => ({})),
         api.get('/locations'),
         api.get('/location-groups'),
+        api.get('/regions').catch(() => []),   // tolerant of older servers
       ])
       setMarkets(c   || [])
       setTaxRates(t  || [])
@@ -353,6 +288,7 @@ export default function MarketsPage() {
       setBaseCurrency(typeof bc === 'object' && bc !== null ? (bc.code || 'USD') : (bc || 'USD'))
       setLocations(locs  || [])
       setLocationGroups(grps || [])
+      setRegions(rgn || [])
 
       // Load the per-country price-level enablement matrix. Non-fatal on
       // failure — the matrix falls back to "all enabled", which matches the
@@ -509,6 +445,7 @@ export default function MarketsPage() {
   function openAddMarket() {
     setEditingMarket(null)
     setMarketForm(blankMarket)
+    setMarketRegionIds([])
     setMarketErrors({})
     setMarketModal(true)
   }
@@ -521,7 +458,9 @@ export default function MarketsPage() {
       currency_code:   m.currency_code,
       currency_symbol: m.currency_symbol,
       exchange_rate:   m.exchange_rate,
+      parent_country_id: m.parent_country_id == null ? '' : m.parent_country_id,
     })
+    setMarketRegionIds(Array.isArray(m.region_ids) ? m.region_ids.slice() : [])
     setMarketErrors({})
     setMarketModal(true)
   }
@@ -543,12 +482,18 @@ export default function MarketsPage() {
     if (!validateMarket()) return
     setMarketSubmitting(true)
     try {
-      const payload = {
+      const parentId = marketForm.parent_country_id === '' ? null : Number(marketForm.parent_country_id)
+      const payload: Record<string, unknown> = {
         name:            marketForm.name.trim(),
         country_iso:     marketForm.country_iso || null,
         currency_code:   marketForm.currency_code.toUpperCase().trim(),
         currency_symbol: marketForm.currency_symbol.trim(),
         exchange_rate:   Number(marketForm.exchange_rate),
+        parent_country_id: parentId,
+        // region_ids are only meaningful for regional markets. Sending an
+        // empty array for a country-level market explicitly clears any stray
+        // junction rows on edit.
+        region_ids: parentId ? marketRegionIds : [],
       }
       if (editingMarket) {
         await api.put(`/countries/${editingMarket.id}`, payload)
@@ -814,7 +759,7 @@ export default function MarketsPage() {
 
       {/* Tab bar */}
       <div className="flex border-b border-border bg-surface px-6">
-        {(['Brand Partners', 'Markets', 'Locations', 'Centres'] as const).map(tab => (
+        {(['Brand Partners', 'Markets', 'Regions', 'Locations', 'Centres'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setSearch('') }}
@@ -833,6 +778,9 @@ export default function MarketsPage() {
             )}
             {tab === 'Locations' && locations.length > 0 && (
               <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{locations.length}</span>
+            )}
+            {tab === 'Regions' && regions.length > 0 && (
+              <span className="ml-1.5 text-xs bg-surface-2 text-text-3 rounded-full px-1.5 py-0.5">{regions.length}</span>
             )}
           </button>
         ))}
@@ -875,6 +823,8 @@ export default function MarketsPage() {
                     priceLevels={priceLevels}
                     levelTax={levelTax.filter(lt => lt.country_id === market.id)}
                     cplMatrix={cplMatrix}
+                    regions={regions}
+                    parentMarket={market.parent_country_id ? markets.find(m => m.id === market.parent_country_id) ?? null : null}
                     brandPartners={brandPartners}
                     baseCurrency={baseCurrency}
                     onEdit={openEditMarket}
@@ -1176,6 +1126,15 @@ export default function MarketsPage() {
 
           </div>
         </div>
+      ) : activeTab === 'Regions' ? (
+        /* ── Regions tab ── */
+        <RegionsPanel
+          api={api}
+          markets={markets}
+          regions={regions}
+          onRefresh={loadAll}
+          showToast={showToast}
+        />
       ) : (
         /* ── Centres tab ── */
         <CentresPanel api={api} locations={locations} onRefresh={loadAll} />
@@ -1246,6 +1205,73 @@ export default function MarketsPage() {
               placeholder="e.g. 0.79"
             />
           </Field>
+
+          {/* Regional market — optional. When a parent country is chosen, this market
+              is treated as a sub-country market and a region multi-select appears. */}
+          <Field label="Parent market (optional)">
+            <select
+              className="input w-full"
+              value={marketForm.parent_country_id === '' ? '' : String(marketForm.parent_country_id)}
+              onChange={e => {
+                const v = e.target.value
+                setMarketForm(f => ({ ...f, parent_country_id: v === '' ? '' : Number(v) }))
+                // Clear regions when switching parent — they belong to the previous country.
+                setMarketRegionIds([])
+              }}
+            >
+              <option value="">— None (this is a country-level market) —</option>
+              {markets
+                .filter(m => m.parent_country_id == null && (!editingMarket || m.id !== editingMarket.id))
+                .map(m => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+            </select>
+            <p className="text-xs text-text-3 mt-1">
+              Pick a country to make this a regional market (e.g. &ldquo;West Coast USA&rdquo; under &ldquo;USA&rdquo;).
+              Leave blank for a standard country-level market.
+            </p>
+          </Field>
+
+          {marketForm.parent_country_id !== '' && (() => {
+            const parentId = Number(marketForm.parent_country_id)
+            const availableRegions = regions.filter(r => r.country_id === parentId)
+            return (
+              <Field label="Regions covered">
+                {availableRegions.length === 0 ? (
+                  <div className="text-xs text-text-3 p-3 bg-surface-2 rounded border border-border">
+                    No regions configured for the selected country yet. Add some in <strong>Configuration → Markets → Regions</strong>, or leave this empty and the market will have no regional scope.
+                  </div>
+                ) : (
+                  <div className="border border-border rounded p-2 max-h-56 overflow-y-auto bg-surface">
+                    {availableRegions.map(r => {
+                      const checked = marketRegionIds.includes(r.id)
+                      return (
+                        <label key={r.id} className="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-surface-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={e => {
+                              setMarketRegionIds(prev =>
+                                e.target.checked
+                                  ? [...prev, r.id]
+                                  : prev.filter(id => id !== r.id)
+                              )
+                            }}
+                            className="w-4 h-4 accent-accent"
+                          />
+                          <span className="text-sm text-text-2">{r.name}</span>
+                          {r.iso_code && <span className="text-xs text-text-3 ml-auto font-mono">{r.iso_code}</span>}
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-text-3 mt-1">
+                  Multiple markets can claim the same region — franchise arrangements may overlap.
+                </p>
+              </Field>
+            )
+          })()}
 
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setMarketModal(false)}>Cancel</button>
@@ -1497,6 +1523,259 @@ export default function MarketsPage() {
   )
 }
 
+// ── Regions Panel — admin CRUD for sub-country regions ───────────────────────
+// Grouped by country-level market. Inline add form per country, inline
+// edit / delete per region. Uses /api/regions.
+
+function RegionsPanel({ api, markets, regions, onRefresh, showToast }: {
+  api: ReturnType<typeof useApi>
+  markets: Market[]
+  regions: Region[]
+  onRefresh: () => void
+  showToast: (msg: string, type?: 'success' | 'error') => void
+}) {
+  // Only country-level markets can host regions.
+  const countries = useMemo(
+    () => markets.filter(m => m.parent_country_id == null).sort((a, b) => a.name.localeCompare(b.name)),
+    [markets]
+  )
+
+  // Form state for the "add region" input per country. Keyed by country_id.
+  const [addForms, setAddForms] = useState<Record<number, { name: string; iso_code: string }>>({})
+  const [addingFor, setAddingFor] = useState<number | null>(null)
+  // Inline edit state — only one region is editable at a time.
+  const [editing, setEditing] = useState<{ id: number; name: string; iso_code: string } | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  // ISO 3166-2 standard catalog summary. key = country_iso, value = region count.
+  // Populated once on mount from /regions/catalog so each country card knows
+  // whether to show the "Import standard regions" button.
+  const [catalogCounts, setCatalogCounts] = useState<Map<string, number>>(new Map())
+  const [importingFor, setImportingFor] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.get('/regions/catalog').then((rows: any) => {
+      if (cancelled) return
+      const m = new Map<string, number>()
+      ;(rows || []).forEach((r: any) => m.set(String(r.country_iso).toUpperCase(), Number(r.count) || 0))
+      setCatalogCounts(m)
+    }).catch(() => { /* older server — button just won't appear */ })
+    return () => { cancelled = true }
+  }, [api])
+
+  async function handleImportStandard(countryId: number, iso: string, expectedCount: number) {
+    if (!confirm(`Import ${expectedCount} standard regions for ${iso} from the ISO 3166-2 catalog? Existing regions with matching names will be skipped.`)) return
+    setImportingFor(countryId)
+    try {
+      const res = await api.post('/regions/import-standard', { country_id: countryId }) as { imported: number; skipped: number; total: number }
+      showToast(`Imported ${res.imported} regions (${res.skipped} already present)`)
+      onRefresh()
+    } catch (err: any) {
+      showToast(err?.message || 'Import failed', 'error')
+    } finally {
+      setImportingFor(null)
+    }
+  }
+
+  function getForm(countryId: number) {
+    return addForms[countryId] || { name: '', iso_code: '' }
+  }
+
+  function setForm(countryId: number, patch: Partial<{ name: string; iso_code: string }>) {
+    setAddForms(prev => ({ ...prev, [countryId]: { ...getForm(countryId), ...patch } }))
+  }
+
+  async function handleAdd(countryId: number) {
+    const form = getForm(countryId)
+    if (!form.name.trim()) return
+    setAddingFor(countryId)
+    try {
+      await api.post('/regions', {
+        country_id: countryId,
+        name:       form.name.trim(),
+        iso_code:   form.iso_code.trim() || null,
+      })
+      setForm(countryId, { name: '', iso_code: '' })
+      showToast('Region added')
+      onRefresh()
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to add region', 'error')
+    } finally {
+      setAddingFor(null)
+    }
+  }
+
+  async function handleUpdate() {
+    if (!editing || !editing.name.trim()) return
+    setSaving(true)
+    try {
+      await api.put(`/regions/${editing.id}`, { name: editing.name.trim(), iso_code: editing.iso_code.trim() || null })
+      setEditing(null)
+      showToast('Region updated')
+      onRefresh()
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update region', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(id: number) {
+    setDeletingId(id)
+    try {
+      await api.delete(`/regions/${id}`)
+      showToast('Region deleted')
+      onRefresh()
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to delete region', 'error')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  if (countries.length === 0) {
+    return (
+      <div className="p-8 text-center text-sm text-text-3">
+        Add a country-level market first (Markets tab), then come back to configure its regions.
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 space-y-5">
+      <div className="text-sm text-text-3">
+        Manage sub-country regions (e.g. US states, UK nations, Canadian provinces). Regions are a shared catalog — multiple markets within the same country can claim the same region.
+      </div>
+
+      {countries.map(country => {
+        const list  = regions.filter(r => r.country_id === country.id)
+        const form  = getForm(country.id)
+        const isAdding = addingFor === country.id
+
+        return (
+          <div key={country.id} className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-surface-2 border-b border-border gap-3 flex-wrap">
+              {(() => {
+                const iso = (country.country_iso || '').toUpperCase()
+                const catalogCount = iso ? catalogCounts.get(iso) ?? 0 : 0
+                const canImport = catalogCount > 0 && catalogCount > list.length
+                return canImport && (
+                  <button
+                    className="btn-outline px-3 py-1 text-xs whitespace-nowrap order-last"
+                    onClick={() => handleImportStandard(country.id, iso, catalogCount)}
+                    disabled={importingFor === country.id}
+                    title={`${catalogCount} standard ISO 3166-2 regions available`}
+                  >
+                    {importingFor === country.id
+                      ? 'Importing…'
+                      : `Import ${catalogCount - list.length} from standard catalog`}
+                  </button>
+                )
+              })()}
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-text-1">{country.name}</span>
+                <span className="text-xs text-text-3">{list.length} {list.length === 1 ? 'region' : 'regions'}</span>
+              </div>
+            </div>
+
+            {/* Inline add form */}
+            <div className="flex gap-2 px-4 py-3 border-b border-border bg-surface">
+              <input
+                className="input text-sm flex-1"
+                placeholder="Region name (e.g. California)"
+                value={form.name}
+                onChange={e => setForm(country.id, { name: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') handleAdd(country.id) }}
+                disabled={isAdding}
+              />
+              <input
+                className="input text-sm w-28 font-mono uppercase"
+                placeholder="ISO (US-CA)"
+                value={form.iso_code}
+                onChange={e => setForm(country.id, { iso_code: e.target.value.toUpperCase() })}
+                onKeyDown={e => { if (e.key === 'Enter') handleAdd(country.id) }}
+                disabled={isAdding}
+                maxLength={10}
+              />
+              <button
+                className="btn-primary px-4 text-sm"
+                onClick={() => handleAdd(country.id)}
+                disabled={!form.name.trim() || isAdding}
+              >
+                {isAdding ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+
+            {/* Region rows */}
+            {list.length === 0 ? (
+              <div className="px-4 py-4 text-xs text-text-3 italic">
+                No regions yet for {country.name}. Add some above.
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {list.map(r => {
+                  const isEditing = editing?.id === r.id
+                  return (
+                    <li key={r.id} className="px-4 py-2.5 flex items-center gap-3">
+                      {isEditing ? (
+                        <>
+                          <input
+                            className="input text-sm flex-1"
+                            value={editing!.name}
+                            onChange={e => setEditing(v => v ? { ...v, name: e.target.value } : v)}
+                            autoFocus
+                          />
+                          <input
+                            className="input text-sm w-28 font-mono uppercase"
+                            value={editing!.iso_code}
+                            onChange={e => setEditing(v => v ? { ...v, iso_code: e.target.value.toUpperCase() } : v)}
+                            maxLength={10}
+                          />
+                          <button className="btn-primary px-3 py-1 text-xs" onClick={handleUpdate} disabled={saving}>
+                            {saving ? '…' : 'Save'}
+                          </button>
+                          <button className="btn-ghost px-3 py-1 text-xs" onClick={() => setEditing(null)} disabled={saving}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-sm text-text-1 flex-1">{r.name}</span>
+                          {r.iso_code && (
+                            <span className="text-xs font-mono text-text-3 px-2 py-0.5 rounded bg-surface-2 border border-border">
+                              {r.iso_code}
+                            </span>
+                          )}
+                          <button
+                            className="btn-ghost px-2 py-1 text-xs flex items-center gap-1"
+                            onClick={() => setEditing({ id: r.id, name: r.name, iso_code: r.iso_code || '' })}
+                          >
+                            <EditIcon size={12} /> Edit
+                          </button>
+                          <button
+                            className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50 flex items-center gap-1"
+                            onClick={() => {
+                              if (confirm(`Delete region "${r.name}"? Any markets claiming it will lose the association.`)) handleDelete(r.id)
+                            }}
+                            disabled={deletingId === r.id}
+                          >
+                            <TrashIcon size={12} /> {deletingId === r.id ? '…' : 'Delete'}
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Centres Panel (wraps StoresTab from StockManagerPage) ─────────────────────
 
 function CentresPanel({ api, locations, onRefresh }: {
@@ -1533,6 +1812,8 @@ interface MarketCardProps {
   priceLevels:            PriceLevel[]
   levelTax:               MarketLevelTax[]
   cplMatrix:              Map<string, boolean>
+  regions:                Region[]
+  parentMarket:           Market | null   // resolved parent country-level market (null when this IS country-level)
   brandPartners:          BrandPartner[]
   baseCurrency:           string
   onEdit:                 (m: Market) => void
@@ -1548,10 +1829,11 @@ interface MarketCardProps {
 }
 
 function MarketCard({
-  market, taxRates, priceLevels, levelTax, cplMatrix, brandPartners, baseCurrency,
+  market, taxRates, priceLevels, levelTax, cplMatrix, regions, parentMarket, brandPartners, baseCurrency,
   onEdit, onDelete, onAddTax, onEditTax, onDeleteTax, onSetDefaultTax,
   onSetDefaultPriceLevel, onSetLevelTax, onSetLevelEnabled, onSetBrandPartner,
 }: MarketCardProps) {
+  const marketRegions = (market.region_ids || []).map(id => regions.find(r => r.id === id)).filter((r): r is Region => !!r)
   const flag          = isoToFlag(market.country_iso)
   const rate          = Number(market.exchange_rate)
   const linkedCountry = WORLD_COUNTRIES.find(c => c.iso === market.country_iso)
@@ -1566,9 +1848,21 @@ function MarketCard({
             {flag}
           </div>
           <div>
-            <div className="font-bold text-text-1 text-sm">{market.name}</div>
+            <div className="font-bold text-text-1 text-sm flex items-center gap-2">
+              {market.name}
+              {parentMarket && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent-dim text-accent uppercase tracking-wider" title={`Sub-country market of ${parentMarket.name}`}>
+                  REGIONAL
+                </span>
+              )}
+            </div>
             <div className="text-xs text-text-3 flex items-center gap-2 mt-0.5 flex-wrap">
-              {linkedCountry && (
+              {parentMarket ? (
+                <>
+                  <span className="text-text-2">{parentMarket.name}</span>
+                  <span>·</span>
+                </>
+              ) : linkedCountry && (
                 <>
                   <span className="text-text-2">{linkedCountry.name}</span>
                   <span>·</span>
@@ -1580,6 +1874,15 @@ function MarketCard({
               <span>·</span>
               <span className="font-mono">1 {baseCurrency} = {rate.toFixed(4)} {market.currency_code}</span>
             </div>
+            {marketRegions.length > 0 && (
+              <div className="text-xs text-text-3 mt-1 flex flex-wrap gap-1">
+                {marketRegions.map(r => (
+                  <span key={r.id} className="inline-block px-1.5 py-0.5 rounded bg-surface-2 border border-border text-text-2">
+                    {r.name}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

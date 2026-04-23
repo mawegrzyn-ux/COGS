@@ -61,6 +61,7 @@ router.use('/countries',          ...can('markets', 'read'),     write('markets'
 router.use('/tax-rates',          ...can('markets', 'read'),     write('markets'),     require('./tax-rates'));
 router.use('/country-level-tax',  ...can('markets', 'read'),     write('markets'),     require('./country-level-tax'));
 router.use('/brand-partners',     ...can('markets', 'read'),     write('markets'),     require('./brand-partners'));
+router.use('/regions',            ...can('markets', 'read'),     write('markets'),     require('./regions'));
 
 // ── Categories ─────────────────────────────────────────────────────────────────
 router.use('/category-groups',    ...can('categories', 'read'),  write('categories'),  require('./category-groups'));

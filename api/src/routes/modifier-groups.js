@@ -88,8 +88,11 @@ router.put('/:id', async (req, res, next) => {
     const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
     const { rows: [old] } = await pool.query('SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
-      `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5, allow_repeat_selection=$6, default_auto_show=$7
-       WHERE id=$8 RETURNING *`,
+      `UPDATE mcogs_modifier_groups
+          SET name=$1, display_name=$2, description=$3, min_select=$4,
+              max_select=$5, allow_repeat_selection=$6, default_auto_show=$7,
+              updated_at = NOW()
+        WHERE id=$8 RETURNING *`,
       [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });

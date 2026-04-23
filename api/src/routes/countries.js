@@ -3,9 +3,22 @@ const pool = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /countries
+// Each row includes `region_ids` — an array of mcogs_regions.id that this
+// market covers (empty for country-level markets). Aggregated via LATERAL
+// subquery so there's only one round trip.
 router.get('/', async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT * FROM mcogs_countries ORDER BY name ASC`);
+    const { rows } = await pool.query(
+      `SELECT c.*,
+              COALESCE(r.region_ids, '{}'::int[]) AS region_ids
+       FROM   mcogs_countries c
+       LEFT   JOIN LATERAL (
+         SELECT array_agg(mr.region_id ORDER BY mr.region_id) AS region_ids
+         FROM   mcogs_market_regions mr
+         WHERE  mr.market_id = c.id
+       ) r ON true
+       ORDER  BY c.name ASC`
+    );
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -15,53 +28,145 @@ router.get('/', async (req, res) => {
 
 // POST /countries
 router.post('/', async (req, res) => {
-  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso } = req.body;
+  const {
+    name, currency_code, currency_symbol, exchange_rate,
+    default_price_level_id, country_iso,
+    parent_country_id,
+    region_ids,                // optional array of mcogs_regions.id this market covers
+  } = req.body;
   if (!name || !currency_code || !currency_symbol || exchange_rate == null)
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO mcogs_countries (name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null]
+  // Guard against nested regions — a regional market's parent must itself be
+  // a country-level market (parent_country_id NULL).
+  if (parent_country_id) {
+    const { rows: [parent] } = await pool.query(
+      'SELECT parent_country_id FROM mcogs_countries WHERE id = $1',
+      [parent_country_id]
     );
-    logAudit(pool, req, { action: 'create', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name });
-    res.status(201).json(rows[0]);
+    if (!parent) return res.status(400).json({ error: { message: 'Parent market not found' } });
+    if (parent.parent_country_id) {
+      return res.status(400).json({ error: { message: 'Cannot nest a region under another region. Parent must be a country-level market.' } });
+    }
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO mcogs_countries
+         (name, currency_code, currency_symbol, exchange_rate,
+          default_price_level_id, country_iso, parent_country_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate,
+        default_price_level_id || null,
+        country_iso ? country_iso.toUpperCase().trim() : null,
+        parent_country_id || null,
+      ]
+    );
+    const created = rows[0];
+    // If caller supplied region_ids, attach them. Only meaningful for regional
+    // markets — silently ignored for country-level markets to keep the API
+    // tolerant of stale UI state.
+    if (Array.isArray(region_ids) && region_ids.length && parent_country_id) {
+      const values = region_ids.map((_, i) => `($1, $${i + 2})`).join(',');
+      await client.query(
+        `INSERT INTO mcogs_market_regions (market_id, region_id) VALUES ${values}
+         ON CONFLICT DO NOTHING`,
+        [created.id, ...region_ids]
+      );
+    }
+    await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'country', entity_id: created.id, entity_label: created.name });
+    res.status(201).json(created);
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create country' } });
+  } finally {
+    client.release();
   }
 });
 
 // PUT /countries/:id
 router.put('/:id', async (req, res) => {
-  const { name, currency_code, currency_symbol, exchange_rate, default_price_level_id, country_iso } = req.body;
+  const {
+    name, currency_code, currency_symbol, exchange_rate,
+    default_price_level_id, country_iso,
+    parent_country_id,
+    region_ids,               // optional — when supplied, replaces the market's regions
+  } = req.body;
   if (!name || !currency_code || !currency_symbol || exchange_rate == null)
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
+  // Parent-market sanity: cannot be self, cannot be a regional market itself.
+  if (parent_country_id && Number(parent_country_id) === Number(req.params.id)) {
+    return res.status(400).json({ error: { message: 'Market cannot be its own parent.' } });
+  }
+  if (parent_country_id) {
+    const { rows: [parent] } = await pool.query(
+      'SELECT parent_country_id FROM mcogs_countries WHERE id = $1',
+      [parent_country_id]
+    );
+    if (!parent) return res.status(400).json({ error: { message: 'Parent market not found' } });
+    if (parent.parent_country_id) {
+      return res.status(400).json({ error: { message: 'Cannot nest a region under another region. Parent must be a country-level market.' } });
+    }
+  }
+  const client = await pool.connect();
   try {
-    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_countries WHERE id=$1', [req.params.id]);
-    const { rows } = await pool.query(
+    await client.query('BEGIN');
+    const { rows: [old] } = await client.query('SELECT * FROM mcogs_countries WHERE id=$1', [req.params.id]);
+    const { rows } = await client.query(
       `UPDATE mcogs_countries
        SET name=$1, currency_code=$2, currency_symbol=$3, exchange_rate=$4,
-           default_price_level_id=$5, country_iso=$6, updated_at=NOW()
-       WHERE id=$7 RETURNING *`,
-      [name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate, default_price_level_id || null, country_iso ? country_iso.toUpperCase().trim() : null, req.params.id]
+           default_price_level_id=$5, country_iso=$6, parent_country_id=$7, updated_at=NOW()
+       WHERE id=$8 RETURNING *`,
+      [
+        name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate,
+        default_price_level_id || null,
+        country_iso ? country_iso.toUpperCase().trim() : null,
+        parent_country_id || null,
+        req.params.id,
+      ]
     );
-    if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
-    logAudit(pool, req, { action: 'update', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'currency_code', 'currency_symbol', 'exchange_rate', 'default_price_level_id']) });
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'Not found' } });
+    }
+    // If region_ids was supplied, fully replace the market's region set.
+    // Undefined => leave existing rows alone (lets callers skip the junction).
+    if (Array.isArray(region_ids)) {
+      await client.query('DELETE FROM mcogs_market_regions WHERE market_id = $1', [req.params.id]);
+      if (region_ids.length) {
+        const values = region_ids.map((_, i) => `($1, $${i + 2})`).join(',');
+        await client.query(
+          `INSERT INTO mcogs_market_regions (market_id, region_id) VALUES ${values}
+           ON CONFLICT DO NOTHING`,
+          [req.params.id, ...region_ids]
+        );
+      }
+    }
+    await client.query('COMMIT');
+    logAudit(pool, req, {
+      action: 'update', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name,
+      field_changes: diffFields(old, rows[0], ['name', 'currency_code', 'currency_symbol', 'exchange_rate', 'default_price_level_id', 'parent_country_id']),
+    });
     res.json(rows[0]);
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to update country' } });
+  } finally {
+    client.release();
   }
 });
 
 // PATCH /countries/:id  (partial — used for default_price_level_id inline update)
 router.patch('/:id', async (req, res) => {
-  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso','brand_partner_id'];
+  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso','brand_partner_id','parent_country_id'];
   const fields  = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length)
     return res.status(400).json({ error: { message: 'No valid fields to update' } });
