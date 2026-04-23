@@ -3413,6 +3413,16 @@ const migrations = [
      ('AU','Australian Capital Territory','AU-ACT'),
      ('AU','Northern Territory','AU-NT')
    ON CONFLICT (country_iso, name) DO NOTHING`,
+
+  // ── Step 135: Location coordinates (for the country-region map widget) ────
+  // Admin-2 polygons (city boundaries) aren't available as a clean world
+  // dataset, so location-level cartography uses point markers instead. Capture
+  // lat/lng on each location so the dashboard's country-region map can plot
+  // franchise stores as pins over their country's regional polygons. Nullable
+  // — existing rows keep working without coordinates, they simply aren't
+  // plotted.
+  `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS latitude  NUMERIC(10, 7)`,
+  `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS longitude NUMERIC(11, 7)`,
 ];
 
 async function runMigrations(pool) {

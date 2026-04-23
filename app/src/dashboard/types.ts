@@ -21,6 +21,7 @@ export type WidgetId =
   | 'menu-top-items'
   | 'new-ingredient'    // Quick-add ingredient (optionally with price quote) from the dashboard
   | 'new-price-quote'   // Quick-add a price quote for an existing ingredient
+  | 'country-region-map' // Zoomed-in map of one country's regions (follows the selected market)
 
 // Widget size — maps to CSS grid col-span (out of 12)
 export type WidgetSize = 'sm' | 'md' | 'lg' | 'xl'

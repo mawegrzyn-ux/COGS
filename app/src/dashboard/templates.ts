@@ -25,6 +25,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 
   'new-ingredient':    { id: 'new-ingredient',    label: 'New Ingredient',    description: 'Quick-add card — create a new ingredient (optionally with a first price quote) without leaving the dashboard.', defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false },
   'new-price-quote':   { id: 'new-price-quote',   label: 'New Price Quote',   description: 'Quick-add card — log a price quote for an existing ingredient + vendor in one click.',                                   defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false },
+  'country-region-map': { id: 'country-region-map', label: 'Country Region Map', description: 'Zoomed-in map of the selected market\'s country, highlighting every region claimed by any market. City pins appear for locations with captured lat/lng.', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────

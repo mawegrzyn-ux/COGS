@@ -15,6 +15,16 @@ function MarketMapWidget() {
   )
 }
 
+// Lazy-load the country-region map too (shares the admin-1 GeoJSON + d3-geo).
+const CountryRegionMap = lazy(() => import('./CountryRegionMap'))
+function CountryRegionMapWidget() {
+  return (
+    <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
+      <CountryRegionMap />
+    </Suspense>
+  )
+}
+
 // Lazy-load the top-items chart — only fetches /cogs when visible
 const MenuTopItemsChart = lazy(() => import('./MenuTopItemsChart'))
 function MenuTopItemsWidget() {
@@ -1095,4 +1105,5 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'menu-top-items':    MenuTopItemsWidget,
   'new-ingredient':    NewIngredientWidget,
   'new-price-quote':   NewPriceQuoteWidget,
+  'country-region-map': CountryRegionMapWidget,
 }
