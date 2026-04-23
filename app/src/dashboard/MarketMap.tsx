@@ -243,12 +243,25 @@ export default function MarketMap() {
   const activeGeo = view === 'country' ? countryGeo : regionGeo
   const loading = !activeGeo && !error
 
+  // When fullscreen, inset is computed from CSS custom properties that
+  // AppLayout keeps up to date with Pepper's current dock (see the
+  // --pepper-left / --pepper-right / --pepper-bottom vars set there). This
+  // way the fullscreen overlay stops at Pepper's edge instead of covering it.
+  const fullscreenStyle: React.CSSProperties = fullscreen
+    ? {
+        top:    0,
+        left:   'var(--pepper-left, 0px)',
+        right:  'var(--pepper-right, 0px)',
+        bottom: 'var(--pepper-bottom, 0px)',
+      }
+    : {}
+
   const containerClass = fullscreen
-    ? 'fixed inset-0 z-50 bg-surface p-6 flex flex-col overflow-auto'
+    ? 'fixed z-40 bg-surface p-6 flex flex-col overflow-auto'
     : 'card p-5 h-full relative overflow-hidden'
 
   return (
-    <div className={containerClass}>
+    <div className={containerClass} style={fullscreenStyle}>
       <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">World Map</h2>

@@ -325,6 +325,28 @@ export default function AppLayout() {
 
   const pepperToggle = useCallback(() => setPepperOpen(o => !o), [])
 
+  // Expose the current Pepper dock dimensions as CSS custom properties on the
+  // document root so any widget that enters a fullscreen mode (e.g. MarketMap)
+  // can respect them and avoid covering the chat panel. Values update live as
+  // the user resizes or toggles Pepper.
+  //
+  // Usage from a fullscreen overlay:
+  //   inset: 0 var(--pepper-right) var(--pepper-bottom) var(--pepper-left);
+  useEffect(() => {
+    const root = document.documentElement.style
+    const leftPx   = showPepper && pepperMode === 'docked-left'   ? `${panelWidth}px`  : '0px'
+    const rightPx  = showPepper && pepperMode === 'docked-right'  ? `${panelWidth}px`  : '0px'
+    const bottomPx = showPepper && pepperMode === 'docked-bottom' ? `${panelHeight}px` : '0px'
+    root.setProperty('--pepper-left',   leftPx)
+    root.setProperty('--pepper-right',  rightPx)
+    root.setProperty('--pepper-bottom', bottomPx)
+    return () => {
+      root.removeProperty('--pepper-left')
+      root.removeProperty('--pepper-right')
+      root.removeProperty('--pepper-bottom')
+    }
+  }, [showPepper, pepperMode, panelWidth, panelHeight])
+
   // ── Keyboard shortcut: Ctrl+Shift+P (or Cmd+Shift+P) → open/focus Pepper ──
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
