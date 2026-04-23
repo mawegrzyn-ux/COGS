@@ -318,7 +318,14 @@ export function Field({ label, hint, error, required, children }: FieldProps) {
   return (
     <div className="mb-4">
       <label htmlFor={wiredId} className="block text-sm font-semibold text-text-2 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+        {label}
+        {required && (
+          // aria-hidden so the asterisk isn't appended to the label's accessible
+          // name. Screen readers should surface the required state via the
+          // input's `required`/`aria-required` attribute, not a visual marker,
+          // and tests using getByLabel('Name') shouldn't have to match 'Name*'.
+          <span aria-hidden="true" className="text-red-500 ml-0.5">*</span>
+        )}
       </label>
       {hint && <p className="text-xs text-text-3 mb-1.5 -mt-1">{hint}</p>}
       {wiredChildren}
