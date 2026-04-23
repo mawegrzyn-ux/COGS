@@ -1,6 +1,6 @@
 import { useParams, useSearchParams } from 'react-router-dom'
 import { DashboardDataProvider } from '../dashboard/DashboardData'
-import { WIDGET_COMPONENTS, WidgetLabelProvider } from '../dashboard/widgets'
+import { WIDGET_COMPONENTS, WidgetLabelProvider, WidgetPopoutProvider } from '../dashboard/widgets'
 import { WIDGET_REGISTRY } from '../dashboard/templates'
 import { WidgetId } from '../dashboard/types'
 
@@ -64,9 +64,11 @@ export default function WidgetPopoutPage() {
 
         <main className="flex-1 p-4 overflow-auto">
           <div className="h-full">
-            <WidgetLabelProvider label={customLabel}>
-              <Component />
-            </WidgetLabelProvider>
+            <WidgetPopoutProvider>
+              <WidgetLabelProvider label={customLabel}>
+                <Component />
+              </WidgetLabelProvider>
+            </WidgetPopoutProvider>
           </div>
         </main>
       </div>

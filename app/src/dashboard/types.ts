@@ -19,6 +19,7 @@ export type WidgetId =
   | 'market-header'
   | 'market-map'
   | 'mapbox-map'        // Mapbox GL JS world map (vector tiles, requires token)
+  | 'mapbox-country-map' // Mapbox GL JS zoomed-in country+regions view (requires token)
   | 'menu-top-items'
   | 'new-ingredient'    // Quick-add ingredient (optionally with price quote) from the dashboard
   | 'new-price-quote'   // Quick-add a price quote for an existing ingredient

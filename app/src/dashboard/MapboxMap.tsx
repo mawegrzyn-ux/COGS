@@ -5,7 +5,7 @@ import { useApi } from '../hooks/useApi'
 import { useMarket } from '../contexts/MarketContext'
 import { useDashboardData } from './DashboardData'
 import { useMapboxToken } from '../hooks/useMapboxToken'
-import { useWidgetLabel } from './widgets'
+import { useWidgetLabel, useIsWidgetPopout } from './widgets'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const COUNTRY_SRC_ID   = 'mb-countries'
@@ -58,6 +58,7 @@ export default function MapboxMap() {
   const { menuTiles } = useDashboardData()
   const { token, loading: tokenLoading } = useMapboxToken()
   const label = useWidgetLabel('Mapbox World Map')
+  const isPopout = useIsWidgetPopout()
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef       = useRef<MbMap | null>(null)
@@ -72,6 +73,13 @@ export default function MapboxMap() {
   const [regionGeo, setRegionGeo]       = useState<any>(null)
   const [regionGeoLoading, setRegionGeoLoading] = useState(false)
   const [regions, setRegions]           = useState<RegionRow[]>([])
+
+  // When rendered in the pop-out window, expand to fill the viewport
+  // automatically — the user opened a dedicated window specifically for this
+  // widget, so they want it maximised.
+  useEffect(() => {
+    if (isPopout) setFullscreen(true)
+  }, [isPopout])
 
   // Esc closes fullscreen + body scroll lock.
   useEffect(() => {
@@ -147,8 +155,9 @@ export default function MapboxMap() {
     })
   }, [countries, regionIdToIso])
 
-  // Per-country colour (all markets for that ISO, COGS-blended)
-  const countryFillData = useMemo(() => {
+  // Per-country colour for the **country view** — blends all markets for an
+  // ISO regardless of region-scoping.
+  const countryFillDataAll = useMemo(() => {
     const groups = new Map<string, typeof marketCoverage>()
     for (const mc of marketCoverage) {
       if (!mc.country_iso) continue
@@ -166,6 +175,32 @@ export default function MapboxMap() {
     }
     return out
   }, [marketCoverage, avgCogsByMarket])
+
+  // Per-country colour for the **region view** — only whole-country markets
+  // contribute. Countries that are exclusively region-scoped render as
+  // "not in scope" at the country level so the region layer on top is the
+  // sole indicator of what's claimed.
+  const countryFillDataWholeOnly = useMemo(() => {
+    const groups = new Map<string, typeof marketCoverage>()
+    for (const mc of marketCoverage) {
+      if (!mc.country_iso || !mc.isWholeCountry) continue
+      const list = groups.get(mc.country_iso) ?? []
+      list.push(mc)
+      groups.set(mc.country_iso, list)
+    }
+    const out = new Map<string, { color: string; markets: typeof marketCoverage }>()
+    for (const [iso, markets] of groups.entries()) {
+      const vals = markets.map(m => avgCogsByMarket[m.market.id]).filter(v => v != null) as number[]
+      const color = vals.length
+        ? fillForCogs(vals.reduce((s, n) => s + n, 0) / vals.length)
+        : COLOR_ACCENT_DIM
+      out.set(iso, { color, markets })
+    }
+    return out
+  }, [marketCoverage, avgCogsByMarket])
+
+  // Pick the appropriate map for the current view.
+  const countryFillData = view === 'region' ? countryFillDataWholeOnly : countryFillDataAll
 
   // Per-region colour — only region-owning markets contribute.
   const regionFillData = useMemo(() => {
@@ -556,14 +591,16 @@ export default function MapboxMap() {
           ) : (
             <span className="text-xs text-text-3">No market selected</span>
           )}
-          <button
-            onClick={() => setFullscreen(v => !v)}
-            className="text-xs text-text-3 hover:text-text-1 px-2 py-1 rounded hover:bg-surface-2 transition-colors flex items-center gap-1"
-            title={fullscreen ? 'Exit full screen (Esc)' : 'Open full screen'}
-            aria-label={fullscreen ? 'Exit full screen' : 'Open full screen'}
-          >
-            {fullscreen ? '⤢ Exit' : '⛶ Full screen'}
-          </button>
+          {!isPopout && (
+            <button
+              onClick={() => setFullscreen(v => !v)}
+              className="text-xs text-text-3 hover:text-text-1 px-2 py-1 rounded hover:bg-surface-2 transition-colors flex items-center gap-1"
+              title={fullscreen ? 'Exit full screen (Esc)' : 'Open full screen'}
+              aria-label={fullscreen ? 'Exit full screen' : 'Open full screen'}
+            >
+              {fullscreen ? '⤢ Exit' : '⛶ Full screen'}
+            </button>
+          )}
         </div>
       </div>
 

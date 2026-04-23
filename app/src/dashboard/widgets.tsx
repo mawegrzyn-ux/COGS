@@ -26,6 +26,21 @@ export function useWidgetLabel(fallback: string): string {
   return override?.trim() ? override : fallback
 }
 
+// ── Widget-popout context ─────────────────────────────────────────────────────
+// True when the widget is being rendered inside the standalone pop-out page
+// (window opened via WidgetPopoutPage). Widgets that have a "fullscreen" or
+// "expanded" UX can opt in to enabling it automatically when popped out so
+// the user gets max real estate in the new window.
+const WidgetPopoutContext = createContext<boolean>(false)
+
+export function WidgetPopoutProvider({ children }: { children: ReactNode }) {
+  return <WidgetPopoutContext.Provider value={true}>{children}</WidgetPopoutContext.Provider>
+}
+
+export function useIsWidgetPopout(): boolean {
+  return useContext(WidgetPopoutContext)
+}
+
 // Lazy-load the map widget so react-simple-maps + d3-geo only load when used
 const MarketMap = lazy(() => import('./MarketMap'))
 function MarketMapWidget() {
@@ -53,6 +68,16 @@ function MapboxMapWidget() {
   return (
     <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
       <MapboxMap />
+    </Suspense>
+  )
+}
+
+// Mapbox country-zoom widget — same lazy-load pattern.
+const MapboxCountryMap = lazy(() => import('./MapboxCountryMap'))
+function MapboxCountryMapWidget() {
+  return (
+    <Suspense fallback={<div className="card p-5 h-full"><div className="h-64 bg-surface-2 rounded-lg animate-pulse" /></div>}>
+      <MapboxCountryMap />
     </Suspense>
   )
 }
@@ -1137,6 +1162,7 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'market-header':     MarketHeader,
   'market-map':        MarketMapWidget,
   'mapbox-map':        MapboxMapWidget,
+  'mapbox-country-map': MapboxCountryMapWidget,
   'menu-top-items':    MenuTopItemsWidget,
   'new-ingredient':    NewIngredientWidget,
   'new-price-quote':   NewPriceQuoteWidget,
