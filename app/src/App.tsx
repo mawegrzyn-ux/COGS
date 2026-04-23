@@ -26,6 +26,7 @@ const AuditRunnerPage     = lazy(() => import('./pages/audits/AuditRunnerPage'))
 const AuditReportPage     = lazy(() => import('./pages/audits/AuditReportPage'))
 const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage'))
 import SharedMenuPage       from './pages/SharedMenuPage'
+import WidgetPopoutPage     from './pages/WidgetPopoutPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
@@ -99,6 +100,15 @@ export default function App() {
             <Route path="pos-tester"   element={<PosTesterPage />} />
             <Route path="import"        element={<Navigate to="/configuration" replace />} />
           </Route>
+
+          {/* Protected but outside the AppLayout shell — the widget popout is
+              launched via window.open() and needs just the widget, not the
+              sidebar / Pepper dock. Still requires auth + active user status. */}
+          <Route path="/widget/:widgetId" element={
+            <ProtectedRoute>
+              <WidgetPopoutPage />
+            </ProtectedRoute>
+          } />
 
           {/* Public shared pages — no auth, outside RBAC */}
           <Route path="/share/:slug" element={<SharedMenuPage />} />

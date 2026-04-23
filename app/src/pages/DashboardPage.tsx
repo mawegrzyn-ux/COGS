@@ -64,7 +64,7 @@ function saveConfig(cfg: DashboardConfig) {
 // ── Widget chrome (render + edit mode controls) ───────────────────────────────
 
 function WidgetShell({
-  slot, index, total, editing, onMove, onRemove, onResize,
+  slot, index, total, editing, onMove, onRemove, onResize, onRename,
 }: {
   slot: SlotConfig
   index: number
@@ -73,20 +73,74 @@ function WidgetShell({
   onMove: (from: number, to: number) => void
   onRemove: (idx: number) => void
   onResize: (idx: number, size: WidgetSize) => void
+  onRename: (idx: number, label: string) => void
 }) {
   const meta = WIDGET_REGISTRY[slot.widgetId]
   const Component = WIDGET_COMPONENTS[slot.widgetId]
   if (!Component || !meta) return null
+
+  const displayLabel = slot.customLabel || meta.label
+  const showTitleBar = !!slot.customLabel || editing
+
+  // Open this widget in a standalone window. Shared localStorage + cookies
+  // mean the popped-out window stays authenticated and picks up the user's
+  // market selection automatically.
+  function popOut() {
+    const qs = new URLSearchParams()
+    if (slot.customLabel) qs.set('label', slot.customLabel)
+    const url = `/widget/${encodeURIComponent(slot.widgetId)}${qs.toString() ? `?${qs}` : ''}`
+    window.open(url, `cogs-widget-${slot.widgetId}-${index}`, 'popup=yes,width=900,height=700,resizable=yes,scrollbars=yes')
+  }
 
   return (
     <div className={`${sizeSpan[slot.size]} relative`}>
       {editing && (
         <div className="absolute inset-0 rounded-xl border-2 border-dashed border-accent/40 bg-accent-dim/30 z-10 pointer-events-none" />
       )}
-      <div className={`h-full relative ${editing ? 'ring-2 ring-accent/20 rounded-xl' : ''}`}>
-        <Component />
+      <div className={`h-full relative flex flex-col ${editing ? 'ring-2 ring-accent/20 rounded-xl' : ''}`}>
+        {/* Optional title bar — shows when user has renamed the widget, or
+            whenever the user is in edit mode so they can set a label. */}
+        {showTitleBar && (
+          <div className="flex items-center justify-between px-3 py-1.5 bg-surface-2/50 border-b border-border text-xs rounded-t-xl">
+            {editing ? (
+              <input
+                type="text"
+                value={slot.customLabel ?? ''}
+                onChange={e => onRename(index, e.target.value)}
+                placeholder={meta.label}
+                className="flex-1 bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-accent rounded px-1.5 py-0.5 text-text-1 font-semibold placeholder:text-text-3 placeholder:font-normal"
+                aria-label="Widget label"
+              />
+            ) : (
+              <span className="font-semibold text-text-2 px-1.5">{displayLabel}</span>
+            )}
+          </div>
+        )}
+
+        <div className="flex-1 min-h-0">
+          <Component />
+        </div>
+
+        {/* Always-visible pop-out button (top-right, subtle until hover) */}
+        {!editing && (
+          <button
+            onClick={popOut}
+            title="Open in a standalone window"
+            aria-label="Open widget in a standalone window"
+            className="absolute top-2 right-2 z-10 w-7 h-7 rounded bg-surface/60 hover:bg-surface border border-transparent hover:border-border text-text-3 hover:text-text-1 opacity-0 hover:opacity-100 focus:opacity-100 group-hover:opacity-100 transition flex items-center justify-center text-sm"
+            style={{ opacity: 0 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0' }}
+          >
+            ⤢
+          </button>
+        )}
+
         {editing && (
           <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-surface border border-border rounded-lg shadow-sm p-1">
+            <button title="Open in a standalone window"
+              onClick={popOut}
+              className="w-7 h-7 rounded hover:bg-surface-2 text-text-2 text-sm">⤢</button>
             <button title="Move up" disabled={index === 0}
               onClick={() => onMove(index, index - 1)}
               className="w-7 h-7 rounded hover:bg-surface-2 disabled:opacity-30 text-text-2 text-sm">↑</button>
@@ -188,6 +242,19 @@ function DashboardInner() {
     }))
   }, [])
 
+  // Rename stores as trimmed string; empty string clears the override so the
+  // widget falls back to its registry label.
+  const renameSlot = useCallback((idx: number, label: string) => {
+    setConfig(prev => ({
+      ...prev,
+      slots: prev.slots.map((s, i) =>
+        i === idx
+          ? { ...s, customLabel: label.trim() ? label : undefined }
+          : s
+      ),
+    }))
+  }, [])
+
   const addWidget = useCallback((id: WidgetId) => {
     const meta = WIDGET_REGISTRY[id]
     setConfig(prev => ({ ...prev, slots: [...prev.slots, { widgetId: id, size: meta.defaultSize }] }))
@@ -283,6 +350,7 @@ function DashboardInner() {
                 onMove={moveSlot}
                 onRemove={removeSlot}
                 onResize={resizeSlot}
+                onRename={renameSlot}
               />
             ))}
           </div>

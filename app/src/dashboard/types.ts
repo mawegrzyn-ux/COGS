@@ -33,6 +33,10 @@ export const sizeSpan: Record<WidgetSize, string> = {
 export interface SlotConfig {
   widgetId: WidgetId
   size: WidgetSize
+  /** Optional user-provided label shown in a title bar above the widget.
+   *  When absent, the widget renders without any external title and uses
+   *  whatever internal heading it ships with. */
+  customLabel?: string
 }
 
 export interface DashboardConfig {
