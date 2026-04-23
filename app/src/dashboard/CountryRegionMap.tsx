@@ -4,9 +4,12 @@ import { geoCentroid, geoBounds } from 'd3-geo'
 import { useApi } from '../hooks/useApi'
 import { useMarket } from '../contexts/MarketContext'
 import { useDashboardData } from './DashboardData'
+import { useWidgetLabel } from './widgets'
 
-// Same admin-1 GeoJSON used by MarketMap — ~2 MB, cached by the browser.
-const ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces.geojson'
+// Same admin-1 GeoJSON used by MarketMap — 10m variant is the full global
+// dataset (~25 MB, ~5 MB gzipped). Cached by the browser after first load;
+// fetched async via AbortController so nothing else blocks.
+const ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_10m_admin_1_states_provinces.geojson'
 
 interface RegionRow { id: number; country_iso: string; name: string; iso_code: string | null }
 interface Location  { id: number; name: string; country_id: number; latitude: number | null; longitude: number | null }
@@ -29,14 +32,23 @@ export default function CountryRegionMap() {
   const [error, setError]       = useState<string | null>(null)
   const [hovered, setHovered]   = useState<{ label: string; subtitle?: string; markets: string[] } | null>(null)
 
-  // Fetch the admin-1 GeoJSON once.
+  const [loading, setLoading] = useState(false)
+
+  // Fetch the admin-1 GeoJSON once. AbortController so the download is
+  // cancelled if the user unmounts the widget — the rest of the app keeps
+  // running normally while this (~5 MB gzipped) streams in the background.
   useEffect(() => {
-    let cancelled = false
-    fetch(ADMIN1_GEO_URL)
+    const ctrl = new AbortController()
+    setLoading(true)
+    fetch(ADMIN1_GEO_URL, { signal: ctrl.signal })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(j => { if (!cancelled) setGeo(j) })
-      .catch(e => { if (!cancelled) setError(e.message || 'Failed to load map') })
-    return () => { cancelled = true }
+      .then(j => { setGeo(j); setLoading(false) })
+      .catch(e => {
+        if (e?.name === 'AbortError') return
+        setError(e.message || 'Failed to load map')
+        setLoading(false)
+      })
+    return () => ctrl.abort()
   }, [])
 
   // Fetch regions + locations catalogs.
@@ -151,7 +163,7 @@ export default function CountryRegionMap() {
       <div className="flex items-start justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">
-            {selected ? `${selected.name} · Regions` : 'Country Region Map'}
+            {useWidgetLabel(selected ? `${selected.name} · Regions` : 'Country Region Map')}
           </h2>
           <p className="text-xs text-text-3 mt-0.5">
             {selected
@@ -159,11 +171,22 @@ export default function CountryRegionMap() {
               : 'Pick a market above to zoom into its country.'}
           </p>
         </div>
-        {selected && (
-          <div className="text-[10px] text-text-3 font-mono bg-surface-2 border border-border rounded px-2 py-0.5">
-            {iso}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {loading && (
+            <span
+              className="inline-flex items-center gap-1.5 text-[10px] text-text-3 px-2 py-0.5 rounded-full bg-surface-2 border border-border"
+              title="Downloading detailed region data (~5 MB gzipped). The rest of the app stays responsive — this streams in the background."
+            >
+              <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
+              Loading map…
+            </span>
+          )}
+          {selected && (
+            <div className="text-[10px] text-text-3 font-mono bg-surface-2 border border-border rounded px-2 py-0.5">
+              {iso}
+            </div>
+          )}
+        </div>
       </div>
 
       {!selected ? (

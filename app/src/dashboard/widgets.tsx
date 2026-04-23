@@ -1,9 +1,30 @@
-import { useMemo, useState, useEffect, useCallback, ReactElement, lazy, Suspense } from 'react'
+import { useMemo, useState, useEffect, useCallback, createContext, useContext, ReactElement, ReactNode, lazy, Suspense } from 'react'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { useApi } from '../hooks/useApi'
 import { Modal, Field, Toast } from '../components/ui'
 import { WidgetId } from './types'
+
+// ── Widget-label context ──────────────────────────────────────────────────────
+// Lets a user's custom label (set via the Customise panel) override the
+// hardcoded title inside each widget. The WidgetShell wraps every widget in
+// this provider; widgets call useWidgetLabel(defaultLabel) and render the
+// returned string instead of their hardcoded one.
+
+const WidgetLabelContext = createContext<string | null>(null)
+
+export function WidgetLabelProvider({ label, children }: { label?: string | null; children: ReactNode }) {
+  return (
+    <WidgetLabelContext.Provider value={label ?? null}>
+      {children}
+    </WidgetLabelContext.Provider>
+  )
+}
+
+export function useWidgetLabel(fallback: string): string {
+  const override = useContext(WidgetLabelContext)
+  return override?.trim() ? override : fallback
+}
 
 // Lazy-load the map widget so react-simple-maps + d3-geo only load when used
 const MarketMap = lazy(() => import('./MarketMap'))
@@ -46,9 +67,10 @@ function EmptyState({ message }: { message: string }) {
 }
 
 function SectionHeader({ title, count }: { title: string; count?: number }) {
+  const effectiveTitle = useWidgetLabel(title)
   return (
     <div className="flex items-center gap-2 mb-3">
-      <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">{title}</h2>
+      <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">{effectiveTitle}</h2>
       {count !== undefined && (
         <span className="text-xs font-medium text-text-3 bg-surface-2 px-2 py-0.5 rounded-full">{count}</span>
       )}
@@ -72,9 +94,10 @@ function fmt(n: number) { return n.toLocaleString() }
 function KpiCard({ label, value, accent = false, sub }: {
   label: string; value: number | string; accent?: boolean; sub?: string
 }) {
+  const effectiveLabel = useWidgetLabel(label)
   return (
     <div className={`card p-5 h-full flex flex-col justify-between ${accent ? 'border-accent/30 bg-accent-dim' : ''}`}>
-      <span className="text-text-3 text-xs font-medium uppercase tracking-wide">{label}</span>
+      <span className="text-text-3 text-xs font-medium uppercase tracking-wide">{effectiveLabel}</span>
       <div>
         <div className={`text-3xl font-bold tabular-nums ${accent ? 'text-accent' : 'text-text-1'}`}>{value}</div>
         {sub && <div className="text-text-3 text-xs mt-0.5">{sub}</div>}
@@ -716,7 +739,7 @@ function NewIngredientWidget() {
     <div className="card p-5 h-full flex flex-col items-start gap-3 bg-gradient-to-br from-accent-dim to-surface">
       <div className="flex-1">
         <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">Quick add</div>
-        <h2 className="text-lg font-bold text-text-1">New ingredient</h2>
+        <h2 className="text-lg font-bold text-text-1">{useWidgetLabel('New ingredient')}</h2>
         <p className="text-sm text-text-2 mt-1">
           Capture a new ingredient, with an optional first price quote in one go.
         </p>
@@ -950,7 +973,7 @@ function NewPriceQuoteWidget() {
     <div className="card p-5 h-full flex flex-col items-start gap-3 bg-gradient-to-br from-accent-dim to-surface">
       <div className="flex-1">
         <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">Quick add</div>
-        <h2 className="text-lg font-bold text-text-1">New price quote</h2>
+        <h2 className="text-lg font-bold text-text-1">{useWidgetLabel('New price quote')}</h2>
         <p className="text-sm text-text-2 mt-1">
           Record a fresh price for an existing ingredient from any vendor.
         </p>

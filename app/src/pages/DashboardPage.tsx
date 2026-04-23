@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { PepperHelpButton } from '../components/ui'
 import { useDashboardData, DashboardDataProvider } from '../dashboard/DashboardData'
-import { WIDGET_COMPONENTS } from '../dashboard/widgets'
+import { WIDGET_COMPONENTS, WidgetLabelProvider } from '../dashboard/widgets'
 import { TEMPLATES, WIDGET_REGISTRY, getTemplate, DEFAULT_TEMPLATE_ID } from '../dashboard/templates'
 import {
   DashboardConfig, SlotConfig, WidgetId, WidgetSize, sizeSpan,
@@ -79,9 +79,6 @@ function WidgetShell({
   const Component = WIDGET_COMPONENTS[slot.widgetId]
   if (!Component || !meta) return null
 
-  const displayLabel = slot.customLabel || meta.label
-  const showTitleBar = !!slot.customLabel || editing
-
   // Open this widget in a standalone window. Shared localStorage + cookies
   // mean the popped-out window stays authenticated and picks up the user's
   // market selection automatically.
@@ -98,28 +95,12 @@ function WidgetShell({
         <div className="absolute inset-0 rounded-xl border-2 border-dashed border-accent/40 bg-accent-dim/30 z-10 pointer-events-none" />
       )}
       <div className={`h-full relative flex flex-col ${editing ? 'ring-2 ring-accent/20 rounded-xl' : ''}`}>
-        {/* Optional title bar — shows when user has renamed the widget, or
-            whenever the user is in edit mode so they can set a label. */}
-        {showTitleBar && (
-          <div className="flex items-center justify-between px-3 py-1.5 bg-surface-2/50 border-b border-border text-xs rounded-t-xl">
-            {editing ? (
-              <input
-                type="text"
-                value={slot.customLabel ?? ''}
-                onChange={e => onRename(index, e.target.value)}
-                placeholder={meta.label}
-                className="flex-1 bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-accent rounded px-1.5 py-0.5 text-text-1 font-semibold placeholder:text-text-3 placeholder:font-normal"
-                aria-label="Widget label"
-              />
-            ) : (
-              <span className="font-semibold text-text-2 px-1.5">{displayLabel}</span>
-            )}
-          </div>
-        )}
-
-        <div className="flex-1 min-h-0">
+        {/* The widget renders its own card with its own title. When the user
+            has set a custom label, WidgetLabelProvider injects it so the
+            widget's internal label is REPLACED (not duplicated). */}
+        <WidgetLabelProvider label={slot.customLabel}>
           <Component />
-        </div>
+        </WidgetLabelProvider>
 
         {/* Always-visible pop-out button (top-right, subtle until hover) */}
         {!editing && (
@@ -127,7 +108,7 @@ function WidgetShell({
             onClick={popOut}
             title="Open in a standalone window"
             aria-label="Open widget in a standalone window"
-            className="absolute top-2 right-2 z-10 w-7 h-7 rounded bg-surface/60 hover:bg-surface border border-transparent hover:border-border text-text-3 hover:text-text-1 opacity-0 hover:opacity-100 focus:opacity-100 group-hover:opacity-100 transition flex items-center justify-center text-sm"
+            className="absolute top-2 right-2 z-10 w-7 h-7 rounded bg-surface/60 hover:bg-surface border border-transparent hover:border-border text-text-3 hover:text-text-1 transition flex items-center justify-center text-sm"
             style={{ opacity: 0 }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0' }}
@@ -137,33 +118,50 @@ function WidgetShell({
         )}
 
         {editing && (
-          <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-surface border border-border rounded-lg shadow-sm p-1">
-            <button title="Open in a standalone window"
-              onClick={popOut}
-              className="w-7 h-7 rounded hover:bg-surface-2 text-text-2 text-sm">⤢</button>
-            <button title="Move up" disabled={index === 0}
-              onClick={() => onMove(index, index - 1)}
-              className="w-7 h-7 rounded hover:bg-surface-2 disabled:opacity-30 text-text-2 text-sm">↑</button>
-            <button title="Move down" disabled={index === total - 1}
-              onClick={() => onMove(index, index + 1)}
-              className="w-7 h-7 rounded hover:bg-surface-2 disabled:opacity-30 text-text-2 text-sm">↓</button>
-            {meta.allowedSizes.length > 1 && (
-              <select
-                value={slot.size}
-                onChange={e => onResize(index, e.target.value as WidgetSize)}
-                className="text-xs border border-border rounded px-1 py-0.5 bg-surface text-text-2"
-                title="Change size"
-              >
-                {meta.allowedSizes.map(s => (
-                  <option key={s} value={s}>
-                    {s === 'sm' ? '¼' : s === 'md' ? '½' : s === 'lg' ? '¾' : 'Full'}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button title="Remove" onClick={() => onRemove(index)}
-              className="w-7 h-7 rounded hover:bg-red-50 text-red-500 text-sm">✕</button>
-          </div>
+          <>
+            {/* Rename input — floats at top-left of the editing chrome. The
+                custom label replaces the widget's internal title live via the
+                WidgetLabelProvider; empty string reverts to the default. */}
+            <div className="absolute top-2 left-2 z-20 bg-surface border border-border rounded-lg shadow-sm">
+              <input
+                type="text"
+                value={slot.customLabel ?? ''}
+                onChange={e => onRename(index, e.target.value)}
+                placeholder={`Rename… (default: ${meta.label})`}
+                className="w-56 bg-transparent border-0 focus:outline-none focus:ring-0 rounded-lg px-2 py-1 text-xs text-text-1 placeholder:text-text-3"
+                aria-label="Widget label"
+              />
+            </div>
+
+            {/* Editing toolbar — pop-out, reorder, resize, remove */}
+            <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-surface border border-border rounded-lg shadow-sm p-1">
+              <button title="Open in a standalone window"
+                onClick={popOut}
+                className="w-7 h-7 rounded hover:bg-surface-2 text-text-2 text-sm">⤢</button>
+              <button title="Move up" disabled={index === 0}
+                onClick={() => onMove(index, index - 1)}
+                className="w-7 h-7 rounded hover:bg-surface-2 disabled:opacity-30 text-text-2 text-sm">↑</button>
+              <button title="Move down" disabled={index === total - 1}
+                onClick={() => onMove(index, index + 1)}
+                className="w-7 h-7 rounded hover:bg-surface-2 disabled:opacity-30 text-text-2 text-sm">↓</button>
+              {meta.allowedSizes.length > 1 && (
+                <select
+                  value={slot.size}
+                  onChange={e => onResize(index, e.target.value as WidgetSize)}
+                  className="text-xs border border-border rounded px-1 py-0.5 bg-surface text-text-2"
+                  title="Change size"
+                >
+                  {meta.allowedSizes.map(s => (
+                    <option key={s} value={s}>
+                      {s === 'sm' ? '¼' : s === 'md' ? '½' : s === 'lg' ? '¾' : 'Full'}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button title="Remove" onClick={() => onRemove(index)}
+                className="w-7 h-7 rounded hover:bg-red-50 text-red-500 text-sm">✕</button>
+            </div>
+          </>
         )}
       </div>
     </div>
