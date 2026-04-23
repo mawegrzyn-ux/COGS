@@ -3462,6 +3462,19 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-23' AND title = 'Dashboard drag-and-drop + multi-row widgets + new costing method'
    )`,
+
+  // ── Step 138: Changelog — Seed validator + Excel template download fix ────
+  // Idempotent via WHERE NOT EXISTS on (version, title).
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-23', 'Excel import template download fix + seed/clear validator', '[
+     {"type":"fixed","description":"Import wizard \u201CDownload template.xlsx\u201D was returning a 401 / \u201Cfile not available\u201D error. Root cause: the button used a bare <a href> which skipped the Auth0 bearer token. Replaced with an authenticated fetch + Blob + programmatic download. Clear error messages for 401 (session expired) and other HTTP statuses route into the existing parseError banner."},
+     {"type":"added","description":"New npm script \u0060npm run validate:seed\u0060 in api/ \u2014 one-shot end-to-end validator for clearData() + seedSmall() + mcogs_import_jobs round-trip. Snapshots preserved-table row counts, asserts clear leaves user tables empty and preserved tables untouched, runs seedSmall and reports row counts for 11 core tables, then re-clears to leave the DB neutral. Safe to run repeatedly."},
+     {"type":"changed","description":"Preserve-list comment in both seed-test-data.js and seed-test-data-small.js updated to explicitly list mcogs_settings / mcogs_changelog / mcogs_languages / mcogs_regions / mcogs_qsc_questions / mcogs_qsc_templates (previously implicitly preserved but undocumented). Also documents that mcogs_qsc_audits + children cascade-truncate via mcogs_locations despite ON DELETE SET NULL."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-23' AND title = 'Excel import template download fix + seed/clear validator'
+   )`,
 ];
 
 async function runMigrations(pool) {

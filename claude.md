@@ -2018,6 +2018,21 @@ Tab resets to Details whenever a different sales item is selected. Delete button
 
 ---
 
+### Fix 24 — Excel Import Template Download Returned 401
+
+**Symptom:** Users clicking "Download template.xlsx" on the Import wizard saw a generic "file not available" browser error. Server logs showed a 401 on `GET /api/import/template`.
+
+**Root Cause:** The link was a bare `<a href="/api/import/template" download>`. Plain anchor tags don't attach headers, so the Auth0 bearer token was never sent. The route sits behind `requireAuth`, so the server correctly rejected the anonymous request — the browser surfaced that as a failed download.
+
+**Fix:** Replaced the anchor with a `<button>` that calls a new `downloadTemplate()` function. It uses the existing `authHeader()` helper to fetch with the bearer token, converts the response to a Blob, creates an object URL, programmatically triggers a download, then revokes the URL. Status-aware error messages route into the existing `parseError` banner:
+- 401 → "Session expired — please sign in again to download the template."
+- Other HTTP → `Template download failed (HTTP NNN)`
+- Network error → exception message
+
+**File:** `app/src/pages/ImportPage.tsx`
+
+---
+
 ## 16a. Testing — Test Suite & QA Strategy
 
 > **Full guide:** [`docs/TESTING.md`](./docs/TESTING.md). UAT scripts: [`docs/UAT/`](./docs/UAT/). Staging setup: [`docs/STAGING.md`](./docs/STAGING.md).
@@ -2049,6 +2064,7 @@ The project has a phased automated test suite plus a manual UAT process. **Every
 - `api/test/helpers/db.js` — `withTx()` for transaction-rolled isolation
 - `api/test/helpers/factories.js` — `makeIngredient()`, `makeRecipe()`, etc.
 - `api/test/helpers/auth.js` — `bypassAuthMiddleware()` for Supertest
+- `api/scripts/validate-seed-import.js` — one-shot end-to-end validator for the Test Data + Clear Database tools. Run with `cd api && npm run validate:seed`. Snapshots preserved-table row counts, asserts `clearData()` leaves user tables empty + preserved tables untouched, runs `seedSmall()` and reports row counts for 11 core tables, round-trips an `mcogs_import_jobs` row, then re-clears. Uses your local `api/.env` DB creds. Safe to run repeatedly.
 
 ### Test database
 
@@ -2819,7 +2835,9 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session continuation: Dashboard DnD + row-span + Recipe Costing Method + MapboxCountryMap focus-masking. Drag-and-drop reordering via native HTML5 DnD (grab anywhere; drop target gets accent ring). `WidgetHeight = 1 | 2 | 3` type + `SlotConfig.rowSpan` + `WidgetMeta.defaultRowSpan/allowedRowSpans`; grid uses `gridAutoRows: minmax(160px, auto)` + `gridAutoFlow: row dense`; new ×H selector in editing toolbar. New `mcogs_settings.data.costing_method` (`'best'` default / `'average'`) — preferred vendor quotes always win; setting picks the fallback rule. `loadQuoteLookup()` + `effectivePrice.js` refactored so `price_per_base_unit` is computed in SQL and the AVG branch is mathematically correct. MapboxCountryMap now masks every country outside the focused one via a second fill layer + `setFilter` on default-style label layers (country/state/settlement/natural/water/waterway/airport) so only India's labels show when focused on India. New migration step 137 with changelog entry. No DB table or schema changes (setting lives in existing JSONB blob). No new Pepper tools — `get_settings`/`update_settings` already handle `costing_method`, and `loadQuoteLookup()` picks up the setting automatically so `get_menu_cogs` stays consistent. DB: 87 tables (no change), 136→137 migration steps, tools: 104 (no change), widgets: 21 (no change).)*
+*README last updated: April 2026 (session continuation: Seed/clear validator + Excel template download fix. Fix 24 added — Import wizard "Download template.xlsx" was returning a generic browser "file not available" error because the bare `<a href>` anchor bypassed the Auth0 bearer token (401 from `requireAuth`); replaced with an authenticated fetch + Blob + programmatic download in ImportPage.tsx. New `npm run validate:seed` script + `api/scripts/validate-seed-import.js` — end-to-end validator that runs clearData() + seedSmall() against your local DB, asserts truncated tables are empty + preserved tables untouched, and round-trips an mcogs_import_jobs row. Preserve-list comments in seed-test-data.js and seed-test-data-small.js updated to explicitly name mcogs_settings / mcogs_changelog / mcogs_languages / mcogs_regions / mcogs_qsc_questions / mcogs_qsc_templates (previously implicitly preserved but undocumented) with a note on mcogs_qsc_audits cascade behaviour. New migration step 138 with changelog entry. DB: 87 tables (no change), 137→138 migration steps, tools: 104 (no change), widgets: 21 (no change).)*
+
+*README previous session: Dashboard DnD + row-span + Recipe Costing Method + MapboxCountryMap focus-masking. Drag-and-drop reordering via native HTML5 DnD. `WidgetHeight = 1 | 2 | 3` + grid-auto-flow dense + ×H selector. New `mcogs_settings.data.costing_method` (`'best'` default / `'average'`) — preferred vendor always wins; setting picks the fallback. `loadQuoteLookup()` + `effectivePrice.js` refactored so price_per_base_unit is computed in SQL. MapboxCountryMap masks every country outside the focused one via a second fill layer + setFilter on default-style label layers. Migration step 137.*
 
 *README previous session: Mapbox integration + dashboard map polish. New MAPBOX_ACCESS_TOKEN config key (encrypted config store + aiConfig cache) + `GET /api/ai-config/mapbox-token` endpoint. System → AI → Mapbox Integration card. New dashboard widgets `mapbox-map` (world map, Mapbox GL JS + vector tiles + Countries/Regions toggle) and `mapbox-country-map` (zoomed country drill-down with admin-1 regions + city pins). New hook `useMapboxToken` with module-level cache. New `WidgetPopoutProvider` / `useIsWidgetPopout` context so popped-out Mapbox widgets auto-fullscreen. `.mapbox-widget` CSS overrides in index.css so popups pick up design tokens. Existing MarketMap Regions toggle disabled (country-level only). Mapbox Regions view now only colours whole-country markets at the country base layer so region-scoped countries don't bleed solid colour. `sk.*` secret-token guard with friendly message. Migration step 136. Widgets: 17→21.*
 
