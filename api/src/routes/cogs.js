@@ -5,19 +5,78 @@ const pool   = require('../db/pool');
 //  SHARED HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Costing methods supported for the non-preferred fallback. Preferred vendor
+// quote ALWAYS wins — the method only determines what to do when an ingredient
+// has no preferred vendor set for that country.
+//
+//   'best'    — cheapest active quote (current default, historical behaviour)
+//   'average' — arithmetic mean of all active quotes' price-per-base-unit
+//               (vendor FX-normalised). Useful when operators source from
+//               multiple vendors and want a blended market rate rather than a
+//               best-case figure.
+const COSTING_METHODS = ['best', 'average'];
+
+async function resolveCostingMethodFromSettings() {
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    const raw = rows[0]?.data?.costing_method;
+    if (COSTING_METHODS.includes(raw)) return raw;
+  } catch { /* settings row may not exist yet on first boot */ }
+  return 'best';
+}
+
 /**
  * Load all active quotes for every ingredient, keyed by ingredient_id → country_id.
- * Preferred vendor quote wins; cheapest active quote is the fallback.
+ * Preferred vendor quote always wins; the `method` argument picks how the
+ * fallback is computed when no preferred is set:
+ *   - 'best'    : cheapest active quote in the market (default)
+ *   - 'average' : mean of all active quotes in the market (amalgamated)
+ *
+ * When `method` is omitted the value is read from mcogs_settings.data.costing_method.
+ *
  * Returns: { [ingredientId]: { [countryId]: { price_per_base_unit, is_preferred } } }
  */
-async function loadQuoteLookup() {
+async function loadQuoteLookup(method) {
+  if (!COSTING_METHODS.includes(method)) {
+    method = await resolveCostingMethodFromSettings();
+  }
+
+  const fallbackCte = method === 'average'
+    ? `fallback AS (
+         SELECT pq.ingredient_id,
+                v.country_id,
+                AVG(
+                  (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+                  / COALESCE(NULLIF(vc.exchange_rate, 0), 1)
+                ) AS price_per_base_unit,
+                false AS is_preferred
+         FROM   mcogs_price_quotes pq
+         JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+         JOIN   mcogs_countries    vc ON vc.id = v.country_id
+         WHERE  pq.is_active = true AND pq.qty_in_base_units > 0
+         GROUP  BY pq.ingredient_id, v.country_id
+       )`
+    : `fallback AS (
+         SELECT DISTINCT ON (pq.ingredient_id, v.country_id)
+                pq.ingredient_id,
+                v.country_id,
+                (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+                  / COALESCE(NULLIF(vc.exchange_rate, 0), 1) AS price_per_base_unit,
+                false AS is_preferred
+         FROM   mcogs_price_quotes pq
+         JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+         JOIN   mcogs_countries    vc ON vc.id = v.country_id
+         WHERE  pq.is_active = true
+         ORDER  BY pq.ingredient_id, v.country_id,
+                   (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
+       )`;
+
   const { rows } = await pool.query(`
     WITH preferred AS (
       SELECT pv.ingredient_id,
              pv.country_id,
-             pq.purchase_price,
-             pq.qty_in_base_units,
-             vc.exchange_rate AS vendor_exchange_rate,
+             (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+               / COALESCE(NULLIF(vc.exchange_rate, 0), 1) AS price_per_base_unit,
              true AS is_preferred
       FROM   mcogs_ingredient_preferred_vendor pv
       JOIN   mcogs_price_quotes pq ON pq.id  = pv.quote_id
@@ -25,21 +84,7 @@ async function loadQuoteLookup() {
       JOIN   mcogs_countries    vc ON vc.id  = v.country_id
       WHERE  pq.is_active = true
     ),
-    fallback AS (
-      SELECT DISTINCT ON (pq.ingredient_id, v.country_id)
-             pq.ingredient_id,
-             v.country_id,
-             pq.purchase_price,
-             pq.qty_in_base_units,
-             vc.exchange_rate AS vendor_exchange_rate,
-             false AS is_preferred
-      FROM   mcogs_price_quotes pq
-      JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
-      JOIN   mcogs_countries    vc ON vc.id = v.country_id
-      WHERE  pq.is_active = true
-      ORDER  BY pq.ingredient_id, v.country_id,
-                (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
-    )
+    ${fallbackCte}
     SELECT * FROM preferred
     UNION ALL
     SELECT f.* FROM fallback f
@@ -48,17 +93,16 @@ async function loadQuoteLookup() {
       WHERE p.ingredient_id = f.ingredient_id AND p.country_id = f.country_id
     )
   `);
-  // Divide by vendor_exchange_rate to normalise from vendor's local currency → USD base.
-  // Callers multiply by the target market's exchange_rate to get the correct local display cost.
+
+  // price_per_base_unit is already FX-normalised in SQL (vendor's local →
+  // USD base). Callers multiply by the target market's exchange_rate to get
+  // the correct local display cost.
   const lookup = {};
   for (const q of rows) {
     if (!lookup[q.ingredient_id]) lookup[q.ingredient_id] = {};
-    const vendorRate = Math.max(Number(q.vendor_exchange_rate) || 1, 0.000001);
     lookup[q.ingredient_id][q.country_id] = {
-      price_per_base_unit: Number(q.qty_in_base_units) > 0
-        ? (Number(q.purchase_price) / Number(q.qty_in_base_units)) / vendorRate
-        : 0,
-      is_preferred: q.is_preferred,
+      price_per_base_unit: Number(q.price_per_base_unit) || 0,
+      is_preferred:        q.is_preferred,
     };
   }
   return lookup;

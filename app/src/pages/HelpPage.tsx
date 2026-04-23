@@ -439,7 +439,10 @@ export default function HelpPage() {
         <ul className="list-disc pl-5 space-y-1 text-sm text-[#2D4A38]">
           <li>Change <strong>template</strong> — replaces the layout (your customisations for the new template persist).</li>
           <li>Click <strong>+ Add widget</strong> to add any widget not already on the board.</li>
-          <li>Use the per-widget ↑ ↓ arrows to reorder, the dropdown to resize (¼ / ½ / ¾ / Full), or ✕ to remove.</li>
+          <li><strong>Drag tiles</strong> — click and hold anywhere on a tile (or grab the <strong>⠿</strong> handle next to the rename input) to drop it at a new position. The source fades and the target gets a green ring while you drag.</li>
+          <li>Use the <strong>width selector</strong> (¼ W / ½ W / ¾ W / Full W) and <strong>height selector</strong> (1× H / 2× H / 3× H) in the per-widget toolbar to resize. Maps default to 3× H; charts and tables default to 2× H; KPIs stay at 1× H.</li>
+          <li>The ↑ ↓ buttons are still there as a keyboard fallback if you prefer clicking to dragging.</li>
+          <li>✕ removes the widget; <strong>⤢</strong> pops it out to a standalone window (which auto-fullscreens for Mapbox widgets).</li>
           <li>Click <strong>↺ Reset</strong> to restore the template's default layout.</li>
           <li>Click <strong>✓ Done</strong> to exit edit mode. Your layout is saved automatically.</li>
         </ul>
@@ -454,10 +457,16 @@ export default function HelpPage() {
             { label: 'Missing Quotes',   desc: 'Top 10 ingredients with no active price quote.' },
             { label: 'Recent Quotes',    desc: 'Latest 8 active price-quote updates, scoped to the active market.' },
             { label: 'Quick Links',      desc: 'Shortcut tiles with icons for Inventory, Recipes, Menus, Sales Items, Stock, HACCP, Allergens, Config.' },
-            { label: 'World Map',        desc: '2D world map — click any country in your scope to set it as the active market. Countries shaded by avg COGS%.' },
+            { label: 'World Map',        desc: '2D world map — click any country in your scope to set it as the active market. Countries shaded by avg COGS%. Country level only.' },
+            { label: 'Mapbox World Map', desc: 'Vector-tile world map powered by Mapbox GL JS (requires a Mapbox public token in System → AI → Mapbox Integration). Countries / Regions toggle for admin-1 drill-down. Popout opens in fullscreen.' },
+            { label: 'Mapbox Country Map', desc: 'Zooms to the active market\'s country, shows its admin-1 regions coloured by coverage, plus pins for every location with captured lat/lng. Requires a Mapbox token.' },
+            { label: 'Country Region Map', desc: 'Zoomed GeoJSON map of the active market\'s country with admin-1 regions + optional city pins (react-simple-maps version).' },
             { label: 'Market Picker',    desc: 'Card grid of all markets with menu/vendor counts and avg COGS%.' },
             { label: 'Market Stats',     desc: 'Snapshot of the selected market (menus, vendors, avg COGS, currency).' },
             { label: 'Market Header',    desc: 'Large banner showing the active market name, currency, exchange rate.' },
+            { label: 'Market Selector',  desc: 'Compact chip row that scopes the whole dashboard to a single market in one click.' },
+            { label: 'New Ingredient',   desc: 'Quick-add card — create an ingredient (optionally with a first price quote) without leaving the dashboard.' },
+            { label: 'New Price Quote',  desc: 'Quick-add card — log a price quote for an existing ingredient + vendor in one click.' },
           ].map(k => (
             <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
               <p className="text-xs font-bold text-[#146A34]">{k.label}</p>
@@ -1018,6 +1027,20 @@ export default function HelpPage() {
           <span className="text-amber-600 font-semibold">Acceptable</span> (amber, target+10%),{' '}
           <span className="text-red-600 font-semibold">Alert</span> (red, above acceptable). A typical
           QSR target is 28–32% food cost.
+        </p>
+
+        <H3 id="costing-method">Recipe Costing Method</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Controls how ingredient cost is resolved when an ingredient has <strong>no preferred vendor</strong> set for a market.
+          Preferred vendor quotes always win regardless of this setting.
+        </p>
+        <ul className="list-disc pl-5 space-y-1 text-sm text-[#2D4A38]">
+          <li><strong>Best price quote</strong> <em>(default)</em> — the cheapest active quote in the market. Optimistic: reflects best-case sourcing.</li>
+          <li><strong>Market amalgamated quote</strong> — arithmetic mean of all active quotes in the market (FX-normalised per vendor). Blended view: useful when ingredients are sourced from multiple vendors and no single one is clearly preferred.</li>
+        </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mt-2">
+          Switch in <strong>Settings → COGS Thresholds</strong>. Change takes effect immediately — all COGS calculations
+          (recipe costs, menu COGS tiles, Menu Engineer, Pepper responses) respect it automatically.
         </p>
 
         <H3 id="ai-settings">AI Configuration</H3>

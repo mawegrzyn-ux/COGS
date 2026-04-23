@@ -4,7 +4,7 @@ import { useDashboardData, DashboardDataProvider } from '../dashboard/DashboardD
 import { WIDGET_COMPONENTS, WidgetLabelProvider } from '../dashboard/widgets'
 import { TEMPLATES, WIDGET_REGISTRY, getTemplate, DEFAULT_TEMPLATE_ID } from '../dashboard/templates'
 import {
-  DashboardConfig, SlotConfig, WidgetId, WidgetSize, sizeSpan,
+  DashboardConfig, SlotConfig, WidgetId, WidgetSize, WidgetHeight, sizeSpan, heightSpan,
 } from '../dashboard/types'
 
 // ── PWA install banner (preserved from old dashboard) ─────────────────────────
@@ -64,7 +64,8 @@ function saveConfig(cfg: DashboardConfig) {
 // ── Widget chrome (render + edit mode controls) ───────────────────────────────
 
 function WidgetShell({
-  slot, index, total, editing, onMove, onRemove, onResize, onRename,
+  slot, index, total, editing, onMove, onRemove, onResize, onRename, onResizeHeight,
+  draggingIndex, dragOverIndex, onDragStart, onDragOverSlot, onDragLeaveSlot, onDropSlot, onDragEnd,
 }: {
   slot: SlotConfig
   index: number
@@ -74,10 +75,23 @@ function WidgetShell({
   onRemove: (idx: number) => void
   onResize: (idx: number, size: WidgetSize) => void
   onRename: (idx: number, label: string) => void
+  onResizeHeight: (idx: number, h: WidgetHeight) => void
+  draggingIndex: number | null
+  dragOverIndex: number | null
+  onDragStart: (idx: number) => void
+  onDragOverSlot: (idx: number) => void
+  onDragLeaveSlot: () => void
+  onDropSlot: (idx: number) => void
+  onDragEnd: () => void
 }) {
   const meta = WIDGET_REGISTRY[slot.widgetId]
   const Component = WIDGET_COMPONENTS[slot.widgetId]
   if (!Component || !meta) return null
+
+  // Resolve the effective row-span: slot override → widget registry default → 1.
+  const effectiveRowSpan: WidgetHeight = (slot.rowSpan ?? meta.defaultRowSpan ?? 1)
+  const rowSpanClass = heightSpan[effectiveRowSpan]
+  const allowedRowSpans = meta.allowedRowSpans ?? [1]
 
   // Open this widget in a standalone window. Shared localStorage + cookies
   // mean the popped-out window stays authenticated and picks up the user's
@@ -89,8 +103,42 @@ function WidgetShell({
     window.open(url, `cogs-widget-${slot.widgetId}-${index}`, 'popup=yes,width=900,height=700,resizable=yes,scrollbars=yes')
   }
 
+  const isBeingDragged = draggingIndex === index
+  const isDropTarget   = editing && dragOverIndex === index && draggingIndex !== null && draggingIndex !== index
+
   return (
-    <div className={`${sizeSpan[slot.size]} relative group`}>
+    <div
+      className={`${sizeSpan[slot.size]} ${rowSpanClass} relative group ${
+        editing ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${isBeingDragged ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-accent ring-offset-2 ring-offset-surface-2' : ''}`}
+      draggable={editing}
+      onDragStart={e => {
+        if (!editing) return
+        e.dataTransfer.effectAllowed = 'move'
+        // Firefox requires some data to be set for the drag to start.
+        try { e.dataTransfer.setData('text/plain', String(index)) } catch { /* ignore */ }
+        onDragStart(index)
+      }}
+      onDragOver={e => {
+        if (!editing || draggingIndex === null) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        onDragOverSlot(index)
+      }}
+      onDragLeave={() => {
+        if (!editing) return
+        onDragLeaveSlot()
+      }}
+      onDrop={e => {
+        if (!editing) return
+        e.preventDefault()
+        onDropSlot(index)
+      }}
+      onDragEnd={() => {
+        if (!editing) return
+        onDragEnd()
+      }}
+    >
       {editing && (
         <div className="absolute inset-0 rounded-xl border-2 border-dashed border-accent/40 bg-accent-dim/30 z-10 pointer-events-none" />
       )}
@@ -121,7 +169,15 @@ function WidgetShell({
             {/* Rename input — floats at top-left of the editing chrome. The
                 custom label replaces the widget's internal title live via the
                 WidgetLabelProvider; empty string reverts to the default. */}
-            <div className="absolute top-2 left-2 z-20 bg-surface border border-border rounded-lg shadow-sm">
+            <div className="absolute top-2 left-2 z-20 bg-surface border border-border rounded-lg shadow-sm flex items-center">
+              {/* Drag handle — visual hint that the whole tile is draggable. */}
+              <span
+                className="px-2 py-1 text-text-3 cursor-grab active:cursor-grabbing select-none"
+                title="Drag to reorder"
+                aria-label="Drag handle"
+              >
+                ⠿
+              </span>
               <input
                 type="text"
                 value={slot.customLabel ?? ''}
@@ -129,10 +185,12 @@ function WidgetShell({
                 placeholder={`Rename… (default: ${meta.label})`}
                 className="w-56 bg-transparent border-0 focus:outline-none focus:ring-0 rounded-lg px-2 py-1 text-xs text-text-1 placeholder:text-text-3"
                 aria-label="Widget label"
+                // Stop drag start when focus is in the input so the user can type.
+                onDragStart={e => e.preventDefault()}
               />
             </div>
 
-            {/* Editing toolbar — pop-out, reorder, resize, remove */}
+            {/* Editing toolbar — pop-out, reorder, resize, height, remove */}
             <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-surface border border-border rounded-lg shadow-sm p-1">
               <button title="Open in a standalone window"
                 onClick={popOut}
@@ -148,12 +206,24 @@ function WidgetShell({
                   value={slot.size}
                   onChange={e => onResize(index, e.target.value as WidgetSize)}
                   className="text-xs border border-border rounded px-1 py-0.5 bg-surface text-text-2"
-                  title="Change size"
+                  title="Change width"
                 >
                   {meta.allowedSizes.map(s => (
                     <option key={s} value={s}>
-                      {s === 'sm' ? '¼' : s === 'md' ? '½' : s === 'lg' ? '¾' : 'Full'}
+                      {s === 'sm' ? '¼ W' : s === 'md' ? '½ W' : s === 'lg' ? '¾ W' : 'Full W'}
                     </option>
+                  ))}
+                </select>
+              )}
+              {allowedRowSpans.length > 1 && (
+                <select
+                  value={effectiveRowSpan}
+                  onChange={e => onResizeHeight(index, Number(e.target.value) as WidgetHeight)}
+                  className="text-xs border border-border rounded px-1 py-0.5 bg-surface text-text-2"
+                  title="Change height (row span)"
+                >
+                  {allowedRowSpans.map(h => (
+                    <option key={h} value={h}>{h}× H</option>
                   ))}
                 </select>
               )}
@@ -210,6 +280,10 @@ function DashboardInner() {
   const [config, setConfig] = useState<DashboardConfig>(() => loadConfig())
   const [editing, setEditing] = useState(false)
 
+  // Drag-and-drop state (edit mode only)
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+
   // Persist whenever config changes
   useEffect(() => { saveConfig(config) }, [config])
 
@@ -238,6 +312,33 @@ function DashboardInner() {
       slots: prev.slots.map((s, i) => i === idx ? { ...s, size } : s),
     }))
   }, [])
+
+  const resizeSlotHeight = useCallback((idx: number, rowSpan: WidgetHeight) => {
+    setConfig(prev => ({
+      ...prev,
+      slots: prev.slots.map((s, i) => i === idx ? { ...s, rowSpan } : s),
+    }))
+  }, [])
+
+  // Drag-and-drop: mutate slots by moving `from` before `to`.
+  const handleDrop = useCallback((toIndex: number) => {
+    const from = draggingIndex
+    if (from == null || from === toIndex) {
+      setDraggingIndex(null)
+      setDragOverIndex(null)
+      return
+    }
+    setConfig(prev => {
+      const next = [...prev.slots]
+      const [item] = next.splice(from, 1)
+      // Adjust target for the removed item.
+      const adjustedTo = from < toIndex ? toIndex - 1 : toIndex
+      next.splice(adjustedTo, 0, item)
+      return { ...prev, slots: next }
+    })
+    setDraggingIndex(null)
+    setDragOverIndex(null)
+  }, [draggingIndex])
 
   // Rename stores as trimmed string; empty string clears the override so the
   // widget falls back to its registry label.
@@ -336,7 +437,16 @@ function DashboardInner() {
             <AddWidgetButton onAdd={addWidget} existing={existingIds} />
           </div>
         ) : (
-          <div className="grid grid-cols-12 gap-4">
+          <div
+            className="grid grid-cols-12 gap-4"
+            style={{
+              // Fixed-ish row height with dense flow. "dense" lets smaller
+              // widgets backfill gaps left by tall row-span widgets so the
+              // grid stays compact rather than leaving holes.
+              gridAutoRows: 'minmax(160px, auto)',
+              gridAutoFlow: 'row dense',
+            }}
+          >
             {config.slots.map((slot, i) => (
               <WidgetShell
                 key={`${slot.widgetId}-${i}`}
@@ -348,6 +458,14 @@ function DashboardInner() {
                 onRemove={removeSlot}
                 onResize={resizeSlot}
                 onRename={renameSlot}
+                onResizeHeight={resizeSlotHeight}
+                draggingIndex={draggingIndex}
+                dragOverIndex={dragOverIndex}
+                onDragStart={setDraggingIndex}
+                onDragOverSlot={setDragOverIndex}
+                onDragLeaveSlot={() => setDragOverIndex(prev => prev)} // keep — leave can fire between child elements
+                onDropSlot={handleDrop}
+                onDragEnd={() => { setDraggingIndex(null); setDragOverIndex(null) }}
               />
             ))}
           </div>

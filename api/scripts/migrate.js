@@ -3423,6 +3423,45 @@ const migrations = [
   // plotted.
   `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS latitude  NUMERIC(10, 7)`,
   `ALTER TABLE mcogs_locations ADD COLUMN IF NOT EXISTS longitude NUMERIC(11, 7)`,
+
+  // ── Step 136: Changelog entry — Mapbox integration + widget popout ────────
+  // Idempotent: skips the insert if an entry with this (version, title) pair
+  // already exists so re-running migrate.js doesn't duplicate the row.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-23', 'Mapbox integration + dashboard map polish', '[
+     {"type":"added","description":"MAPBOX_ACCESS_TOKEN added to the encrypted config store + aiConfig runtime cache; new GET /api/ai-config/mapbox-token endpoint serving the public token to the browser."},
+     {"type":"added","description":"System \u2192 AI \u2192 Mapbox Integration card for saving / clearing the public token (pk.*)."},
+     {"type":"added","description":"New dashboard widget mapbox-map \u2014 Mapbox GL JS world map with vector tiles, hover feature-state, clean country choropleth, Countries / Regions toggle, design-token popup styling."},
+     {"type":"added","description":"New dashboard widget mapbox-country-map \u2014 zoomed-in Mapbox view of the selected market\u2019s country with admin-1 region polygons, accent-green country outline, and city pins for locations with captured lat/lng."},
+     {"type":"added","description":"WidgetPopoutContext / useIsWidgetPopout hook \u2014 widgets can detect when rendered in the standalone popout window; both Mapbox widgets auto-enable fullscreen so the popped-out window is maximised."},
+     {"type":"added","description":".mapbox-widget CSS overrides in index.css so Mapbox popups, nav controls and attribution pick up design tokens (rounded, accent colours, Nunito)."},
+     {"type":"added","description":"useMapboxToken hook with module-level cache so multiple map widgets share one /ai-config fetch."},
+     {"type":"changed","description":"Existing MarketMap widget: Regions toggle disabled \u2014 country-level only (the Mapbox widgets now cover the regions use case)."},
+     {"type":"changed","description":"Mapbox world map Regions view now only colours countries at the base layer when they have whole-country markets, so region-scoped countries (e.g. 4 Indian states claimed) no longer show as solid green underneath."},
+     {"type":"fixed","description":"MapboxMap guards against sk.* secret tokens with a friendly \u201CWrong token type\u201D message instead of Mapbox GL\u2019s raw error."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-23' AND title = 'Mapbox integration + dashboard map polish'
+   )`,
+
+  // ── Step 137: Changelog — Dashboard DnD + row-span + costing method + map polish ──
+  // Idempotent via WHERE NOT EXISTS on (version, title).
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-23', 'Dashboard drag-and-drop + multi-row widgets + new costing method', '[
+     {"type":"added","description":"Dashboard widgets are draggable in edit mode via native HTML5 DnD \u2014 grab anywhere on the tile (or the \u2820 handle next to the rename input) to reorder. Source tile dims to 40% opacity; hovered drop target shows an accent-ringed outline. Keyboard \u2191 / \u2193 buttons kept as a fallback."},
+     {"type":"added","description":"Widgets can now span multiple rows. New WidgetHeight = 1 | 2 | 3 type + SlotConfig.rowSpan override + WidgetMeta.defaultRowSpan / allowedRowSpans. Editing toolbar gets a new \u201C\u00d7 H\u201D selector next to the existing width selector. Maps default to 3\u00d7H, charts/tables 2\u00d7H, KPIs 1\u00d7H."},
+     {"type":"changed","description":"Dashboard grid now uses grid-auto-rows: minmax(160px, auto) with grid-auto-flow: row dense so smaller widgets backfill gaps left by tall row-span widgets. Width-selector labels clarified to \u201C\u00bc W / \u00bd W / \u00be W / Full W\u201D."},
+     {"type":"added","description":"Recipe Costing Method setting (mcogs_settings.data.costing_method). Preferred vendor quotes always win; the setting controls the fallback \u2014 \u201cbest\u201d (cheapest active quote, default + historical) or \u201caverage\u201d (arithmetic mean of all active quotes in the market, FX-normalised per vendor). Exposed in Settings \u2192 Thresholds tab as a new \u201cRecipe Costing Method\u201d section."},
+     {"type":"changed","description":"loadQuoteLookup() in cogs.js now computes price_per_base_unit in SQL (not JS) so AVG(p/q/fx) is mathematically correct for the new average method. All existing callers pick up the setting automatically \u2014 no API changes."},
+     {"type":"changed","description":"getEffectivePrice / getEffectivePricesBulk in effectivePrice.js mirror the same semantics; also exports COSTING_METHODS + resolveCostingMethodFromSettings for callers that need to branch explicitly."},
+     {"type":"added","description":"MapboxCountryMap: focus-country masking. A fill layer covers every country whose ISO \u2260 the focused one (surface-2 at 0.95 opacity), and country-label / state-label / settlement-major-label / natural-point / water-point / airport labels are filtered to the focused country only. Water bodies around the focused country stay visible."},
+     {"type":"changed","description":"Height defaults tuned per widget: mapbox-map / mapbox-country-map / market-map / country-region-map / menu-top-items default to 3\u00d7H, menu-tiles / market-picker / market-stats / missing-quotes / recent-quotes / new-ingredient / new-price-quote default to 2\u00d7H, KPIs and banners stay at 1\u00d7H."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-23' AND title = 'Dashboard drag-and-drop + multi-row widgets + new costing method'
+   )`,
 ];
 
 async function runMigrations(pool) {

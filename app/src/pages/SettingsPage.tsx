@@ -27,7 +27,12 @@ interface AppSettings {
   base_currency?:   { code: string; symbol: string; name: string }
   cogs_thresholds?: { excellent: number; acceptable: number }
   target_cogs?:     number
+  /** How the ingredient cost fallback is resolved when no preferred vendor is set for
+   *  that ingredient+country. Preferred vendor quote ALWAYS wins. */
+  costing_method?:  'best' | 'average'
 }
+
+type CostingMethod = 'best' | 'average'
 
 type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles'
 
@@ -51,7 +56,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'units':        'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
   'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
   'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
-  'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
+  'thresholds':   'What are COGS Thresholds and the Recipe Costing Method? Explain the green/amber/red target percentages (typical good ranges for a restaurant), and then explain the difference between the two costing methods — "Best price quote" (cheapest active quote) vs "Market amalgamated quote" (arithmetic mean of all active quotes in a market) — and when to pick each. Clarify that preferred vendor quotes always take priority regardless of method.',
   'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
@@ -862,6 +867,7 @@ function ThresholdsTab() {
   const [excellent, setExcellent]   = useState(28)
   const [acceptable, setAcceptable] = useState(35)
   const [targetCogs, setTargetCogs] = useState('')
+  const [costingMethod, setCostingMethod] = useState<CostingMethod>('best')
 
   useEffect(() => {
     api.get('/settings')
@@ -871,6 +877,9 @@ function ThresholdsTab() {
           setAcceptable(s.cogs_thresholds.acceptable ?? 35)
         }
         if (s?.target_cogs != null) setTargetCogs(String(s.target_cogs))
+        if (s?.costing_method === 'average' || s?.costing_method === 'best') {
+          setCostingMethod(s.costing_method)
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -886,8 +895,9 @@ function ThresholdsTab() {
       await api.patch('/settings', {
         cogs_thresholds: { excellent, acceptable },
         target_cogs: targetCogs ? Number(targetCogs) : null,
+        costing_method: costingMethod,
       })
-      setToast({ message: 'Thresholds saved', type: 'success' })
+      setToast({ message: 'Saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
     } finally {
@@ -960,6 +970,54 @@ function ThresholdsTab() {
         />
         <p className="text-xs text-text-3 mt-1">Used for benchmark line on dashboard charts.</p>
       </Field>
+
+      {/* ── Recipe Costing Method ─────────────────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Recipe Costing Method</h2>
+        <p className="text-sm text-text-3">
+          How ingredient cost is resolved when an ingredient has <strong>no preferred vendor</strong> set for a market.
+          Preferred vendor quotes always take priority and are unaffected by this setting.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 border-b border-border cursor-pointer hover:bg-surface-2 ${costingMethod === 'best' ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="radio"
+            name="costing-method"
+            value="best"
+            checked={costingMethod === 'best'}
+            onChange={() => setCostingMethod('best')}
+            className="mt-1 accent-[#146A34]"
+          />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-text-1">Best price quote</span>
+              <span className="text-[10px] font-bold text-text-3 bg-surface-2 border border-border rounded px-1.5 py-0.5 uppercase tracking-wide">Default</span>
+            </div>
+            <p className="text-xs text-text-3 mt-0.5">Use the cheapest active quote in the market. Optimistic view — reflects best-case sourcing.</p>
+          </div>
+        </label>
+
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${costingMethod === 'average' ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="radio"
+            name="costing-method"
+            value="average"
+            checked={costingMethod === 'average'}
+            onChange={() => setCostingMethod('average')}
+            className="mt-1 accent-[#146A34]"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">Market amalgamated quote</span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Use the arithmetic mean of all active quotes in the market. Blended view —
+              useful when ingredients are sourced from multiple vendors and no single
+              vendor is clearly preferred.
+            </p>
+          </div>
+        </label>
+      </div>
 
       <div className="flex justify-end pt-2">
         <button className="btn-primary px-5 py-2 text-sm" onClick={handleSave} disabled={saving}>

@@ -670,7 +670,10 @@ All routes registered in `api/src/routes/index.js`.
 | `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 96 tools (includes web search, GitHub, Excel export, audit log, and FAQ search) |
 | `GET /api/ai-chat/my-usage` | `ai-chat.js` | ✅ Active — current period token usage stats |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
-| `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration |
+| `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration (stores ANTHROPIC/VOYAGE/BRAVE/GITHUB/JIRA keys + MAPBOX_ACCESS_TOKEN in the encrypted config store) |
+| `GET /api/ai-config/claude-code-key` | `ai-config.js` | ✅ Active — returns the self-generated Claude Code API key (only plaintext key ever returned) |
+| `POST /api/ai-config/generate-claude-code-key` | `ai-config.js` | ✅ Active — (re)generates the Claude Code API key |
+| `GET /api/ai-config/mapbox-token` | `ai-config.js` | ✅ Active — returns the Mapbox PUBLIC token (pk.*) for browser map widgets. Public tokens are safe to expose (expected to be URL-restricted in the Mapbox dashboard). |
 | `GET/POST/PUT/DELETE /api/db-config` | `db-config.js` | ✅ Active — database management (local ↔ standalone switch, migrate data) |
 | `GET/POST/PUT/DELETE /api/stock-stores` | `stock-stores.js` | ✅ Active — requires `stock_overview:read` / `stock_overview:write` |
 | `GET/PUT/POST /api/stock-levels` | `stock-levels.js` | ✅ Active — stock on hand, adjustments, movements query |
@@ -964,7 +967,7 @@ System administration and documentation hub.
 
 **Sections:** AI | Bugs & Backlog | Audit Log | Storage | Database | Test Data | Architecture | API Reference | Security | Troubleshooting | Domain Migration | POS Mockup | CLAUDE.md
 
-- **AI** — Embeds Settings → AI (API keys, token usage, concise mode)
+- **AI** — Embeds Settings → AI (API keys, token usage, concise mode). Integration cards include Anthropic, Voyage, Brave, GitHub, Jira, and **Mapbox** (public `pk.*` access token for the dashboard map widgets — guards against `sk.*` secret tokens with a friendly error since GL JS only works with public tokens).
 - **Bugs & Backlog** — Embedded `BugsBacklogPage` (previously standalone at `/bugs-backlog`, now redirects here). Two-tab tracker: bugs (BUG-1001+) and feature backlog (BACK-1001+). Visible to all users. Migration step 108 seeds known bugs and backlog items from CLAUDE.md
 - **Audit Log** — Central audit trail viewer with filters and expandable rows. Gated by `settings:write` (amber ADMIN badge)
 - **Storage** — Media storage config (local vs S3). Gated by `settings:write` (amber ADMIN badge)
@@ -998,9 +1001,24 @@ Three tabs:
 
 - Recipe builder: name, category, yield qty + unit
 - Recipe items: add ingredients or sub-recipes with qty + prep unit + conversion factor
-- COGS calculation: cost per portion based on preferred vendor quotes
+- COGS calculation: cost per portion based on preferred vendor quotes, with a configurable fallback (see **Recipe Costing Method** below).
 - **Market variations** — alternative ingredient lists per country/market (existing)
 - **Price Level Recipes (PL Variations)** — alternative ingredient lists per price level. Create via the Price Level variant selector. Priority: PL variation > market variation > global recipe. Stored in `mcogs_recipe_pl_variations`; items linked via `pl_variation_id` on `mcogs_recipe_items`. Copy-to-global promotes a PL variation to the global recipe.
+
+#### Recipe Costing Method
+
+A global setting at `mcogs_settings.data.costing_method` (values: `'best'` default, or `'average'`) controls how ingredient cost resolves **when no preferred vendor is set** for an ingredient+country. Preferred vendor quotes **always** win regardless of method.
+
+| Method | Fallback rule |
+|---|---|
+| `best` (default) | Cheapest active quote in the market — `DISTINCT ON (ingredient, country) … ORDER BY price ASC` |
+| `average` | Arithmetic mean of every active quote's price-per-base-unit in the market, FX-normalised per vendor — `AVG((price / qty) / exchange_rate)` grouped by `(ingredient, country)` |
+
+- Implemented in [`api/src/routes/cogs.js`](api/src/routes/cogs.js) (`loadQuoteLookup(method?)`, `resolveCostingMethodFromSettings()`) and mirrored in [`api/src/helpers/effectivePrice.js`](api/src/helpers/effectivePrice.js) (`getEffectivePrice`, `getEffectivePricesBulk`, exports `COSTING_METHODS` + `resolveCostingMethodFromSettings`).
+- `loadQuoteLookup()` now returns `price_per_base_unit` already computed in SQL — the JS post-processing step that divided by vendor rate was removed, because `AVG(p/q/fx)` ≠ `AVG(p)/AVG(q)/AVG(fx)` and the SQL-side aggregation gives mathematically correct blended rates.
+- Exposed in the UI under **Settings → COGS Thresholds** as a new "Recipe Costing Method" section with two radio options and explanatory copy. Saved via the same PATCH to `/settings`.
+- No schema change — setting is added to the existing `mcogs_settings.data` JSONB blob. Existing deployments default to `'best'` (matches historical behaviour); users opt in to `'average'` by saving the radio.
+- All existing callers (`cogs.js` internal routes, `scenarios.js`, `shared-pages.js`, tests) pick up the setting automatically — no signature changes.
 
 ### ✅ Menus Page (`/menus`)
 
@@ -1118,20 +1136,23 @@ The Dashboard is a **template-driven, user-customisable widget grid** (not a fix
 - **Finance / Cost** — coverage-focused. KPIs + Coverage Bar + Missing Quotes + Recent Quotes + Menu Tiles.
 - **Market Explorer** — Market Header banner + World Map + Market Stats + Market Picker + Menu Tiles + Recent Quotes + Quick Links.
 
-**Widgets (17):**
+**Widgets (21):**
 | Category | Widgets |
 |---|---|
 | KPI tiles (¼ width) | `kpi-ingredients`, `kpi-recipes`, `kpi-menus`, `kpi-markets`, `kpi-vendors`, `kpi-active-quotes`, `kpi-categories`, `kpi-coverage` |
-| Full-width cards | `coverage-bar`, `menu-tiles`, `quick-links` (with SVG icons), `market-header`, `market-picker`, `market-map`, `menu-top-items` |
-| Half-width cards | `missing-quotes`, `recent-quotes`, `market-stats` |
+| Full-width cards | `coverage-bar`, `menu-tiles`, `quick-links` (with SVG icons), `market-selector`, `market-header`, `market-picker`, `market-map`, `mapbox-map`, `mapbox-country-map`, `country-region-map`, `menu-top-items` |
+| Half-width cards | `missing-quotes`, `recent-quotes`, `market-stats`, `new-ingredient`, `new-price-quote` |
 
 **Customise mode:**
-- `✎ Customise` toggle in header → shows per-widget controls (↑ ↓ reorder, size selector ¼/½/¾/Full, ✕ remove)
-- `+ Add widget` dropdown (edit mode only) lists widgets not yet on the board
-- Template selector + `↺ Reset` button (edit mode only) — Reset restores the current template's default slot list
-- In view mode, header is clean: just Dashboard title · Customise · Refresh
+- `✎ Customise` toggle in header → shows per-widget controls: `⠿` drag handle, ↑ ↓ keyboard fallback, width selector (¼ W / ½ W / ¾ W / Full W), height selector (1×H / 2×H / 3×H), pop-out, ✕ remove.
+- **Drag-and-drop reordering** — native HTML5 DnD. Grab anywhere on the tile (the whole shell is `draggable` with `cursor-grab`) to reorder; source dims to 40% opacity; drop target gets an accent-ringed outline. Rename input captures `onDragStart` to let typing work. ↑ / ↓ buttons remain as a keyboard fallback.
+- `+ Add widget` dropdown (edit mode only) lists widgets not yet on the board.
+- Template selector + `↺ Reset` button (edit mode only) — Reset restores the current template's default slot list.
+- In view mode, header is clean: just Dashboard title · Customise · Refresh.
 
-**Widget grid:** 12-col CSS grid. Sizes map to col-spans: `sm=3 (¼)`, `md=6 (½)`, `lg=9 (¾)`, `xl=12 (full)`. Sizes gracefully collapse to 12 on mobile, 6 on tablet.
+**Widget grid:** 12-col CSS grid with `gridAutoRows: minmax(160px, auto)` + `gridAutoFlow: row dense`. Sizes map to col-spans: `sm=3 (¼)`, `md=6 (½)`, `lg=9 (¾)`, `xl=12 (full)`. Row-span via `WidgetHeight = 1 | 2 | 3` → `row-span-1/2/3` classes. Dense flow lets smaller widgets backfill gaps left by tall row-span widgets, so rows stay compact. Sizes gracefully collapse to 12 on mobile, 6 on tablet.
+
+**Row-span defaults:** KPIs and banners stay at `1×H`; charts, tables, and the quick-add widgets default to `2×H`; maps (`market-map`, `mapbox-map`, `mapbox-country-map`, `country-region-map`) and `menu-top-items` default to `3×H`. Each widget's registry entry declares `defaultRowSpan` + `allowedRowSpans`; the height selector only appears when the allowed list has more than one option. User overrides are stored per-slot in `SlotConfig.rowSpan` so saved dashboards keep their layout.
 
 **Market scope integration:** Widgets marked `marketScoped: true` auto-filter by the global market selection (top-bar `MarketSwitcher`). Non-scoped widgets (categories, recipes, markets count) always show global data. The market filter respects RBAC `allowedCountries`.
 
@@ -1140,11 +1161,17 @@ The Dashboard is a **template-driven, user-customisable widget grid** (not a fix
 - `app/src/dashboard/types.ts` — `WidgetId`, `WidgetSize`, `SlotConfig`, `DashboardConfig`, `Template`
 - `app/src/dashboard/templates.ts` — `WIDGET_REGISTRY` (meta per widget) + 3 `TEMPLATES`
 - `app/src/dashboard/DashboardData.tsx` — shared data provider (one fetch, all widgets subscribe). Loads ingredients, recipes, vendors, countries, menus, categories, price-levels, quotes, settings. Also computes per-menu COGS tiles scoped to the active market.
-- `app/src/dashboard/widgets.tsx` — 15 widget components + registry mapping `WidgetId → Component`. `MarketMap` and `MenuTopItemsChart` are lazy-loaded.
-- `app/src/dashboard/MarketMap.tsx` — 2D world map (react-simple-maps + d3-geo, natural-earth topojson from jsDelivr CDN). Countries shaded by avg COGS% (green ≤30%, amber ≤40%, red >40%, accent-dim if no data, pale grey if outside RBAC scope). Click to set market, ZoomableGroup for zoom/pan. Name matching uses an alias table for USA/UK/Czechia/Myanmar/etc.
+- `app/src/dashboard/widgets.tsx` — widget components + registry mapping `WidgetId → Component`. `MarketMap`, `CountryRegionMap`, `MapboxMap`, `MapboxCountryMap`, and `MenuTopItemsChart` are lazy-loaded. Also exports the `WidgetLabelProvider` / `useWidgetLabel` and `WidgetPopoutProvider` / `useIsWidgetPopout` contexts.
+- `app/src/dashboard/MarketMap.tsx` — 2D world map (react-simple-maps + d3-geo, natural-earth topojson from jsDelivr CDN). **Regions toggle disabled** — country-level only (the Mapbox widgets below cover the regions use case). Countries shaded by avg COGS% (green ≤30%, amber ≤40%, red >40%, accent-dim if no data, pale grey if outside RBAC scope). Click to set market, ZoomableGroup for zoom/pan. Name matching uses an alias table for USA/UK/Czechia/Myanmar/etc.
+- `app/src/dashboard/CountryRegionMap.tsx` — existing zoom-in widget using react-simple-maps + natural-earth 50m admin-1 GeoJSON.
+- `app/src/dashboard/MapboxMap.tsx` — **Mapbox GL JS world map widget** (`mapbox-map`). Uses `mapbox://styles/mapbox/light-v11` with clutter layers (road/POI/building/landuse/settlement-minor) hidden on `style.load`. Countries rendered via the bundled `mapbox.country-boundaries-v1` vector source with `promoteId: iso_3166_1` so hover uses `setFeatureState` for smooth transitions. Data-driven `match` expression colours countries by avg COGS%. Countries / Regions toggle adds our natural-earth 50m admin-1 GeoJSON as an overlay (lazy-loaded with AbortController when Regions clicked). In Regions view the base country fill switches to a whole-country-only dataset so region-scoped countries don't bleed a single colour across all their sub-regions. Popup styling (`.mapbox-widget` CSS in `index.css`) picks up design tokens. Auto-enters fullscreen when rendered in the popout window.
+- `app/src/dashboard/MapboxCountryMap.tsx` — **Mapbox country drill-down widget** (`mapbox-country-map`). Zooms to the selected market's country via `d3-geo.geoBounds` + `map.fitBounds`. Draws an accent-green outline of the focused country (via a `country-boundaries-v1` line layer filtered on `iso_3166_1`). Admin-1 polygons from the same 50m GeoJSON coloured by which markets claim each region ISO 3166-2. City pins (Mapbox Markers) rendered for every `mcogs_locations` row in that country with captured `latitude` / `longitude`. **Focus masking:** a second `country-boundaries-v1` fill layer covers every country whose ISO ≠ the focused one (surface-2 at 0.95 opacity), and the default-style label layers (`country-label`, `state-label`, `settlement-major-label`, `settlement-subdivision-label`, `natural-point-label`, `water-point-label`, `waterway-label`, `airport-label`) are filtered via `setFilter` to only show features within the focused country — so in "India" focus you see India-only names and nothing from Iran / Pakistan / Saudi Arabia etc. Water bodies (Arabian Sea, Bay of Bengal) aren't part of `country_boundaries` and stay visible. Every `setFilter` is try/caught since layer ids are style-version-specific. Same hover feature-state + popup styling + popout auto-fullscreen as the world map.
+- `app/src/hooks/useMapboxToken.ts` — shared hook that fetches `GET /api/ai-config/mapbox-token` once (module-level cache + inflight promise dedupe) so multiple map widgets don't refetch. Returns `{ token, loading, error }`.
 - `app/src/dashboard/MenuTopItemsChart.tsx` — horizontal bar chart showing top 10 items per menu. Metric toggle (Cost / Revenue / COGS%). Per-menu price-level override dropdown when >1 level exists. Data from `/cogs/menu-sales/:id?price_level_id=X`.
 
-**Dependencies added:** `react-simple-maps ^3.0.0`, `d3-geo ^3.1.1` (plus their `@types/*`). Lazy-loaded so bundle stays lean when map isn't used.
+**Widget popout behaviour:** `WidgetPopoutProvider` (set by `WidgetPopoutPage`) + `useIsWidgetPopout()` let widgets detect when they're being rendered in the standalone popped-out window (opened via the pop-out icon on each widget tile). Both Mapbox widgets call this hook in a one-shot `useEffect` that flips their local `fullscreen` state to `true`, so the popped-out window is maximised automatically and the now-redundant fullscreen toggle button is hidden. Pepper-aware CSS insets (`--pepper-left`/`--pepper-right`/`--pepper-bottom`) default to `0px` in the popout window (no Pepper dock there), so the fixed-positioned fullscreen layer fills the viewport cleanly.
+
+**Dependencies added:** `react-simple-maps ^3.0.0`, `d3-geo ^3.1.1` (existing). `mapbox-gl` + `@types/mapbox-gl` (new, ~492 KB gzipped, lazy-loaded with both Mapbox widgets).
 
 ### Global Market Switcher
 
@@ -1572,7 +1599,7 @@ The flag is separate from roles — a Viewer or Operator can be granted dev acce
 
 | Section | Gate | Icon badge | What it does |
 |---|---|---|---|
-| **AI** | — | none | Embeds Settings → AI (API keys, token usage, concise mode) |
+| **AI** | — | none | Embeds Settings → AI (API keys, token usage, concise mode, Mapbox integration) |
 | **Database** | `settings:write` (admin) | amber ADMIN | Embeds Settings → Database — DB connection mode (local vs standalone/RDS), test/save/migrate/switch |
 | **Test Data** | `is_dev` (dev) | purple DEV | Embeds Settings → Test Data — Load Test / Load Small / Clear / Load Defaults, all gated by `DateConfirmDialog` (ddmmyyyy) |
 | **CLAUDE.md** | `is_dev` (dev) | purple DEV | Project documentation viewer — reads raw CLAUDE.md from repo root via `GET /api/docs/claude-md` |
@@ -2792,7 +2819,11 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session: QSC Audit Tool v1 — all phases + full docs + expanded Pepper toolkit. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 7 new Pepper tools (list_audits, get_audit_report, list_qsc_questions, get_qsc_question, list_audit_templates, get_audit_nc_trends, get_location_audit_history). 2 new RBAC features (audits, audits_admin) + global feature-flag switch. 11 QSC FAQ entries seeded. User guide section added. Migration steps 124-131. DB: 82→87 tables, 123→131 migration steps, tools: 97→104, features: 21→23.)*
+*README last updated: April 2026 (session continuation: Dashboard DnD + row-span + Recipe Costing Method + MapboxCountryMap focus-masking. Drag-and-drop reordering via native HTML5 DnD (grab anywhere; drop target gets accent ring). `WidgetHeight = 1 | 2 | 3` type + `SlotConfig.rowSpan` + `WidgetMeta.defaultRowSpan/allowedRowSpans`; grid uses `gridAutoRows: minmax(160px, auto)` + `gridAutoFlow: row dense`; new ×H selector in editing toolbar. New `mcogs_settings.data.costing_method` (`'best'` default / `'average'`) — preferred vendor quotes always win; setting picks the fallback rule. `loadQuoteLookup()` + `effectivePrice.js` refactored so `price_per_base_unit` is computed in SQL and the AVG branch is mathematically correct. MapboxCountryMap now masks every country outside the focused one via a second fill layer + `setFilter` on default-style label layers (country/state/settlement/natural/water/waterway/airport) so only India's labels show when focused on India. New migration step 137 with changelog entry. No DB table or schema changes (setting lives in existing JSONB blob). No new Pepper tools — `get_settings`/`update_settings` already handle `costing_method`, and `loadQuoteLookup()` picks up the setting automatically so `get_menu_cogs` stays consistent. DB: 87 tables (no change), 136→137 migration steps, tools: 104 (no change), widgets: 21 (no change).)*
+
+*README previous session: Mapbox integration + dashboard map polish. New MAPBOX_ACCESS_TOKEN config key (encrypted config store + aiConfig cache) + `GET /api/ai-config/mapbox-token` endpoint. System → AI → Mapbox Integration card. New dashboard widgets `mapbox-map` (world map, Mapbox GL JS + vector tiles + Countries/Regions toggle) and `mapbox-country-map` (zoomed country drill-down with admin-1 regions + city pins). New hook `useMapboxToken` with module-level cache. New `WidgetPopoutProvider` / `useIsWidgetPopout` context so popped-out Mapbox widgets auto-fullscreen. `.mapbox-widget` CSS overrides in index.css so popups pick up design tokens. Existing MarketMap Regions toggle disabled (country-level only). Mapbox Regions view now only colours whole-country markets at the country base layer so region-scoped countries don't bleed solid colour. `sk.*` secret-token guard with friendly message. Migration step 136. Widgets: 17→21.*
+
+*README previous session: QSC Audit Tool v1 — all phases + full docs + expanded Pepper toolkit. Wingstop Quality/Service/Cleanliness audits. 5 new tables (mcogs_qsc_questions with 150 seeded, mcogs_qsc_templates with 7 seeded, mcogs_qsc_audits, mcogs_qsc_responses, mcogs_qsc_response_photos). New routes /api/qsc/* (questions, templates, audits, responses, photos, last-external lookup, CSV export). Scoring engine helper with auto-unacceptable triggers + rating bands. 4 new pages under /audits (dashboard, runner, report, templates). 7 new Pepper tools (list_audits, get_audit_report, list_qsc_questions, get_qsc_question, list_audit_templates, get_audit_nc_trends, get_location_audit_history). 2 new RBAC features (audits, audits_admin) + global feature-flag switch. 11 QSC FAQ entries seeded. User guide section added. Migration steps 124-131. DB: 82→87 tables, 123→131 migration steps, tools: 97→104, features: 21→23.*
 
 *README previous session: HTML Validator + Memory Consolidation + FAQ + Audit Expansion + Change Log — HTML content validator with Ask Pepper escalation, nightly memory consolidation MVP (node-cron, Haiku, daily/monthly summaries, profile auto-update), FAQ knowledge base (70+ entries, HelpPage tab, Pepper search_faq tool), audit logging expanded from 10→48 route files (209 logAudit calls, full coverage), Change Log table + Pepper get_changelog tool + EOS protocol step 5.*
 

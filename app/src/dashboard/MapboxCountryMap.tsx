@@ -9,11 +9,32 @@ import { useMapboxToken } from '../hooks/useMapboxToken'
 import { useWidgetLabel, useIsWidgetPopout } from './widgets'
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const COUNTRY_MASK_SRC  = 'mb-country-mask'
-const COUNTRY_MASK_LYR  = 'mb-country-mask-line'
+const COUNTRY_MASK_SRC     = 'mb-country-mask'
+const COUNTRY_MASK_LYR     = 'mb-country-mask-line'
+// Solid fill covering every country EXCEPT the focused one — visually hides
+// all surrounding countries (their fills, roads, borders) while letting the
+// focused country show through. Labels are then filtered separately so only
+// names within the focused country remain.
+const COUNTRY_OUTSIDE_FILL = 'mb-country-outside-fill'
+
 const REGION_SRC_ID     = 'mb-country-regions'
 const REGION_FILL_LYR   = 'mb-country-regions-fill'
 const REGION_LINE_LYR   = 'mb-country-regions-line'
+
+// Mapbox Light style label layers we filter down to the focused country only.
+// We try each one in a try/catch since the list is style-version specific.
+const LABEL_LAYERS_TO_FILTER_BY_ISO1: string[] = [
+  'country-label',
+  'settlement-major-label',
+  'settlement-subdivision-label',
+  'natural-point-label',
+  'water-point-label',
+  'waterway-label',
+  'airport-label',
+]
+const LABEL_LAYERS_TO_FILTER_BY_ISO2_PREFIX: string[] = [
+  'state-label', // iso_3166_2 starts with "IN-", "US-", etc.
+]
 
 const ADMIN1_GEO_URL = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces.geojson'
 
@@ -231,6 +252,24 @@ export default function MapboxCountryMap() {
           url: 'mapbox://mapbox.country-boundaries-v1',
           promoteId: { country_boundaries: 'iso_3166_1' },
         } as any)
+
+        // Masking fill — covers every country whose ISO is NOT the focused
+        // one. Filter starts as "never" (no focus yet) and is updated when a
+        // country is selected. Inserted above the base style's land/road
+        // layers but below the region + outline layers we add next so those
+        // remain visible on top.
+        map.addLayer({
+          id: COUNTRY_OUTSIDE_FILL,
+          type: 'fill',
+          source: COUNTRY_MASK_SRC,
+          'source-layer': 'country_boundaries',
+          paint: {
+            'fill-color': '#F7F9F8', // design token surface-2
+            'fill-opacity': 0.95,
+          },
+          filter: ['==', ['upcase', ['get', 'iso_3166_1']], '___NEVER___'],
+        })
+
         map.addLayer({
           id: COUNTRY_MASK_LYR,
           type: 'line',
@@ -304,14 +343,54 @@ export default function MapboxCountryMap() {
     }
   }, [countryFeatureCollection, styleReady])
 
-  // Country outline filter — update when iso changes
+  // Apply all iso-dependent filters: country outline, masking fill for the
+  // rest of the world, and label filters so only names inside the focused
+  // country are visible. Every setFilter is try/caught because the style's
+  // layer ids are version-specific and we'd rather silently keep a label
+  // visible than crash the map on a style update.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !styleReady) return
-    if (!map.getLayer(COUNTRY_MASK_LYR)) return
-    try {
-      map.setFilter(COUNTRY_MASK_LYR, ['==', ['upcase', ['get', 'iso_3166_1']], iso])
-    } catch { /* ignore */ }
+
+    // Country outline — show only the focused country's border.
+    if (map.getLayer(COUNTRY_MASK_LYR)) {
+      try {
+        map.setFilter(COUNTRY_MASK_LYR, ['==', ['upcase', ['get', 'iso_3166_1']], iso])
+      } catch { /* ignore */ }
+    }
+
+    // Masking fill — cover everything EXCEPT the focused country.
+    // `'___NEVER___'` placeholder when no iso so nothing is masked.
+    if (map.getLayer(COUNTRY_OUTSIDE_FILL)) {
+      try {
+        const maskFilter: any = iso
+          ? ['!=', ['upcase', ['get', 'iso_3166_1']], iso]
+          : ['==', ['upcase', ['get', 'iso_3166_1']], '___NEVER___']
+        map.setFilter(COUNTRY_OUTSIDE_FILL, maskFilter)
+      } catch { /* ignore */ }
+    }
+
+    // Labels keyed off iso_3166_1 (country, cities, airports, etc.).
+    for (const layerId of LABEL_LAYERS_TO_FILTER_BY_ISO1) {
+      if (!map.getLayer(layerId)) continue
+      try {
+        const f: any = iso
+          ? ['==', ['upcase', ['get', 'iso_3166_1']], iso]
+          : null // restore default (show all) when no country is focused
+        map.setFilter(layerId, f)
+      } catch { /* ignore — layer may not have iso_3166_1 property */ }
+    }
+
+    // Labels keyed off iso_3166_2 (states/provinces) — filter by prefix.
+    for (const layerId of LABEL_LAYERS_TO_FILTER_BY_ISO2_PREFIX) {
+      if (!map.getLayer(layerId)) continue
+      try {
+        const f: any = iso
+          ? ['==', ['slice', ['upcase', ['get', 'iso_3166_2']], 0, 2], iso]
+          : null
+        map.setFilter(layerId, f)
+      } catch { /* ignore */ }
+    }
   }, [iso, styleReady])
 
   // Region fill colour
