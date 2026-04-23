@@ -525,6 +525,98 @@ function MarketHeader() {
 
 // ── Registry mapping WidgetId → component ─────────────────────────────────────
 
+// ── MarketSelector — full-width dashboard switcher ────────────────────────────
+// Distinct from MarketPicker (card-grid) and MarketHeader (banner). This is the
+// fast chooser meant to live at the top of every template: a row of clickable
+// chips + an "All markets" reset button. All widgets further down the page
+// react via MarketContext, so picking one here re-scopes KPIs, menu tiles,
+// recent quotes, the map etc. in one click.
+
+function isoToFlag(iso: string | null | undefined): string {
+  if (!iso || iso.length !== 2) return '🌐'
+  return [...iso.toUpperCase()].map(c => String.fromCodePoint(0x1F1E6 - 65 + c.charCodeAt(0))).join('')
+}
+
+function MarketSelector() {
+  const { countries, countryId, setCountryId, selected, loading } = useMarket()
+
+  if (loading) {
+    return (
+      <div className="card p-4 h-full">
+        <Skeleton className="h-6 w-48 mb-3" />
+        <div className="flex gap-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-9 w-24 rounded-full" />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (countries.length === 0) {
+    return (
+      <div className="card p-4 h-full text-sm text-text-3">
+        No markets configured yet. Add one in <strong>Configuration → Location Structure → Markets</strong>.
+      </div>
+    )
+  }
+
+  return (
+    <div className="card p-4 h-full flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-2 pr-3 border-r border-border">
+        <span className="text-xs uppercase tracking-wider text-text-3 font-semibold">Market</span>
+        {selected ? (
+          <span className="text-sm font-semibold text-text-1 flex items-center gap-1.5">
+            <span className="text-base leading-none">{isoToFlag(selected.country_iso)}</span>
+            {selected.name}
+            <span className="text-xs font-mono text-text-3">· {selected.currency_code}</span>
+          </span>
+        ) : (
+          <span className="text-sm font-medium text-text-2">All markets</span>
+        )}
+      </div>
+
+      {/* All markets reset chip */}
+      <button
+        onClick={() => setCountryId(null)}
+        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
+          countryId === null
+            ? 'bg-accent text-white border-accent'
+            : 'bg-surface text-text-2 border-border hover:bg-surface-2 hover:text-text-1'
+        }`}
+        title="Clear market scope — show data across every allowed market"
+      >
+        🌐 All markets
+      </button>
+
+      {/* One chip per country the user can see */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {countries.map(c => {
+          const active = countryId === c.id
+          return (
+            <button
+              key={c.id}
+              onClick={() => setCountryId(active ? null : c.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                active
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-surface text-text-2 border-border hover:bg-surface-2 hover:text-text-1'
+              }`}
+              title={`${c.name} · ${c.currency_code} ${c.currency_symbol}`}
+            >
+              <span className="text-sm leading-none">{isoToFlag(c.country_iso)}</span>
+              <span>{c.name}</span>
+              <span className={`text-[10px] font-mono ${active ? 'text-white/70' : 'text-text-3'}`}>
+                {c.currency_symbol}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'kpi-ingredients':   KpiIngredients,
   'kpi-recipes':       KpiRecipes,
@@ -539,6 +631,7 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'missing-quotes':    MissingQuotes,
   'recent-quotes':     RecentQuotes,
   'quick-links':       QuickLinks,
+  'market-selector':   MarketSelector,
   'market-picker':     MarketPicker,
   'market-stats':      MarketStats,
   'market-header':     MarketHeader,

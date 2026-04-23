@@ -13,6 +13,7 @@ export type WidgetId =
   | 'missing-quotes'
   | 'recent-quotes'
   | 'quick-links'
+  | 'market-selector'   // Compact full-width market chooser — scopes the whole dashboard
   | 'market-picker'
   | 'market-stats'
   | 'market-header'

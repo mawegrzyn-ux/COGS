@@ -16,6 +16,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'recent-quotes':     { id: 'recent-quotes',     label: 'Recent Price Quotes',  description: 'Latest price quote updates',        defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true  },
   'quick-links':       { id: 'quick-links',       label: 'Quick Links',       description: 'Shortcut tiles to main sections',     defaultSize: 'xl', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false },
 
+  'market-selector':   { id: 'market-selector',   label: 'Market Selector',   description: 'Compact chip row that scopes the whole dashboard to a single market in one click.', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: false },
   'market-picker':     { id: 'market-picker',     label: 'Market Picker',     description: 'Grid of markets with quick stats',   defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
   'market-stats':      { id: 'market-stats',      label: 'Market Snapshot',   description: 'Headline stats for selected market', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: true },
   'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
@@ -31,6 +32,7 @@ export const TEMPLATES: Template[] = [
     name: 'Executive',
     description: 'High-level KPIs, menu COGS across all markets, and recent activity.',
     slots: [
+      { widgetId: 'market-selector',   size: 'xl' },
       { widgetId: 'kpi-ingredients',   size: 'sm' },
       { widgetId: 'kpi-recipes',       size: 'sm' },
       { widgetId: 'kpi-menus',         size: 'sm' },
@@ -47,6 +49,7 @@ export const TEMPLATES: Template[] = [
     name: 'Finance / Cost',
     description: 'Quote coverage, missing quotes, and menu cost margins.',
     slots: [
+      { widgetId: 'market-selector',   size: 'xl' },
       { widgetId: 'kpi-coverage',      size: 'sm' },
       { widgetId: 'kpi-active-quotes', size: 'sm' },
       { widgetId: 'kpi-vendors',       size: 'sm' },
@@ -62,6 +65,7 @@ export const TEMPLATES: Template[] = [
     name: 'Market Explorer',
     description: 'Drill into a specific market. Pick on the map or card grid; stats update as you select.',
     slots: [
+      { widgetId: 'market-selector',   size: 'xl' },
       { widgetId: 'market-header',     size: 'xl' },
       { widgetId: 'market-map',        size: 'xl' },
       { widgetId: 'market-stats',      size: 'md' },
