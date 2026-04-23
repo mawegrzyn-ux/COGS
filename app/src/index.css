@@ -7,6 +7,39 @@
   40%           { transform: scale(1.25); opacity: 1; }
 }
 
+/* ── Mapbox widget — align with design tokens ──────────────────────────────── */
+.mapbox-widget .mapboxgl-popup-content {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(15, 31, 23, 0.12);
+  padding: 10px 12px;
+  font-family: Nunito, system-ui, sans-serif;
+}
+.mapbox-widget .mapboxgl-popup-tip {
+  border-top-color: var(--surface);
+  border-bottom-color: var(--surface);
+}
+.mapbox-widget .mapboxgl-ctrl-group {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(15, 31, 23, 0.06);
+}
+.mapbox-widget .mapboxgl-ctrl-group button {
+  background: transparent;
+}
+.mapbox-widget .mapboxgl-ctrl-group button:hover {
+  background: var(--surface-2);
+}
+.mapbox-widget .mapboxgl-ctrl-attrib {
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 10px;
+}
+.mapbox-widget .mapboxgl-canvas {
+  outline: none;
+}
+
 /* ── Doc Library fullscreen / kiosk mode ───────────────────────────────────── */
 .doc-viewer:fullscreen {
   background: white;
