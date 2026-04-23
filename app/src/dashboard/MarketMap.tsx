@@ -313,10 +313,14 @@ export default function MarketMap() {
         <div className={`relative ${fullscreen ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
           <ComposableMap
             projection="geoNaturalEarth1"
-            projectionConfig={{ scale: fullscreen ? 220 : 150 }}
+            // Keep scale constant between modes — "fullscreen" just means the
+            // SVG fills a bigger container, it shouldn't zoom in and crop the
+            // world. Users can zoom further with the ZoomableGroup (scroll /
+            // pinch) if they want to drill in.
+            projectionConfig={{ scale: 150 }}
             width={800}
             height={380}
-            style={{ width: '100%', height: fullscreen ? '100%' : 'auto', flex: fullscreen ? 1 : undefined }}
+            style={{ width: '100%', height: 'auto', maxHeight: fullscreen ? '100%' : undefined }}
           >
             <ZoomableGroup center={[0, 20]}>
               <Geographies geography={activeGeo}>
