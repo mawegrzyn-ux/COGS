@@ -12,9 +12,11 @@ import { test, expect } from '@playwright/test';
 test.describe('RBAC sidebar', () => {
   test('Admin user sees Configuration and System nav items', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('Dashboard',     { exact: false })).toBeVisible();
-    await expect(page.getByText('Configuration', { exact: false })).toBeVisible();
-    await expect(page.getByText('System',        { exact: false })).toBeVisible();
+    // Target the sidebar links by role to avoid colliding with page headings
+    // that also say "Dashboard", "Configuration", etc.
+    await expect(page.getByRole('link', { name: /^Dashboard$/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^Configuration$/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^System$/ })).toBeVisible();
   });
 
   test('navigating to a protected page does not 403', async ({ page }) => {

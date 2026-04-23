@@ -11,7 +11,8 @@ import { test, expect } from '@playwright/test';
 test.describe('Menu COGS', () => {
   test('navigating to a menu shows COGS column', async ({ page }) => {
     await page.goto('/menus');
-    await expect(page.getByRole('heading', { name: /Menus/i })).toBeVisible();
+    // Page heading is "Menu Builder" (PageHeader `title` prop in MenusPage).
+    await expect(page.getByRole('heading', { name: /Menu Builder|Menus/i })).toBeVisible();
 
     // Pick the first menu in the dropdown if any exist
     const firstMenuOption = page.locator('select[name*="menu"], [data-testid="menu-select"] option').first();

@@ -6,30 +6,34 @@
 //
 // Each test creates a uniquely-named row so parallel runs don't collide.
 
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 
 const ts = () => `e2e_${Date.now()}_${Math.floor(Math.random() * 999)}`;
+
+// The shared `Field` component renders `<label>` as a sibling (not a wrapper)
+// of the input, so Playwright's `getByLabel` can't resolve it. Until the Field
+// component is refactored to use htmlFor/id or wrap children, target the
+// modal's name input via its autoFocus + placeholder. The add modal's name
+// input consistently renders with `placeholder="e.g. …"` and `autoFocus`.
+const nameInput = (page: Page) =>
+  page.locator('[role="dialog"] input[placeholder^="e.g." i]').first();
 
 test.describe('Ingredient CRUD', () => {
   test('create an ingredient and verify it appears', async ({ page }) => {
     const name = `${ts()}_TestIngredient`;
     await page.goto('/inventory');
 
-    // Wait for the page to settle.
     await expect(page.getByRole('heading', { name: /Inventory/i })).toBeVisible();
 
-    // Click the "+ Add Ingredient" / "+ New" button. UI text may vary —
-    // try the most likely options.
-    const addBtn = page.getByRole('button', { name: /add|new/i }).first();
-    await addBtn.click();
+    // Click the "+ Add Ingredient" / "+ New" button.
+    await page.getByRole('button', { name: /add|new/i }).first().click();
 
-    // Fill the form
-    await page.getByLabel(/Name/i).first().fill(name);
+    // Modal should be open with the name input focused
+    await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
+    await nameInput(page).fill(name);
 
-    // Save
     await page.getByRole('button', { name: /save|create/i }).first().click();
 
-    // The new row should appear in the table
     await expect(page.getByText(name)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -39,13 +43,15 @@ test.describe('Ingredient CRUD', () => {
 
     await page.goto('/inventory');
     await page.getByRole('button', { name: /add|new/i }).first().click();
-    await page.getByLabel(/Name/i).first().fill(original);
+    await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
+    await nameInput(page).fill(original);
     await page.getByRole('button', { name: /save|create/i }).first().click();
     await expect(page.getByText(original)).toBeVisible();
 
-    // Click the row to open edit
+    // Open the just-created row's edit modal
     await page.getByText(original).click();
-    await page.getByLabel(/Name/i).first().fill(updated);
+    await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
+    await nameInput(page).fill(updated);
     await page.getByRole('button', { name: /save|update/i }).first().click();
 
     await expect(page.getByText(updated)).toBeVisible({ timeout: 10_000 });
