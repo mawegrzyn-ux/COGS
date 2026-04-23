@@ -36,12 +36,35 @@ function coerceThreshold(v) {
   return n;
 }
 
+// Ensure every region id passed in belongs to the given country ISO. Returns
+// the normalised array; throws with a user-friendly message on mismatch or
+// unknown ids. A market can cover ZERO regions (country-wide) or any subset
+// of its country's regions — it can never span multiple countries.
+async function validateRegionIds(client, country_iso, region_ids) {
+  if (!Array.isArray(region_ids) || region_ids.length === 0) return [];
+  if (!country_iso) {
+    throw new Error('Cannot attach regions to a market without a country_iso.');
+  }
+  const { rows } = await client.query(
+    `SELECT id, country_iso FROM mcogs_regions WHERE id = ANY($1::int[])`,
+    [region_ids]
+  );
+  if (rows.length !== region_ids.length) {
+    throw new Error('One or more regions were not found.');
+  }
+  const iso = country_iso.toUpperCase();
+  const bad = rows.filter(r => (r.country_iso || '').toUpperCase() !== iso);
+  if (bad.length > 0) {
+    throw new Error(`Regions must belong to ${iso}. ${bad.length} region(s) are from a different country.`);
+  }
+  return region_ids;
+}
+
 // POST /countries
 router.post('/', async (req, res) => {
   const {
     name, currency_code, currency_symbol, exchange_rate,
     default_price_level_id, country_iso,
-    parent_country_id,
     region_ids,                // optional array of mcogs_regions.id this market covers
     cogs_threshold_excellent,  // nullable — NULL means "inherit global setting"
     cogs_threshold_acceptable, // nullable — NULL means "inherit global setting"
@@ -50,18 +73,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
-  // Guard against nested regions — a regional market's parent must itself be
-  // a country-level market (parent_country_id NULL).
-  if (parent_country_id) {
-    const { rows: [parent] } = await pool.query(
-      'SELECT parent_country_id FROM mcogs_countries WHERE id = $1',
-      [parent_country_id]
-    );
-    if (!parent) return res.status(400).json({ error: { message: 'Parent market not found' } });
-    if (parent.parent_country_id) {
-      return res.status(400).json({ error: { message: 'Cannot nest a region under another region. Parent must be a country-level market.' } });
-    }
-  }
+
   let thrExc, thrAcc;
   try {
     thrExc = coerceThreshold(cogs_threshold_excellent);
@@ -78,22 +90,27 @@ router.post('/', async (req, res) => {
     const { rows } = await client.query(
       `INSERT INTO mcogs_countries
          (name, currency_code, currency_symbol, exchange_rate,
-          default_price_level_id, country_iso, parent_country_id,
+          default_price_level_id, country_iso,
           cogs_threshold_excellent, cogs_threshold_acceptable)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate,
         default_price_level_id || null,
         country_iso ? country_iso.toUpperCase().trim() : null,
-        parent_country_id || null,
         thrExc, thrAcc,
       ]
     );
     const created = rows[0];
-    // If caller supplied region_ids, attach them. Only meaningful for regional
-    // markets — silently ignored for country-level markets to keep the API
-    // tolerant of stale UI state.
-    if (Array.isArray(region_ids) && region_ids.length && parent_country_id) {
+    // Attach regions if supplied. All region rows must share this market's
+    // country_iso — enforced by validateRegionIds so the API layer is the
+    // single source of truth for "market ⊂ country".
+    if (Array.isArray(region_ids) && region_ids.length > 0) {
+      try {
+        await validateRegionIds(client, created.country_iso, region_ids);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: err.message } });
+      }
       const values = region_ids.map((_, i) => `($1, $${i + 2})`).join(',');
       await client.query(
         `INSERT INTO mcogs_market_regions (market_id, region_id) VALUES ${values}
@@ -118,7 +135,6 @@ router.put('/:id', async (req, res) => {
   const {
     name, currency_code, currency_symbol, exchange_rate,
     default_price_level_id, country_iso,
-    parent_country_id,
     region_ids,               // optional — when supplied, replaces the market's regions
     cogs_threshold_excellent,
     cogs_threshold_acceptable,
@@ -127,20 +143,6 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: { message: 'name, currency_code, currency_symbol and exchange_rate are required' } });
   if (Number(exchange_rate) <= 0)
     return res.status(400).json({ error: { message: 'exchange_rate must be positive' } });
-  // Parent-market sanity: cannot be self, cannot be a regional market itself.
-  if (parent_country_id && Number(parent_country_id) === Number(req.params.id)) {
-    return res.status(400).json({ error: { message: 'Market cannot be its own parent.' } });
-  }
-  if (parent_country_id) {
-    const { rows: [parent] } = await pool.query(
-      'SELECT parent_country_id FROM mcogs_countries WHERE id = $1',
-      [parent_country_id]
-    );
-    if (!parent) return res.status(400).json({ error: { message: 'Parent market not found' } });
-    if (parent.parent_country_id) {
-      return res.status(400).json({ error: { message: 'Cannot nest a region under another region. Parent must be a country-level market.' } });
-    }
-  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -160,14 +162,13 @@ router.put('/:id', async (req, res) => {
     const { rows } = await client.query(
       `UPDATE mcogs_countries
        SET name=$1, currency_code=$2, currency_symbol=$3, exchange_rate=$4,
-           default_price_level_id=$5, country_iso=$6, parent_country_id=$7,
-           cogs_threshold_excellent=$8, cogs_threshold_acceptable=$9, updated_at=NOW()
-       WHERE id=$10 RETURNING *`,
+           default_price_level_id=$5, country_iso=$6,
+           cogs_threshold_excellent=$7, cogs_threshold_acceptable=$8, updated_at=NOW()
+       WHERE id=$9 RETURNING *`,
       [
         name.trim(), currency_code.toUpperCase().trim(), currency_symbol.trim(), exchange_rate,
         default_price_level_id || null,
         country_iso ? country_iso.toUpperCase().trim() : null,
-        parent_country_id || null,
         thrExc, thrAcc,
         req.params.id,
       ]
@@ -176,9 +177,17 @@ router.put('/:id', async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: { message: 'Not found' } });
     }
-    // If region_ids was supplied, fully replace the market's region set.
-    // Undefined => leave existing rows alone (lets callers skip the junction).
+    // If region_ids was supplied, fully replace the market's region set. All
+    // region ids must belong to this market's country_iso — validateRegionIds
+    // enforces the invariant. Undefined => leave existing rows alone (callers
+    // can skip the junction).
     if (Array.isArray(region_ids)) {
+      try {
+        await validateRegionIds(client, rows[0].country_iso, region_ids);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: { message: err.message } });
+      }
       await client.query('DELETE FROM mcogs_market_regions WHERE market_id = $1', [req.params.id]);
       if (region_ids.length) {
         const values = region_ids.map((_, i) => `($1, $${i + 2})`).join(',');
@@ -192,7 +201,7 @@ router.put('/:id', async (req, res) => {
     await client.query('COMMIT');
     logAudit(pool, req, {
       action: 'update', entity_type: 'country', entity_id: rows[0].id, entity_label: rows[0].name,
-      field_changes: diffFields(old, rows[0], ['name', 'currency_code', 'currency_symbol', 'exchange_rate', 'default_price_level_id', 'parent_country_id']),
+      field_changes: diffFields(old, rows[0], ['name', 'currency_code', 'currency_symbol', 'exchange_rate', 'default_price_level_id']),
     });
     res.json(rows[0]);
   } catch (err) {
@@ -206,7 +215,7 @@ router.put('/:id', async (req, res) => {
 
 // PATCH /countries/:id  (partial — used for default_price_level_id inline update)
 router.patch('/:id', async (req, res) => {
-  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso','brand_partner_id','parent_country_id','cogs_threshold_excellent','cogs_threshold_acceptable'];
+  const allowed = ['name','currency_code','currency_symbol','exchange_rate','default_price_level_id','country_iso','brand_partner_id','cogs_threshold_excellent','cogs_threshold_acceptable'];
   const fields  = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length)
     return res.status(400).json({ error: { message: 'No valid fields to update' } });

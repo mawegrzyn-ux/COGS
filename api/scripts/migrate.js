@@ -3265,35 +3265,31 @@ const migrations = [
    ON CONFLICT (country_id, price_level_id) DO NOTHING`,
 
   // ── Step 133: Regional markets (sub-country) ──────────────────────────────
-  // A market row in mcogs_countries can now represent either a country
-  // (country-level, parent_country_id=NULL) or a sub-country market spanning
-  // one or more regions inside that country (parent_country_id set, with
-  // rows in mcogs_market_regions for every region the market covers).
+  // Markets can optionally be scoped to one or more regions inside a country
+  // via mcogs_market_regions. The regions catalog is keyed by ISO 3166-1
+  // alpha-2 country code so it lives independently of the mcogs_countries
+  // (a.k.a. "markets") table — you don't need a country-level market row
+  // for a country in order to catalogue its regions, and multiple markets
+  // under the same country_iso can each claim their own subset.
   //
-  // mcogs_regions is a catalog of ISO 3166-2-style subdivisions keyed to their
-  // parent country. mcogs_market_regions is the market ↔ region junction.
+  // Hard rule (enforced at the API layer in countries.js + regions.js):
+  //   a market cannot cover regions that belong to a different country than
+  //   its own country_iso. A market may cover no regions (country-wide) or
+  //   any subset; it can never exceed its country.
+  //
   // Regions CAN be claimed by multiple markets (no UNIQUE on region_id) —
   // franchise arrangements may overlap geographically.
-  //
-  // Naming note: the existing table is mcogs_countries for historical reasons
-  // (WP plugin origin). Semantically it has always held "markets" — regional
-  // markets are just additional rows with a parent FK.
-  `ALTER TABLE mcogs_countries
-     ADD COLUMN IF NOT EXISTS parent_country_id INTEGER
-       REFERENCES mcogs_countries(id) ON DELETE CASCADE`,
-  `CREATE INDEX IF NOT EXISTS idx_countries_parent ON mcogs_countries(parent_country_id)`,
-
   `CREATE TABLE IF NOT EXISTS mcogs_regions (
-     id          SERIAL PRIMARY KEY,
-     country_id  INTEGER NOT NULL REFERENCES mcogs_countries(id) ON DELETE CASCADE,
-     name        VARCHAR(120) NOT NULL,
-     iso_code    VARCHAR(10),             -- ISO 3166-2: "US-CA", "GB-SCT", "IN-KA"
-     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-     UNIQUE (country_id, name)
+     id           SERIAL PRIMARY KEY,
+     country_iso  VARCHAR(10) NOT NULL,         -- ISO 3166-1 alpha-2, e.g. 'US', 'GB'
+     name         VARCHAR(120) NOT NULL,
+     iso_code     VARCHAR(10),                  -- ISO 3166-2: "US-CA", "GB-SCT", "IN-KA"
+     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     UNIQUE (country_iso, name)
    )`,
-  `CREATE INDEX IF NOT EXISTS idx_regions_country ON mcogs_regions(country_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_regions_iso     ON mcogs_regions(iso_code)`,
+  `CREATE INDEX IF NOT EXISTS idx_regions_country_iso ON mcogs_regions(country_iso)`,
+  `CREATE INDEX IF NOT EXISTS idx_regions_iso_code    ON mcogs_regions(iso_code)`,
 
   `CREATE TABLE IF NOT EXISTS mcogs_market_regions (
      id          SERIAL PRIMARY KEY,
@@ -3304,6 +3300,25 @@ const migrations = [
    )`,
   `CREATE INDEX IF NOT EXISTS idx_mr_market ON mcogs_market_regions(market_id)`,
   `CREATE INDEX IF NOT EXISTS idx_mr_region ON mcogs_market_regions(region_id)`,
+
+  // Legacy cleanup — if an earlier iteration of this feature created the
+  // country_id column (FK to mcogs_countries), drop it. The new column is
+  // country_iso (VARCHAR, no FK to markets table). Also drop the old UNIQUE
+  // on (country_id, name) since UNIQUE (country_iso, name) replaces it.
+  `DO $$ BEGIN
+     IF EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'mcogs_regions' AND column_name = 'country_id'
+     ) THEN
+       -- Backfill country_iso from the legacy FK before dropping it.
+       UPDATE mcogs_regions r
+       SET    country_iso = UPPER(c.country_iso)
+       FROM   mcogs_countries c
+       WHERE  r.country_id = c.id AND (r.country_iso IS NULL OR r.country_iso = '');
+       ALTER TABLE mcogs_regions DROP COLUMN country_id CASCADE;
+     END IF;
+   END $$`,
+  `ALTER TABLE mcogs_countries DROP COLUMN IF EXISTS parent_country_id`,
 
   // ── Step 133c: Hotfix — missing updated_at on mcogs_modifier_groups ────────
   // The translations commit (904d5b6) started selecting mg.updated_at in
@@ -3324,81 +3339,55 @@ const migrations = [
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS cogs_threshold_excellent  NUMERIC(5,2)`,
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS cogs_threshold_acceptable NUMERIC(5,2)`,
 
-  // ── Step 133b: Seed regions for common markets ─────────────────────────────
-  // Short catalog for US, UK, Canada, India, Australia — top-level subdivisions
-  // only. Admins can add more via the Regions admin UI. Idempotent via
-  // ON CONFLICT (country_id, name).
-  `DO $$
-   DECLARE
-     _us INTEGER := (SELECT id FROM mcogs_countries WHERE UPPER(country_iso) = 'US' AND parent_country_id IS NULL LIMIT 1);
-     _gb INTEGER := (SELECT id FROM mcogs_countries WHERE UPPER(country_iso) = 'GB' AND parent_country_id IS NULL LIMIT 1);
-     _ca INTEGER := (SELECT id FROM mcogs_countries WHERE UPPER(country_iso) = 'CA' AND parent_country_id IS NULL LIMIT 1);
-     _in INTEGER := (SELECT id FROM mcogs_countries WHERE UPPER(country_iso) = 'IN' AND parent_country_id IS NULL LIMIT 1);
-     _au INTEGER := (SELECT id FROM mcogs_countries WHERE UPPER(country_iso) = 'AU' AND parent_country_id IS NULL LIMIT 1);
-   BEGIN
-     IF _us IS NOT NULL THEN
-       INSERT INTO mcogs_regions (country_id, name, iso_code) VALUES
-         (_us, 'Alabama','US-AL'),(_us, 'Alaska','US-AK'),(_us, 'Arizona','US-AZ'),
-         (_us, 'Arkansas','US-AR'),(_us, 'California','US-CA'),(_us, 'Colorado','US-CO'),
-         (_us, 'Connecticut','US-CT'),(_us, 'Delaware','US-DE'),(_us, 'Florida','US-FL'),
-         (_us, 'Georgia','US-GA'),(_us, 'Hawaii','US-HI'),(_us, 'Idaho','US-ID'),
-         (_us, 'Illinois','US-IL'),(_us, 'Indiana','US-IN'),(_us, 'Iowa','US-IA'),
-         (_us, 'Kansas','US-KS'),(_us, 'Kentucky','US-KY'),(_us, 'Louisiana','US-LA'),
-         (_us, 'Maine','US-ME'),(_us, 'Maryland','US-MD'),(_us, 'Massachusetts','US-MA'),
-         (_us, 'Michigan','US-MI'),(_us, 'Minnesota','US-MN'),(_us, 'Mississippi','US-MS'),
-         (_us, 'Missouri','US-MO'),(_us, 'Montana','US-MT'),(_us, 'Nebraska','US-NE'),
-         (_us, 'Nevada','US-NV'),(_us, 'New Hampshire','US-NH'),(_us, 'New Jersey','US-NJ'),
-         (_us, 'New Mexico','US-NM'),(_us, 'New York','US-NY'),(_us, 'North Carolina','US-NC'),
-         (_us, 'North Dakota','US-ND'),(_us, 'Ohio','US-OH'),(_us, 'Oklahoma','US-OK'),
-         (_us, 'Oregon','US-OR'),(_us, 'Pennsylvania','US-PA'),(_us, 'Rhode Island','US-RI'),
-         (_us, 'South Carolina','US-SC'),(_us, 'South Dakota','US-SD'),(_us, 'Tennessee','US-TN'),
-         (_us, 'Texas','US-TX'),(_us, 'Utah','US-UT'),(_us, 'Vermont','US-VT'),
-         (_us, 'Virginia','US-VA'),(_us, 'Washington','US-WA'),(_us, 'West Virginia','US-WV'),
-         (_us, 'Wisconsin','US-WI'),(_us, 'Wyoming','US-WY'),(_us, 'District of Columbia','US-DC')
-       ON CONFLICT (country_id, name) DO NOTHING;
-     END IF;
-     IF _gb IS NOT NULL THEN
-       INSERT INTO mcogs_regions (country_id, name, iso_code) VALUES
-         (_gb, 'England','GB-ENG'),(_gb, 'Scotland','GB-SCT'),
-         (_gb, 'Wales','GB-WLS'),(_gb, 'Northern Ireland','GB-NIR')
-       ON CONFLICT (country_id, name) DO NOTHING;
-     END IF;
-     IF _ca IS NOT NULL THEN
-       INSERT INTO mcogs_regions (country_id, name, iso_code) VALUES
-         (_ca, 'Alberta','CA-AB'),(_ca, 'British Columbia','CA-BC'),
-         (_ca, 'Manitoba','CA-MB'),(_ca, 'New Brunswick','CA-NB'),
-         (_ca, 'Newfoundland and Labrador','CA-NL'),(_ca, 'Nova Scotia','CA-NS'),
-         (_ca, 'Ontario','CA-ON'),(_ca, 'Prince Edward Island','CA-PE'),
-         (_ca, 'Quebec','CA-QC'),(_ca, 'Saskatchewan','CA-SK'),
-         (_ca, 'Northwest Territories','CA-NT'),(_ca, 'Nunavut','CA-NU'),
-         (_ca, 'Yukon','CA-YT')
-       ON CONFLICT (country_id, name) DO NOTHING;
-     END IF;
-     IF _in IS NOT NULL THEN
-       INSERT INTO mcogs_regions (country_id, name, iso_code) VALUES
-         (_in, 'Andhra Pradesh','IN-AP'),(_in, 'Arunachal Pradesh','IN-AR'),
-         (_in, 'Assam','IN-AS'),(_in, 'Bihar','IN-BR'),(_in, 'Chhattisgarh','IN-CT'),
-         (_in, 'Delhi','IN-DL'),(_in, 'Goa','IN-GA'),(_in, 'Gujarat','IN-GJ'),
-         (_in, 'Haryana','IN-HR'),(_in, 'Himachal Pradesh','IN-HP'),
-         (_in, 'Jharkhand','IN-JH'),(_in, 'Karnataka','IN-KA'),(_in, 'Kerala','IN-KL'),
-         (_in, 'Madhya Pradesh','IN-MP'),(_in, 'Maharashtra','IN-MH'),
-         (_in, 'Manipur','IN-MN'),(_in, 'Meghalaya','IN-ML'),(_in, 'Mizoram','IN-MZ'),
-         (_in, 'Nagaland','IN-NL'),(_in, 'Odisha','IN-OR'),(_in, 'Punjab','IN-PB'),
-         (_in, 'Rajasthan','IN-RJ'),(_in, 'Sikkim','IN-SK'),(_in, 'Tamil Nadu','IN-TN'),
-         (_in, 'Telangana','IN-TG'),(_in, 'Tripura','IN-TR'),(_in, 'Uttar Pradesh','IN-UP'),
-         (_in, 'Uttarakhand','IN-UT'),(_in, 'West Bengal','IN-WB')
-       ON CONFLICT (country_id, name) DO NOTHING;
-     END IF;
-     IF _au IS NOT NULL THEN
-       INSERT INTO mcogs_regions (country_id, name, iso_code) VALUES
-         (_au, 'New South Wales','AU-NSW'),(_au, 'Victoria','AU-VIC'),
-         (_au, 'Queensland','AU-QLD'),(_au, 'Western Australia','AU-WA'),
-         (_au, 'South Australia','AU-SA'),(_au, 'Tasmania','AU-TAS'),
-         (_au, 'Australian Capital Territory','AU-ACT'),
-         (_au, 'Northern Territory','AU-NT')
-       ON CONFLICT (country_id, name) DO NOTHING;
-     END IF;
-   END $$`,
+  // ── Step 133b: Seed regions for common countries ───────────────────────────
+  // Short catalog keyed by ISO 3166-1 alpha-2. Independent of whether a
+  // country-level market exists for these ISOs — the regions catalog is
+  // self-contained. Admins can extend via the Regions admin UI or the
+  // standard-catalog import endpoint (POST /regions/import-standard).
+  `INSERT INTO mcogs_regions (country_iso, name, iso_code) VALUES
+     ('US','Alabama','US-AL'),('US','Alaska','US-AK'),('US','Arizona','US-AZ'),
+     ('US','Arkansas','US-AR'),('US','California','US-CA'),('US','Colorado','US-CO'),
+     ('US','Connecticut','US-CT'),('US','Delaware','US-DE'),('US','Florida','US-FL'),
+     ('US','Georgia','US-GA'),('US','Hawaii','US-HI'),('US','Idaho','US-ID'),
+     ('US','Illinois','US-IL'),('US','Indiana','US-IN'),('US','Iowa','US-IA'),
+     ('US','Kansas','US-KS'),('US','Kentucky','US-KY'),('US','Louisiana','US-LA'),
+     ('US','Maine','US-ME'),('US','Maryland','US-MD'),('US','Massachusetts','US-MA'),
+     ('US','Michigan','US-MI'),('US','Minnesota','US-MN'),('US','Mississippi','US-MS'),
+     ('US','Missouri','US-MO'),('US','Montana','US-MT'),('US','Nebraska','US-NE'),
+     ('US','Nevada','US-NV'),('US','New Hampshire','US-NH'),('US','New Jersey','US-NJ'),
+     ('US','New Mexico','US-NM'),('US','New York','US-NY'),('US','North Carolina','US-NC'),
+     ('US','North Dakota','US-ND'),('US','Ohio','US-OH'),('US','Oklahoma','US-OK'),
+     ('US','Oregon','US-OR'),('US','Pennsylvania','US-PA'),('US','Rhode Island','US-RI'),
+     ('US','South Carolina','US-SC'),('US','South Dakota','US-SD'),('US','Tennessee','US-TN'),
+     ('US','Texas','US-TX'),('US','Utah','US-UT'),('US','Vermont','US-VT'),
+     ('US','Virginia','US-VA'),('US','Washington','US-WA'),('US','West Virginia','US-WV'),
+     ('US','Wisconsin','US-WI'),('US','Wyoming','US-WY'),('US','District of Columbia','US-DC'),
+     ('GB','England','GB-ENG'),('GB','Scotland','GB-SCT'),
+     ('GB','Wales','GB-WLS'),('GB','Northern Ireland','GB-NIR'),
+     ('CA','Alberta','CA-AB'),('CA','British Columbia','CA-BC'),
+     ('CA','Manitoba','CA-MB'),('CA','New Brunswick','CA-NB'),
+     ('CA','Newfoundland and Labrador','CA-NL'),('CA','Nova Scotia','CA-NS'),
+     ('CA','Ontario','CA-ON'),('CA','Prince Edward Island','CA-PE'),
+     ('CA','Quebec','CA-QC'),('CA','Saskatchewan','CA-SK'),
+     ('CA','Northwest Territories','CA-NT'),('CA','Nunavut','CA-NU'),
+     ('CA','Yukon','CA-YT'),
+     ('IN','Andhra Pradesh','IN-AP'),('IN','Arunachal Pradesh','IN-AR'),
+     ('IN','Assam','IN-AS'),('IN','Bihar','IN-BR'),('IN','Chhattisgarh','IN-CT'),
+     ('IN','Delhi','IN-DL'),('IN','Goa','IN-GA'),('IN','Gujarat','IN-GJ'),
+     ('IN','Haryana','IN-HR'),('IN','Himachal Pradesh','IN-HP'),
+     ('IN','Jharkhand','IN-JH'),('IN','Karnataka','IN-KA'),('IN','Kerala','IN-KL'),
+     ('IN','Madhya Pradesh','IN-MP'),('IN','Maharashtra','IN-MH'),
+     ('IN','Manipur','IN-MN'),('IN','Meghalaya','IN-ML'),('IN','Mizoram','IN-MZ'),
+     ('IN','Nagaland','IN-NL'),('IN','Odisha','IN-OR'),('IN','Punjab','IN-PB'),
+     ('IN','Rajasthan','IN-RJ'),('IN','Sikkim','IN-SK'),('IN','Tamil Nadu','IN-TN'),
+     ('IN','Telangana','IN-TG'),('IN','Tripura','IN-TR'),('IN','Uttar Pradesh','IN-UP'),
+     ('IN','Uttarakhand','IN-UT'),('IN','West Bengal','IN-WB'),
+     ('AU','New South Wales','AU-NSW'),('AU','Victoria','AU-VIC'),
+     ('AU','Queensland','AU-QLD'),('AU','Western Australia','AU-WA'),
+     ('AU','South Australia','AU-SA'),('AU','Tasmania','AU-TAS'),
+     ('AU','Australian Capital Territory','AU-ACT'),
+     ('AU','Northern Territory','AU-NT')
+   ON CONFLICT (country_iso, name) DO NOTHING`,
 ];
 
 async function runMigrations(pool) {

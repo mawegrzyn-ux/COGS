@@ -30,17 +30,16 @@ interface Market {
   default_price_level_id: number | null
   country_iso: string | null
   brand_partner_id: number | null
-  parent_country_id: number | null   // NULL = country-level; else regional market under the referenced country
-  region_ids?: number[]              // mcogs_regions this market covers; empty for country-level
+  region_ids?: number[]              // mcogs_regions this market covers; empty = whole country
   cogs_threshold_excellent?:  string | number | null   // NUMERIC — pg returns string; NULL inherits global
   cogs_threshold_acceptable?: string | number | null
 }
 
 interface Region {
-  id: number
-  country_id: number
-  name: string
-  iso_code: string | null
+  id:          number
+  country_iso: string               // ISO 3166-1 alpha-2 — decoupled from the markets table
+  name:        string
+  iso_code:    string | null        // ISO 3166-2 subdivision code
 }
 
 interface TaxRate {
@@ -101,7 +100,7 @@ interface LocationGroup {
 
 // ── Blank forms ───────────────────────────────────────────────────────────────
 
-const blankMarket   = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '', parent_country_id: '' as string | number }
+const blankMarket   = { name: '', country_iso: '', currency_code: '', currency_symbol: '', exchange_rate: '' }
 const blankTax      = { name: '', rate: '' }
 const blankBP       = { name: '', contact: '', email: '', phone: '', notes: '' }
 const blankLocation = { name: '', country_id: '', group_id: '', address: '', email: '', phone: '', contact_name: '', contact_email: '', contact_phone: '', is_active: 'true' }
@@ -460,7 +459,6 @@ export default function MarketsPage() {
       currency_code:   m.currency_code,
       currency_symbol: m.currency_symbol,
       exchange_rate:   m.exchange_rate,
-      parent_country_id: m.parent_country_id == null ? '' : m.parent_country_id,
     })
     setMarketRegionIds(Array.isArray(m.region_ids) ? m.region_ids.slice() : [])
     setMarketErrors({})
@@ -484,18 +482,16 @@ export default function MarketsPage() {
     if (!validateMarket()) return
     setMarketSubmitting(true)
     try {
-      const parentId = marketForm.parent_country_id === '' ? null : Number(marketForm.parent_country_id)
       const payload: Record<string, unknown> = {
         name:            marketForm.name.trim(),
         country_iso:     marketForm.country_iso || null,
         currency_code:   marketForm.currency_code.toUpperCase().trim(),
         currency_symbol: marketForm.currency_symbol.trim(),
         exchange_rate:   Number(marketForm.exchange_rate),
-        parent_country_id: parentId,
-        // region_ids are only meaningful for regional markets. Sending an
-        // empty array for a country-level market explicitly clears any stray
-        // junction rows on edit.
-        region_ids: parentId ? marketRegionIds : [],
+        // Empty array = market covers the whole country; populated = limited
+        // to those specific regions. All regions must belong to country_iso
+        // (server enforces).
+        region_ids: marketRegionIds,
       }
       if (editingMarket) {
         await api.put(`/countries/${editingMarket.id}`, payload)
@@ -852,7 +848,6 @@ export default function MarketsPage() {
                     levelTax={levelTax.filter(lt => lt.country_id === market.id)}
                     cplMatrix={cplMatrix}
                     regions={regions}
-                    parentMarket={market.parent_country_id ? markets.find(m => m.id === market.parent_country_id) ?? null : null}
                     brandPartners={brandPartners}
                     baseCurrency={baseCurrency}
                     onEdit={openEditMarket}
@@ -1190,15 +1185,19 @@ export default function MarketsPage() {
           <Field label="Country" required error={marketErrors.country_iso}>
             <CountryPicker
               value={marketForm.country_iso || null}
-              onChange={(iso, wc) => setMarketForm(f => ({
-                ...f,
-                country_iso:     iso,
-                currency_code:   wc.currency_code,
-                currency_symbol: wc.currency_symbol,
-              }))}
+              onChange={(iso, wc) => {
+                setMarketForm(f => ({
+                  ...f,
+                  country_iso:     iso,
+                  currency_code:   wc.currency_code,
+                  currency_symbol: wc.currency_symbol,
+                }))
+                // Wipe region selection — they belong to the previous country.
+                setMarketRegionIds([])
+              }}
               error={marketErrors.country_iso}
             />
-            <p className="text-xs text-text-3 mt-1">Links this market to a real country for flags and regional settings. Currency fields are auto-filled but editable.</p>
+            <p className="text-xs text-text-3 mt-1">Links this market to a real country. Region scope below is limited to this country — a market can never span multiple countries. Currency fields are auto-filled but editable.</p>
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
@@ -1235,40 +1234,18 @@ export default function MarketsPage() {
             />
           </Field>
 
-          {/* Regional market — optional. When a parent country is chosen, this market
-              is treated as a sub-country market and a region multi-select appears. */}
-          <Field label="Parent market (optional)">
-            <select
-              className="input w-full"
-              value={marketForm.parent_country_id === '' ? '' : String(marketForm.parent_country_id)}
-              onChange={e => {
-                const v = e.target.value
-                setMarketForm(f => ({ ...f, parent_country_id: v === '' ? '' : Number(v) }))
-                // Clear regions when switching parent — they belong to the previous country.
-                setMarketRegionIds([])
-              }}
-            >
-              <option value="">— None (this is a country-level market) —</option>
-              {markets
-                .filter(m => m.parent_country_id == null && (!editingMarket || m.id !== editingMarket.id))
-                .map(m => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-            </select>
-            <p className="text-xs text-text-3 mt-1">
-              Pick a country to make this a regional market (e.g. &ldquo;West Coast USA&rdquo; under &ldquo;USA&rdquo;).
-              Leave blank for a standard country-level market.
-            </p>
-          </Field>
-
-          {marketForm.parent_country_id !== '' && (() => {
-            const parentId = Number(marketForm.parent_country_id)
-            const availableRegions = regions.filter(r => r.country_id === parentId)
+          {/* Optional region scope. A market can cover the whole country
+              (leave all boxes unticked) or be limited to specific regions
+              within that country. A market can never span multiple countries —
+              the server enforces this. */}
+          {marketForm.country_iso && (() => {
+            const iso = marketForm.country_iso.toUpperCase()
+            const availableRegions = regions.filter(r => (r.country_iso || '').toUpperCase() === iso)
             return (
-              <Field label="Regions covered">
+              <Field label="Regions within this country (optional)">
                 {availableRegions.length === 0 ? (
                   <div className="text-xs text-text-3 p-3 bg-surface-2 rounded border border-border">
-                    No regions configured for the selected country yet. Add some in <strong>Configuration → Markets → Regions</strong>, or leave this empty and the market will have no regional scope.
+                    No regions catalogued for <span className="font-mono">{iso}</span> yet. Add some in <strong>Configuration → Location Structure → Regions</strong>, or leave this empty and the market will cover the whole country.
                   </div>
                 ) : (
                   <div className="border border-border rounded p-2 max-h-56 overflow-y-auto bg-surface">
@@ -1296,7 +1273,7 @@ export default function MarketsPage() {
                   </div>
                 )}
                 <p className="text-xs text-text-3 mt-1">
-                  Multiple markets can claim the same region — franchise arrangements may overlap.
+                  Leave unticked for country-wide coverage. Ticking any region limits this market to that subset. Multiple markets can claim the same region.
                 </p>
               </Field>
             )
@@ -1553,34 +1530,32 @@ export default function MarketsPage() {
 }
 
 // ── Regions Panel — admin CRUD for sub-country regions ───────────────────────
-// Grouped by country-level market. Inline add form per country, inline
-// edit / delete per region. Uses /api/regions.
+// Regions are a shared catalog keyed by ISO 3166-1 alpha-2 country code and
+// live independently of the markets table. Groups by country ISO in the UI.
+// Uses /api/regions (catalog CRUD) + /api/regions/import-standard.
 
-function RegionsPanel({ api, markets, regions, onRefresh, showToast }: {
+type RegionForm = { name: string; iso_code: string }
+
+function RegionsPanel({ api, regions, onRefresh, showToast }: {
   api: ReturnType<typeof useApi>
-  markets: Market[]
+  markets: Market[]    // retained for consistency with sibling panels; unused here
   regions: Region[]
   onRefresh: () => void
   showToast: (msg: string, type?: 'success' | 'error') => void
 }) {
-  // Only country-level markets can host regions.
-  const countries = useMemo(
-    () => markets.filter(m => m.parent_country_id == null).sort((a, b) => a.name.localeCompare(b.name)),
-    [markets]
-  )
-
-  // Form state for the "add region" input per country. Keyed by country_id.
-  const [addForms, setAddForms] = useState<Record<number, { name: string; iso_code: string }>>({})
-  const [addingFor, setAddingFor] = useState<number | null>(null)
-  // Inline edit state — only one region is editable at a time.
+  // Form state for the "add region" input per country ISO.
+  const [addForms, setAddForms] = useState<Record<string, RegionForm>>({})
+  const [addingFor, setAddingFor] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ id: number; name: string; iso_code: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
-  // ISO 3166-2 standard catalog summary. key = country_iso, value = region count.
-  // Populated once on mount from /regions/catalog so each country card knows
-  // whether to show the "Import standard regions" button.
+  // Standard catalog summary: iso → count. Drives the "Import standard" button.
   const [catalogCounts, setCatalogCounts] = useState<Map<string, number>>(new Map())
-  const [importingFor, setImportingFor] = useState<number | null>(null)
+  const [importingFor, setImportingFor] = useState<string | null>(null)
+  // Countries the admin wants to see — starts as the union of ISOs already in
+  // the regions catalog, plus any ISOs the user adds via the "+ Add country"
+  // dropdown (backed by WORLD_COUNTRIES). Kept in a Set so sort order is stable.
+  const [visibleIsos, setVisibleIsos] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -1589,43 +1564,48 @@ function RegionsPanel({ api, markets, regions, onRefresh, showToast }: {
       const m = new Map<string, number>()
       ;(rows || []).forEach((r: any) => m.set(String(r.country_iso).toUpperCase(), Number(r.count) || 0))
       setCatalogCounts(m)
-    }).catch(() => { /* older server — button just won't appear */ })
+    }).catch(() => { /* older server — import buttons just won't appear */ })
     return () => { cancelled = true }
   }, [api])
 
-  async function handleImportStandard(countryId: number, iso: string, expectedCount: number) {
-    if (!confirm(`Import ${expectedCount} standard regions for ${iso} from the ISO 3166-2 catalog? Existing regions with matching names will be skipped.`)) return
-    setImportingFor(countryId)
-    try {
-      const res = await api.post('/regions/import-standard', { country_id: countryId }) as { imported: number; skipped: number; total: number }
-      showToast(`Imported ${res.imported} regions (${res.skipped} already present)`)
-      onRefresh()
-    } catch (err: any) {
-      showToast(err?.message || 'Import failed', 'error')
-    } finally {
-      setImportingFor(null)
-    }
+  // Ensure every ISO that already has regions is visible by default.
+  useEffect(() => {
+    setVisibleIsos(prev => {
+      const next = new Set(prev)
+      regions.forEach(r => next.add((r.country_iso || '').toUpperCase()))
+      return next
+    })
+  }, [regions])
+
+  const displayCountries = useMemo(() => {
+    const items = Array.from(visibleIsos)
+      .filter(Boolean)
+      .map(iso => {
+        const wc = WORLD_COUNTRIES.find(c => c.iso === iso)
+        return { iso, name: wc?.name || iso }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+    return items
+  }, [visibleIsos])
+
+  function getForm(iso: string) {
+    return addForms[iso] || { name: '', iso_code: '' }
+  }
+  function setForm(iso: string, patch: Partial<RegionForm>) {
+    setAddForms(prev => ({ ...prev, [iso]: { ...getForm(iso), ...patch } }))
   }
 
-  function getForm(countryId: number) {
-    return addForms[countryId] || { name: '', iso_code: '' }
-  }
-
-  function setForm(countryId: number, patch: Partial<{ name: string; iso_code: string }>) {
-    setAddForms(prev => ({ ...prev, [countryId]: { ...getForm(countryId), ...patch } }))
-  }
-
-  async function handleAdd(countryId: number) {
-    const form = getForm(countryId)
+  async function handleAdd(iso: string) {
+    const form = getForm(iso)
     if (!form.name.trim()) return
-    setAddingFor(countryId)
+    setAddingFor(iso)
     try {
       await api.post('/regions', {
-        country_id: countryId,
-        name:       form.name.trim(),
-        iso_code:   form.iso_code.trim() || null,
+        country_iso: iso,
+        name:        form.name.trim(),
+        iso_code:    form.iso_code.trim() || null,
       })
-      setForm(countryId, { name: '', iso_code: '' })
+      setForm(iso, { name: '', iso_code: '' })
       showToast('Region added')
       onRefresh()
     } catch (err: any) {
@@ -1663,49 +1643,77 @@ function RegionsPanel({ api, markets, regions, onRefresh, showToast }: {
     }
   }
 
-  if (countries.length === 0) {
-    return (
-      <div className="p-8 text-center text-sm text-text-3">
-        Add a country-level market first (Markets tab), then come back to configure its regions.
-      </div>
-    )
+  async function handleImportStandard(iso: string, expectedCount: number) {
+    if (!confirm(`Import ${expectedCount} standard regions for ${iso} from the ISO 3166-2 catalog? Existing regions with matching names will be skipped.`)) return
+    setImportingFor(iso)
+    try {
+      const res = await api.post('/regions/import-standard', { country_iso: iso }) as { imported: number; skipped: number }
+      showToast(`Imported ${res.imported} regions (${res.skipped} already present)`)
+      onRefresh()
+    } catch (err: any) {
+      showToast(err?.message || 'Import failed', 'error')
+    } finally {
+      setImportingFor(null)
+    }
+  }
+
+  function addCountry(iso: string) {
+    if (!iso) return
+    setVisibleIsos(prev => new Set(prev).add(iso.toUpperCase()))
   }
 
   return (
     <div className="p-6 space-y-5">
-      <div className="text-sm text-text-3">
-        Manage sub-country regions (e.g. US states, UK nations, Canadian provinces). Regions are a shared catalog — multiple markets within the same country can claim the same region.
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div className="text-sm text-text-3 max-w-2xl">
+          Manage sub-country regions (e.g. US states, UK nations, Canadian provinces). Regions are a shared catalog keyed by country — any market under that country can claim any subset. Multiple markets can claim the same region.
+        </div>
+        <div>
+          <label className="text-xs text-text-3 block mb-1">+ Add country to configure</label>
+          <select
+            className="input text-sm"
+            value=""
+            onChange={e => { addCountry(e.target.value); e.target.value = '' }}
+          >
+            <option value="">— Pick a country —</option>
+            {WORLD_COUNTRIES
+              .filter(c => !visibleIsos.has(c.iso))
+              .map(c => (<option key={c.iso} value={c.iso}>{c.name} ({c.iso})</option>))}
+          </select>
+        </div>
       </div>
 
-      {countries.map(country => {
-        const list  = regions.filter(r => r.country_id === country.id)
-        const form  = getForm(country.id)
-        const isAdding = addingFor === country.id
+      {displayCountries.length === 0 ? (
+        <div className="p-8 text-center text-sm text-text-3 bg-surface rounded border border-border">
+          No regions configured yet. Pick a country above to start.
+        </div>
+      ) : displayCountries.map(({ iso, name: countryName }) => {
+        const list     = regions.filter(r => (r.country_iso || '').toUpperCase() === iso)
+        const form     = getForm(iso)
+        const isAdding = addingFor === iso
+        const catalogCount = catalogCounts.get(iso) ?? 0
+        const canImport    = catalogCount > 0 && catalogCount > list.length
 
         return (
-          <div key={country.id} className="bg-surface border border-border rounded-xl overflow-hidden">
+          <div key={iso} className="bg-surface border border-border rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 bg-surface-2 border-b border-border gap-3 flex-wrap">
-              {(() => {
-                const iso = (country.country_iso || '').toUpperCase()
-                const catalogCount = iso ? catalogCounts.get(iso) ?? 0 : 0
-                const canImport = catalogCount > 0 && catalogCount > list.length
-                return canImport && (
-                  <button
-                    className="btn-outline px-3 py-1 text-xs whitespace-nowrap order-last"
-                    onClick={() => handleImportStandard(country.id, iso, catalogCount)}
-                    disabled={importingFor === country.id}
-                    title={`${catalogCount} standard ISO 3166-2 regions available`}
-                  >
-                    {importingFor === country.id
-                      ? 'Importing…'
-                      : `Import ${catalogCount - list.length} from standard catalog`}
-                  </button>
-                )
-              })()}
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm text-text-1">{country.name}</span>
-                <span className="text-xs text-text-3">{list.length} {list.length === 1 ? 'region' : 'regions'}</span>
+                <span className="font-mono text-xs text-text-3 bg-surface border border-border px-1.5 py-0.5 rounded">{iso}</span>
+                <span className="font-semibold text-sm text-text-1">{countryName}</span>
+                <span className="text-xs text-text-3">· {list.length} {list.length === 1 ? 'region' : 'regions'}</span>
               </div>
+              {canImport && (
+                <button
+                  className="btn-outline px-3 py-1 text-xs whitespace-nowrap"
+                  onClick={() => handleImportStandard(iso, catalogCount)}
+                  disabled={importingFor === iso}
+                  title={`${catalogCount} standard ISO 3166-2 regions available`}
+                >
+                  {importingFor === iso
+                    ? 'Importing…'
+                    : `Import ${catalogCount - list.length} from standard catalog`}
+                </button>
+              )}
             </div>
 
             {/* Inline add form */}
@@ -1714,32 +1722,31 @@ function RegionsPanel({ api, markets, regions, onRefresh, showToast }: {
                 className="input text-sm flex-1"
                 placeholder="Region name (e.g. California)"
                 value={form.name}
-                onChange={e => setForm(country.id, { name: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Enter') handleAdd(country.id) }}
+                onChange={e => setForm(iso, { name: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') handleAdd(iso) }}
                 disabled={isAdding}
               />
               <input
                 className="input text-sm w-28 font-mono uppercase"
-                placeholder="ISO (US-CA)"
+                placeholder={`ISO (${iso}-XX)`}
                 value={form.iso_code}
-                onChange={e => setForm(country.id, { iso_code: e.target.value.toUpperCase() })}
-                onKeyDown={e => { if (e.key === 'Enter') handleAdd(country.id) }}
+                onChange={e => setForm(iso, { iso_code: e.target.value.toUpperCase() })}
+                onKeyDown={e => { if (e.key === 'Enter') handleAdd(iso) }}
                 disabled={isAdding}
                 maxLength={10}
               />
               <button
                 className="btn-primary px-4 text-sm"
-                onClick={() => handleAdd(country.id)}
+                onClick={() => handleAdd(iso)}
                 disabled={!form.name.trim() || isAdding}
               >
                 {isAdding ? 'Adding…' : 'Add'}
               </button>
             </div>
 
-            {/* Region rows */}
             {list.length === 0 ? (
               <div className="px-4 py-4 text-xs text-text-3 italic">
-                No regions yet for {country.name}. Add some above.
+                No regions yet for {countryName}. Add some above or use the standard-catalog import.
               </div>
             ) : (
               <ul className="divide-y divide-border">
@@ -1842,7 +1849,6 @@ interface MarketCardProps {
   levelTax:               MarketLevelTax[]
   cplMatrix:              Map<string, boolean>
   regions:                Region[]
-  parentMarket:           Market | null   // resolved parent country-level market (null when this IS country-level)
   brandPartners:          BrandPartner[]
   baseCurrency:           string
   onEdit:                 (m: Market) => void
@@ -1859,7 +1865,7 @@ interface MarketCardProps {
 }
 
 function MarketCard({
-  market, taxRates, priceLevels, levelTax, cplMatrix, regions, parentMarket, brandPartners, baseCurrency,
+  market, taxRates, priceLevels, levelTax, cplMatrix, regions, brandPartners, baseCurrency,
   onEdit, onDelete, onAddTax, onEditTax, onDeleteTax, onSetDefaultTax,
   onSetDefaultPriceLevel, onSetLevelTax, onSetLevelEnabled, onSetCogsThresholds, onSetBrandPartner,
 }: MarketCardProps) {
@@ -1880,19 +1886,14 @@ function MarketCard({
           <div>
             <div className="font-bold text-text-1 text-sm flex items-center gap-2">
               {market.name}
-              {parentMarket && (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent-dim text-accent uppercase tracking-wider" title={`Sub-country market of ${parentMarket.name}`}>
-                  REGIONAL
+              {marketRegions.length > 0 && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-accent-dim text-accent uppercase tracking-wider" title={`Scoped to ${marketRegions.length} region(s)`}>
+                  {marketRegions.length} REGION{marketRegions.length === 1 ? '' : 'S'}
                 </span>
               )}
             </div>
             <div className="text-xs text-text-3 flex items-center gap-2 mt-0.5 flex-wrap">
-              {parentMarket ? (
-                <>
-                  <span className="text-text-2">{parentMarket.name}</span>
-                  <span>·</span>
-                </>
-              ) : linkedCountry && (
+              {linkedCountry && (
                 <>
                   <span className="text-text-2">{linkedCountry.name}</span>
                   <span>·</span>
