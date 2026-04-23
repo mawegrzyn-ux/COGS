@@ -22,6 +22,9 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'market-header':     { id: 'market-header',     label: 'Market Header',     description: 'Large banner for the active market', defaultSize: 'xl', allowedSizes: ['xl'], marketScoped: true },
   'market-map':        { id: 'market-map',        label: 'World Map',         description: '2D world map — click a country to set the active market', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: false },
   'menu-top-items':    { id: 'menu-top-items',    label: 'Top 10 Items / Menu', description: 'Bar chart of top 10 items per menu in the active market (by cost, revenue or COGS%)', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true },
+
+  'new-ingredient':    { id: 'new-ingredient',    label: 'New Ingredient',    description: 'Quick-add card — create a new ingredient (optionally with a first price quote) without leaving the dashboard.', defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false },
+  'new-price-quote':   { id: 'new-price-quote',   label: 'New Price Quote',   description: 'Quick-add card — log a price quote for an existing ingredient + vendor in one click.',                                   defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────

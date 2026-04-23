@@ -1,6 +1,8 @@
-import { useMemo, ReactElement, lazy, Suspense } from 'react'
+import { useMemo, useState, useEffect, useCallback, ReactElement, lazy, Suspense } from 'react'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
+import { useApi } from '../hooks/useApi'
+import { Modal, Field, Toast } from '../components/ui'
 import { WidgetId } from './types'
 
 // Lazy-load the map widget so react-simple-maps + d3-geo only load when used
@@ -617,6 +619,460 @@ function MarketSelector() {
   )
 }
 
+// ── NewIngredient widget ──────────────────────────────────────────────────────
+// Quick-add card: button opens a modal mirroring InventoryPage's "Add Ingredient
+// with optional price quote" flow. Posts to /ingredients and (when enabled)
+// /price-quotes. Refreshes dashboard data on success so tiles / stats update.
+
+interface Unit { id: number; name: string; abbreviation: string; type: string }
+
+function NewIngredientWidget() {
+  const api = useApi()
+  const { categories, vendors, refresh } = useDashboardData()
+  const [open, setOpen]     = useState(false)
+  const [units, setUnits]   = useState<Unit[]>([])
+  const [withQuote, setWithQuote] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast]   = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  const [form, setForm] = useState({
+    name: '', category_id: '', base_unit_id: '',
+    waste_pct: '', notes: '',
+  })
+  const [quoteForm, setQuoteForm] = useState({
+    vendor_id: '', purchase_price: '', qty_in_base_units: '1', purchase_unit: '',
+  })
+
+  // Lazy-load units the first time the modal opens — small payload, not in
+  // DashboardData today.
+  useEffect(() => {
+    if (!open || units.length) return
+    api.get('/units').then((u: Unit[]) => setUnits(u || [])).catch(() => {})
+  }, [open, units.length, api])
+
+  function reset() {
+    setForm({ name: '', category_id: '', base_unit_id: '', waste_pct: '', notes: '' })
+    setQuoteForm({ vendor_id: '', purchase_price: '', qty_in_base_units: '1', purchase_unit: '' })
+    setWithQuote(false)
+    setErrors({})
+  }
+
+  const onSave = useCallback(async () => {
+    const e: Record<string, string> = {}
+    if (!form.name.trim())      e.name         = 'Required'
+    if (!form.base_unit_id)     e.base_unit_id = 'Required'
+    if (withQuote) {
+      if (!quoteForm.vendor_id)      e.vendor_id      = 'Required'
+      if (!quoteForm.purchase_price) e.purchase_price = 'Required'
+    }
+    setErrors(e)
+    if (Object.keys(e).length) return
+
+    setSaving(true)
+    try {
+      const payload = {
+        name:             form.name.trim(),
+        category_id:      form.category_id ? Number(form.category_id) : null,
+        base_unit_id:     Number(form.base_unit_id),
+        waste_pct:        Number(form.waste_pct) || 0,
+        notes:            form.notes.trim() || null,
+      }
+      const created = await api.post('/ingredients', payload) as { id: number } | null
+      if (withQuote && created?.id) {
+        await api.post('/price-quotes', {
+          ingredient_id:     created.id,
+          vendor_id:         Number(quoteForm.vendor_id),
+          purchase_price:    Number(quoteForm.purchase_price),
+          qty_in_base_units: Number(quoteForm.qty_in_base_units) || 1,
+          purchase_unit:     quoteForm.purchase_unit.trim() || null,
+          is_active:         true,
+        })
+        setToast({ message: 'Ingredient and price quote added', type: 'success' })
+      } else {
+        setToast({ message: 'Ingredient added', type: 'success' })
+      }
+      setOpen(false)
+      reset()
+      refresh()
+    } catch (err: any) {
+      setToast({ message: err?.message || 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }, [api, form, quoteForm, withQuote, refresh])
+
+  return (
+    <div className="card p-5 h-full flex flex-col items-start gap-3 bg-gradient-to-br from-accent-dim to-surface">
+      <div className="flex-1">
+        <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">Quick add</div>
+        <h2 className="text-lg font-bold text-text-1">New ingredient</h2>
+        <p className="text-sm text-text-2 mt-1">
+          Capture a new ingredient, with an optional first price quote in one go.
+        </p>
+      </div>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-primary px-4 py-2 text-sm"
+      >
+        + New ingredient
+      </button>
+
+      {open && (
+        <Modal
+          title="New ingredient"
+          onClose={() => { setOpen(false); reset() }}
+          width="max-w-lg"
+        >
+          <Field label="Name" required error={errors.name}>
+            <input
+              className="input w-full"
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. Chicken Breast"
+              autoFocus
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Category">
+              <select
+                className="select w-full"
+                value={form.category_id}
+                onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}
+              >
+                <option value="">No category…</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Base Unit" required error={errors.base_unit_id}>
+              <select
+                className="select w-full"
+                value={form.base_unit_id}
+                onChange={e => setForm(f => ({ ...f, base_unit_id: e.target.value }))}
+              >
+                <option value="">Select unit…</option>
+                {['mass', 'volume', 'count'].map(type => (
+                  <optgroup key={type} label={type[0].toUpperCase() + type.slice(1)}>
+                    {units.filter(u => u.type === type).map(u => (
+                      <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Waste %">
+              <input
+                type="number"
+                className="input w-full"
+                value={form.waste_pct}
+                onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))}
+                placeholder="0"
+              />
+            </Field>
+            <Field label="Notes">
+              <input
+                className="input w-full"
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Optional…"
+              />
+            </Field>
+          </div>
+
+          <div className="border-t border-border pt-4 mt-2">
+            <label className="flex items-center gap-2 cursor-pointer mb-3">
+              <input
+                type="checkbox"
+                checked={withQuote}
+                onChange={e => setWithQuote(e.target.checked)}
+                className="w-4 h-4 accent-accent"
+              />
+              <span className="text-sm font-semibold text-text-2">Also add a first price quote</span>
+            </label>
+
+            {withQuote && (
+              <>
+                <Field label="Vendor" required error={errors.vendor_id}>
+                  <select
+                    className="select w-full"
+                    value={quoteForm.vendor_id}
+                    onChange={e => setQuoteForm(q => ({ ...q, vendor_id: e.target.value }))}
+                  >
+                    <option value="">Select vendor…</option>
+                    {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                </Field>
+                <div className="grid grid-cols-3 gap-3">
+                  <Field label="Purchase price" required error={errors.purchase_price}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="input w-full"
+                      value={quoteForm.purchase_price}
+                      onChange={e => setQuoteForm(q => ({ ...q, purchase_price: e.target.value }))}
+                      placeholder="0.00"
+                    />
+                  </Field>
+                  <Field label="Qty in base units">
+                    <input
+                      type="number"
+                      step="0.0001"
+                      className="input w-full"
+                      value={quoteForm.qty_in_base_units}
+                      onChange={e => setQuoteForm(q => ({ ...q, qty_in_base_units: e.target.value }))}
+                      placeholder="1"
+                    />
+                  </Field>
+                  <Field label="Purchase unit">
+                    <input
+                      className="input w-full"
+                      value={quoteForm.purchase_unit}
+                      onChange={e => setQuoteForm(q => ({ ...q, purchase_unit: e.target.value }))}
+                      placeholder="kg"
+                    />
+                  </Field>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <button
+              className="btn-ghost px-4 py-2 text-sm"
+              onClick={() => { setOpen(false); reset() }}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary px-4 py-2 text-sm"
+              onClick={onSave}
+              disabled={saving}
+            >
+              {saving ? 'Saving…' : (withQuote ? 'Add ingredient + quote' : 'Add ingredient')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── NewPriceQuote widget ──────────────────────────────────────────────────────
+// Companion to NewIngredient: pick an existing ingredient + vendor, enter the
+// price and purchase pack size. Idempotent — same ingredient+vendor can have
+// multiple historical quotes, and `is_active` marks the current one.
+
+function NewPriceQuoteWidget() {
+  const api = useApi()
+  const { ingredients, vendors, refresh } = useDashboardData()
+  const [open, setOpen]     = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast]   = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [ingSearch, setIngSearch] = useState('')
+
+  const [form, setForm] = useState({
+    ingredient_id:     '',
+    vendor_id:         '',
+    purchase_price:    '',
+    qty_in_base_units: '1',
+    purchase_unit:     '',
+    vendor_product_code: '',
+    is_active:         true,
+  })
+
+  function reset() {
+    setForm({
+      ingredient_id: '', vendor_id: '', purchase_price: '',
+      qty_in_base_units: '1', purchase_unit: '',
+      vendor_product_code: '', is_active: true,
+    })
+    setIngSearch('')
+    setErrors({})
+  }
+
+  // Client-side filter so the select stays snappy even with thousands of
+  // ingredients. Sorted so the selected one stays visible.
+  const filteredIngredients = useMemo(() => {
+    const needle = ingSearch.trim().toLowerCase()
+    if (!needle) return ingredients
+    return ingredients.filter(i => i.name.toLowerCase().includes(needle))
+  }, [ingredients, ingSearch])
+
+  const onSave = useCallback(async () => {
+    const e: Record<string, string> = {}
+    if (!form.ingredient_id)  e.ingredient_id  = 'Required'
+    if (!form.vendor_id)      e.vendor_id      = 'Required'
+    if (!form.purchase_price) e.purchase_price = 'Required'
+    setErrors(e)
+    if (Object.keys(e).length) return
+
+    setSaving(true)
+    try {
+      await api.post('/price-quotes', {
+        ingredient_id:       Number(form.ingredient_id),
+        vendor_id:           Number(form.vendor_id),
+        purchase_price:      Number(form.purchase_price),
+        qty_in_base_units:   Number(form.qty_in_base_units) || 1,
+        purchase_unit:       form.purchase_unit.trim() || null,
+        vendor_product_code: form.vendor_product_code.trim() || null,
+        is_active:           form.is_active,
+      })
+      setToast({ message: 'Price quote added', type: 'success' })
+      setOpen(false)
+      reset()
+      refresh()
+    } catch (err: any) {
+      setToast({ message: err?.message || 'Save failed', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }, [api, form, refresh])
+
+  return (
+    <div className="card p-5 h-full flex flex-col items-start gap-3 bg-gradient-to-br from-accent-dim to-surface">
+      <div className="flex-1">
+        <div className="text-xs uppercase tracking-wider text-accent font-semibold mb-1">Quick add</div>
+        <h2 className="text-lg font-bold text-text-1">New price quote</h2>
+        <p className="text-sm text-text-2 mt-1">
+          Record a fresh price for an existing ingredient from any vendor.
+        </p>
+      </div>
+      <button
+        onClick={() => setOpen(true)}
+        className="btn-primary px-4 py-2 text-sm"
+        disabled={ingredients.length === 0 || vendors.length === 0}
+        title={
+          ingredients.length === 0
+            ? 'Add an ingredient first'
+            : vendors.length === 0
+              ? 'Add a vendor first'
+              : undefined
+        }
+      >
+        + New price quote
+      </button>
+
+      {open && (
+        <Modal
+          title="New price quote"
+          onClose={() => { setOpen(false); reset() }}
+          width="max-w-lg"
+        >
+          <Field label="Ingredient" required error={errors.ingredient_id}>
+            <input
+              className="input w-full mb-2"
+              value={ingSearch}
+              onChange={e => setIngSearch(e.target.value)}
+              placeholder="Search ingredients…"
+            />
+            <select
+              className="select w-full"
+              size={6}
+              value={form.ingredient_id}
+              onChange={e => setForm(f => ({ ...f, ingredient_id: e.target.value }))}
+            >
+              {filteredIngredients.length === 0 ? (
+                <option disabled>No matches</option>
+              ) : filteredIngredients.map(i => (
+                <option key={i.id} value={i.id}>{i.name}</option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Vendor" required error={errors.vendor_id}>
+            <select
+              className="select w-full"
+              value={form.vendor_id}
+              onChange={e => setForm(f => ({ ...f, vendor_id: e.target.value }))}
+              autoFocus
+            >
+              <option value="">Select vendor…</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </Field>
+
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Purchase price" required error={errors.purchase_price}>
+              <input
+                type="number"
+                step="0.01"
+                className="input w-full"
+                value={form.purchase_price}
+                onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))}
+                placeholder="0.00"
+              />
+            </Field>
+            <Field label="Qty in base units">
+              <input
+                type="number"
+                step="0.0001"
+                className="input w-full"
+                value={form.qty_in_base_units}
+                onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))}
+                placeholder="1"
+              />
+            </Field>
+            <Field label="Purchase unit">
+              <input
+                className="input w-full"
+                value={form.purchase_unit}
+                onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))}
+                placeholder="kg"
+              />
+            </Field>
+          </div>
+
+          <Field label="Vendor product code">
+            <input
+              className="input w-full"
+              value={form.vendor_product_code}
+              onChange={e => setForm(f => ({ ...f, vendor_product_code: e.target.value }))}
+              placeholder="Optional SKU"
+            />
+          </Field>
+
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-text-2 pt-1">
+            <input
+              type="checkbox"
+              checked={form.is_active}
+              onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))}
+              className="w-4 h-4 accent-accent"
+            />
+            Mark as the active quote for this ingredient + vendor
+          </label>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <button
+              className="btn-ghost px-4 py-2 text-sm"
+              onClick={() => { setOpen(false); reset() }}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary px-4 py-2 text-sm"
+              onClick={onSave}
+              disabled={saving}
+            >
+              {saving ? 'Saving…' : 'Add price quote'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
 export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'kpi-ingredients':   KpiIngredients,
   'kpi-recipes':       KpiRecipes,
@@ -637,4 +1093,6 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'market-header':     MarketHeader,
   'market-map':        MarketMapWidget,
   'menu-top-items':    MenuTopItemsWidget,
+  'new-ingredient':    NewIngredientWidget,
+  'new-price-quote':   NewPriceQuoteWidget,
 }

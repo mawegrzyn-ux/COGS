@@ -231,8 +231,15 @@ export default function MarketMap() {
     return '#DC2626'
   }
 
+  // Colour for land that isn't in any market's scope. Hard-coded to a
+  // medium grey (not --surface-2, which is nearly invisible on white cards).
+  // Every country / region still renders in this shade so the world shape is
+  // always obvious — markets in scope just stand out with green/amber/red on
+  // top of it.
+  const OUT_OF_SCOPE = '#CBD5E1'   // slate-300 — visible but clearly "not us"
+
   function fillForMatches(matches: typeof marketCoverage): string {
-    if (matches.length === 0) return 'var(--surface-2)'
+    if (matches.length === 0) return OUT_OF_SCOPE
     // Average COGS across matching markets (so multi-market countries / shared
     // regions get a blended colour rather than last-wins).
     const vals = matches.map(m => avgCogsByMarket[m.market.id]).filter(v => v != null) as number[]
@@ -347,7 +354,7 @@ export default function MarketMap() {
             <Legend color="#D97706"           label="≤ 40%" />
             <Legend color="#DC2626"           label="> 40%" />
             <Legend color="var(--accent-dim)" label="No data" />
-            <Legend color="var(--surface-2)"  label="Not in scope" />
+            <Legend color="#CBD5E1"           label="Not in scope" />
             <span className="ml-auto text-text-3/60">
               {countries.length} markets{view === 'region' ? ` · ${regions.length} regions` : ''}
             </span>
@@ -401,8 +408,8 @@ function renderCountryFeature(
       onMouseLeave={() => ctx.setHovered(null)}
       onClick={() => { if (!primary) return; ctx.setCountryId(isSelected ? null : primary.market.id) }}
       style={{
-        default: { fill, stroke: 'var(--border)', strokeWidth: 0.4, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
-        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: 'var(--border)', strokeWidth: 0.6, outline: 'none', cursor: primary ? 'pointer' : 'default' },
+        default: { fill, stroke: '#94A3B8', strokeWidth: 0.5, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
+        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: '#64748B', strokeWidth: 0.75, outline: 'none', cursor: primary ? 'pointer' : 'default' },
         pressed: { fill: 'var(--accent-dark)', outline: 'none' },
       }}
     />
@@ -448,8 +455,8 @@ function renderRegionFeature(
       onMouseLeave={() => ctx.setHovered(null)}
       onClick={() => { if (!primary) return; ctx.setCountryId(isSelected ? null : primary.market.id) }}
       style={{
-        default: { fill, stroke: 'var(--border)', strokeWidth: 0.25, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
-        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: 'var(--border)', strokeWidth: 0.5, outline: 'none', cursor: primary ? 'pointer' : 'default' },
+        default: { fill, stroke: '#94A3B8', strokeWidth: 0.3, outline: 'none', cursor: primary ? 'pointer' : 'default', transition: 'fill 150ms' },
+        hover:   { fill: primary ? 'var(--accent-mid)' : fill, stroke: '#64748B', strokeWidth: 0.5, outline: 'none', cursor: primary ? 'pointer' : 'default' },
         pressed: { fill: 'var(--accent-dark)', outline: 'none' },
       }}
     />
