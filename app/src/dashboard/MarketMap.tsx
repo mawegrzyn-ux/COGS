@@ -3,6 +3,7 @@ import { ComposableMap, Geographies, Geography, ZoomableGroup } from 'react-simp
 import { useApi } from '../hooks/useApi'
 import { useMarket } from '../contexts/MarketContext'
 import { useDashboardData } from './DashboardData'
+import { WORLD_COUNTRIES } from '../data/worldCountries'
 
 // Country-level (natural earth 110m, ~90 kB) — used by the "Country" view.
 const COUNTRY_GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
@@ -44,6 +45,32 @@ function canonicalName(name: string): string {
   return NAME_TO_CANON[name.toLowerCase()] ?? name
 }
 
+// Map natural-earth feature names (already canonicalised) → ISO 3166-1 alpha-2
+// so the country-level view can resolve any feature to a country ISO. The
+// lookup is built from WORLD_COUNTRIES (our 249-entry catalog) plus every
+// alias listed in NAME_ALIASES, so both "United States" and "United States of
+// America" route to "US", etc.
+const COUNTRY_NAME_TO_ISO: Map<string, string> = (() => {
+  const m = new Map<string, string>()
+  for (const wc of WORLD_COUNTRIES) {
+    m.set(wc.name.toLowerCase(), wc.iso)
+    const canon = canonicalName(wc.name)
+    if (canon !== wc.name) m.set(canon.toLowerCase(), wc.iso)
+  }
+  // Also index every canon key so that e.g. "United States of America" maps to
+  // the same ISO as "United States".
+  for (const canon of Object.keys(NAME_ALIASES)) {
+    if (m.has(canon.toLowerCase())) continue
+    // Find whichever variant is in our catalog and inherit its iso.
+    const variants = [canon, ...(NAME_ALIASES[canon] || [])]
+    for (const v of variants) {
+      const hit = WORLD_COUNTRIES.find(wc => wc.name.toLowerCase() === v.toLowerCase())
+      if (hit) { m.set(canon.toLowerCase(), hit.iso); break }
+    }
+  }
+  return m
+})()
+
 interface RegionRow {
   id:          number
   country_iso: string
@@ -64,6 +91,20 @@ export default function MarketMap() {
   const [regions, setRegions]       = useState<RegionRow[]>([])
   const [hovered, setHovered]       = useState<HoverState | null>(null)
   const [error, setError]           = useState<string | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
+
+  // Esc key closes fullscreen; body scroll locked while it's on.
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [fullscreen])
 
   // Load country topojson once (tiny).
   useEffect(() => {
@@ -202,8 +243,12 @@ export default function MarketMap() {
   const activeGeo = view === 'country' ? countryGeo : regionGeo
   const loading = !activeGeo && !error
 
+  const containerClass = fullscreen
+    ? 'fixed inset-0 z-50 bg-surface p-6 flex flex-col overflow-auto'
+    : 'card p-5 h-full relative overflow-hidden'
+
   return (
-    <div className="card p-5 h-full relative overflow-hidden">
+    <div className={containerClass}>
       <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-text-1 uppercase tracking-wide">World Map</h2>
@@ -234,6 +279,14 @@ export default function MarketMap() {
           ) : (
             <span className="text-xs text-text-3">No market selected</span>
           )}
+          <button
+            onClick={() => setFullscreen(v => !v)}
+            className="text-xs text-text-3 hover:text-text-1 px-2 py-1 rounded hover:bg-surface-2 transition-colors flex items-center gap-1"
+            title={fullscreen ? 'Exit full screen (Esc)' : 'Open full screen'}
+            aria-label={fullscreen ? 'Exit full screen' : 'Open full screen'}
+          >
+            {fullscreen ? '⤢ Exit' : '⛶ Full screen'}
+          </button>
         </div>
       </div>
 
@@ -244,13 +297,13 @@ export default function MarketMap() {
       ) : loading ? (
         <div className="h-64 bg-surface-2 rounded-lg animate-pulse" />
       ) : (
-        <div className="relative">
+        <div className={`relative ${fullscreen ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
           <ComposableMap
             projection="geoNaturalEarth1"
-            projectionConfig={{ scale: 150 }}
+            projectionConfig={{ scale: fullscreen ? 220 : 150 }}
             width={800}
             height={380}
-            style={{ width: '100%', height: 'auto' }}
+            style={{ width: '100%', height: fullscreen ? '100%' : 'auto', flex: fullscreen ? 1 : undefined }}
           >
             <ZoomableGroup center={[0, 20]}>
               <Geographies geography={activeGeo}>
@@ -258,7 +311,6 @@ export default function MarketMap() {
                   view === 'country'
                     ? renderCountryFeature(g, {
                         marketsByParentIso,
-                        marketsByName: buildNameIndex(countries),
                         countryId, setCountryId, fillForMatches, setHovered,
                       })
                     : renderRegionFeature(g, {
@@ -297,29 +349,10 @@ interface HoverState {
   matches: Array<{ market: { id: number; name: string; country_iso?: string | null }; isWholeCountry: boolean }>
 }
 
-// The tiny aliases only cover the most common mismatches. For the country-level
-// topojson (world-atlas) features carry `name` (English) but no ISO code — so
-// we build a name-based index from our markets list (uses each market's name
-// and its country_iso so that, e.g., "USA" and "United States" both resolve).
-function buildNameIndex(countries: Array<{ id: number; name: string; country_iso?: string | null }>) {
-  const m = new Map<string, Array<typeof countries[number]>>()
-  for (const c of countries) {
-    const names = [c.name, canonicalName(c.name)]
-    for (const n of names) {
-      const key = n.toLowerCase()
-      const list = m.get(key) ?? []
-      if (!list.some(x => x.id === c.id)) list.push(c)
-      m.set(key, list)
-    }
-  }
-  return m
-}
-
 function renderCountryFeature(
   g: any,
   ctx: {
     marketsByParentIso: Map<string, any[]>
-    marketsByName:      Map<string, Array<{ id: number; name: string; country_iso?: string | null }>>
     countryId: number | null
     setCountryId: (id: number | null) => void
     fillForMatches: (matches: any[]) => string
@@ -330,15 +363,13 @@ function renderCountryFeature(
   const name: string = props.name || ''
   const canonical = canonicalName(name)
 
-  // Prefer ISO match (some topojsons expose `iso_a2`), fall back to name.
-  const iso: string = (props.iso_a2 || props.ISO_A2 || '').toString().toUpperCase()
-  let matches: any[] = []
-  if (iso && ctx.marketsByParentIso.has(iso)) {
-    matches = ctx.marketsByParentIso.get(iso) || []
-  } else {
-    const byName = ctx.marketsByName.get(canonical.toLowerCase()) ?? []
-    matches = byName.map(m => ({ market: m, isWholeCountry: true, country_iso: (m.country_iso || '').toUpperCase(), region_isos: new Set<string>() }))
-  }
+  // Resolve feature → ISO 3166-1 alpha-2 via the name index. Then look up every
+  // market with that country_iso (country-wide AND region-scoped) so the
+  // country lights up whenever any market sits inside it.
+  const iso = COUNTRY_NAME_TO_ISO.get(canonical.toLowerCase())
+              ?? COUNTRY_NAME_TO_ISO.get(name.toLowerCase())
+              ?? (props.iso_a2 || props.ISO_A2 || '').toString().toUpperCase()
+  const matches = iso ? (ctx.marketsByParentIso.get(iso) || []) : []
 
   const primary = matches[0] || null
   const isSelected = primary && primary.market.id === ctx.countryId
