@@ -218,6 +218,34 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     } catch { return {} }
   }
 
+  // The template endpoint is behind requireAuth, so a bare <a href> download
+  // fails with a 401 and the browser shows a generic "file not available"
+  // error. Fetch with the Auth0 bearer token, convert to blob, and trigger
+  // a programmatic download.
+  const downloadTemplate = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/import/template`, { headers: await authHeader() })
+      if (!res.ok) {
+        const msg = res.status === 401
+          ? 'Session expired — please sign in again to download the template.'
+          : `Template download failed (HTTP ${res.status})`
+        setParseError(msg)
+        return
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = 'cogs-import-template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Template download failed')
+    }
+  }
+
   const [step,        setStep]        = useState<Step>('upload')
   const [importPath,  setImportPath]  = useState<ImportPath>('ai')
   const [file,        setFile]        = useState<File | null>(null)
@@ -472,7 +500,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         <div className="mb-4 p-3 rounded-lg flex items-center gap-3 text-sm" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
           <span>📥</span>
           <span className="flex-1">First time? Download the blank template.</span>
-          <a href={`${API_BASE}/import/template`} download className="font-semibold underline">Download template.xlsx</a>
+          <button type="button" onClick={downloadTemplate} className="font-semibold underline hover:opacity-80">Download template.xlsx</button>
         </div>
       )}
 

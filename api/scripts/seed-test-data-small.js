@@ -522,16 +522,18 @@ async function clearData(client) {
   // Clear all operational / COGS data in dependency-safe order.
   // CASCADE automatically truncates any referencing tables not listed here.
   //
-  // Tables intentionally preserved (not truncated):
-  //   mcogs_allergens          — FIC 1169 reference data seeded by migration
-  //   mcogs_roles, mcogs_role_permissions — RBAC reference data seeded by migration
-  //   mcogs_users, mcogs_user_brand_partners — auth data (would break login)
-  //   mcogs_ai_chat_log        — AI assistant history
-  //   mcogs_feedback           — user-submitted bug/feature reports
-  //   mcogs_import_jobs        — import staging data
-  //   mcogs_audit_log          — historical audit trail (preserved for compliance)
-  //   mcogs_user_notes         — Pepper memory notes (preserved per-user)
-  //   mcogs_user_profiles      — Pepper user profiles (preserved per-user)
+  // Tables intentionally preserved (not truncated). Kept in sync with
+  // seed-test-data.js — see that file for the full rationale.
+  //
+  //   mcogs_allergens / mcogs_roles / mcogs_role_permissions  — reference data
+  //   mcogs_users / mcogs_user_brand_partners                 — auth data
+  //   mcogs_ai_chat_log / mcogs_feedback / mcogs_import_jobs  — history / staging
+  //   mcogs_audit_log / mcogs_user_notes / mcogs_user_profiles — compliance / memory
+  //   mcogs_settings / mcogs_changelog                        — global config + history
+  //   mcogs_languages / mcogs_regions                         — migration-seeded catalogs
+  //   mcogs_qsc_questions / mcogs_qsc_templates               — QSC reference data
+  //
+  // mcogs_qsc_audits and children are cascade-truncated via mcogs_locations.
   await client.query(`
     TRUNCATE TABLE
       -- FAQ knowledge base

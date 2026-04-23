@@ -14,7 +14,8 @@
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
-    "test:schema": "vitest run test/schema"
+    "test:schema": "vitest run test/schema",
+    "validate:seed": "node scripts/validate-seed-import.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
