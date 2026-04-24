@@ -827,11 +827,12 @@ CONFIRMATION REQUIRED before calling.`,
 
   {
     name: 'start_import',
-    description: `Sends a file that the user has already uploaded in this conversation to the Import Wizard for structured review. Use this when:
-- The user uploads a spreadsheet and says "import this", "use the import wizard", or similar
+    description: `Stages a file the user has already uploaded in this conversation so they can finish the import manually in the Import Wizard. Use this when:
+- The user uploads a spreadsheet and says "import this", "stage this", "use the import wizard", or similar
 - The file contains many ingredients/recipes and the user wants to review before committing
+The job is persisted with the current user's email so it appears in their "Continue a staged import" panel on the Import page, and can be resumed later via list_import_jobs.
 Returns a job URL — share it with the user as a clickable link: /import?job=<id>
-Do NOT use this for small single-record requests; use the individual create_* tools instead.`,
+Do NOT use this for small single-record requests; use the individual create_* tools instead. Do NOT execute the import yourself — the user reviews and commits in the wizard.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -839,6 +840,26 @@ Do NOT use this for small single-record requests; use the individual create_* to
         filename:     { type: 'string', description: 'Original filename, e.g. "ingredients.xlsx"' },
       },
       required: ['file_content', 'filename'],
+    },
+  },
+
+  {
+    name: 'list_import_jobs',
+    description: `Lists the user's staged import jobs — use this when the user asks "what have I got pending?", "show me my staged imports", "did I leave anything unfinished?", or wants to resume an earlier import. Returns one row per job with counts and a clickable URL (/import?job=<id>) for the user to open in the Import Wizard. Defaults to the current user's non-terminal jobs (staging, ready, failed); pass status explicitly to broaden (e.g. include 'done' for history).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'array',
+          items: { type: 'string', enum: ['staging', 'ready', 'importing', 'done', 'failed'] },
+          description: 'Which statuses to return. Default: ["staging","ready","failed"].',
+        },
+        mine: {
+          type: 'boolean',
+          description: 'If true (default), filter to jobs staged by the current user. Set false to see everyone\u2019s jobs (admin use).',
+        },
+        limit: { type: 'integer', description: 'Max rows (default 20, max 100).' },
+      },
     },
   },
 
@@ -2772,7 +2793,10 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       const { stageFileContent } = require('./import');
       const Anthropic = require('@anthropic-ai/sdk');
       const importClient = new Anthropic({ apiKey: importKey });
-      const result = await stageFileContent(importClient, file_content, filename, null);
+      // Attribute the job to the current user so it shows up in their
+      // "Continue a staged import" list on the Import page.
+      const userEmail = userCtx?.email || null;
+      const result = await stageFileContent(importClient, file_content, filename, userEmail);
       const counts = result.staged_data;
       return {
         job_id: result.job_id,
@@ -2784,6 +2808,45 @@ async function executeTool(name, input, send = null, userCtx = {}) {
           recipes:      counts.recipes?.length      || 0,
         },
       };
+    }
+
+    case 'list_import_jobs': {
+      // List recent import jobs the user can resume manually. Defaults to
+      // the current user's pending (non-terminal) jobs, matching what the
+      // Import page's "Continue a staged import" panel shows.
+      const { status, mine = true, limit = 20 } = input || {};
+      const userEmail = userCtx?.email || null;
+      const allowed   = ['staging', 'ready', 'importing', 'done', 'failed'];
+      const statuses  = Array.isArray(status) && status.length
+        ? status.filter(s => allowed.includes(s))
+        : ['staging', 'ready', 'failed'];
+      if (!statuses.length) return [];
+
+      const cap    = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+      const params = [statuses, cap];
+      let where    = `status = ANY($1::text[])`;
+      if (mine && userEmail) {
+        params.push(userEmail);
+        where += ` AND user_email = $${params.length}`;
+      }
+
+      const { rows } = await pool.query(`
+        SELECT id, user_email, source_file, status, created_at, updated_at,
+               COALESCE(jsonb_array_length(staged_data -> 'ingredients'),  0) AS ingredient_count,
+               COALESCE(jsonb_array_length(staged_data -> 'vendors'),      0) AS vendor_count,
+               COALESCE(jsonb_array_length(staged_data -> 'price_quotes'), 0) AS quote_count,
+               COALESCE(jsonb_array_length(staged_data -> 'recipes'),      0) AS recipe_count,
+               COALESCE(jsonb_array_length(staged_data -> 'menus'),        0) AS menu_count
+        FROM   mcogs_import_jobs
+        WHERE  ${where}
+        ORDER  BY created_at DESC
+        LIMIT  $2
+      `, params);
+
+      return rows.map(r => ({
+        ...r,
+        url: `/import?job=${r.id}`,
+      }));
     }
 
     case 'search_web': {
@@ -4336,12 +4399,18 @@ Use export_to_excel when the user asks to "export", "download", "get a spreadshe
 - The file downloads automatically in the user's browser; tell them it has been downloaded
 - No confirmation required (read-only operation)
 
-## BULK FILE IMPORT (start_import tool)
+## BULK FILE IMPORT (start_import + list_import_jobs tools)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
-1. Call start_import with the file content text and filename
-2. It stages the data for review and returns a job URL
-3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. before confirming."
-4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import
+1. Call start_import with the file content text and filename.
+2. It stages the data under the user's email and returns a job URL.
+3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. and commit."
+4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import.
+5. Do NOT commit the staged data yourself. The user reviews and finishes the import manually in the wizard.
+
+When the user asks "what imports do I have pending?", "any staged imports?", "can I resume an earlier import?":
+- Call list_import_jobs (defaults to the current user's non-terminal jobs).
+- Format the result as a short table: job id, filename, status, counts, clickable /import?job=<id> link.
+- If the list is empty, say so plainly and suggest uploading a new file to start one.
 
 ## FEEDBACK TOOL RULES
 - After calling submit_feedback, you MUST state the ticket ID from the tool result (e.g. "Ticket #15 logged"). Never confirm a ticket was submitted without seeing a successful tool result containing a valid id. If submit_feedback returns an error, tell the user it failed — do not claim success.

@@ -132,6 +132,18 @@
         "Returns a clickable URL pointing to /import?job=<id>",
         "Does NOT try to call create_ingredient directly"
       ]
+    },
+    {
+      "id": "list_import_jobs_resume",
+      "category": "import",
+      "prompt": "Do I have any staged imports I can resume?",
+      "expected_tools": ["list_import_jobs"],
+      "criteria": [
+        "Calls list_import_jobs (not list_ingredients or start_import)",
+        "Formats the result as a short list with filename, status, counts, and clickable /import?job=<id> link(s)",
+        "If the list is empty, says so plainly and suggests uploading a new file",
+        "Does NOT try to execute any of the jobs itself"
+      ]
     }
   ]
 }
