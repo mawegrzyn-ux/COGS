@@ -39,6 +39,40 @@ router.get('/', async (req, res) => {
   }
 })
 
+// POST /categories/reorder — bulk update group_id + sort_order for drag-drop.
+// Body: [ { id, group_id: number|null, sort_order: integer }, ... ]
+//
+// Wrapped in a single transaction so a partial failure rolls back — prevents
+// the list appearing half-reordered if one row errors.
+router.post('/reorder', async (req, res) => {
+  const updates = Array.isArray(req.body) ? req.body : []
+  if (!updates.length) return res.json({ ok: true, updated: 0 })
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (const u of updates) {
+      const id = Number(u.id)
+      if (!Number.isFinite(id)) continue
+      const groupId   = u.group_id == null ? null : Number(u.group_id)
+      const sortOrder = Number.isFinite(Number(u.sort_order)) ? Number(u.sort_order) : 0
+      await client.query(
+        `UPDATE mcogs_categories SET group_id = $1, sort_order = $2, updated_at = NOW() WHERE id = $3`,
+        [groupId, sortOrder, id]
+      )
+    }
+    await client.query('COMMIT')
+    logAudit(pool, req, { action: 'update', entity_type: 'category', entity_id: 0, entity_label: 'reorder', context: { count: updates.length } })
+    res.json({ ok: true, updated: updates.length })
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    console.error('[categories/reorder]', err)
+    res.status(500).json({ error: { message: 'Failed to reorder categories' } })
+  } finally {
+    client.release()
+  }
+})
+
 // POST /categories
 router.post('/', async (req, res) => {
   const { name, group_id, for_ingredients = false, for_recipes = false, for_sales_items = false, sort_order = 0 } = req.body

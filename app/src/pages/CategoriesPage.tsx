@@ -81,6 +81,15 @@ function CategoryManager() {
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<CategoryGroup | null>(null)
   const [confirmDeleteCat,   setConfirmDeleteCat]   = useState<Category | null>(null)
 
+  // ── Drag-drop state ──────────────────────────────────────────────────────────
+  // `dragCatId`       — which category row is currently being dragged
+  // `dragOverRowId`   — which category row is hovered for reordering
+  // `dragOverGroupId` — which group (or 'ungrouped') is hovered for a move
+  // Native HTML5 DnD — no extra dependency.
+  const [dragCatId,       setDragCatId]       = useState<number | null>(null)
+  const [dragOverRowId,   setDragOverRowId]   = useState<number | null>(null)
+  const [dragOverGroupId, setDragOverGroupId] = useState<number | 'ungrouped' | null>(null)
+
   // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -100,6 +109,22 @@ function CategoryManager() {
   }, [api])
 
   useEffect(() => { load() }, [load])
+
+  // Auto-select a sensible default on first load so users never land on an
+  // empty-state screen. Preference order:
+  //   1. If any ungrouped categories exist → open the "No Group" bucket
+  //      (imported categories land here by default — prior UX hid them below
+  //      the groups list and users thought they had disappeared).
+  //   2. Otherwise open the first group if there is one.
+  useEffect(() => {
+    if (loading) return
+    if (selectedGroupId !== null) return
+    if (categories.some(c => c.group_id === null)) {
+      setSelectedGroupId('ungrouped')
+    } else if (groups.length) {
+      setSelectedGroupId(groups[0].id)
+    }
+  }, [loading, categories, groups, selectedGroupId])
 
   // ── Derived ──────────────────────────────────────────────────────────────────
 
@@ -297,6 +322,92 @@ function CategoryManager() {
     }
   }
 
+  // ── Drag-drop: reorder within list + move between groups ────────────────────
+
+  // Persist a new order of categories. Each row gets sort_order = its index
+  // in the array, and optionally a new group_id. Optimistic UI update with
+  // rollback on failure.
+  async function persistReorder(reindexed: Category[], targetGroupId: number | null | 'ungrouped' | null) {
+    const snapshot = categories
+    // Merge the reindexed subset back into the full list
+    const reindexedMap = new Map(reindexed.map((c, i) => [c.id, { ...c, sort_order: i, group_id: targetGroupId === 'ungrouped' ? null : (typeof targetGroupId === 'number' ? targetGroupId : c.group_id) }]))
+    const next = categories.map(c => reindexedMap.get(c.id) ?? c)
+    setCategories(next)
+    try {
+      await api.post('/categories/reorder',
+        reindexed.map((c, i) => ({
+          id: c.id,
+          group_id: targetGroupId === 'ungrouped' ? null : (typeof targetGroupId === 'number' ? targetGroupId : c.group_id),
+          sort_order: i,
+        }))
+      )
+    } catch {
+      setCategories(snapshot)
+      showToast('Failed to save new order.', 'error')
+    }
+  }
+
+  // Drop a category onto another category in the right panel → reorder.
+  async function handleDropOnRow(targetCatId: number) {
+    const fromId = dragCatId
+    setDragCatId(null); setDragOverRowId(null); setDragOverGroupId(null)
+    if (fromId == null || fromId === targetCatId) return
+
+    const from = categories.find(c => c.id === fromId)
+    const to   = categories.find(c => c.id === targetCatId)
+    if (!from || !to) return
+
+    // Only reorder within the same logical group (including ungrouped). Moving
+    // across groups should happen via the group sidebar drop target, not a row.
+    if ((from.group_id ?? null) !== (to.group_id ?? null)) return
+
+    // Same group → compute reindex. Pull `from` out, splice into `to`'s slot.
+    const bucket  = categories.filter(c => (c.group_id ?? null) === (to.group_id ?? null))
+                              .sort((a, b) => a.sort_order - b.sort_order)
+    const without = bucket.filter(c => c.id !== fromId)
+    const idx     = without.findIndex(c => c.id === targetCatId)
+    const next    = [...without.slice(0, idx), from, ...without.slice(idx)]
+
+    const groupTarget = (to.group_id ?? 'ungrouped') as number | 'ungrouped'
+    await persistReorder(next, groupTarget)
+    showToast('Order updated.')
+  }
+
+  // Drop a category onto a group sidebar item → move to that group, appended
+  // to the end.
+  async function handleDropOnGroup(targetGroup: number | 'ungrouped') {
+    const fromId = dragCatId
+    setDragCatId(null); setDragOverRowId(null); setDragOverGroupId(null)
+    if (fromId == null) return
+
+    const from = categories.find(c => c.id === fromId)
+    if (!from) return
+
+    const currentGroup = from.group_id ?? 'ungrouped'
+    if (currentGroup === targetGroup) return
+
+    // Append to end of target bucket.
+    const bucket   = categories.filter(c => {
+      const g = c.group_id ?? 'ungrouped'
+      return g === targetGroup && c.id !== fromId
+    }).sort((a, b) => a.sort_order - b.sort_order)
+    const next     = [...bucket, from]
+    const newGroupId = targetGroup === 'ungrouped' ? null : targetGroup
+
+    await persistReorder(next, targetGroup)
+
+    // Locally update group counts (optimistic reorder call above already
+    // patched group_id in the list state).
+    setGroups(prev => prev.map(g => {
+      if (typeof currentGroup === 'number' && g.id === currentGroup) return { ...g, category_count: Math.max(0, g.category_count - 1) }
+      if (newGroupId && g.id === newGroupId) return { ...g, category_count: g.category_count + 1 }
+      return g
+    }))
+    // Auto-follow the category to its new group for better UX.
+    setSelectedGroupId(targetGroup)
+    showToast(newGroupId ? 'Moved to group.' : 'Moved to No Group.')
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="p-6"><Spinner /></div>
@@ -317,17 +428,60 @@ function CategoryManager() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-1">
-          {groups.length === 0 && (
+          {/* "No Group" bucket — hoisted to the top and always visible so
+              imported categories (which land here with group_id = null) are
+              immediately discoverable. Acts as a drop target so users can
+              drag categories out of any group back to No Group. */}
+          {(() => {
+            const active      = selectedGroupId === 'ungrouped'
+            const isDropOver  = dragOverGroupId === 'ungrouped' && dragCatId != null
+            return (
+              <div
+                onClick={() => setSelectedGroupId('ungrouped')}
+                onDragOver={e => {
+                  if (dragCatId == null) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  if (dragOverGroupId !== 'ungrouped') setDragOverGroupId('ungrouped')
+                }}
+                onDragLeave={() => { if (dragOverGroupId === 'ungrouped') setDragOverGroupId(null) }}
+                onDrop={e => { e.preventDefault(); handleDropOnGroup('ungrouped') }}
+                className={`flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors
+                  ${active ? 'bg-amber-50 text-amber-700' : 'hover:bg-surface-2 text-text-2'}
+                  ${isDropOver ? 'ring-2 ring-inset ring-accent bg-accent-dim' : ''}`}
+              >
+                <span className="flex-1 text-sm font-semibold">No Group</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-mono shrink-0
+                  ${active ? 'bg-amber-100 text-amber-700' : 'bg-surface-2 text-text-3'}`}>
+                  {ungroupedCats.length}
+                </span>
+              </div>
+            )
+          })()}
+          {groups.length > 0 && (
+            <div className="mx-4 my-1 border-t border-border" />
+          )}
+          {groups.length === 0 && ungroupedCats.length === 0 && (
             <p className="text-xs text-text-3 italic px-4 py-3">No groups yet.</p>
           )}
           {groups.map(g => {
-            const active = selectedGroupId === g.id
+            const active     = selectedGroupId === g.id
+            const isDropOver = dragOverGroupId === g.id && dragCatId != null
             return (
               <div
                 key={g.id}
                 onClick={() => setSelectedGroupId(g.id)}
+                onDragOver={e => {
+                  if (dragCatId == null) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  if (dragOverGroupId !== g.id) setDragOverGroupId(g.id)
+                }}
+                onDragLeave={() => { if (dragOverGroupId === g.id) setDragOverGroupId(null) }}
+                onDrop={e => { e.preventDefault(); handleDropOnGroup(g.id) }}
                 className={`flex items-center gap-2 px-4 py-2.5 cursor-pointer transition-colors group
-                  ${active ? 'bg-accent-dim text-accent' : 'hover:bg-surface-2 text-text-1'}`}
+                  ${active ? 'bg-accent-dim text-accent' : 'hover:bg-surface-2 text-text-1'}
+                  ${isDropOver ? 'ring-2 ring-inset ring-accent bg-accent-dim' : ''}`}
               >
                 <span className="flex-1 text-sm font-semibold truncate">{g.name}</span>
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-mono shrink-0
@@ -350,20 +504,6 @@ function CategoryManager() {
             )
           })}
         </div>
-
-        {/* Ungrouped bucket */}
-        {ungroupedCats.length > 0 && (
-          <div
-            onClick={() => setSelectedGroupId('ungrouped')}
-            className={`flex items-center gap-2 px-4 py-2.5 border-t border-border cursor-pointer transition-colors
-              ${selectedGroupId === 'ungrouped' ? 'bg-amber-50 text-amber-700' : 'hover:bg-surface-2 text-text-3'}`}
-          >
-            <span className="text-xs font-semibold flex-1">No Group</span>
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-mono">
-              {ungroupedCats.length}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* ── Right panel: Categories ──────────────────────────────────────────── */}
@@ -378,7 +518,7 @@ function CategoryManager() {
                   : 'Categories'}
             </span>
             <p className="text-xs text-text-3 mt-0.5">
-              Toggle pills to set which item types each category appears in.
+              Toggle pills to set scope. <strong>Drag rows</strong> to reorder within this group, or drop onto a group on the left to move.
             </p>
           </div>
           <button
@@ -422,9 +562,44 @@ function CategoryManager() {
                 <span className="w-16" />
               </div>
               {visibleCats.map(cat => {
-                const isEditing = editingCatId === cat.id
+                const isEditing   = editingCatId === cat.id
+                const isDragging  = dragCatId === cat.id
+                const isDropOver  = dragOverRowId === cat.id && dragCatId != null && dragCatId !== cat.id
                 return (
-                  <div key={cat.id} className="flex items-center gap-3 bg-surface border border-border rounded-lg px-4 py-2 hover:bg-surface-2 transition-colors">
+                  <div
+                    key={cat.id}
+                    // Only draggable when not inline-editing — otherwise the
+                    // drag gesture conflicts with text selection in the input.
+                    draggable={!isEditing}
+                    onDragStart={e => {
+                      if (isEditing) return
+                      e.dataTransfer.effectAllowed = 'move'
+                      try { e.dataTransfer.setData('text/plain', String(cat.id)) } catch { /* ignore */ }
+                      setDragCatId(cat.id)
+                    }}
+                    onDragOver={e => {
+                      if (dragCatId == null || dragCatId === cat.id) return
+                      // Only reorder within same group
+                      const from = categories.find(c => c.id === dragCatId)
+                      if (!from || (from.group_id ?? null) !== (cat.group_id ?? null)) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      if (dragOverRowId !== cat.id) setDragOverRowId(cat.id)
+                    }}
+                    onDragLeave={() => { if (dragOverRowId === cat.id) setDragOverRowId(null) }}
+                    onDrop={e => { e.preventDefault(); handleDropOnRow(cat.id) }}
+                    onDragEnd={() => { setDragCatId(null); setDragOverRowId(null); setDragOverGroupId(null) }}
+                    className={`flex items-center gap-3 bg-surface border rounded-lg px-4 py-2 hover:bg-surface-2 transition-colors
+                      ${isEditing ? 'cursor-text' : 'cursor-grab active:cursor-grabbing'}
+                      ${isDragging ? 'opacity-40' : ''}
+                      ${isDropOver ? 'border-accent ring-2 ring-accent/40' : 'border-border'}`}
+                  >
+                    {/* Drag-handle affordance — visual hint that the row is
+                        draggable. The whole row is actually the drag source
+                        (native HTML5 DnD), so this is just a dot-grip icon. */}
+                    {!isEditing && (
+                      <span className="text-text-3 select-none text-xs opacity-60 shrink-0" aria-hidden>⠿</span>
+                    )}
 
                     {/* Name — editable inline */}
                     {isEditing ? (

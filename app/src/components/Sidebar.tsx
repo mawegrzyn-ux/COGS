@@ -41,7 +41,11 @@ export default function Sidebar() {
   const [showPwa, setShowPwa] = useState(false)
   const { logout, user } = useAuth0()
   const { can } = usePermissions()
-  const { flags } = useFeatureFlags()
+  // `flags` default to all-true until /settings resolves, which causes disabled
+  // modules to flash into the nav for ~1-2 seconds before being hidden. Gate
+  // flag-dependent items on the loading state so they stay hidden until the
+  // real values arrive.
+  const { flags, loading: flagsLoading } = useFeatureFlags()
   const { t } = useTranslation('nav')
 
   useEffect(() => {
@@ -81,8 +85,11 @@ export default function Sidebar() {
           if (item.features?.length) {
             if (!item.features.some(f => can(f, 'read'))) return null
           } else if (item.feature && !can(item.feature, 'read')) return null
-          // Hide whole modules when their Global Config feature flag is off
-          if (item.flag && !flags[item.flag]) return null
+          // Hide whole modules when their Global Config feature flag is off.
+          // Also hide while the flags are still loading, so a disabled module
+          // never briefly flashes into the nav (it would otherwise show for
+          // the first ~1-2 seconds using DEFAULT_FLAGS before /settings loads).
+          if (item.flag && (flagsLoading || !flags[item.flag])) return null
           // Prefer translated label if labelKey is set; fall back to English.
           const displayLabel = item.labelKey ? t(item.labelKey, { defaultValue: item.label }) : item.label
           return (
