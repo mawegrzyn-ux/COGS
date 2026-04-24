@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, CalcInput } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 import TranslationEditor from '../components/TranslationEditor'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
@@ -1200,11 +1200,10 @@ export default function RecipesPage() {
                             // Edit always in the menu's own market currency to avoid conversion rounding
                             <div className="flex items-center gap-1 mt-1">
                               <span className="text-sm text-text-3">{activeMenu.currency_symbol}</span>
-                              <input
-                                type="number" min="0" step="0.01"
+                              <CalcInput
                                 className="input text-sm font-mono w-24 py-0.5 px-1"
                                 value={editingTilePrice}
-                                onChange={e => setEditingTilePrice(e.target.value)}
+                                onChange={v => setEditingTilePrice(v)}
                                 onKeyDown={async e => {
                                   if (e.key === 'Enter') {
                                     const gross = parseFloat(editingTilePrice)
@@ -1818,11 +1817,10 @@ export default function RecipesPage() {
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
                   {isSubRecipe ? (
                     <Field label="Portions used">
-                      <input
-                        className="input font-mono"
-                        type="number" min="0.0001" step="0.0001"
+                      <CalcInput
+                        className="input w-full font-mono"
                         value={itemPanelForm.prep_qty}
-                        onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                        onChange={v => setItemPanelForm(f => f ? { ...f, prep_qty: v } : f)}
                         autoFocus
                       />
                       <p className="text-xs text-text-3 mt-1">How many portions of this sub-recipe go into the parent recipe</p>
@@ -1831,11 +1829,10 @@ export default function RecipesPage() {
                     <>
                       <div className="grid grid-cols-2 gap-3">
                         <Field label="Quantity">
-                          <input
-                            className="input font-mono"
-                            type="number" min="0.0001" step="0.0001"
+                          <CalcInput
+                            className="input w-full font-mono"
                             value={itemPanelForm.prep_qty}
-                            onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                            onChange={v => setItemPanelForm(f => f ? { ...f, prep_qty: v } : f)}
                             autoFocus
                           />
                         </Field>
@@ -1850,11 +1847,10 @@ export default function RecipesPage() {
                       </div>
 
                       <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`}>
-                        <input
-                          className="input font-mono"
-                          type="number" min="0.000001" step="0.000001"
+                        <CalcInput
+                          className="input w-full font-mono"
                           value={itemPanelForm.prep_to_base_conversion}
-                          onChange={e => setItemPanelForm(f => f ? { ...f, prep_to_base_conversion: e.target.value } : f)}
+                          onChange={v => setItemPanelForm(f => f ? { ...f, prep_to_base_conversion: v } : f)}
                         />
                         <p className="text-xs text-text-3 mt-1">
                           {itemPanelForm.prep_unit && baseUnit
@@ -1994,6 +1990,9 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
 
   const set = (k: keyof RecipeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
+  // Same as set() but accepts the raw string value — for CalcInput etc.
+  const setV = (k: keyof RecipeForm) => (v: string) =>
+    setForm(f => ({ ...f, [k]: v }))
 
   return (
     <Modal title={recipe ? 'Edit Recipe' : 'New Recipe'} onClose={onClose}>
@@ -2020,7 +2019,7 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Yield Quantity">
-            <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.yield_qty} onChange={set('yield_qty')} />
+            <CalcInput className="input w-full font-mono" value={form.yield_qty} onChange={setV('yield_qty')} />
           </Field>
           <Field label="Yield Unit">
             <input className="input" value={form.yield_unit_text} onChange={set('yield_unit_text')}
@@ -2205,6 +2204,9 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
   const set = (k: keyof ItemForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
+  // String-value variant for CalcInput.
+  const setV = (k: keyof ItemForm) => (v: string) =>
+    setForm(f => ({ ...f, [k]: v }))
 
   const baseEquiv = selIngredient
     ? Number(form.prep_qty) * Number(form.prep_to_base_conversion)
@@ -2270,7 +2272,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Quantity" required>
-                <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
+                <CalcInput className="input w-full font-mono" value={form.prep_qty} onChange={setV('prep_qty')} />
               </Field>
               <Field label="Prep Unit">
                 <input className="input" value={form.prep_unit} onChange={set('prep_unit')} placeholder={baseUnit || 'e.g. g'} />
@@ -2278,7 +2280,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
             </div>
 
             <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`} required>
-              <input className="input font-mono" type="number" min="0.000001" step="0.000001" value={form.prep_to_base_conversion} onChange={set('prep_to_base_conversion')} />
+              <CalcInput className="input w-full font-mono" value={form.prep_to_base_conversion} onChange={setV('prep_to_base_conversion')} />
               <p className="text-xs text-text-3 mt-1">
                 {form.prep_unit && baseUnit
                   ? <>1 <span className="font-mono">{form.prep_unit}</span> = <span className="font-mono">{form.prep_to_base_conversion}</span> <span className="font-mono">{baseUnit}</span></>
@@ -2336,7 +2338,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
               )}
             </Field>
             <Field label="Portions used" required>
-              <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
+              <CalcInput className="input w-full font-mono" value={form.prep_qty} onChange={setV('prep_qty')} />
               <p className="text-xs text-text-3 mt-1">How many portions of this sub-recipe go into the parent recipe</p>
             </Field>
           </>

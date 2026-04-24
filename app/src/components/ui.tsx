@@ -352,6 +352,17 @@ interface CalcInputProps {
   disabled?: boolean
   /** Forwarded to the underlying <input> so <label htmlFor=""> pairs work. */
   id?: string
+  /** Auto-focus on mount — forwarded directly to the <input>. */
+  autoFocus?: boolean
+  /** Pass-through for callers that need Enter-to-save / custom keystrokes.
+   *  Note: CalcInput evaluates the expression on Enter BEFORE calling this
+   *  handler, so by the time your onKeyDown runs the parent's `value` state
+   *  already holds the numeric result. */
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
+  /** Pass-through onBlur — fires AFTER CalcInput's internal evaluation. */
+  onBlur?: React.FocusEventHandler<HTMLInputElement>
+  /** Inline style forwarded to the outer wrapper (for grid-cell sizing etc.) */
+  style?: React.CSSProperties
 }
 
 function safeEval(expr: string): number | null {
@@ -370,7 +381,10 @@ function safeEval(expr: string): number | null {
   }
 }
 
-export function CalcInput({ value, onChange, className = 'input w-full', placeholder, disabled, id }: CalcInputProps) {
+export function CalcInput({
+  value, onChange, className = 'input w-full', placeholder, disabled, id,
+  autoFocus, onKeyDown, onBlur, style,
+}: CalcInputProps) {
   const [rawText, setRawText] = useState(value)
   const [focused, setFocused] = useState(false)
 
@@ -379,29 +393,39 @@ export function CalcInput({ value, onChange, className = 'input w-full', placeho
     if (!focused) setRawText(value)
   }, [value, focused])
 
-  const handleBlur = () => {
-    setFocused(false)
+  // Shared evaluator — called on blur AND on Enter. Returns true if a commit
+  // happened so the caller's onKeyDown can observe the updated parent value.
+  const commit = () => {
     const trimmed = rawText.trim()
-    // If it's a plain number, just pass it through
     if (!trimmed) { onChange(''); return }
     if (/^-?\d+(\.\d+)?$/.test(trimmed)) { onChange(trimmed); return }
-    // Try to evaluate as expression
     const result = safeEval(trimmed)
     if (result !== null) {
-      // Round to avoid floating point noise (max 8 decimal places)
       const rounded = String(Math.round(result * 100000000) / 100000000)
       setRawText(rounded)
       onChange(rounded)
     } else {
-      // Invalid expression — revert to last good value
       setRawText(value)
     }
+  }
+
+  const handleBlur: React.FocusEventHandler<HTMLInputElement> = (e) => {
+    setFocused(false)
+    commit()
+    onBlur?.(e)
+  }
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
+    // Evaluate on Enter so callers that save on Enter see the final numeric
+    // value, not a raw expression like "5+3".
+    if (e.key === 'Enter') commit()
+    onKeyDown?.(e)
   }
 
   const hasExpression = focused && rawText.trim() !== '' && !/^-?\d*\.?\d*$/.test(rawText.trim())
 
   return (
-    <div className="relative">
+    <div className="relative" style={style}>
       <input
         id={id}
         type="text"
@@ -411,8 +435,10 @@ export function CalcInput({ value, onChange, className = 'input w-full', placeho
         onChange={e => { setRawText(e.target.value); if (/^-?\d*\.?\d*$/.test(e.target.value)) onChange(e.target.value) }}
         onFocus={() => setFocused(true)}
         onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled}
+        autoFocus={autoFocus}
       />
       {hasExpression && (() => {
         const preview = safeEval(rawText.trim())
