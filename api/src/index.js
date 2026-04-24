@@ -98,6 +98,29 @@ app.use((_req, res, next) => {
         } catch (err) {
           console.warn('[cron] Translation pre-warm disabled:', err.message);
         }
+
+        // ── Jira pull-sync — every 15 minutes ───────────────────────────────
+        // Fetches status/priority/summary/description/labels for every linked
+        // bug + backlog row. No-op when Jira isn't configured. Logs only on
+        // changes or errors so healthy cycles don't spam the log.
+        try {
+          const { runJiraSync } = require('./jobs/syncJira');
+          cron.schedule('*/15 * * * *', async () => {
+            try {
+              const result = await runJiraSync();
+              if (result?.error) {
+                console.log('[cron] Jira sync skipped:', result.error);
+              } else if (result?.changedCount > 0 || (result?.errors?.length ?? 0) > 0) {
+                console.log(`[cron] Jira sync: pulled ${result.pulled}, changed ${result.changedCount}, errors ${result.errors.length}`);
+              }
+            } catch (err) {
+              console.error('[cron] Jira sync failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Jira sync scheduled every 15 minutes');
+        } catch (err) {
+          console.warn('[cron] Jira sync disabled:', err.message);
+        }
       } catch (err) {
         console.warn('[cron] node-cron not available — memory consolidation disabled:', err.message);
       }

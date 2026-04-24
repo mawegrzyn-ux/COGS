@@ -1085,6 +1085,34 @@ export default function HelpPage() {
           Assistant will display "API key not configured".
         </InfoBox>
 
+        <H3 id="ai-mobile">Pepper on Mobile (PWA)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Install COGS on your phone (Add to Home Screen on iOS, Install App on Android) to get a native-feeling
+          Pepper experience designed for kitchen + on-the-go use:
+        </p>
+        <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside space-y-1 mb-2">
+          <li><strong>Full-viewport sheet</strong> — below 640 px wide, Pepper takes the whole screen when opened. Tap targets are 44 px (iOS HIG), the font bumps to 16 px, and the input auto-adjusts for the on-screen keyboard.</li>
+          <li><strong>📷 Camera button</strong> — snap a receipt or invoice; Pepper reads it via vision and stages it as an import job. Pick it up on the Import page's "Continue a staged import" panel.</li>
+          <li><strong>🎙️ Voice input (push-to-talk)</strong> — press and hold the mic to dictate. Free + on-device on Chrome Android (native SpeechRecognition). On Safari/iOS it falls back to OpenAI Whisper (requires an OPENAI_API_KEY in System → AI).</li>
+          <li><strong>🔊 Voice output</strong> — toggle the speaker icon in the Pepper header. Replies read aloud sentence-by-sentence as the stream arrives. Uses the browser's built-in speechSynthesis (no extra API cost).</li>
+          <li><strong>🧇 Kitchen Mode</strong> — toggle (the pan icon) for bigger type + 44 px min tap targets <em>across the whole app</em>, not just Pepper. Great for shop-floor tablets where staff are wearing gloves or have greasy fingers.</li>
+        </ul>
+        <InfoBox type="info">
+          Voice, camera, and kitchen-mode toggles persist per-browser. Kitchen Mode is app-wide, not Pepper-only.
+        </InfoBox>
+
+        <H3 id="ai-calc-input">Math in Numeric Fields (CalcInput)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Every numeric field on the Recipes and Inventory pages evaluates simple math expressions. Type
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">25*6</code> for a case-of-6 price,
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">(10+2)/12</code> for a blended average,
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">200/100</code> for a mg-to-g conversion.
+          You'll see a live <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">= N</code> preview
+          while typing; on blur or Enter the field snaps to the evaluated number. Only
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">+ − × ÷ ( )</code> and decimals are
+          accepted — invalid expressions revert to the last good value.
+        </p>
+
         <H3 id="ai-concise-mode">Concise Mode</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           The <strong>Response Behaviour</strong> toggle in Settings → AI switches Pepper to concise mode.

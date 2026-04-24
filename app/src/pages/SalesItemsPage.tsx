@@ -10,6 +10,8 @@ interface Country    { id: number; name: string }
 interface Recipe     { id: number; name: string; category_name: string | null; yield_unit_abbr?: string | null }
 interface Ingredient { id: number; name: string; base_unit_abbr: string | null }
 interface SalesItemMarket { country_id: number; country_name: string; is_active: boolean }
+interface SalesItemPrice  { price_level_id: number; sell_price: number | string; tax_rate_id?: number | null; price_level_name?: string }
+interface PriceLevel      { id: number; name: string; is_default?: boolean }
 
 interface ModifierOption {
   id: number; modifier_group_id: number; name: string; display_name?: string | null
@@ -61,6 +63,8 @@ interface SalesItem {
   modifier_group_count?: number
   markets?: SalesItemMarket[]
   modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]
+  /** Only populated when the list is fetched with `include_prices=true` (Excel view). */
+  prices?: SalesItemPrice[]
 }
 
 // ── Combo panel edit target ────────────────────────────────────────────────────
@@ -292,28 +296,46 @@ export default function SalesItemsPage() {
   const api = useApi()
   const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>('items')
 
+  // ── Items-tab view mode — 'list' = existing dense table, 'excel' = editable
+  //     spreadsheet grid with frozen Name/Type/Category + a column per price
+  //     level + a column per country for market visibility. Persists per
+  //     browser so a user's preference survives a reload.
+  const [viewMode, setViewMode] = useState<'list' | 'excel'>(() => {
+    try { return (localStorage.getItem('sales-items-view-mode') as 'list' | 'excel') || 'list' } catch { return 'list' }
+  })
+  useEffect(() => { try { localStorage.setItem('sales-items-view-mode', viewMode) } catch {} }, [viewMode])
+
   // ── Shared data ────────────────────────────────────────────────────────────
   const [salesItems,     setSalesItems]     = useState<SalesItem[]>([])
   const [combos,         setCombos]         = useState<Combo[]>([])
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([])
   const [countries,      setCountries]      = useState<Country[]>([])
+  const [priceLevels,    setPriceLevels]    = useState<PriceLevel[]>([])
   const [recipes,        setRecipes]        = useState<Recipe[]>([])
   const [ingredients,    setIngredients]    = useState<Ingredient[]>([])
   const [siCategories,   setSiCategories]   = useState<{id: number; name: string}[]>([])
   const [loading,        setLoading]        = useState(true)
   const [toast,          setToast]          = useState<{msg: string} | null>(null)
+  // Cells currently writing back to the server — key is "<itemId>:<fieldKey>".
+  const [savingCells, setSavingCells] = useState<Set<string>>(new Set())
   const showToast = (msg: string) => setToast({ msg })
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [items, combosData, groups, c, r, i] = await Promise.all([
-        api.get('/sales-items?include_inactive=true'),
+      // Excel view needs per-item default-price rows; list view doesn't.
+      // Fetching `include_prices=true` is cheap (one extra join) and keeps
+      // both views backed by a single network round-trip so switching between
+      // them is instant.
+      const wantPrices = viewMode === 'excel' ? '&include_prices=true' : ''
+      const [items, combosData, groups, c, r, i, pl] = await Promise.all([
+        api.get(`/sales-items?include_inactive=true${wantPrices}`),
         api.get('/combos'),
         api.get('/modifier-groups'),
         api.get('/countries'),
         api.get('/recipes'),
         api.get('/ingredients'),
+        api.get('/price-levels'),
       ])
       setSalesItems(items || [])
       setCombos(combosData || [])
@@ -321,8 +343,9 @@ export default function SalesItemsPage() {
       setCountries(c || [])
       setRecipes(r || [])
       setIngredients(i || [])
+      setPriceLevels((pl || []).sort((a: PriceLevel, b: PriceLevel) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0)))
     } finally { setLoading(false) }
-  }, [api])
+  }, [api, viewMode])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -330,6 +353,105 @@ export default function SalesItemsPage() {
       .then((d: any[]) => setSiCategories((d || []).map((c: any) => ({ id: c.id, name: c.name })).sort((a: any, b: any) => a.name.localeCompare(b.name))))
       .catch(() => {})
   }, [api])
+
+  // ── Inline-save helpers for the Excel view ──────────────────────────────────
+  // Each cell edit is persisted independently, with a little ⟳ spinner on the
+  // cell while the PUT is in flight. Optimistic updates in state; a failed
+  // save rolls back and shows a toast. Keeps the UI feeling like Excel
+  // (commit on blur / Enter) instead of a big save-all button.
+
+  const markSaving = useCallback((itemId: number, field: string, on: boolean) => {
+    setSavingCells(prev => {
+      const next = new Set(prev)
+      const key = `${itemId}:${field}`
+      if (on) next.add(key); else next.delete(key)
+      return next
+    })
+  }, [])
+
+  const saveCoreField = useCallback(async (itemId: number, patch: Partial<SalesItem>, label: string) => {
+    const prev = salesItems.find(s => s.id === itemId)
+    if (!prev) return
+    markSaving(itemId, label, true)
+    // Optimistic
+    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, ...patch } : s))
+    try {
+      const updated: SalesItem = await api.put(`/sales-items/${itemId}`, patch)
+      // Merge server response so computed fields (category_name etc.) refresh
+      setSalesItems(list => list.map(s => s.id === itemId ? { ...s, ...updated } : s))
+    } catch (err) {
+      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
+      showToast(`Save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      markSaving(itemId, label, false)
+    }
+  }, [api, salesItems, markSaving])
+
+  const savePrice = useCallback(async (itemId: number, priceLevelId: number, raw: string) => {
+    const trimmed = (raw || '').trim()
+    const num = trimmed === '' ? null : Number(trimmed)
+    if (trimmed !== '' && (Number.isNaN(num) || (num as number) < 0)) {
+      showToast('Invalid price'); return
+    }
+    const prev = salesItems.find(s => s.id === itemId)
+    if (!prev) return
+    const label = `price_${priceLevelId}`
+    markSaving(itemId, label, true)
+
+    // Build the full price array (PUT replaces all). Preserve other levels'
+    // values; update or remove this one based on num === null.
+    const existing: SalesItemPrice[] = Array.isArray(prev.prices) ? prev.prices : []
+    const next = existing.filter(p => p.price_level_id !== priceLevelId)
+    if (num !== null) next.push({ price_level_id: priceLevelId, sell_price: num })
+
+    // Optimistic
+    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, prices: next } : s))
+    try {
+      await api.put(`/sales-items/${itemId}/prices`, { prices: next })
+    } catch (err) {
+      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
+      showToast(`Price save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      markSaving(itemId, label, false)
+    }
+  }, [api, salesItems, markSaving])
+
+  const toggleMarket = useCallback(async (itemId: number, countryId: number, active: boolean) => {
+    const prev = salesItems.find(s => s.id === itemId)
+    if (!prev) return
+    const label = `market_${countryId}`
+    markSaving(itemId, label, true)
+
+    const existingMkts: SalesItemMarket[] = Array.isArray(prev.markets) ? prev.markets : []
+    // Active country_ids after toggle: markets are "active if present in array
+    // and is_active=true"; the PUT /markets endpoint treats the supplied array
+    // as the full list of active countries for the item (upserts TRUE, others
+    // get FALSE or removed).
+    const activeIds = new Set(existingMkts.filter(m => m.is_active).map(m => m.country_id))
+    if (active) activeIds.add(countryId); else activeIds.delete(countryId)
+
+    // Rebuild optimistic markets array — mark every country's is_active flag
+    const nextMkts: SalesItemMarket[] = countries.map(c => {
+      const existing = existingMkts.find(m => m.country_id === c.id)
+      return {
+        country_id:   c.id,
+        country_name: c.name,
+        is_active:    activeIds.has(c.id),
+        ...(existing || {}),
+        is_active_override: undefined,   // not a real field, just shape guarantee
+      } as SalesItemMarket
+    })
+    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, markets: nextMkts } : s))
+
+    try {
+      await api.put(`/sales-items/${itemId}/markets`, { country_ids: Array.from(activeIds) })
+    } catch (err) {
+      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
+      showToast(`Market save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      markSaving(itemId, label, false)
+    }
+  }, [api, salesItems, countries, markSaving])
 
   // ── Create / edit / delete ─────────────────────────────────────────────────
   const [siModal,       setSiModal]       = useState<'new' | null>(null)
@@ -931,7 +1053,7 @@ export default function SalesItemsPage() {
       {activeTab === 'items' && (
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 overflow-auto p-5">
-            <div className="flex gap-2 mb-4">
+            <div className="flex gap-2 mb-4 items-center">
               <input className="input input-sm w-64" placeholder="Search by name or category…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} />
               <select className="input py-1 text-xs" value={typeFilter} onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}>
                 <option value="">All Types</option>
@@ -947,10 +1069,51 @@ export default function SalesItemsPage() {
                 </button>
               )}
               <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
+              {/* View-mode toggle — same three-button pattern as the Menu
+                  Engineer Excel view on SharedMenuPage, minus the Grid option
+                  (card-tiles wouldn't add anything over the existing list). */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden ml-2" role="group" aria-label="View mode">
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === 'list' ? 'bg-accent-dim text-accent' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                  title="List view"
+                  aria-pressed={viewMode === 'list'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
+                  </svg>
+                  <span className="hidden sm:inline">List</span>
+                </button>
+                <button
+                  onClick={() => setViewMode('excel')}
+                  className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === 'excel' ? 'bg-accent-dim text-accent' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                  title="Excel view — dense editable grid"
+                  aria-pressed={viewMode === 'excel'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M3 6h18M3 18h18M8 6v12M16 6v12"/>
+                  </svg>
+                  <span className="hidden sm:inline">Excel</span>
+                </button>
+              </div>
             </div>
 
             {nonComboItems.length === 0 ? (
               <div className="py-16 text-center text-sm text-gray-400">No sales items yet. Click "+ New Sales Item" to create one.</div>
+            ) : viewMode === 'excel' ? (
+              <ExcelView
+                items={nonComboItems}
+                priceLevels={priceLevels}
+                countries={countries}
+                siCategories={siCategories}
+                savingCells={savingCells}
+                onSaveCore={saveCoreField}
+                onSavePrice={savePrice}
+                onToggleMarket={toggleMarket}
+                onSelect={id => setSelectedSiId(id)}
+                onDelete={si => setDeleting(si)}
+                selectedSiId={selectedSiId}
+              />
             ) : (
               <div className="card overflow-hidden">
                 <table className="w-full text-sm">
@@ -2357,5 +2520,288 @@ export default function SalesItemsPage() {
 
       {toast && <Toast message={toast.msg} onClose={() => setToast(null)} />}
     </div>
+  )
+}
+
+// ── Excel view ────────────────────────────────────────────────────────────────
+// Dense spreadsheet-like grid with frozen left columns (Name / Type / Category),
+// inline edit on every editable cell, per-price-level columns, per-country
+// market toggles, and a trailing Actions column.
+//
+// Visual language mirrors the Menu Engineer Excel view on SharedMenuPage —
+// gray header band, 12px body text, 1px #e5e7eb borders, amber cell background
+// while a save is in flight. The CSS `position: sticky` pattern is what pins
+// the left columns in place during horizontal scroll; it needs
+// `border-collapse: separate` on the table to avoid border bleed.
+
+interface ExcelViewProps {
+  items:         SalesItem[]
+  priceLevels:   PriceLevel[]
+  countries:     Country[]
+  siCategories:  { id: number; name: string }[]
+  savingCells:   Set<string>
+  onSaveCore:    (itemId: number, patch: Partial<SalesItem>, fieldKey: string) => void | Promise<void>
+  onSavePrice:   (itemId: number, priceLevelId: number, raw: string) => void | Promise<void>
+  onToggleMarket:(itemId: number, countryId: number, active: boolean) => void | Promise<void>
+  onSelect:      (id: number) => void
+  onDelete:      (si: SalesItem) => void
+  selectedSiId:  number | null
+}
+
+function ExcelView({
+  items, priceLevels, countries, siCategories,
+  savingCells, onSaveCore, onSavePrice, onToggleMarket,
+  onSelect, onDelete, selectedSiId,
+}: ExcelViewProps) {
+  // Local draft state so the user can type freely before blurring. One map
+  // keyed by "<itemId>:<field>" so draft edits don't interfere across rows.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const draftKey = (id: number, field: string) => `${id}:${field}`
+  const getDraft = (id: number, field: string, fallback: string) => {
+    const k = draftKey(id, field)
+    return k in drafts ? drafts[k] : fallback
+  }
+  const setDraft = (id: number, field: string, value: string) =>
+    setDrafts(prev => ({ ...prev, [draftKey(id, field)]: value }))
+  const clearDraft = (id: number, field: string) =>
+    setDrafts(prev => { const next = { ...prev }; delete next[draftKey(id, field)]; return next })
+
+  const isSaving = (id: number, field: string) => savingCells.has(`${id}:${field}`)
+
+  // Commit a draft text field back via onSaveCore, only if it actually changed.
+  const commitText = async (item: SalesItem, field: 'name' | 'display_name', currentValue: string) => {
+    const k    = draftKey(item.id, field)
+    if (!(k in drafts)) return
+    const next = drafts[k]
+    clearDraft(item.id, field)
+    if (next.trim() === (currentValue ?? '').trim()) return
+    // `display_name` accepts empty string (falls back to `name` in rendering),
+    // `name` doesn't — keep a minimum of 1 char.
+    if (field === 'name' && !next.trim()) return
+    await onSaveCore(item.id, { [field]: next.trim() } as Partial<SalesItem>, field)
+  }
+
+  const commitPrice = async (item: SalesItem, priceLevelId: number) => {
+    const field = `price_${priceLevelId}`
+    const k     = draftKey(item.id, field)
+    if (!(k in drafts)) return
+    const next  = drafts[k]
+    clearDraft(item.id, field)
+    // No-op if blank + no existing price
+    const current = (item.prices || []).find(p => p.price_level_id === priceLevelId)
+    const currentStr = current ? String(current.sell_price ?? '') : ''
+    if (next.trim() === currentStr.trim()) return
+    await onSavePrice(item.id, priceLevelId, next)
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded overflow-hidden" style={{ fontSize: 12 }}>
+      {/* The overflow-x container provides the horizontal scroll; sticky
+          columns pin to its left edge. `max-height` caps the table so
+          vertical scrolling kicks in on long catalogs. */}
+      <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+        <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
+          <thead className="sticky top-0 z-20" style={{ background: '#f0f0f0' }}>
+            <tr>
+              {/* Frozen: Name */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 0, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 200, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Name</th>
+              {/* Frozen: Display name */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 200, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 180, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Display</th>
+              {/* Frozen: Type */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 380, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 80, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Type</th>
+              {/* Frozen: Category */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 460, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 160, borderRight: '2px solid #9ca3af', borderBottom: '1px solid #d1d5db' }}
+              >Category</th>
+              {/* Prices — one column per price level. Muted green header band to
+                  distinguish from the left frozen block. */}
+              {priceLevels.map(pl => (
+                <th key={`pl-h-${pl.id}`}
+                  className="text-right font-semibold text-gray-700 uppercase tracking-wide whitespace-nowrap"
+                  style={{ background: '#dce8dc', padding: '6px 10px', fontSize: 10, minWidth: 90, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+                >{pl.name}</th>
+              ))}
+              {/* Markets — one column per country. Muted blue header band. */}
+              {countries.map(c => (
+                <th key={`c-h-${c.id}`}
+                  className="text-center font-semibold text-gray-700 uppercase tracking-wide whitespace-nowrap"
+                  style={{ background: '#dce1e8', padding: '6px 10px', fontSize: 10, minWidth: 60, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+                  title={c.name}
+                >{c.name}</th>
+              ))}
+              {/* Actions */}
+              <th className="text-center font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                  style={{ background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 60, borderBottom: '1px solid #d1d5db' }}
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => {
+              const rowBg       = selectedSiId === item.id ? '#e8f5ed' : (idx % 2 === 0 ? '#fff' : '#fafafa')
+              const cellBase    = { padding: '3px 6px', borderRight: '1px solid #e5e7eb', borderBottom: '1px solid #f0f0f0' } as const
+              const frozenCell  = (left: number, extra: React.CSSProperties = {}) => ({
+                position: 'sticky' as const, left, zIndex: 10, background: rowBg, ...cellBase, ...extra,
+              })
+              return (
+                <tr key={item.id} style={{ background: rowBg }} onClick={() => onSelect(item.id)}>
+                  {/* Name (editable) */}
+                  <td style={frozenCell(0)}>
+                    <CellInput
+                      value={getDraft(item.id, 'name', item.name ?? '')}
+                      onChange={v => setDraft(item.id, 'name', v)}
+                      onCommit={() => commitText(item, 'name', item.name ?? '')}
+                      saving={isSaving(item.id, 'name')}
+                    />
+                  </td>
+                  {/* Display name (editable) */}
+                  <td style={frozenCell(200)}>
+                    <CellInput
+                      value={getDraft(item.id, 'display_name', item.display_name ?? '')}
+                      onChange={v => setDraft(item.id, 'display_name', v)}
+                      onCommit={() => commitText(item, 'display_name', item.display_name ?? '')}
+                      saving={isSaving(item.id, 'display_name')}
+                      placeholder={item.name ?? ''}
+                    />
+                  </td>
+                  {/* Type (read-only — changing type via this grid would
+                      require a linked-item re-pick, not meaningful inline) */}
+                  <td style={frozenCell(380)}>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${TYPE_BADGE[item.item_type]}`}>
+                      {TYPE_LABEL[item.item_type]}
+                    </span>
+                  </td>
+                  {/* Category (editable select) */}
+                  <td style={frozenCell(460, { borderRight: '2px solid #9ca3af' })}>
+                    <select
+                      className="w-full bg-transparent text-xs focus:outline-none focus:ring-1 focus:ring-accent rounded"
+                      value={item.category_id ?? ''}
+                      onChange={e => {
+                        const v = e.target.value ? Number(e.target.value) : null
+                        onSaveCore(item.id, { category_id: v }, 'category_id')
+                      }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <option value="">—</option>
+                      {siCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    {isSaving(item.id, 'category_id') && <SpinnerDot />}
+                  </td>
+                  {/* Prices */}
+                  {priceLevels.map(pl => {
+                    const price   = (item.prices || []).find(p => p.price_level_id === pl.id)
+                    const raw     = price ? String(price.sell_price ?? '') : ''
+                    const key     = `price_${pl.id}`
+                    const saving  = isSaving(item.id, key)
+                    return (
+                      <td key={`p-${item.id}-${pl.id}`}
+                          style={{ ...cellBase, background: rowBg, textAlign: 'right' }}
+                          onClick={e => e.stopPropagation()}
+                      >
+                        <CellInput
+                          value={getDraft(item.id, key, raw)}
+                          onChange={v => setDraft(item.id, key, v)}
+                          onCommit={() => commitPrice(item, pl.id)}
+                          saving={saving}
+                          align="right"
+                          placeholder="—"
+                        />
+                      </td>
+                    )
+                  })}
+                  {/* Markets */}
+                  {countries.map(c => {
+                    const mk     = (item.markets || []).find(m => m.country_id === c.id)
+                    const active = !!mk?.is_active
+                    const key    = `market_${c.id}`
+                    const saving = isSaving(item.id, key)
+                    return (
+                      <td key={`m-${item.id}-${c.id}`}
+                          style={{ ...cellBase, background: rowBg, textAlign: 'center' }}
+                          onClick={e => e.stopPropagation()}
+                      >
+                        <label className="inline-flex items-center justify-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            disabled={saving}
+                            onChange={e => onToggleMarket(item.id, c.id, e.target.checked)}
+                          />
+                          {saving && <SpinnerDot />}
+                        </label>
+                      </td>
+                    )
+                  })}
+                  {/* Actions */}
+                  <td style={{ ...cellBase, background: rowBg, textAlign: 'center' }}
+                      onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => onDelete(item)}
+                      className="p-1 rounded text-red-300 hover:text-red-600 hover:bg-red-50"
+                      title="Delete"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-3 py-1.5 text-[10px] text-gray-400 border-t border-gray-100 bg-gray-50">
+        {items.length} item{items.length === 1 ? '' : 's'}
+        {' · '}Click any cell to edit · changes save automatically on blur / Enter
+      </div>
+    </div>
+  )
+}
+
+// Single-cell editable input — plain text, amber background while saving,
+// commits on blur or Enter. Extracted so each table cell stays tight.
+function CellInput({ value, onChange, onCommit, saving, align = 'left', placeholder }: {
+  value:       string
+  onChange:    (v: string) => void
+  onCommit:    () => void
+  saving:      boolean
+  align?:      'left' | 'right'
+  placeholder?:string
+}) {
+  return (
+    <div className={`relative flex items-center ${align === 'right' ? 'justify-end' : ''}`}
+         style={saving ? { background: 'rgba(251, 191, 36, 0.15)' } : undefined}>
+      <input
+        type="text"
+        className={`w-full bg-transparent focus:outline-none focus:ring-1 focus:ring-accent rounded px-1 py-0.5 font-mono tabular-nums ${align === 'right' ? 'text-right' : 'text-left'}`}
+        style={{ fontSize: 12 }}
+        value={value}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        onBlur={onCommit}
+        onKeyDown={e => {
+          if (e.key === 'Enter')  { e.preventDefault(); (e.target as HTMLInputElement).blur() }
+          if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
+        }}
+      />
+      {saving && <SpinnerDot />}
+    </div>
+  )
+}
+
+function SpinnerDot() {
+  return (
+    <span className="inline-block w-2 h-2 rounded-full ml-1 align-middle"
+          style={{ background: '#f59e0b', animation: 'pepper-dot 1.2s ease-in-out infinite' }} />
   )
 }

@@ -670,7 +670,8 @@ All routes registered in `api/src/routes/index.js`.
 | `POST /api/ai-chat` | `ai-chat.js` | ✅ Active — SSE streaming Pepper chat with 96 tools (includes web search, GitHub, Excel export, audit log, and FAQ search) |
 | `GET /api/ai-chat/my-usage` | `ai-chat.js` | ✅ Active — current period token usage stats |
 | `POST /api/ai-upload` | `ai-upload.js` | ✅ Active — multipart file + chat message → SSE (vision/CSV) |
-| `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration (stores ANTHROPIC/VOYAGE/BRAVE/GITHUB/JIRA keys + MAPBOX_ACCESS_TOKEN in the encrypted config store) |
+| `GET/PUT /api/ai-config` | `ai-config.js` | ✅ Active — AI feature flag configuration (stores ANTHROPIC/VOYAGE/BRAVE/GITHUB/JIRA keys + MAPBOX_ACCESS_TOKEN + OPENAI_API_KEY in the encrypted config store) |
+| `POST /api/ai-transcribe` | `ai-transcribe.js` | ✅ Active — multipart audio → OpenAI Whisper → `{text}`. Used by the PWA voice-input fallback on Safari/iOS (Chromium uses native SpeechRecognition). 25 MB cap, 503 if `OPENAI_API_KEY` isn't configured. |
 | `GET /api/ai-config/claude-code-key` | `ai-config.js` | ✅ Active — returns the self-generated Claude Code API key (only plaintext key ever returned) |
 | `POST /api/ai-config/generate-claude-code-key` | `ai-config.js` | ✅ Active — (re)generates the Claude Code API key |
 | `GET /api/ai-config/mapbox-token` | `ai-config.js` | ✅ Active — returns the Mapbox PUBLIC token (pk.*) for browser map widgets. Public tokens are safe to expose (expected to be URL-restricted in the Mapbox dashboard). |
@@ -1383,9 +1384,20 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 - **GitHub config:** `GITHUB_PAT` and `GITHUB_REPO` stored via `GET/PUT /api/ai-config` — enables 8 GitHub tools when set. Helper: `api/src/helpers/github.js`
 - **Market scope filtering:** all data-read and export tools respect `allowedCountries` from the user's RBAC scope (`mcogs_user_brand_partners`); `null` = unrestricted (Admin default), non-null = array of permitted country IDs injected from `req.user.allowedCountries`. Note: this is the user's **RBAC scope**, not the top-bar Market Switcher selection — Pepper sees everything the user is allowed to see, regardless of which market is currently focused in the UI. See §10 → "Global App Switches" for the relationship between the two.
 - **Language:** `req.language` is threaded into `userCtxWithLang` and applied as a COALESCE bind param on translatable SELECTs in tools like `list_ingredients`, `list_recipes`, `list_menus`, `list_categories`, `list_price_levels`, `list_price_quotes`. The system prompt also instructs Pepper to reply in the user's language. See §10 → "Global App Switches" and §23 for the resolution chain.
-- **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content
+- **Panel mode:** `PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'` — persisted in `localStorage('pepper-mode')`. Left/right render as full-height flex columns in `AppLayout`; bottom renders as a resizable panel (200px-60vh) below main content. **On mobile** (viewport < 640px) the dock mode is overridden to a full-viewport fixed sheet (`position: fixed; inset: 0; z-index: 50`) with a `visualViewport`-driven bottom inset so the on-screen keyboard doesn't cover the chat input. The stored mode preference is preserved — it applies again when the user goes back to desktop.
 
-### Tool Count: 104
+### Pepper on PWA (mobile-native features)
+
+- **Mobile detection:** `app/src/hooks/useIsMobile.ts` exports `useIsMobile()` (matches the Tailwind `sm:` breakpoint) and `useKeyboardInset()` (tracks `window.visualViewport.height` to adjust the chat-sheet bottom when iOS/Android opens the keyboard).
+- **Bigger tap targets + font on mobile:** `ChatPanel` reads the `isMobile` prop from `AiChat` and scales icon buttons from `w-7 h-7` to `w-11 h-11` (iOS HIG min), send button from `w-8` to `w-12`, textarea from `text-sm` to `text-base`.
+- **Camera capture:** new `cameraInputRef` alongside `fileInputRef`. Camera button uses `<input type="file" accept="image/*" capture="environment">` which opens the native camera app on mobile and a regular file picker on desktop. Reuses the existing `handleFileChange` → `/api/ai-upload` → `stageFileContent` pipeline, so a photographed receipt lands as a staged import job the user can finish via the Continue-a-staged-import panel on `/import`.
+- **Voice input (push-to-talk):** `app/src/hooks/useVoiceInput.ts` returns `{ recording, backend, available, start, stop, unavailableReason }`. Chromium-based browsers use native `SpeechRecognition` (free, on-device). Safari/iOS fall back to `MediaRecorder` → POST `/api/ai-transcribe` → OpenAI Whisper. The mic button is a `onPointerDown/Up/Leave` push-to-talk; pre-existing input is stashed in `preVoiceInputRef` so the transcript appends rather than overwrites.
+- **Voice output (sentence-buffered TTS):** `app/src/hooks/useVoiceOutput.ts` returns `{ enabled, speaking, available, toggle, feed, flush, cancel }`. Wired into the SSE text-event handler in `AiChat.tsx` (`tts.feed(event.text)` per token, `tts.flush()` on stream end). Buffers on `. ? !` boundaries so whole sentences are spoken rather than token fragments. Strips markdown noise (asterisks, backticks, pipes) before speaking. Toggle lives in the Pepper header (speaker icon), persisted to `localStorage('pepper-tts-enabled')`.
+- **Kitchen Mode:** toggle in the Pepper header → adds `body.kitchen-mode` class → CSS in `index.css` scales font-size to 17px + sets `min-height: 44px` on buttons/inputs/textareas. Scope is app-wide (not just Pepper) so operators on a shop-floor tablet can click it once and the whole app becomes greasy-finger-friendly. Persisted to `localStorage('pepper-kitchen-mode')`.
+- **Whisper backend (`POST /api/ai-transcribe`):** [api/src/routes/ai-transcribe.js](api/src/routes/ai-transcribe.js). Multipart `audio` field (≤25 MB), optional `language` ISO-639-1, returns `{ text }`. Uses `OPENAI_API_KEY` from the config store (new entry in `AI_KEY_NAMES`; exposed as `openai_key_set` in `aiConfig.status()`). 503 with a friendly error when not configured — the client shows "Voice unavailable" and Chromium users keep working via native SpeechRecognition. Audits each call via `logAudit` (length + mimetype, no transcript content).
+- **Settings → AI card:** OpenAI key input with "only needed for Safari/iOS" copy. Mapbox + OpenAI cards live side-by-side in the Integrations list.
+
+### Tool Count: 121 (verified live via `require('./ai-chat').TOOLS.length`)
 
 **Lookup / Read (15):**
 `get_dashboard_stats`, `list_ingredients`, `get_ingredient`, `list_recipes`, `get_recipe`, `list_menus`, `get_menu_cogs`, `get_feedback`, `submit_feedback`, `list_vendors`, `list_markets`, `list_categories`, `list_units`, `list_price_levels`, `list_price_quotes`
@@ -1426,8 +1438,9 @@ Pepper is the in-app AI assistant (Claude Haiku 4.5 via Anthropic API). It can b
 **Allergens (4):**
 `list_allergens`, `get_ingredient_allergens`, `set_ingredient_allergens`, `get_menu_allergens`
 
-**Import (1):**
-`start_import` — accepts file text content already in conversation, calls `stageFileContent()`, returns `{ job_id, url: '/import?job=<id>', summary }` so the user can click through to the Import Wizard
+**Import (2):**
+`start_import` — accepts file text content already in conversation, calls `stageFileContent()` with the current user's email (via `userCtx.email`) so the job shows up in their "Continue a staged import" list on the Import page. Returns `{ job_id, url: '/import?job=<id>', summary }` so the user can click through to the Import Wizard to review + commit.
+`list_import_jobs` — lists the user's staged/unfinished import jobs with counts + filename + status + a `/import?job=<id>` URL. Defaults to current user's non-terminal jobs (staging, ready, failed). Used when the user asks "what imports do I have pending?" or "can I resume an earlier import?".
 
 **Web Search (1):**
 `search_web` — uses Brave Search API if `BRAVE_SEARCH_API_KEY` is configured in Settings → AI; falls back to DuckDuckGo Instant Answer API (free, no key, limited coverage). **Only invoked when the user explicitly asks to search the internet.** System prompt restricts autonomous use.
@@ -2030,6 +2043,44 @@ Tab resets to Details whenever a different sales item is selected. Delete button
 - Network error → exception message
 
 **File:** `app/src/pages/ImportPage.tsx`
+
+---
+
+### Fix 25 — Sidebar Flashed Disabled Modules for 1-2 Seconds
+
+**Symptom:** On initial page load the sidebar briefly showed nav items for globally-disabled modules (Allergens / HACCP / Audits / Stock Manager), then hid them once `/settings` returned ~1-2 seconds later.
+
+**Root Cause:** `FeatureFlagsContext.DEFAULT_FLAGS` had every flag set to `true`, so the first render used those defaults. Real flag values only arrived after the async `/settings` fetch.
+
+**Fix:** Sidebar now reads `loading` from `useFeatureFlags()` alongside `flags`, and hides flag-gated items while `flagsLoading` is true. Safe degradation: if the fetch fails, `finally { setLoading(false) }` runs and `DEFAULT_FLAGS` is used, so the user sees all modules rather than nothing.
+
+**File:** `app/src/components/Sidebar.tsx`
+
+---
+
+### Fix 26 — Imported Categories Appeared to Vanish
+
+**Symptom:** After using the Import wizard to create categories, users couldn't find them anywhere on the Categories page.
+
+**Root Cause:** The import creates categories with `group_id = null` (correct). The Categories page had a "No Group" bucket but it was tucked at the bottom of the groups sidebar and only rendered when the ungrouped count was > 0. First landing on the page with `selectedGroupId = null` showed an empty-state panel — imported categories were sitting one click away in a non-obvious place.
+
+**Fix:**
+- Hoisted the "No Group" bucket to the **top** of the sidebar, always visible (even when empty, so it's a stable drop target for DnD).
+- Added an auto-select effect: if any ungrouped categories exist on first load, `setSelectedGroupId('ungrouped')` so users land directly on the imported rows. Otherwise opens the first group.
+
+**File:** `app/src/pages/CategoriesPage.tsx`
+
+---
+
+### Fix 27 — Categories Drag-Drop Appeared to Do Nothing
+
+**Symptom:** Dragging a category row to reorder updated state behind the scenes but the UI kept showing the old order.
+
+**Root Cause:** `visibleCats` filtered by group + scope but didn't sort. The initial `/categories` response was in the right order, so the first render looked correct. After a drag, `persistReorder` updated `sort_order` values in component state but the array order didn't change — `setCategories(next)` was returning the same array topology. React rendered the stale visual order despite the underlying state being correct.
+
+**Fix:** `visibleCats` useMemo now ends with `[...list].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)`. The optimistic reorder flashes immediately; backend is authoritative on reload.
+
+**File:** `app/src/pages/CategoriesPage.tsx`
 
 ---
 
@@ -2835,7 +2886,9 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session continuation: Seed/clear validator + Excel template download fix. Fix 24 added — Import wizard "Download template.xlsx" was returning a generic browser "file not available" error because the bare `<a href>` anchor bypassed the Auth0 bearer token (401 from `requireAuth`); replaced with an authenticated fetch + Blob + programmatic download in ImportPage.tsx. New `npm run validate:seed` script + `api/scripts/validate-seed-import.js` — end-to-end validator that runs clearData() + seedSmall() against your local DB, asserts truncated tables are empty + preserved tables untouched, and round-trips an mcogs_import_jobs row. Preserve-list comments in seed-test-data.js and seed-test-data-small.js updated to explicitly name mcogs_settings / mcogs_changelog / mcogs_languages / mcogs_regions / mcogs_qsc_questions / mcogs_qsc_templates (previously implicitly preserved but undocumented) with a note on mcogs_qsc_audits cascade behaviour. New migration step 138 with changelog entry. DB: 87 tables (no change), 137→138 migration steps, tools: 104 (no change), widgets: 21 (no change).)*
+*README last updated: April 2026 (session: Mobile Pepper + configurable shortcut widget + categories DnD + Recipes/Inventory CalcInput + import save-feature. The big one was PWA Pepper: full-viewport mobile sheet (useIsMobile / useKeyboardInset hooks), 44px tap targets, bigger fonts, camera button with `capture="environment"`, push-to-talk voice input (SpeechRecognition + Whisper fallback), sentence-buffered speechSynthesis voice output, Kitchen Mode. New POST /api/ai-transcribe route + OPENAI_API_KEY config entry + Settings → AI Whisper card. Quick Links widget now config-driven: RBAC + feature-flag filtering, per-link width (¼/½/¾/full) + height (1/2/3 rows), drag-to-reorder, add/remove, reset-to-defaults, WidgetEditingProvider context. Categories page: No Group bucket hoisted + always visible + auto-selected on load with ungrouped cats (Fix 26); drag rows to reorder within group + drop onto group to move (backend POST /categories/reorder); scope filter chips; sort-by-sort_order fix (Fix 27). Recipes page: 7 numeric fields migrated to CalcInput (yield_qty, prep_qty x3, prep_to_base_conversion x2, inline tile price). Inventory page: 9 numeric fields migrated (purchase_price x4, qty_in_base_units x4, nutrition loop). CalcInput extended with onKeyDown/onBlur/autoFocus/style pass-through + Enter-to-commit. Import staged-job flow: start_import now passes userCtx.email; new list_import_jobs tool (121 total Pepper tools); Continue a staged import panel on ImportPage. Sidebar flash fix (Fix 25). Migration step 139. DB: 87 tables (no change), 138→139 steps, tools: 121 (live count; +1 this session), widgets: 21 (no change).)*
+
+*README previous session: Seed/clear validator + Excel template download fix (Fix 24). Migration step 138.*
 
 *README previous session: Dashboard DnD + row-span + Recipe Costing Method + MapboxCountryMap focus-masking. Drag-and-drop reordering via native HTML5 DnD. `WidgetHeight = 1 | 2 | 3` + grid-auto-flow dense + ×H selector. New `mcogs_settings.data.costing_method` (`'best'` default / `'average'`) — preferred vendor always wins; setting picks the fallback. `loadQuoteLookup()` + `effectivePrice.js` refactored so price_per_base_unit is computed in SQL. MapboxCountryMap masks every country outside the focused one via a second fill layer + setFilter on default-style label layers. Migration step 137.*
 

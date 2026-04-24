@@ -3475,6 +3475,59 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-23' AND title = 'Excel import template download fix + seed/clear validator'
    )`,
+
+  // ── Step 139: Changelog — Mobile Pepper + categories DnD + shortcut widget ──
+  // Idempotent via WHERE NOT EXISTS.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-24', 'Mobile Pepper (voice + camera + kitchen mode), configurable shortcut widget, categories DnD, Recipes/Inventory CalcInput rollout', '[
+     {"type":"added","description":"Mobile-first Pepper on PWA \u2014 full-viewport sheet below the sm: breakpoint (640px), 44px tap targets, larger fonts, dock buttons hidden. Powered by new useIsMobile + useKeyboardInset hooks (visualViewport API keeps the chat input above the on-screen keyboard). Dedicated camera button with capture=\\"environment\\" hits the native camera app on iOS/Android; reuses /api/ai-upload to stage receipt imports."},
+     {"type":"added","description":"Voice input (push-to-talk) \u2014 new useVoiceInput hook. Chromium browsers use native SpeechRecognition (free, on-device); Safari/iOS fall back to MediaRecorder \u2192 POST /api/ai-transcribe (new Whisper proxy route). Pre-existing input text is preserved so transcripts append instead of overwrite."},
+     {"type":"added","description":"Voice output (sentence-buffered TTS) \u2014 new useVoiceOutput hook. Feeds SSE text chunks into speechSynthesis, splitting on sentence boundaries. Markdown is stripped before speaking. Speaker toggle in the Pepper header, persisted to localStorage (pepper-tts-enabled)."},
+     {"type":"added","description":"Kitchen Mode toggle in the Pepper header \u2014 applies a body.kitchen-mode class with 17px font-size and 44px min-heights across all design-token components. Persisted to localStorage (pepper-kitchen-mode). Global across the whole app, not just Pepper."},
+     {"type":"added","description":"OPENAI_API_KEY added to the encrypted config store + aiConfig status flag (openai_key_set). Settings \u2192 AI gains a new Whisper configuration card explaining that the key is only needed for Safari/iOS voice input."},
+     {"type":"added","description":"POST /api/ai-transcribe \u2014 new multipart endpoint, gated by ai_chat:read, proxies audio (<=25MB) to OpenAI Whisper. Returns 503 when no key is configured so the client can degrade gracefully."},
+     {"type":"added","description":"Quick Links (shortcut) widget fully customisable in dashboard edit mode: per-link width (\u00bc/\u00bd/\u00be/full), per-link height (1/2/3 rows), drag-to-reorder, add from catalog, remove, reset to defaults. Hard-respects RBAC (can(feature,read)) and global feature flags (hides links for disabled modules, with loading-state flash-guard). Config persists to localStorage (cogs-quick-links-v1) with auto-rehydration against the catalog so renamed routes pick up new hrefs automatically."},
+     {"type":"added","description":"WidgetEditingProvider / useIsWidgetEditing context \u2014 lets widgets detect when the dashboard is in Customise mode and switch to their own inline-edit UI (consumed by Quick Links; any future widget can opt in)."},
+     {"type":"added","description":"Categories page drag-and-drop: drag rows to reorder within a group, drop onto a group sidebar item to move. Backend POST /categories/reorder (idempotent batch update of group_id + sort_order) wraps the full batch in a transaction. Page auto-follows a moved category to its new group."},
+     {"type":"added","description":"Categories page scope filter \u2014 4 mutually-exclusive chips (All / Inventory / Recipes / Sales) in the right-panel header, combined with the existing group filter."},
+     {"type":"added","description":"Continue a staged import panel on the Import page \u2014 lists the user\u2019s unfinished import jobs (staging/ready/failed) with counts + filename + status, Resume and Discard buttons. Restore flow mirrors the existing ?job= URL deep-link from Pepper."},
+     {"type":"added","description":"list_import_jobs Pepper tool \u2014 user can ask \\"what imports do I have pending?\\" and Pepper lists them with clickable /import?job=<id> URLs. Respects per-user scoping via userCtx.email."},
+     {"type":"added","description":"start_import attributes Pepper-staged jobs to the current user\u2019s email so they appear in the Continue panel and in list_import_jobs output."},
+     {"type":"added","description":"CalcInput extended with onKeyDown + onBlur + autoFocus + style pass-through; Enter now evaluates the expression before firing the caller\u2019s handler. Wired into 7 numeric fields on RecipesPage (yield_qty, prep_qty x2, prep_to_base x2, itemPanel x2, inline tile price) and 9 numeric fields on InventoryPage (purchase_price x4, qty_in_base_units x4, nutrition loop)."},
+     {"type":"fixed","description":"Sidebar flash of disabled modules (Fix 25) \u2014 feature-flag DEFAULTS were all-true, causing disabled modules to briefly appear and then disappear once /settings returned. Sidebar now hides flag-gated items while flagsLoading is true; safe degradation on fetch failure (defaults surface after 1 tick)."},
+     {"type":"fixed","description":"Imported categories appeared invisible (Fix 26) \u2014 categories created via the Import wizard land with group_id = null; the No Group bucket was hidden until clicked and at the bottom of the sidebar. Now hoisted to the top, always visible, and auto-selected on first load when ungrouped categories exist."},
+     {"type":"fixed","description":"Categories DnD optimistic reorder appeared to do nothing (Fix 27) \u2014 visibleCats filter didn\u2019t sort by sort_order, so state updates didn\u2019t reorder the list. Added [...list].sort((a,b) => a.sort_order - b.sort_order || a.id - b.id) inside the useMemo."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-24' AND title = 'Mobile Pepper (voice + camera + kitchen mode), configurable shortcut widget, categories DnD, Recipes/Inventory CalcInput rollout'
+   )`,
+
+  // ── Step 140: Jira 2-way sync — remote-updated-at columns ──────────────────
+  // Timestamp columns let us detect which side is newer when pulling, so we
+  // only overwrite local data when Jira is actually more recent. Without this
+  // a manual pull could stomp on a freshly-edited local description with an
+  // older Jira state.
+  `DO $$ BEGIN ALTER TABLE mcogs_bugs    ADD COLUMN jira_remote_updated_at TIMESTAMPTZ; EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+  `DO $$ BEGIN ALTER TABLE mcogs_backlog ADD COLUMN jira_remote_updated_at TIMESTAMPTZ; EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  // ── Step 141: Changelog — Jira 2-way sync + cron + UI banner ───────────────
+  // Idempotent via WHERE NOT EXISTS on (version, title).
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-24', 'Jira 2-way sync (broader pull + 15-min cron + Sync banner)', '[
+     {"type":"added","description":"Jira pull now syncs summary + description + labels back to COGS (previously only status + priority). Uses Atlassian Document Format (ADF) flatten helper in jira.js (paragraphs, headings, hardBreaks, bullet/ordered lists)."},
+     {"type":"added","description":"Timestamp-based conflict resolution: the pull only overwrites text fields when Jira\u2019s updated timestamp is newer than the local updated_at. Freshly-edited local rows are preserved; next push sends them up instead."},
+     {"type":"added","description":"jira_remote_updated_at column on mcogs_bugs + mcogs_backlog via migration step 140 \u2014 stores the last known Jira-side updated_at for conflict detection and \u201cJira is newer\u201d hints in the UI."},
+     {"type":"added","description":"Every-15-minute pull cron (api/src/jobs/syncJira.js, */15 * * * * scheduled in index.js). Calls the shared syncAll() helper; no-op when Jira isn\u2019t configured. Only logs on changes or errors so healthy cycles don\u2019t spam the log."},
+     {"type":"added","description":"Sync status persistence in mcogs_settings.data.jira_sync_status \u2014 tracks trigger (cron|manual), startedAt, finishedAt, durationMs, pulled count, changedCount, and errors. Lets the UI report \u201cLast synced N min ago.\u201d"},
+     {"type":"added","description":"GET /api/jira/sync-status \u2014 new endpoint returning {configured, status} for the Bugs & Backlog banner."},
+     {"type":"added","description":"JiraSyncBanner on the Bugs & Backlog page: one-line status strip with trigger source, last-run timestamp, counts, errors, and a Sync Now button. Shown only when Jira is configured AND at least one item is linked (no useless \u201cnever synced\u201d noise)."},
+     {"type":"changed","description":"POST /api/jira/pull/all now delegates to syncAll({trigger:manual}) so both the cron path and the Sync Now button produce the same shape of sync-status log."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-24' AND title = 'Jira 2-way sync (broader pull + 15-min cron + Sync banner)'
+   )`,
 ];
 
 async function runMigrations(pool) {

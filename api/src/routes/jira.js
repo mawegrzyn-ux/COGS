@@ -120,25 +120,25 @@ router.post('/pull/all', async (_req, res) => {
   }
 
   try {
-    const results = { pulled: 0, errors: [] };
-
-    const [bugsRes, backlogRes] = await Promise.all([
-      pool.query(`SELECT id FROM mcogs_bugs WHERE jira_key IS NOT NULL`),
-      pool.query(`SELECT id FROM mcogs_backlog WHERE jira_key IS NOT NULL`),
-    ]);
-
-    for (const row of bugsRes.rows) {
-      try { await pullItem('bug', row.id); results.pulled++; }
-      catch (err) { results.errors.push({ type: 'bug', id: row.id, error: err.message }); }
-    }
-    for (const row of backlogRes.rows) {
-      try { await pullItem('backlog', row.id); results.pulled++; }
-      catch (err) { results.errors.push({ type: 'backlog', id: row.id, error: err.message }); }
-    }
-
-    res.json(results);
+    const result = await syncAll({ trigger: 'manual' });
+    res.json(result);
   } catch (err) {
     console.error('[jira] pull/all error:', err);
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// ── GET /sync-status — last sync summary for the UI banner ─────────────────
+router.get('/sync-status', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    const status = rows[0]?.data?.jira_sync_status || null;
+    res.json({
+      configured: jira.isConfigured(),
+      status,     // null if never synced
+    });
+  } catch (err) {
+    console.error('[jira] sync-status error:', err);
     res.status(500).json({ error: { message: err.message } });
   }
 });
@@ -208,7 +208,12 @@ async function pushItem(type, id) {
 }
 
 // ── Internal: pull a single item from Jira ──────────────────────────────────
-
+//
+// Now pulls status + priority + summary + description (flattened from ADF) +
+// labels. Conflict resolution: if the local row's `updated_at` is newer than
+// Jira's `updated` timestamp we skip Jira's values for that field so a
+// freshly-edited local row doesn't get stomped. Next push will sync the
+// other direction.
 async function pullItem(type, id) {
   const table = type === 'bug' ? 'mcogs_bugs' : 'mcogs_backlog';
   const { rows } = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
@@ -217,26 +222,76 @@ async function pullItem(type, id) {
   if (!item.jira_key) throw new Error(`${type} #${id} is not linked to Jira`);
 
   const issue = await jira.getIssue(item.jira_key);
-  const jiraStatusName = (issue.fields?.status?.name || '').toLowerCase();
-  const jiraPriority   = (issue.fields?.priority?.name || '').toLowerCase();
+  const f = issue.fields || {};
 
-  const statusMap   = type === 'bug' ? jira.BUG_STATUS_FROM_JIRA : jira.BACKLOG_STATUS_FROM_JIRA;
-  const newStatus   = statusMap[jiraStatusName] || null;
-  const newPriority = jira.PRIORITY_FROM_JIRA[jiraPriority] || null;
+  // Remote update timestamp from Jira — ms-precision ISO. Falls back to the
+  // `created` field if `updated` is missing (shouldn't happen in practice).
+  const remoteUpdatedAt = f.updated ? new Date(f.updated) : null;
+  const localUpdatedAt  = item.updated_at ? new Date(item.updated_at) : null;
+
+  // Only overwrite local fields when Jira is newer (or local timestamp is
+  // missing, which is a degenerate case). This is the "last write wins" rule
+  // the user asked for — gentle on fresh local edits.
+  const jiraIsNewer = !localUpdatedAt || (remoteUpdatedAt && remoteUpdatedAt > localUpdatedAt);
+
+  const jiraStatusName = (f.status?.name   || '').toLowerCase();
+  const jiraPriority   = (f.priority?.name || '').toLowerCase();
+  const statusMap      = type === 'bug' ? jira.BUG_STATUS_FROM_JIRA : jira.BACKLOG_STATUS_FROM_JIRA;
+  const newStatus      = statusMap[jiraStatusName] || null;
+  const newPriority    = jira.PRIORITY_FROM_JIRA[jiraPriority] || null;
+
+  const newSummary     = typeof f.summary === 'string' ? f.summary.trim() : null;
+  const newDescription = jira.adfToText(f.description) || null;
+  const newLabels      = Array.isArray(f.labels) ? f.labels : null;
 
   const updates = [];
   const vals    = [];
   let idx = 1;
+  const changes = {};
 
+  // Status + priority always sync (Jira is workflow source of truth).
   if (newStatus && newStatus !== item.status) {
     updates.push(`status = $${idx++}`);
     vals.push(newStatus);
+    changes.status = { from: item.status, to: newStatus };
   }
   if (newPriority && newPriority !== item.priority) {
     updates.push(`priority = $${idx++}`);
     vals.push(newPriority);
+    changes.priority = { from: item.priority, to: newPriority };
   }
+
+  // Text fields only sync when Jira is newer (conflict guard).
+  if (jiraIsNewer) {
+    if (newSummary && newSummary !== item.summary) {
+      updates.push(`summary = $${idx++}`);
+      vals.push(newSummary);
+      changes.summary = { from: item.summary, to: newSummary };
+    }
+    if (newDescription != null && newDescription !== item.description) {
+      updates.push(`description = $${idx++}`);
+      vals.push(newDescription);
+      changes.description = { changed: true };
+    }
+    if (newLabels) {
+      const currentLabels = Array.isArray(item.labels) ? item.labels : []
+      const same = currentLabels.length === newLabels.length &&
+                   currentLabels.every((l, i) => l === newLabels[i])
+      if (!same) {
+        updates.push(`labels = $${idx++}`);
+        vals.push(JSON.stringify(newLabels));
+        changes.labels = { from: currentLabels, to: newLabels };
+      }
+    }
+  } else {
+    changes.skippedTextFields = 'local is newer';
+  }
+
   updates.push(`jira_synced_at = NOW()`);
+  if (remoteUpdatedAt) {
+    updates.push(`jira_remote_updated_at = $${idx++}`);
+    vals.push(remoteUpdatedAt);
+  }
 
   if (updates.length) {
     vals.push(id);
@@ -244,11 +299,81 @@ async function pullItem(type, id) {
   }
 
   return {
-    pulled: true,
+    pulled:   true,
     jira_key: item.jira_key,
-    status_changed: newStatus && newStatus !== item.status ? { from: item.status, to: newStatus } : null,
-    priority_changed: newPriority && newPriority !== item.priority ? { from: item.priority, to: newPriority } : null,
+    changes,
+    skipped:  Object.keys(changes).length === 0,
   };
 }
 
+// ── Shared: pull every linked item + record outcome to mcogs_settings ──────
+// Used by both POST /pull/all (UI Sync Now button) and the syncJira cron.
+// `trigger` is 'manual' or 'cron' and ends up in the sync-status payload so
+// the UI can tell the user "Last synced N min ago via cron" vs "You clicked
+// Sync Now just now".
+async function syncAll({ trigger = 'cron' } = {}) {
+  const startedAt = new Date();
+  const out = {
+    trigger,
+    startedAt: startedAt.toISOString(),
+    finishedAt: null,
+    durationMs: null,
+    pulled: 0,
+    changedCount: 0,
+    errors: [],
+  };
+
+  if (!jira.isConfigured()) {
+    out.error = 'Jira not configured';
+    out.finishedAt = new Date().toISOString();
+    return out;
+  }
+
+  try {
+    const [bugsRes, backlogRes] = await Promise.all([
+      pool.query(`SELECT id FROM mcogs_bugs    WHERE jira_key IS NOT NULL`),
+      pool.query(`SELECT id FROM mcogs_backlog WHERE jira_key IS NOT NULL`),
+    ]);
+    for (const row of bugsRes.rows) {
+      try {
+        const r = await pullItem('bug', row.id);
+        out.pulled++;
+        if (r && !r.skipped) out.changedCount++;
+      } catch (err) {
+        out.errors.push({ type: 'bug', id: row.id, error: err.message });
+      }
+    }
+    for (const row of backlogRes.rows) {
+      try {
+        const r = await pullItem('backlog', row.id);
+        out.pulled++;
+        if (r && !r.skipped) out.changedCount++;
+      } catch (err) {
+        out.errors.push({ type: 'backlog', id: row.id, error: err.message });
+      }
+    }
+  } catch (err) {
+    out.errors.push({ type: 'fatal', error: err.message });
+  }
+
+  out.finishedAt = new Date().toISOString();
+  out.durationMs = Date.now() - startedAt.getTime();
+
+  // Persist last-run status so the UI banner + any admin report can surface it.
+  try {
+    await pool.query(
+      `INSERT INTO mcogs_settings (id, data) VALUES (1, $1::jsonb)
+       ON CONFLICT (id) DO UPDATE
+       SET data = COALESCE(mcogs_settings.data, '{}'::jsonb) || $1::jsonb,
+           updated_at = NOW()`,
+      [JSON.stringify({ jira_sync_status: out })]
+    );
+  } catch (err) {
+    console.warn('[jira] failed to persist sync status:', err.message);
+  }
+
+  return out;
+}
+
 module.exports = router;
+module.exports.syncAll = syncAll;

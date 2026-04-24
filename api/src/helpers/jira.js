@@ -30,6 +30,41 @@ const PRIORITY_FROM_JIRA = Object.fromEntries(
 
 const BACKLOG_TYPE_TO_JIRA = { story: 'Story', task: 'Task', epic: 'Epic', improvement: 'Improvement' };
 
+// ── ADF helpers ──────────────────────────────────────────────────────────────
+// Jira v3 renders descriptions + comments as Atlassian Document Format (ADF) —
+// a nested JSON tree. For sync purposes we flatten it back to plain text so
+// it drops cleanly into mcogs_{bugs,backlog}.description.
+
+function adfToText(adf) {
+  if (!adf) return '';
+  if (typeof adf === 'string') return adf;
+  if (!adf.content) return '';
+  const lines = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.type === 'text' && typeof node.text === 'string') {
+      lines.push(node.text);
+      return;
+    }
+    if (node.type === 'hardBreak') { lines.push('\n'); return; }
+    if (node.type === 'paragraph' || node.type === 'heading') {
+      (node.content || []).forEach(walk);
+      lines.push('\n');
+      return;
+    }
+    if (node.type === 'bulletList' || node.type === 'orderedList') {
+      (node.content || []).forEach(item => {
+        lines.push('- ');
+        (item.content || []).forEach(walk);
+      });
+      return;
+    }
+    (node.content || []).forEach(walk);
+  };
+  walk(adf);
+  return lines.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isConfigured() {
@@ -210,6 +245,7 @@ module.exports = {
   tryTransition,
   buildBugFields,
   buildBacklogFields,
+  adfToText,
   // Mappings
   BUG_STATUS_TO_JIRA,
   BUG_STATUS_FROM_JIRA,

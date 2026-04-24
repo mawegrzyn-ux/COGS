@@ -23,6 +23,58 @@ function JiraIcon({ size = 14 }: { size?: number }) {
   )
 }
 
+// ── Jira sync banner ─────────────────────────────────────────────────────────
+// One-line status strip: "Last synced N min ago · M items, X changed ·
+// [Sync now]". Amber background when the last run had errors, green tint
+// otherwise. Hidden by the caller when Jira isn't configured or nothing is
+// linked, so it never shows a useless "never synced" message.
+
+function JiraSyncBanner({ log, syncing, onSyncNow }: {
+  log:     { trigger: 'manual' | 'cron'; finishedAt: string | null; pulled: number; changedCount: number; errors: Array<{ error: string }>; error?: string } | null
+  syncing: boolean
+  onSyncNow: () => void
+}) {
+  // Format relative time. Under a minute → "just now".
+  const fmtRel = (iso: string | null): string => {
+    if (!iso) return 'never'
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000
+    if (diff < 60)    return 'just now'
+    if (diff < 3600)  return `${Math.floor(diff / 60)} min ago`
+    if (diff < 86400) return `${Math.floor(diff / 3600)} h ago`
+    return `${Math.floor(diff / 86400)} d ago`
+  }
+
+  const errorCount = log?.errors?.length ?? 0
+  const hasIssue   = errorCount > 0 || !!log?.error
+  const bg  = hasIssue ? 'bg-amber-50 border-amber-200' : 'bg-accent-dim border-accent/30'
+  const fg  = hasIssue ? 'text-amber-800' : 'text-accent'
+
+  return (
+    <div className={`flex items-center gap-3 px-3 py-2 rounded-lg border text-xs ${bg}`}>
+      <JiraIcon size={14} />
+      <span className={`font-semibold ${fg}`}>Jira sync</span>
+      {log ? (
+        <>
+          <span className="text-text-3">
+            {log.trigger === 'cron' ? 'Auto' : 'Manual'} · last {fmtRel(log.finishedAt)}
+            {' · '}
+            {log.pulled} linked · {log.changedCount} changed
+            {errorCount > 0 && <span className="text-amber-700 font-semibold"> · {errorCount} error{errorCount === 1 ? '' : 's'}</span>}
+          </span>
+          {log.error && <span className="text-amber-700">· {log.error}</span>}
+        </>
+      ) : (
+        <span className="text-text-3">No sync run yet.</span>
+      )}
+      <span className="flex-1" />
+      <span className="text-[10px] text-text-3 hidden sm:inline">Auto-syncs every 15 min</span>
+      <button className="btn-outline text-xs py-1 px-3 flex items-center gap-1" onClick={onSyncNow} disabled={syncing}>
+        {syncing ? 'Syncing…' : 'Sync now'}
+      </button>
+    </div>
+  )
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface Bug {
@@ -52,6 +104,19 @@ interface BacklogItem {
 interface JiraStatus {
   configured: boolean; projectKey: string | null; baseUrl: string | null
   linkedBugs: number; linkedBacklog: number
+}
+
+// Last-run sync metadata returned by GET /jira/sync-status. Mirrors what the
+// syncAll() helper on the server persists to mcogs_settings.data.jira_sync_status.
+interface JiraSyncLog {
+  trigger:       'manual' | 'cron'
+  startedAt:     string
+  finishedAt:    string | null
+  durationMs:    number | null
+  pulled:        number
+  changedCount:  number
+  errors:        Array<{ type: string; id?: number; error: string }>
+  error?:        string
 }
 
 interface EpicSummary {
@@ -277,6 +342,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   // ── Jira state ──────────────────────────────────────────────────────
   const [jiraStatus, setJiraStatus] = useState<JiraStatus | null>(null)
   const [jiraSyncing, setJiraSyncing] = useState<string | null>(null) // e.g. "bug-5" or "bulk"
+  const [jiraSyncLog, setJiraSyncLog] = useState<JiraSyncLog | null>(null)
 
   // ── Load functions ──────────────────────────────────────────────────────
 
@@ -326,6 +392,40 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     } catch { setJiraStatus(null) }
   }, [api])
 
+  // Pull the last cron/manual sync log — drives the "last synced N min ago"
+  // banner. Refreshed on mount + after any manual sync.
+  const loadJiraSyncLog = useCallback(async () => {
+    try {
+      const data = await api.get('/jira/sync-status')
+      setJiraSyncLog(data?.status || null)
+    } catch { setJiraSyncLog(null) }
+  }, [api])
+
+  // Trigger a full pull-sync. Reuses the backend POST /jira/pull/all which
+  // records its outcome to the sync-status blob, so the banner updates the
+  // moment the call returns.
+  const runJiraSyncNow = useCallback(async () => {
+    if (jiraSyncing) return
+    setJiraSyncing('all')
+    try {
+      const r = await api.post('/jira/pull/all')
+      const changed = Number(r?.changedCount || 0)
+      const errs    = Array.isArray(r?.errors) ? r.errors.length : 0
+      setToast({
+        message: errs
+          ? `Synced ${r.pulled} linked items — ${changed} changed, ${errs} error${errs === 1 ? '' : 's'}`
+          : `Synced ${r.pulled} linked items — ${changed} changed`,
+        type: errs ? 'error' : 'success',
+      })
+      await Promise.all([loadJiraSyncLog(), loadBugs(), loadBacklog()])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setJiraSyncing(null)
+    }
+  }, [api, jiraSyncing, loadJiraSyncLog, loadBugs, loadBacklog])
+
   async function jiraPush(type: 'bug' | 'backlog', id: number) {
     const tag = `${type}-${id}`
     setJiraSyncing(tag)
@@ -367,6 +467,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   useEffect(() => { loadBacklog() }, [loadBacklog])
   useEffect(() => { loadEpics() }, [loadEpics])
   useEffect(() => { loadJiraStatus() }, [loadJiraStatus])
+  useEffect(() => { loadJiraSyncLog() }, [loadJiraSyncLog])
   useEffect(() => { if (tab === 'changelog' && !changelog.length) loadChangelog() }, [tab, loadChangelog, changelog.length])
   useEffect(() => { localStorage.setItem('bb_tab', tab) }, [tab])
 
@@ -585,6 +686,18 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
           </button>
         ))}
       </div>
+
+      {/* ── Jira sync banner — shown only when Jira is configured AND at
+             least one item is linked. Reports last-run cron/manual sync and
+             provides a Sync Now button for admins/devs. Background cron runs
+             every 15 min regardless of whether this banner is rendered. */}
+      {isDev && jiraStatus?.configured && (jiraStatus.linkedBugs + jiraStatus.linkedBacklog) > 0 && (
+        <JiraSyncBanner
+          log={jiraSyncLog}
+          syncing={jiraSyncing === 'all'}
+          onSyncNow={runJiraSyncNow}
+        />
+      )}
 
       {/* ═══ BUGS TAB ═══ */}
       {tab === 'bugs' && (
