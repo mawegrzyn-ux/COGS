@@ -82,7 +82,7 @@ async function fetchFull(id, client, lang = null) {
 // ?recipe_id=X        — filter to items whose recipe_id matches
 router.get('/', async (req, res, next) => {
   try {
-    const { country_id, include_inactive, recipe_id, include_prices } = req.query;
+    const { country_id, include_inactive, recipe_id } = req.query;
     const lang = req.language && req.language !== 'en' ? req.language : null;
 
     const params = [];
@@ -162,28 +162,6 @@ router.get('/', async (req, res, next) => {
         row.markets = marketMap[row.id] || [];
       }
 
-      // Attach default-price rows when `include_prices=true` is set. Used by
-      // the Excel grid view on the Sales Items page so the whole price matrix
-      // renders from a single API call instead of N follow-ups. One join +
-      // bucket-by-id, same shape as markets above.
-      if (include_prices === 'true' || include_prices === '1') {
-        const { rows: prices } = await pool.query(
-          `SELECT sip.sales_item_id, sip.price_level_id, sip.sell_price, sip.tax_rate_id,
-                  pl.name AS price_level_name
-           FROM   mcogs_sales_item_prices sip
-           JOIN   mcogs_price_levels pl ON pl.id = sip.price_level_id
-           WHERE  sip.sales_item_id = ANY($1)`,
-          [ids]
-        );
-        const priceMap = {};
-        for (const p of prices) {
-          if (!priceMap[p.sales_item_id]) priceMap[p.sales_item_id] = [];
-          priceMap[p.sales_item_id].push(p);
-        }
-        for (const row of rows) {
-          row.prices = priceMap[row.id] || [];
-        }
-      }
     }
 
     res.json(rows);

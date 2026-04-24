@@ -10,8 +10,6 @@ interface Country    { id: number; name: string }
 interface Recipe     { id: number; name: string; category_name: string | null; yield_unit_abbr?: string | null }
 interface Ingredient { id: number; name: string; base_unit_abbr: string | null }
 interface SalesItemMarket { country_id: number; country_name: string; is_active: boolean }
-interface SalesItemPrice  { price_level_id: number; sell_price: number | string; tax_rate_id?: number | null; price_level_name?: string }
-interface PriceLevel      { id: number; name: string; is_default?: boolean }
 
 interface ModifierOption {
   id: number; modifier_group_id: number; name: string; display_name?: string | null
@@ -63,8 +61,6 @@ interface SalesItem {
   modifier_group_count?: number
   markets?: SalesItemMarket[]
   modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]
-  /** Only populated when the list is fetched with `include_prices=true` (Excel view). */
-  prices?: SalesItemPrice[]
 }
 
 // ── Combo panel edit target ────────────────────────────────────────────────────
@@ -310,7 +306,6 @@ export default function SalesItemsPage() {
   const [combos,         setCombos]         = useState<Combo[]>([])
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([])
   const [countries,      setCountries]      = useState<Country[]>([])
-  const [priceLevels,    setPriceLevels]    = useState<PriceLevel[]>([])
   const [recipes,        setRecipes]        = useState<Recipe[]>([])
   const [ingredients,    setIngredients]    = useState<Ingredient[]>([])
   const [siCategories,   setSiCategories]   = useState<{id: number; name: string}[]>([])
@@ -323,19 +318,13 @@ export default function SalesItemsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      // Excel view needs per-item default-price rows; list view doesn't.
-      // Fetching `include_prices=true` is cheap (one extra join) and keeps
-      // both views backed by a single network round-trip so switching between
-      // them is instant.
-      const wantPrices = viewMode === 'excel' ? '&include_prices=true' : ''
-      const [items, combosData, groups, c, r, i, pl] = await Promise.all([
-        api.get(`/sales-items?include_inactive=true${wantPrices}`),
+      const [items, combosData, groups, c, r, i] = await Promise.all([
+        api.get('/sales-items?include_inactive=true'),
         api.get('/combos'),
         api.get('/modifier-groups'),
         api.get('/countries'),
         api.get('/recipes'),
         api.get('/ingredients'),
-        api.get('/price-levels'),
       ])
       setSalesItems(items || [])
       setCombos(combosData || [])
@@ -343,9 +332,8 @@ export default function SalesItemsPage() {
       setCountries(c || [])
       setRecipes(r || [])
       setIngredients(i || [])
-      setPriceLevels((pl || []).sort((a: PriceLevel, b: PriceLevel) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0)))
     } finally { setLoading(false) }
-  }, [api, viewMode])
+  }, [api])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -382,35 +370,6 @@ export default function SalesItemsPage() {
     } catch (err) {
       setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
       showToast(`Save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
-    } finally {
-      markSaving(itemId, label, false)
-    }
-  }, [api, salesItems, markSaving])
-
-  const savePrice = useCallback(async (itemId: number, priceLevelId: number, raw: string) => {
-    const trimmed = (raw || '').trim()
-    const num = trimmed === '' ? null : Number(trimmed)
-    if (trimmed !== '' && (Number.isNaN(num) || (num as number) < 0)) {
-      showToast('Invalid price'); return
-    }
-    const prev = salesItems.find(s => s.id === itemId)
-    if (!prev) return
-    const label = `price_${priceLevelId}`
-    markSaving(itemId, label, true)
-
-    // Build the full price array (PUT replaces all). Preserve other levels'
-    // values; update or remove this one based on num === null.
-    const existing: SalesItemPrice[] = Array.isArray(prev.prices) ? prev.prices : []
-    const next = existing.filter(p => p.price_level_id !== priceLevelId)
-    if (num !== null) next.push({ price_level_id: priceLevelId, sell_price: num })
-
-    // Optimistic
-    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, prices: next } : s))
-    try {
-      await api.put(`/sales-items/${itemId}/prices`, { prices: next })
-    } catch (err) {
-      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
-      showToast(`Price save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
     } finally {
       markSaving(itemId, label, false)
     }
@@ -1118,12 +1077,10 @@ export default function SalesItemsPage() {
             ) : viewMode === 'excel' ? (
               <ExcelView
                 items={nonComboItems}
-                priceLevels={priceLevels}
                 countries={countries}
                 siCategories={siCategories}
                 savingCells={savingCells}
                 onSaveCore={saveCoreField}
-                onSavePrice={savePrice}
                 onToggleMarket={toggleMarket}
                 onSelect={id => setSelectedSiId(id)}
                 onDelete={si => setDeleting(si)}
@@ -2551,12 +2508,10 @@ export default function SalesItemsPage() {
 
 interface ExcelViewProps {
   items:         SalesItem[]
-  priceLevels:   PriceLevel[]
   countries:     Country[]
   siCategories:  { id: number; name: string }[]
   savingCells:   Set<string>
   onSaveCore:    (itemId: number, patch: Partial<SalesItem>, fieldKey: string) => void | Promise<void>
-  onSavePrice:   (itemId: number, priceLevelId: number, raw: string) => void | Promise<void>
   onToggleMarket:(itemId: number, countryId: number, active: boolean) => void | Promise<void>
   onSelect:      (id: number) => void
   onDelete:      (si: SalesItem) => void
@@ -2564,8 +2519,8 @@ interface ExcelViewProps {
 }
 
 function ExcelView({
-  items, priceLevels, countries, siCategories,
-  savingCells, onSaveCore, onSavePrice, onToggleMarket,
+  items, countries, siCategories,
+  savingCells, onSaveCore, onToggleMarket,
   onSelect, onDelete, selectedSiId,
 }: ExcelViewProps) {
   // Local draft state so the user can type freely before blurring. One map
@@ -2594,19 +2549,6 @@ function ExcelView({
     // `name` doesn't — keep a minimum of 1 char.
     if (field === 'name' && !next.trim()) return
     await onSaveCore(item.id, { [field]: next.trim() } as Partial<SalesItem>, field)
-  }
-
-  const commitPrice = async (item: SalesItem, priceLevelId: number) => {
-    const field = `price_${priceLevelId}`
-    const k     = draftKey(item.id, field)
-    if (!(k in drafts)) return
-    const next  = drafts[k]
-    clearDraft(item.id, field)
-    // No-op if blank + no existing price
-    const current = (item.prices || []).find(p => p.price_level_id === priceLevelId)
-    const currentStr = current ? String(current.sell_price ?? '') : ''
-    if (next.trim() === currentStr.trim()) return
-    await onSavePrice(item.id, priceLevelId, next)
   }
 
   return (
@@ -2638,15 +2580,12 @@ function ExcelView({
                 className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
                 style={{ position: 'sticky', left: 460, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 160, borderRight: '2px solid #9ca3af', borderBottom: '1px solid #d1d5db' }}
               >Category</th>
-              {/* Prices — one column per price level. Muted green header band to
-                  distinguish from the left frozen block. */}
-              {priceLevels.map(pl => (
-                <th key={`pl-h-${pl.id}`}
-                  className="text-right font-semibold text-gray-700 uppercase tracking-wide whitespace-nowrap"
-                  style={{ background: '#dce8dc', padding: '6px 10px', fontSize: 10, minWidth: 90, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
-                >{pl.name}</th>
-              ))}
-              {/* Markets — one column per country. Muted blue header band. */}
+              {/* Markets — one column per country. Muted blue header band.
+                  Prices intentionally omitted: operators set per-item prices
+                  via the Menu Engineer (menu-specific overrides), not on the
+                  catalog itself — the default price layer was confusing
+                  users. See mcogs_menu_sales_item_prices for the canonical
+                  price source. */}
               {countries.map(c => (
                 <th key={`c-h-${c.id}`}
                   className="text-center font-semibold text-gray-700 uppercase tracking-wide whitespace-nowrap"
@@ -2711,28 +2650,6 @@ function ExcelView({
                     </select>
                     {isSaving(item.id, 'category_id') && <SpinnerDot />}
                   </td>
-                  {/* Prices */}
-                  {priceLevels.map(pl => {
-                    const price   = (item.prices || []).find(p => p.price_level_id === pl.id)
-                    const raw     = price ? String(price.sell_price ?? '') : ''
-                    const key     = `price_${pl.id}`
-                    const saving  = isSaving(item.id, key)
-                    return (
-                      <td key={`p-${item.id}-${pl.id}`}
-                          style={{ ...cellBase, background: rowBg, textAlign: 'right' }}
-                          onClick={e => e.stopPropagation()}
-                      >
-                        <CellInput
-                          value={getDraft(item.id, key, raw)}
-                          onChange={v => setDraft(item.id, key, v)}
-                          onCommit={() => commitPrice(item, pl.id)}
-                          saving={saving}
-                          align="right"
-                          placeholder="—"
-                        />
-                      </td>
-                    )
-                  })}
                   {/* Markets */}
                   {countries.map(c => {
                     const mk     = (item.markets || []).find(m => m.country_id === c.id)
