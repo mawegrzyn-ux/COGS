@@ -1382,10 +1382,10 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Purchase Price" required error={quoteErrors.purchase_price}>
-                    <input className="input w-full font-mono" type="number" min="0" step="0.01" value={quoteForm.purchase_price} onChange={e => setQuoteForm(f => ({ ...f, purchase_price: e.target.value }))} placeholder="0.00" />
+                    <CalcInput className="input w-full font-mono" value={quoteForm.purchase_price} onChange={v => setQuoteForm(f => ({ ...f, purchase_price: v }))} placeholder="0.00" />
                   </Field>
                   <Field label={`Qty in ${units.find(u => u.id === Number(form.base_unit_id))?.abbreviation || 'base units'}`} required error={quoteErrors.qty_in_base_units}>
-                    <input className="input w-full font-mono" type="number" min="0.000001" step="0.001" value={quoteForm.qty_in_base_units} onChange={e => setQuoteForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                    <CalcInput className="input w-full font-mono" value={quoteForm.qty_in_base_units} onChange={v => setQuoteForm(f => ({ ...f, qty_in_base_units: v }))} />
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1971,11 +1971,10 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                         </td>
                         <td className="px-4 py-2">
                           <div className="flex items-center gap-1.5">
-                            <input
+                            <CalcInput
                               className="input font-mono text-sm py-1.5 w-20"
-                              type="number" min="0.000001" step="0.000001"
                               value={f.qty_in_base_units}
-                              onChange={e => setMissingField(ing.id, 'qty_in_base_units', e.target.value)}
+                              onChange={v => setMissingField(ing.id, 'qty_in_base_units', v)}
                             />
                             {ing.base_unit_abbr && (
                               <span className="text-xs text-text-3 font-mono whitespace-nowrap">{ing.base_unit_abbr}</span>
@@ -1983,11 +1982,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                           </div>
                         </td>
                         <td className="px-4 py-2">
-                          <input
+                          <CalcInput
                             className="input w-full font-mono text-sm py-1.5"
-                            type="number" min="0" step="0.01" placeholder="0.00"
+                            placeholder="0.00"
                             value={f.purchase_price}
-                            onChange={e => setMissingField(ing.id, 'purchase_price', e.target.value)}
+                            onChange={v => setMissingField(ing.id, 'purchase_price', v)}
                           />
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono">
@@ -2209,11 +2208,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                           <input className="input w-full" value={form.purchase_unit} onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. Case 12×1kg" />
                         </Field>
                         <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol})` : ''}`} required error={errors.purchase_price}>
-                          <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
+                          <CalcInput className="input w-full font-mono" placeholder="0.00" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} />
                         </Field>
                       </div>
                       <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
-                        <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                        <CalcInput className="input w-full font-mono" value={form.qty_in_base_units} onChange={v => setForm(f => ({ ...f, qty_in_base_units: v }))} />
                       </Field>
                     </div>
                     {pricePerBaseUnit && selectedVendor && selectedIngredient && (
@@ -2286,11 +2285,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                 <p className="text-xs text-text-3 mt-1">Free-text label for your reference.</p>
               </Field>
               <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol} ${selectedVendor.currency_code})` : ''}`} required error={errors.purchase_price}>
-                <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
+                <CalcInput className="input w-full font-mono" placeholder="0.00" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} />
               </Field>
             </div>
             <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
-              <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+              <CalcInput className="input w-full font-mono" value={form.qty_in_base_units} onChange={v => setForm(f => ({ ...f, qty_in_base_units: v }))} />
               <p className="text-xs text-text-3 mt-1">Total base units in this purchase. e.g. a case of 12×1kg bags = 12.</p>
             </Field>
           </div>
@@ -2610,14 +2609,11 @@ function NutritionTabContent({ nutForm, setNutForm, nutSearch, nutResults, nutLo
       <div className="grid grid-cols-2 gap-3 mb-4">
         {nutFields.map(f => (
           <Field key={f.key} label={`${f.label} (${f.unit} / 100g)`}>
-            <input
+            <CalcInput
               className="input w-full font-mono"
-              type="number"
-              min="0"
-              step="0.01"
               placeholder="—"
               value={nutForm[f.key] ?? ''}
-              onChange={e => setNutForm({ ...nutForm, [f.key]: e.target.value })}
+              onChange={v => setNutForm({ ...nutForm, [f.key]: v })}
             />
           </Field>
         ))}
