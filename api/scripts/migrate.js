@@ -3528,6 +3528,23 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-24' AND title = 'Jira 2-way sync (broader pull + 15-min cron + Sync banner)'
    )`,
+
+  // ── Step 142: Changelog — BACK-1942 Sales Items Excel view ─────────────────
+  // Idempotent via WHERE NOT EXISTS.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-24', 'Sales Items: Excel grid view with inline editing (BACK-1942)', '[
+     {"type":"added","description":"Excel view mode on the Sales Items page \u2014 dense spreadsheet grid with 4 frozen left columns (Name, Display, Type, Category), one column per price level, one column per country for market toggles, and a trailing actions column. Matches the Menu Engineer Excel aesthetic (12px cell font, #e5e7eb borders, gray/green/blue header bands)."},
+     {"type":"added","description":"View-mode toggle (List | Excel) in the Sales Items toolbar \u2014 persisted per browser (localStorage key sales-items-view-mode). Three-button pattern reused from SharedMenuPage."},
+     {"type":"added","description":"Inline cell editing with auto-save on blur / Enter: Name, Display Name, Category, Default Prices (per level), Market visibility (per country). Optimistic UI updates with rollback on failure + toast. Amber cell background + small ⟳ dot while a PUT is in flight."},
+     {"type":"added","description":"GET /api/sales-items?include_prices=true \u2014 new query param attaches mcogs_sales_item_prices rows to each item in one batched JOIN so the Excel view renders from a single round-trip (no N+1)."},
+     {"type":"added","description":"CSS position:sticky-based frozen columns (Name, Display, Type, Category) that pin during horizontal scroll through price + market columns. Requires borderCollapse:separate to prevent border bleed."},
+     {"type":"added","description":"Row delete action in Excel view. Row duplicate + reorder deliberately deferred to a follow-up ticket; Linked Item + Description + Image inline edits stay in the side panel since they need complex comboboxes / textareas that don\u2019t fit a cell."},
+     {"type":"added","description":"BACK-1942 marked done in production via the internal API."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-24' AND title = 'Sales Items: Excel grid view with inline editing (BACK-1942)'
+   )`,
 ];
 
 async function runMigrations(pool) {

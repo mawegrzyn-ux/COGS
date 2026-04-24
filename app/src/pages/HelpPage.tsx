@@ -666,6 +666,21 @@ export default function HelpPage() {
           </tbody>
         </table>
 
+        <H3 id="si-excel-view">List vs Excel view</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The toolbar has a <strong>List | Excel</strong> view-mode toggle next to the search box.
+          List mode is the dense table you already know. <strong>Excel mode</strong> renders the whole
+          catalogue as a spreadsheet grid with frozen Name / Display / Type / Category columns on the
+          left, one column per price level, and one column per market (country) with a checkbox.
+          Click any cell to edit; changes save on blur or Enter with a small amber <span className="inline-block w-2 h-2 rounded-full bg-amber-400 align-middle" /> spinner while the
+          save is in flight. Best when you need to tweak prices or market visibility across many items at
+          once without opening the side panel each time. Your view preference is remembered per browser.
+        </p>
+        <InfoBox type="info">
+          Excel view is read-only for Type, Linked Item, Description, and Image — those need the
+          complex side-panel controls. Everything else is editable inline.
+        </InfoBox>
+
         <H3 id="si-edit-panel">Editing a Sales Item — Three-Tab Panel</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           Click any row in the Items list to open the right-side edit panel. The panel has three tabs:
