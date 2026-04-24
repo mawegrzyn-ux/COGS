@@ -7,6 +7,22 @@
   40%           { transform: scale(1.25); opacity: 1; }
 }
 
+/* ── Kitchen Mode — bigger type + chunkier tap targets for greasy fingers ──── */
+.kitchen-mode { font-size: 17px; }
+.kitchen-mode body,
+.kitchen-mode .input,
+.kitchen-mode textarea,
+.kitchen-mode select { font-size: 17px; }
+.kitchen-mode .btn-primary,
+.kitchen-mode .btn-outline,
+.kitchen-mode .btn-ghost,
+.kitchen-mode .btn-danger { min-height: 44px; padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.kitchen-mode .input { min-height: 44px; }
+.kitchen-mode h1 { font-size: 1.75rem; }
+.kitchen-mode h2 { font-size: 1.375rem; }
+.kitchen-mode .text-xs { font-size: 0.8125rem; }
+.kitchen-mode .text-sm { font-size: 0.9375rem; }
+
 /* ── Mapbox widget — align with design tokens ──────────────────────────────── */
 .mapbox-widget .mapboxgl-popup-content {
   background: var(--surface);

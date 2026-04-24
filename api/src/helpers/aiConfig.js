@@ -24,6 +24,7 @@ const _keys = {
   JIRA_API_TOKEN:       null,
   JIRA_PROJECT_KEY:     null,
   MAPBOX_ACCESS_TOKEN:  null,
+  OPENAI_API_KEY:       null,
 };
 
 // One-time migration: pre-feature, AI keys lived in mcogs_settings.data->ai_keys
@@ -132,6 +133,7 @@ function status() {
     jira_token_set:       !!_keys.JIRA_API_TOKEN,
     jira_project_set:     !!_keys.JIRA_PROJECT_KEY,
     mapbox_token_set:     !!_keys.MAPBOX_ACCESS_TOKEN,
+    openai_key_set:       !!_keys.OPENAI_API_KEY,
   };
 }
 

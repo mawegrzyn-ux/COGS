@@ -38,6 +38,11 @@ const AI_KEY_NAMES = [
   // production domain + localhost in the Mapbox dashboard so a leak is a
   // non-issue. Stored here alongside other keys for consistent admin UX.
   'MAPBOX_ACCESS_TOKEN',
+  // OpenAI API key — used only by the /api/ai-transcribe route (Whisper)
+  // for Safari/iOS voice input where browser SpeechRecognition is missing.
+  // Optional: if absent, Chromium users still get voice via the native
+  // SpeechRecognition API and Safari users see "Voice unavailable".
+  'OPENAI_API_KEY',
 ];
 
 // ── DB connection ────────────────────────────────────────────────────────────

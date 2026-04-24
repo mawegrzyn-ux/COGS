@@ -142,6 +142,7 @@ router.use('/import',             ...can('import', 'read'),      write('import')
 // calls enforce write permission via the RBAC system prompt + confirmation rules.
 router.use('/ai-chat',            ...can('ai_chat', 'read'),                          require('./ai-chat').router);
 router.use('/ai-upload',          ...can('ai_chat', 'read'),                          require('./ai-upload'));
+router.use('/ai-transcribe',      ...can('ai_chat', 'read'),                          require('./ai-transcribe'));
 router.use('/ai-config',          ...can('settings', 'read'),    write('settings'),   require('./ai-config'));
 
 // ── DB Config (admin-only — switch between local and standalone PostgreSQL) ───

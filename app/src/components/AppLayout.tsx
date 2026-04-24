@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import AiChat, { type PepperMode } from './AiChat'
+import { useIsMobile, useKeyboardInset } from '../hooks/useIsMobile'
 import MediaLibrary from './MediaLibrary'
 import MarketSwitcher from './MarketSwitcher'
 
@@ -173,7 +174,14 @@ function PepperContextMenu({
 // ── AppLayout ──────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
+  const isMobile      = useIsMobile()
+  const keyboardInset = useKeyboardInset()
+
   const [ctxMenu,         setCtxMenu]         = useState<ContextMenuState | null>(null)
+  // Mobile forces 'docked-bottom' which we then render as a full-viewport
+  // sheet — left/right docks make no sense on a 5-inch screen. The stored
+  // preference is preserved so desktop users keep their chosen dock mode
+  // when they go back to desktop.
   const [pepperMode,      setPepperMode]      = useState<PepperMode>(() => {
     const stored = localStorage.getItem('pepper-mode')
     // Migrate old 'float' to 'docked-right'
@@ -379,8 +387,23 @@ export default function AppLayout() {
     mounted. Only CSS properties (order, width/height, display) change — no unmount.
   */
 
-  // Pepper wrapper position depends on mode
-  const pepperWrapperStyle: React.CSSProperties = isBottom
+  // Pepper wrapper position depends on mode.
+  // On mobile (< sm breakpoint) we render Pepper as a full-viewport fixed
+  // overlay regardless of the user's stored dock mode — phones are too
+  // narrow for a side-docked panel. The sheet rides up above the sidebar /
+  // main content with z-50. `keyboardInset` keeps the chat input above
+  // the on-screen keyboard via visualViewport.
+  const pepperWrapperStyle: React.CSSProperties = isMobile
+    ? (showPepper
+        ? {
+            position:    'fixed',
+            inset:       0,
+            bottom:      keyboardInset,
+            zIndex:      50,
+            background:  'var(--surface)',
+          }
+        : { display: 'none' })
+    : isBottom
     ? {
         order:       2,       // after main inside the column
         height:      showPepper ? panelHeight : 0,
@@ -395,10 +418,10 @@ export default function AppLayout() {
 
   const pepperWrapperClass = [
     'relative flex-shrink-0 print:hidden',
-    showPepper && pepperMode === 'docked-left'  ? 'border-r' : '',
-    showPepper && pepperMode === 'docked-right' ? 'border-l' : '',
-    showPepper && isBottom                      ? 'border-t' : '',
-    !showPepper                                 ? 'overflow-hidden' : '',
+    !isMobile && showPepper && pepperMode === 'docked-left'  ? 'border-r' : '',
+    !isMobile && showPepper && pepperMode === 'docked-right' ? 'border-l' : '',
+    !isMobile && showPepper && isBottom                      ? 'border-t' : '',
+    !showPepper                                              ? 'overflow-hidden' : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -433,10 +456,12 @@ export default function AppLayout() {
             onModeChange={handleModeChange}
             pepperOpen={pepperOpen}
             onToggle={pepperToggle}
+            isMobile={isMobile}
           />
 
-          {/* Resize handle — right edge (docked-left) */}
-          {pepperMode === 'docked-left' && showPepper && (
+          {/* Resize handles — desktop only. On mobile the sheet is full-viewport
+              so there's nothing to resize. */}
+          {!isMobile && pepperMode === 'docked-left' && showPepper && (
             <div
               onMouseDown={startPanelResize}
               className="absolute top-0 right-0 h-full z-20 flex items-center justify-center group"
@@ -449,7 +474,7 @@ export default function AppLayout() {
           )}
 
           {/* Resize handle — left edge (docked-right) */}
-          {pepperMode === 'docked-right' && showPepper && (
+          {!isMobile && pepperMode === 'docked-right' && showPepper && (
             <div
               onMouseDown={startPanelResize}
               className="absolute top-0 left-0 h-full z-20 flex items-center justify-center group"
@@ -462,7 +487,7 @@ export default function AppLayout() {
           )}
 
           {/* Resize handle — top edge (docked-bottom) */}
-          {isBottom && showPepper && (
+          {!isMobile && isBottom && showPepper && (
             <div
               onMouseDown={startBottomResize}
               className="absolute top-0 left-0 w-full z-20 flex justify-center items-center group"

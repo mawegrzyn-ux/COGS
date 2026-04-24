@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, RefObject } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import { useVoiceInput } from '../hooks/useVoiceInput'
+import { useVoiceOutput } from '../hooks/useVoiceOutput'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -320,6 +322,7 @@ interface ChatPanelProps {
   input: string
   inputRef: RefObject<HTMLTextAreaElement>
   fileInputRef: RefObject<HTMLInputElement>
+  cameraInputRef: RefObject<HTMLInputElement>
   bottomRef: RefObject<HTMLDivElement>
   onInputChange: (val: string) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
@@ -327,17 +330,33 @@ interface ChatPanelProps {
   onSend: () => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onFilePickerClick: () => void
+  onCameraClick: () => void
   onRemoveFile: () => void
   onScreenshot: () => void
   canSend: boolean
+  /** Mobile-specific polish: bigger tap targets, larger font. */
+  isMobile: boolean
+  /** Push-to-talk voice input. */
+  voiceAvailable: boolean
+  voiceRecording: boolean
+  onVoiceStart:   () => void
+  onVoiceStop:    () => void
 }
 
 function ChatPanel({
   messages, streaming, toolLabel, attachedFile, attachedFilePreview, input,
-  inputRef, fileInputRef, bottomRef,
-  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onRemoveFile, onScreenshot,
-  canSend,
+  inputRef, fileInputRef, cameraInputRef, bottomRef,
+  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onCameraClick, onRemoveFile, onScreenshot,
+  canSend, isMobile,
+  voiceAvailable, voiceRecording, onVoiceStart, onVoiceStop,
 }: ChatPanelProps) {
+  // Mobile gets bigger tap targets (44px ≈ iOS HIG min) and larger font so
+  // the chat is usable with greasy kitchen fingers without zooming in.
+  const iconBtn    = isMobile ? 'w-11 h-11' : 'w-7 h-7'
+  const sendBtn    = isMobile ? 'w-12 h-12' : 'w-8 h-8'
+  const textareaCls = isMobile
+    ? 'flex-1 resize-none bg-transparent text-base outline-none leading-relaxed'
+    : 'flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed'
   return (
     <>
       {/* Messages */}
@@ -442,37 +461,72 @@ function ChatPanel({
         <div className="flex items-end gap-2 rounded-lg px-3 py-2"
           style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
           <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={onFileChange} />
+          {/* Dedicated camera input — `capture="environment"` asks the native
+              camera app on iOS / Android rather than the file picker. On
+              desktop it falls back to the file picker automatically. */}
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onFileChange} />
           {/* Attach file */}
           <button onClick={onFilePickerClick} disabled={streaming}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
+            className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70`}
             style={{ color: 'var(--text-3)' }} title="Attach file" aria-label="Attach file">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
             </svg>
           </button>
-          {/* Screenshot page */}
-          <button onClick={onScreenshot} disabled={streaming}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
-            style={{ color: 'var(--text-3)' }} title="Attach screenshot of current page" aria-label="Screenshot page">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {/* Camera — snap a receipt / invoice on mobile. On desktop the
+              same click hits a file picker (camera capture is ignored). */}
+          <button onClick={onCameraClick} disabled={streaming}
+            className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70`}
+            style={{ color: 'var(--text-3)' }} title="Take a photo" aria-label="Take a photo">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
               <circle cx="12" cy="13" r="4"/>
             </svg>
           </button>
+          {/* Voice — push-to-talk. Hidden entirely if no voice backend. */}
+          {voiceAvailable && (
+            <button
+              onPointerDown={e => { e.preventDefault(); onVoiceStart() }}
+              onPointerUp={e => { e.preventDefault(); onVoiceStop() }}
+              onPointerLeave={() => { if (voiceRecording) onVoiceStop() }}
+              disabled={streaming}
+              className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-colors disabled:opacity-40 ${voiceRecording ? 'bg-red-100' : 'hover:opacity-70'}`}
+              style={{ color: voiceRecording ? '#DC2626' : 'var(--text-3)', touchAction: 'none' }}
+              title="Press and hold to talk"
+              aria-label="Voice input (push and hold)"
+              aria-pressed={voiceRecording}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3" fill={voiceRecording ? 'currentColor' : 'none'}/>
+                <path d="M5 10v2a7 7 0 0 0 14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+              </svg>
+            </button>
+          )}
+          {/* Screenshot page — desktop only; redundant next to camera on phone. */}
+          {!isMobile && (
+            <button onClick={onScreenshot} disabled={streaming}
+              className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70`}
+              style={{ color: 'var(--text-3)' }} title="Attach screenshot of current page" aria-label="Screenshot page">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 3v4H5m14 4h-4V7m0 10h4v-4M5 17h4v4"/>
+              </svg>
+            </button>
+          )}
           <textarea
             ref={inputRef}
             value={input}
             onChange={e => onInputChange(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={attachedFile ? 'Add a message… (optional)' : 'Ask anything… (Enter to send)'}
+            placeholder={attachedFile ? 'Add a message… (optional)' : (voiceRecording ? 'Listening…' : 'Ask anything… (Enter to send)')}
             disabled={streaming}
             rows={1}
-            className="flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed"
+            className={textareaCls}
             style={{ color: 'var(--text-1)', maxHeight: '120px', overflowY: 'auto' }}
           />
           <button onClick={onSend} disabled={!canSend}
-            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40"
+            className={`flex-shrink-0 ${sendBtn} rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40`}
             style={{ background: 'var(--accent)', color: '#fff' }} aria-label="Send">
             {streaming
               ? <span className="flex items-center gap-0.5">
@@ -495,9 +549,10 @@ function ChatPanel({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen, onToggle }: {
+export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen, onToggle, isMobile = false }: {
   mode?: PepperMode; onModeChange?: (m: PepperMode) => void
   pepperOpen?: boolean; onToggle?: () => void
+  isMobile?: boolean
 }) {
   const { user, getAccessTokenSilently } = useAuth0()
 
@@ -524,10 +579,42 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
   const [sessionsLoad,       setSessionsLoad]       = useState(false)
   const [myUsage,            setMyUsage]            = useState<MyUsage | null>(null)
 
-  const bottomRef    = useRef<HTMLDivElement>(null)
-  const inputRef     = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const wasStreaming = useRef(false)
+  const bottomRef      = useRef<HTMLDivElement>(null)
+  const inputRef       = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef   = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const wasStreaming   = useRef(false)
+
+  // ── Voice input (push-to-talk) ────────────────────────────────────────────
+  // Stash the user's pre-voice input so a short hold doesn't wipe what they
+  // were typing — we append the transcript instead.
+  const preVoiceInputRef = useRef('')
+  const voice = useVoiceInput({
+    lang: 'en-GB',
+    apiBase: API_BASE,
+    authHeader,
+    onTranscript: (text) => {
+      if (!text) return
+      const base = preVoiceInputRef.current
+      setInput(base ? `${base} ${text}` : text)
+    },
+    onError: (_err) => { /* swallow — mic permission denial is user-visible */ },
+  })
+
+  // ── Voice output (sentence-buffered TTS) ──────────────────────────────────
+  const tts = useVoiceOutput({ lang: 'en-GB' })
+
+  // ── Kitchen mode — applies a body class that scales up fonts + tap targets
+  //    across the whole app for greasy-fingers use. Persisted across sessions. */
+  const [kitchenMode, setKitchenMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('pepper-kitchen-mode') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('pepper-kitchen-mode', kitchenMode ? '1' : '0') } catch { /* ignore */ }
+    if (typeof document !== 'undefined') {
+      document.body.classList.toggle('kitchen-mode', kitchenMode)
+    }
+  }, [kitchenMode])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -709,6 +796,9 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
                 msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: msgs[msgs.length - 1].content + event.text }
                 return msgs
               })
+              // Feed sentence-buffered TTS so voice output tracks the stream
+              // in real time. Hook is a no-op when toggle is off.
+              tts.feed(event.text)
             }
             if (event.type === 'tool') {
               setToolLabel(event.name)
@@ -759,10 +849,13 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
         return msgs
       })
     } finally {
+      // Flush any partial sentence buffered by the TTS hook so nothing is
+      // left unspoken when the response ends without a trailing full stop.
+      tts.flush()
       setStreaming(false)
       setToolLabel(null)
     }
-  }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user])
+  }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user, tts, authHeader])
 
   const send        = useCallback(() => sendCore(),          [sendCore])
 
@@ -787,6 +880,21 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
   const handleFilePickerClick = useCallback(() => {
     fileInputRef.current?.click()
   }, [])
+
+  // Dedicated camera trigger — on mobile this opens the native camera app
+  // (via the `capture="environment"` hint on the hidden input); on desktop
+  // it falls back to a file picker.
+  const handleCameraClick = useCallback(() => {
+    cameraInputRef.current?.click()
+  }, [])
+
+  // Push-to-talk: stash whatever's currently in the input so the transcript
+  // appends rather than overwrites, then start the chosen voice backend.
+  const handleVoiceStart = useCallback(() => {
+    preVoiceInputRef.current = input
+    voice.start()
+  }, [voice, input])
+  const handleVoiceStop = useCallback(() => { voice.stop() }, [voice])
 
   const handleRemoveFile = useCallback(() => setAttachedFile(null), [])
 
@@ -881,33 +989,69 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
           </div>
         </div>
       <div className="flex items-center gap-1">
-        {/* Dock-mode toggles */}
-        <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
-          {/* Dock left */}
-          <button onClick={() => onModeChange?.('docked-left')} title="Dock to left"
-            className={`p-1.5 transition-colors ${mode === 'docked-left' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="1" y="1" width="5" height="14" rx="1" opacity="1"/>
-              <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+        {/* Dock-mode toggles — hidden on mobile (full-viewport sheet only) */}
+        {!isMobile && (
+          <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
+            {/* Dock left */}
+            <button onClick={() => onModeChange?.('docked-left')} title="Dock to left"
+              className={`p-1.5 transition-colors ${mode === 'docked-left' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1" y="1" width="5" height="14" rx="1" opacity="1"/>
+                <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+            {/* Dock right */}
+            <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
+              className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
+                <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+            {/* Dock bottom */}
+            <button onClick={() => onModeChange?.('docked-bottom')} title="Dock to bottom"
+              className={`p-1.5 transition-colors ${mode === 'docked-bottom' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1" y="10" width="14" height="5" rx="1" opacity="1"/>
+                <rect x="1" y="1" width="14" height="8" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+          </div>
+        )}
+        {/* TTS toggle — only shown when the browser supports speechSynthesis */}
+        {tts.available && (
+          <button onClick={tts.toggle}
+            className={`p-1.5 rounded transition-colors ${tts.enabled ? 'bg-white/30' : 'hover:bg-white/20'}`}
+            title={tts.enabled ? 'Voice output on — click to mute' : 'Voice output off — click to enable'}
+            aria-label="Toggle voice output"
+            aria-pressed={tts.enabled}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              {tts.enabled ? (
+                <>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </>
+              ) : (
+                <line x1="23" y1="9" x2="17" y2="15"/>
+              )}
             </svg>
           </button>
-          {/* Dock right */}
-          <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
-            className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
-              <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
-            </svg>
-          </button>
-          {/* Dock bottom */}
-          <button onClick={() => onModeChange?.('docked-bottom')} title="Dock to bottom"
-            className={`p-1.5 transition-colors ${mode === 'docked-bottom' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="1" y="10" width="14" height="5" rx="1" opacity="1"/>
-              <rect x="1" y="1" width="14" height="8" rx="1" opacity="0.4"/>
-            </svg>
-          </button>
-        </div>
+        )}
+        {/* Kitchen mode toggle — bigger type, higher contrast across the app */}
+        <button onClick={() => setKitchenMode(v => !v)}
+          className={`p-1.5 rounded transition-colors ${kitchenMode ? 'bg-white/30' : 'hover:bg-white/20'}`}
+          title={kitchenMode ? 'Kitchen mode on — click to switch back' : 'Kitchen mode off — click for bigger type and tap targets'}
+          aria-label="Toggle kitchen mode"
+          aria-pressed={kitchenMode}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 13V4a2 2 0 1 1 4 0v9"/>
+            <path d="M8 13v8"/>
+            <path d="M17 3l-1 10h3l-1 8"/>
+          </svg>
+        </button>
         {/* History button */}
         <button onClick={view === 'history' ? () => setView('chat') : openHistory}
           className="p-1.5 rounded hover:bg-white/20 transition-colors"
@@ -976,10 +1120,17 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
         <ChatPanel
           messages={messages} streaming={streaming} toolLabel={toolLabel}
           attachedFile={attachedFile} attachedFilePreview={attachedFilePreview}
-          input={input} inputRef={inputRef} fileInputRef={fileInputRef} bottomRef={bottomRef}
+          input={input} inputRef={inputRef}
+          fileInputRef={fileInputRef} cameraInputRef={cameraInputRef} bottomRef={bottomRef}
           onInputChange={setInput} onKeyDown={handleKey} onPaste={handlePaste}
           onSend={send} onFileChange={handleFileChange} onFilePickerClick={handleFilePickerClick}
+          onCameraClick={handleCameraClick}
           onRemoveFile={handleRemoveFile} onScreenshot={handleScreenshot} canSend={canSend}
+          isMobile={isMobile}
+          voiceAvailable={voice.available}
+          voiceRecording={voice.recording}
+          onVoiceStart={handleVoiceStart}
+          onVoiceStop={handleVoiceStop}
         />
       )}
     </div>

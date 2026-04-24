@@ -1367,6 +1367,7 @@ interface AiKeyStatus {
   jira_token_set:      boolean
   jira_project_set:    boolean
   mapbox_token_set:    boolean
+  openai_key_set:      boolean
 }
 
 interface UsageSummary {
@@ -2267,7 +2268,7 @@ function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false, mapbox_token_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false, mapbox_token_set: false, openai_key_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
@@ -2280,6 +2281,7 @@ function AiTab() {
   const [jiraTesting,  setJiraTesting]  = useState(false)
   const [jiraTestResult, setJiraTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [mapboxToken,  setMapboxToken]  = useState('')
+  const [openaiKey,    setOpenaiKey]    = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
@@ -2358,6 +2360,7 @@ function AiTab() {
     if (jiraToken.trim())  payload.JIRA_API_TOKEN       = jiraToken.trim()
     if (jiraProject.trim()) payload.JIRA_PROJECT_KEY    = jiraProject.trim().toUpperCase()
     if (mapboxToken.trim()) payload.MAPBOX_ACCESS_TOKEN = mapboxToken.trim()
+    if (openaiKey.trim())   payload.OPENAI_API_KEY      = openaiKey.trim()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -2377,7 +2380,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY' | 'MAPBOX_ACCESS_TOKEN') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY' | 'MAPBOX_ACCESS_TOKEN' | 'OPENAI_API_KEY') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -2646,11 +2649,39 @@ function AiTab() {
         </Field>
       </div>
 
+      {/* ── OpenAI — voice transcription fallback ───────────────────────────── */}
+      <div className="card p-5 mt-5">
+        <h3 className="text-base font-bold text-text-1 mb-2 flex items-center gap-2">
+          <span>🎙️</span> OpenAI Whisper (voice transcription)
+        </h3>
+        <p className="text-xs text-text-3 mb-3">
+          Optional. Only used when Pepper's mic button is pressed <em>on Safari or iOS</em> where the browser's built-in SpeechRecognition isn't available. Chromium-based browsers (Chrome, Edge, Samsung Internet) transcribe for free on-device and never hit this endpoint. Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">platform.openai.com</a>. Whisper is billed per minute of audio — light restaurant use typically costs a few $ / month.
+        </p>
+        <Field label="OpenAI API key">
+          <input
+            type="password"
+            className="input w-full"
+            value={openaiKey}
+            onChange={e => setOpenaiKey(e.target.value)}
+            placeholder={status.openai_key_set ? '••••••••  (leave blank to keep existing)' : 'sk-…'}
+            autoComplete="off"
+          />
+          <div className="text-[10px] text-text-3 mt-0.5 flex items-center gap-2">
+            {status.openai_key_set
+              ? <span className="text-green-600">✓ Configured — Safari / iOS voice input works</span>
+              : <span>Not set — Safari / iOS users see "Voice unavailable"; Chromium users still work</span>}
+            {status.openai_key_set && (
+              <button onClick={() => handleClear('OPENAI_API_KEY')} className="text-red-500 hover:underline">Clear</button>
+            )}
+          </div>
+        </Field>
+      </div>
+
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim() && !mapboxToken.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim() && !mapboxToken.trim() && !openaiKey.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>
