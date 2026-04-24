@@ -1053,9 +1053,22 @@ export default function SalesItemsPage() {
       {activeTab === 'items' && (
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 overflow-auto p-5">
-            <div className="flex gap-2 mb-4 items-center">
-              <input className="input input-sm w-64" placeholder="Search by name or category…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} />
-              <select className="input py-1 text-xs" value={typeFilter} onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}>
+            {/* Constrained-width filters on the left, pushed-right meta/actions.
+                `ml-auto` on the items count creates the gap; a fixed-width
+                select stops the native dropdown from stretching to fill and
+                squashing the view-toggle into a single-letter "E…" badge. */}
+            <div className="flex flex-wrap gap-2 mb-4 items-center">
+              <input
+                className="input input-sm w-64 flex-shrink-0"
+                placeholder="Search by name or category…"
+                value={itemSearch}
+                onChange={e => setItemSearch(e.target.value)}
+              />
+              <select
+                className="input py-1 text-xs w-36 flex-shrink-0"
+                value={typeFilter}
+                onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}
+              >
                 <option value="">All Types</option>
                 <option value="recipe">Recipe</option>
                 <option value="ingredient">Ingredient</option>
@@ -1063,16 +1076,18 @@ export default function SalesItemsPage() {
                 <option value="manual">Manual</option>
               </select>
               {bulkSelected.size > 0 && (
-                <button className="text-xs text-text-3 hover:text-text-1 transition-colors ml-1"
+                <button className="text-xs text-text-3 hover:text-text-1 transition-colors flex-shrink-0"
                   onClick={() => setBulkSelected(new Set())}>
                   Clear {bulkSelected.size} selected
                 </button>
               )}
-              <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
+              <span className="text-xs text-gray-400 self-center ml-auto whitespace-nowrap flex-shrink-0">
+                {nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}
+              </span>
               {/* View-mode toggle — same three-button pattern as the Menu
                   Engineer Excel view on SharedMenuPage, minus the Grid option
                   (card-tiles wouldn't add anything over the existing list). */}
-              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden ml-2" role="group" aria-label="View mode">
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden flex-shrink-0" role="group" aria-label="View mode">
                 <button
                   onClick={() => setViewMode('list')}
                   className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === 'list' ? 'bg-accent-dim text-accent' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
