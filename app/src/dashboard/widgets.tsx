@@ -1,9 +1,11 @@
-import { useMemo, useState, useEffect, useCallback, createContext, useContext, ReactElement, ReactNode, lazy, Suspense } from 'react'
+import { useMemo, useState, useEffect, useCallback, useRef, createContext, useContext, ReactElement, ReactNode, lazy, Suspense } from 'react'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { useApi } from '../hooks/useApi'
 import { Modal, Field, Toast } from '../components/ui'
 import { WidgetId } from './types'
+import { usePermissions, Feature } from '../hooks/usePermissions'
+import { useFeatureFlags, FeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Widget-label context ──────────────────────────────────────────────────────
 // Lets a user's custom label (set via the Customise panel) override the
@@ -39,6 +41,21 @@ export function WidgetPopoutProvider({ children }: { children: ReactNode }) {
 
 export function useIsWidgetPopout(): boolean {
   return useContext(WidgetPopoutContext)
+}
+
+// ── Widget-editing context ────────────────────────────────────────────────────
+// True when the parent dashboard is in "Customise" edit mode. Widgets that
+// support their own inline editing (reordering internal items, sizing a
+// sub-grid, adding/removing links, etc.) opt in by reading this — when false
+// they render in read-only view mode.
+const WidgetEditingContext = createContext<boolean>(false)
+
+export function WidgetEditingProvider({ editing, children }: { editing: boolean; children: ReactNode }) {
+  return <WidgetEditingContext.Provider value={editing}>{children}</WidgetEditingContext.Provider>
+}
+
+export function useIsWidgetEditing(): boolean {
+  return useContext(WidgetEditingContext)
 }
 
 // Lazy-load the map widget so react-simple-maps + d3-geo only load when used
@@ -381,36 +398,362 @@ function RecentQuotes() {
   )
 }
 
-// ── Quick links ────────────────────────────────────────────────────────────────
+// ── Quick Links widget ────────────────────────────────────────────────────────
+// User-customisable shortcut grid. Each link has its own 12-col width and
+// row-span, RBAC/feature-flag gating, and can be reordered via drag-drop in
+// dashboard edit mode. Config persists to localStorage per-user (per-browser).
+
+type QLSize   = 'sm' | 'md' | 'lg' | 'xl'     // ¼ / ½ / ¾ / full inside the widget's 12-col grid
+type QLHeight = 1 | 2 | 3                      // row-span tracks
+
+interface QuickLink {
+  /** Stable id used for DnD + dedupe + add-menu filtering. */
+  id:       string
+  label:    string
+  href:     string
+  /** Key into ICON_MAP; storing a string (not a ReactElement) keeps the config JSON-serialisable. */
+  icon:     string
+  /** RBAC feature — hide tile if the user has no `read` access. */
+  feature?: Feature
+  /** Global feature-flag key — hide tile if flag is off. */
+  flag?:    keyof FeatureFlags
+  size:     QLSize
+  rowSpan:  QLHeight
+}
+
+const QL_SIZE_CLASS: Record<QLSize, string> = {
+  sm: 'col-span-3',
+  md: 'col-span-6',
+  lg: 'col-span-9',
+  xl: 'col-span-12',
+}
+const QL_ROW_CLASS: Record<QLHeight, string> = {
+  1: 'row-span-1',
+  2: 'row-span-2',
+  3: 'row-span-3',
+}
+
+// Catalog = every link the user can choose from via the "+ Add link" menu.
+// Order here also becomes the default Quick Links layout (shipped on first
+// load / after a Reset).
+const QL_CATALOG: QuickLink[] = [
+  { id: 'dashboard',  label: 'Dashboard',   href: '/dashboard',     icon: 'dashboard', feature: 'dashboard',      size: 'sm', rowSpan: 1 },
+  { id: 'inventory',  label: 'Inventory',   href: '/inventory',     icon: 'inventory', feature: 'inventory',      size: 'sm', rowSpan: 1 },
+  { id: 'recipes',    label: 'Recipes',     href: '/recipes',       icon: 'recipes',   feature: 'recipes',        size: 'sm', rowSpan: 1 },
+  { id: 'sales',      label: 'Sales Items', href: '/sales-items',   icon: 'sales',     feature: 'menus',          size: 'sm', rowSpan: 1 },
+  { id: 'menus',      label: 'Menus',       href: '/menus',         icon: 'menus',     feature: 'menus',          size: 'sm', rowSpan: 1 },
+  { id: 'stock',      label: 'Stock',       href: '/stock-manager', icon: 'stock',     feature: 'stock_overview', flag: 'stock_manager', size: 'sm', rowSpan: 1 },
+  { id: 'allergens',  label: 'Allergens',   href: '/allergens',     icon: 'allergen',  feature: 'allergens',      flag: 'allergens',     size: 'sm', rowSpan: 1 },
+  { id: 'haccp',      label: 'HACCP',       href: '/haccp',         icon: 'haccp',     feature: 'haccp',          flag: 'haccp',         size: 'sm', rowSpan: 1 },
+  { id: 'audits',     label: 'Audits',      href: '/audits',        icon: 'audits',    feature: 'audits',         flag: 'audits',        size: 'sm', rowSpan: 1 },
+  { id: 'media',      label: 'Media',       href: '/media',         icon: 'media',                                                       size: 'sm', rowSpan: 1 },
+  { id: 'config',     label: 'Config',      href: '/configuration', icon: 'config',    feature: 'settings',                              size: 'sm', rowSpan: 1 },
+  { id: 'system',     label: 'System',      href: '/system',        icon: 'system',                                                      size: 'sm', rowSpan: 1 },
+  { id: 'help',       label: 'Help',        href: '/help',          icon: 'help',                                                        size: 'sm', rowSpan: 1 },
+]
+
+// Default layout — the 8 links the widget shipped with originally.
+const QL_DEFAULT_IDS = ['inventory', 'recipes', 'menus', 'sales', 'stock', 'haccp', 'allergens', 'config']
+const QL_DEFAULT: QuickLink[] = QL_DEFAULT_IDS
+  .map(id => QL_CATALOG.find(l => l.id === id))
+  .filter((l): l is QuickLink => !!l)
+
+const QL_STORAGE_KEY = 'cogs-quick-links-v1'
+
+function loadQuickLinksConfig(): QuickLink[] {
+  try {
+    const raw = localStorage.getItem(QL_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as QuickLink[]
+      if (Array.isArray(parsed)) {
+        // Re-hydrate against the catalog so any renamed/moved route picks up
+        // the fresh href + RBAC flags without users having to reset manually.
+        const byId = new Map(QL_CATALOG.map(c => [c.id, c]))
+        return parsed.map(saved => {
+          const cat = byId.get(saved.id)
+          return cat
+            ? { ...cat, size: saved.size, rowSpan: saved.rowSpan }
+            : saved
+        })
+      }
+    }
+  } catch { /* fall through to default */ }
+  return QL_DEFAULT
+}
+
+function saveQuickLinksConfig(links: QuickLink[]) {
+  try { localStorage.setItem(QL_STORAGE_KEY, JSON.stringify(links)) } catch { /* storage full — not fatal */ }
+}
 
 function QuickLinks() {
-  const links: { label: string; href: string; icon: ReactElement }[] = [
-    { label: 'Inventory',   href: '/inventory',     icon: <IconInventory /> },
-    { label: 'Recipes',     href: '/recipes',       icon: <IconRecipe /> },
-    { label: 'Menus',       href: '/menus',         icon: <IconMenu /> },
-    { label: 'Sales Items', href: '/sales-items',   icon: <IconSales /> },
-    { label: 'Stock',       href: '/stock-manager', icon: <IconStock /> },
-    { label: 'HACCP',       href: '/haccp',         icon: <IconHaccp /> },
-    { label: 'Allergens',   href: '/allergens',     icon: <IconAllergen /> },
-    { label: 'Config',      href: '/configuration', icon: <IconConfig /> },
-  ]
+  const editing  = useIsWidgetEditing()
+  const { can }  = usePermissions()
+  const { flags, loading: flagsLoading } = useFeatureFlags()
+  const [links,  setLinks]  = useState<QuickLink[]>(() => loadQuickLinksConfig())
+  const [addOpen, setAddOpen] = useState(false)
+
+  // Persist any change to localStorage.
+  useEffect(() => { saveQuickLinksConfig(links) }, [links])
+
+  // Edit-mode DnD state — whole tile is draggable.
+  const dragId  = useRef<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  // RBAC + feature-flag gating. In edit mode we show everything so the owner
+  // can still rearrange tiles they'd be hidden from at view time (without edit
+  // mode the whole tile would disappear mid-drag, which would feel broken).
+  // Flag-gated tiles are also hidden during the flags-loading window so
+  // there's no flash for disabled modules (matches Sidebar behaviour).
+  const visibleLinks = editing ? links : links.filter(l => {
+    if (l.feature && !can(l.feature, 'read')) return false
+    if (l.flag && (flagsLoading || !flags[l.flag])) return false
+    return true
+  })
+
+  // Link id → catalog entry for the Add-link dropdown.
+  const available = useMemo(
+    () => QL_CATALOG.filter(c => !links.some(l => l.id === c.id)),
+    [links]
+  )
+
+  function moveLink(fromId: string, toId: string) {
+    if (fromId === toId) return
+    setLinks(prev => {
+      const fromIdx = prev.findIndex(l => l.id === fromId)
+      const toIdx   = prev.findIndex(l => l.id === toId)
+      if (fromIdx < 0 || toIdx < 0) return prev
+      const next = [...prev]
+      const [item] = next.splice(fromIdx, 1)
+      const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx
+      next.splice(adjustedTo, 0, item)
+      return next
+    })
+  }
+
+  function removeLink(id: string) {
+    setLinks(prev => prev.filter(l => l.id !== id))
+  }
+
+  function addLink(id: string) {
+    const cat = QL_CATALOG.find(c => c.id === id)
+    if (!cat) return
+    setLinks(prev => prev.some(l => l.id === id) ? prev : [...prev, { ...cat }])
+    setAddOpen(false)
+  }
+
+  function resizeLink(id: string, patch: Partial<Pick<QuickLink, 'size' | 'rowSpan'>>) {
+    setLinks(prev => prev.map(l => l.id === id ? { ...l, ...patch } : l))
+  }
+
+  function resetToDefault() {
+    if (!confirm('Reset Quick Links to the default layout?')) return
+    setLinks(QL_DEFAULT)
+  }
+
   return (
-    <div className="card p-5 h-full">
-      <SectionHeader title="Quick Links" />
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {links.map(l => (
-          <a key={l.label} href={l.href}
-            className="flex flex-col items-center gap-1.5 py-3 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center text-xs font-medium text-text-2 hover:text-accent group">
-            <span className="w-8 h-8 rounded-lg bg-surface-2 group-hover:bg-accent/15 flex items-center justify-center text-text-2 group-hover:text-accent transition-colors">
-              {l.icon}
-            </span>
-            <span>{l.label}</span>
-          </a>
-        ))}
+    <div className="card p-5 h-full flex flex-col">
+      <div className="flex items-center justify-between mb-3">
+        <SectionHeader title="Quick Links" />
+        {editing && (
+          <div className="flex items-center gap-2 text-xs">
+            <div className="relative">
+              <button
+                onClick={() => setAddOpen(o => !o)}
+                disabled={available.length === 0}
+                className="btn-outline py-1 px-2 text-xs disabled:opacity-40"
+                title={available.length === 0 ? 'All catalog links already added' : 'Add a link'}
+              >
+                + Add link
+              </button>
+              {addOpen && available.length > 0 && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setAddOpen(false)} />
+                  <div className="absolute top-full right-0 mt-1 w-56 bg-surface border border-border rounded-lg shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
+                    {available.map(c => (
+                      <button
+                        key={c.id}
+                        onClick={() => addLink(c.id)}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-2 text-left text-xs text-text-2"
+                      >
+                        <span className="w-5 h-5 rounded bg-surface-2 flex items-center justify-center text-text-2">
+                          <QuickLinkIcon name={c.icon} />
+                        </span>
+                        <span className="flex-1 font-medium text-text-1">{c.label}</span>
+                        <span className="text-text-3">{c.href}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <button onClick={resetToDefault} className="text-text-3 hover:text-text-1 px-2 py-1 rounded hover:bg-surface-2" title="Reset to defaults">
+              ↺
+            </button>
+          </div>
+        )}
       </div>
+
+      {visibleLinks.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-xs text-text-3 italic">
+          {editing ? 'No links — use "+ Add link" above.' : 'No shortcuts configured.'}
+        </div>
+      ) : (
+        <div
+          className="grid grid-cols-12 gap-2 flex-1"
+          style={{ gridAutoRows: 'minmax(72px, auto)', gridAutoFlow: 'row dense' }}
+        >
+          {visibleLinks.map(link => {
+            const isDragging  = dragId.current === link.id
+            const isDropOver  = dragOverId === link.id && dragId.current && dragId.current !== link.id
+            const sizeCls     = QL_SIZE_CLASS[link.size] + ' ' + QL_ROW_CLASS[link.rowSpan]
+            const tileClasses = `relative ${sizeCls} ${editing ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-40' : ''} ${isDropOver ? 'ring-2 ring-accent rounded-xl' : ''}`
+
+            const tileInner = (
+              <>
+                <span className="w-8 h-8 rounded-lg bg-surface-2 group-hover:bg-accent/15 flex items-center justify-center text-text-2 group-hover:text-accent transition-colors shrink-0">
+                  <QuickLinkIcon name={link.icon} />
+                </span>
+                <span className="truncate">{link.label}</span>
+              </>
+            )
+
+            return (
+              <div
+                key={link.id}
+                className={tileClasses}
+                draggable={editing}
+                onDragStart={e => {
+                  if (!editing) return
+                  dragId.current = link.id
+                  e.dataTransfer.effectAllowed = 'move'
+                  try { e.dataTransfer.setData('text/plain', link.id) } catch { /* ignore */ }
+                }}
+                onDragOver={e => {
+                  if (!editing || !dragId.current || dragId.current === link.id) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  if (dragOverId !== link.id) setDragOverId(link.id)
+                }}
+                onDragLeave={() => { if (dragOverId === link.id) setDragOverId(null) }}
+                onDrop={e => {
+                  if (!editing || !dragId.current) return
+                  e.preventDefault()
+                  moveLink(dragId.current, link.id)
+                  dragId.current = null
+                  setDragOverId(null)
+                }}
+                onDragEnd={() => { dragId.current = null; setDragOverId(null) }}
+              >
+                {editing ? (
+                  // Edit mode: render a non-navigating tile with controls overlay.
+                  <div className="h-full flex flex-col items-center justify-center gap-1.5 py-2 px-2 rounded-xl border border-dashed border-accent/50 bg-accent-dim/30 text-center text-xs font-medium text-text-2 group">
+                    {tileInner}
+                    <div className="absolute top-1 left-1 flex items-center gap-0.5">
+                      <select
+                        value={link.size}
+                        onChange={e => resizeLink(link.id, { size: e.target.value as QLSize })}
+                        className="text-[10px] border border-border rounded px-0.5 py-0 bg-surface text-text-2"
+                        title="Width"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <option value="sm">¼</option>
+                        <option value="md">½</option>
+                        <option value="lg">¾</option>
+                        <option value="xl">1</option>
+                      </select>
+                      <select
+                        value={link.rowSpan}
+                        onChange={e => resizeLink(link.id, { rowSpan: Number(e.target.value) as QLHeight })}
+                        className="text-[10px] border border-border rounded px-0.5 py-0 bg-surface text-text-2"
+                        title="Height"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <option value={1}>1h</option>
+                        <option value={2}>2h</option>
+                        <option value={3}>3h</option>
+                      </select>
+                    </div>
+                    <button
+                      onClick={() => removeLink(link.id)}
+                      className="absolute top-1 right-1 w-5 h-5 rounded hover:bg-red-100 text-red-500 text-xs"
+                      title="Remove link"
+                    >✕</button>
+                  </div>
+                ) : (
+                  <a
+                    href={link.href}
+                    className="h-full flex flex-col items-center justify-center gap-1.5 py-2 px-2 rounded-xl border border-border hover:border-accent/40 hover:bg-accent-dim transition-all text-center text-xs font-medium text-text-2 hover:text-accent group"
+                  >
+                    {tileInner}
+                  </a>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
+
+// Resolves an icon key from the stored config to a React element.
+function QuickLinkIcon({ name }: { name: string }) {
+  const C = QL_ICON_MAP[name]
+  return C ? <C /> : <IconConfig /> // fallback to a generic cog if key renamed
+}
+
+// Icon dictionary — string keys so they survive JSON serialisation of the config.
+const QL_ICON_MAP: Record<string, () => ReactElement> = {
+  inventory: IconInventory,
+  recipes:   IconRecipe,
+  menus:     IconMenu,
+  sales:     IconSales,
+  stock:     IconStock,
+  haccp:     IconHaccp,
+  allergen:  IconAllergen,
+  config:    IconConfig,
+  dashboard: IconDashboardQL,
+  audits:    IconAudits,
+  media:     IconMedia,
+  help:      IconHelp,
+  system:    IconSystem,
+}
+
+function IconDashboardQL() { return (
+  <svg {...iconProps}>
+    <rect x="3" y="3"   width="7" height="9" rx="1"/>
+    <rect x="14" y="3"  width="7" height="5" rx="1"/>
+    <rect x="14" y="12" width="7" height="9" rx="1"/>
+    <rect x="3" y="16"  width="7" height="5" rx="1"/>
+  </svg>
+)}
+function IconAudits() { return (
+  <svg {...iconProps}>
+    <path d="M9 11l3 3 5-5"/>
+    <path d="M21 12c0 5-3.5 9-9 9s-9-4-9-9 3.5-9 9-9 9 4 9 9z"/>
+  </svg>
+)}
+function IconMedia() { return (
+  <svg {...iconProps}>
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <circle cx="8.5" cy="8.5" r="1.5"/>
+    <path d="M21 15l-5-5L5 21"/>
+  </svg>
+)}
+function IconHelp() { return (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="10"/>
+    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+    <line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+)}
+function IconSystem() { return (
+  <svg {...iconProps}>
+    <rect x="2" y="4" width="20" height="12" rx="2"/>
+    <line x1="8"  y1="20" x2="16" y2="20"/>
+    <line x1="12" y1="16" x2="12" y2="20"/>
+  </svg>
+)}
 
 // ── Quick-link icons ─────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { PepperHelpButton } from '../components/ui'
 import { useDashboardData, DashboardDataProvider } from '../dashboard/DashboardData'
-import { WIDGET_COMPONENTS, WidgetLabelProvider } from '../dashboard/widgets'
+import { WIDGET_COMPONENTS, WidgetLabelProvider, WidgetEditingProvider } from '../dashboard/widgets'
 import { TEMPLATES, WIDGET_REGISTRY, getTemplate, DEFAULT_TEMPLATE_ID } from '../dashboard/templates'
 import {
   DashboardConfig, SlotConfig, WidgetId, WidgetSize, WidgetHeight, sizeSpan, heightSpan,
@@ -146,9 +146,11 @@ function WidgetShell({
         {/* The widget renders its own card with its own title. When the user
             has set a custom label, WidgetLabelProvider injects it so the
             widget's internal label is REPLACED (not duplicated). */}
-        <WidgetLabelProvider label={slot.customLabel}>
-          <Component />
-        </WidgetLabelProvider>
+        <WidgetEditingProvider editing={editing}>
+          <WidgetLabelProvider label={slot.customLabel}>
+            <Component />
+          </WidgetLabelProvider>
+        </WidgetEditingProvider>
 
         {/* Pop-out button — fades in on widget hover (Tailwind group-hover
             from the outer div). Hidden in edit mode because the toolbar

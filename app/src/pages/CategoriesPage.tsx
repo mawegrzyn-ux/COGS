@@ -77,6 +77,10 @@ function CategoryManager() {
   const [editingGroupId, setEditingGroupId] = useState<number | ''>('')
   const [inlineSaving,   setInlineSaving]   = useState(false)
 
+  // Scope filter — narrows the right-panel list by scope flag within the
+  // currently-selected group. 'all' = no filter; others are mutually exclusive.
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'ingredients' | 'recipes' | 'sales'>('all')
+
   // Confirm deletes
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<CategoryGroup | null>(null)
   const [confirmDeleteCat,   setConfirmDeleteCat]   = useState<Category | null>(null)
@@ -134,10 +138,26 @@ function CategoryManager() {
   )
 
   const visibleCats = useMemo(() => {
-    if (selectedGroupId === 'ungrouped') return ungroupedCats
-    if (selectedGroupId === null) return []
-    return categories.filter(c => c.group_id === selectedGroupId)
-  }, [categories, selectedGroupId, ungroupedCats])
+    let list: Category[]
+    if (selectedGroupId === 'ungrouped') list = ungroupedCats
+    else if (selectedGroupId === null) list = []
+    else list = categories.filter(c => c.group_id === selectedGroupId)
+
+    if (scopeFilter !== 'all') {
+      list = list.filter(c =>
+        scopeFilter === 'ingredients' ? c.for_ingredients :
+        scopeFilter === 'recipes'     ? c.for_recipes :
+                                         c.for_sales_items
+      )
+    }
+
+    // Always sort by (sort_order ASC, id ASC). Without this, optimistic
+    // reorder updates change sort_order in state but the UI keeps the old
+    // array order (initial fetch order), so drags appear to do nothing.
+    return [...list].sort((a, b) =>
+      a.sort_order - b.sort_order || a.id - b.id
+    )
+  }, [categories, selectedGroupId, ungroupedCats, scopeFilter])
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ message, type })
@@ -508,8 +528,8 @@ function CategoryManager() {
 
       {/* ── Right panel: Categories ──────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-surface shrink-0">
-          <div>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-surface shrink-0 gap-4">
+          <div className="min-w-0">
             <span className="text-sm font-bold text-text-1">
               {selectedGroupId === 'ungrouped'
                 ? 'No Group'
@@ -521,12 +541,38 @@ function CategoryManager() {
               Toggle pills to set scope. <strong>Drag rows</strong> to reorder within this group, or drop onto a group on the left to move.
             </p>
           </div>
-          <button
-            className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5"
-            onClick={() => openCatModal()}
-          >
-            <PlusIcon size={12} /> Add Category
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Scope filter chips */}
+            <div className="flex items-center gap-1">
+              {([
+                { k: 'all',         label: 'All' },
+                { k: 'ingredients', label: 'Inventory' },
+                { k: 'recipes',     label: 'Recipes' },
+                { k: 'sales',       label: 'Sales' },
+              ] as const).map(({ k, label }) => {
+                const on = scopeFilter === k
+                return (
+                  <button
+                    key={k}
+                    onClick={() => setScopeFilter(k)}
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors
+                      ${on
+                        ? 'bg-accent text-white border-accent'
+                        : 'bg-surface-2 text-text-3 border-border hover:text-text-1'}`}
+                    title={k === 'all' ? 'Show all categories' : `Show only categories scoped to ${label}`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5"
+              onClick={() => openCatModal()}
+            >
+              <PlusIcon size={12} /> Add Category
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
