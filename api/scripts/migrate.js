@@ -3601,18 +3601,48 @@ const migrations = [
      'story', 'medium', 'todo', '["inventory","ui"]'::jsonb, 1962)
    ON CONFLICT (key) DO NOTHING`,
 
+  // ── Step 147: Bugs (resolved this session) ────────────────────────────────
+  `INSERT INTO mcogs_bugs (key, summary, description, priority, severity, status, labels, page, resolution) VALUES
+    ('BUG-1026', 'Sub-recipe yield unit displayed as generic "portion"',
+     'When a sub-recipe is added as an ingredient in a parent recipe, the unit shown next to the qty was the hardcoded word "portion" / "portions" instead of the sub-recipe''s actual yield_unit_text. e.g. a "Blue Cheese Dip Batch" with yield_unit_text="50ml portion" still rendered as "1 portion" in the parent recipe.',
+     'medium', 'minor', 'resolved', '["recipes","ui"]'::jsonb, 'Recipes',
+     'Backend GET /recipes/:id queries (global + 3 variations) now select COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit (joining mcogs_units via sr.yield_unit_id). Frontend RecipeItem interface gained sub_recipe_yield_unit; ingredient table + comparison view fall back through prep_unit → base_unit_abbr → sub_recipe_yield_unit → "portion".')
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 148: Backlog (done this session) ─────────────────────────────────
+  `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+    ('BACK-1963', 'Dashboard widget: Unquoted Ingredients in Recipes (with optional menu filter)',
+     'New dashboard widget "recipe-unquoted-ingredients" that lists ingredients used in at least one recipe but without any active price quote. Different from the existing "missing-quotes" widget which lists *all* unquoted ingredients (including orphaned catalog rows that no recipe references). Backed by a new endpoint GET /api/ingredients/unquoted-in-recipes?menu_id=<id> — optional menu filter narrows the list to ingredients used by recipes that the menu serves (via mcogs_menu_sales_items → mcogs_sales_items.recipe_id). Combo recipes within sales items are not traversed in v1. Empty state shows a "Full coverage" badge. Each row shows ingredient name, category, recipe count + names (when ≤3), and base unit. Registered in types.ts + templates.ts; defaultSize=md, allowedSizes=md/lg/xl, marketScoped=false, defaultRowSpan=2.',
+     'story', 'medium', 'done', '["dashboard","widgets","reporting"]'::jsonb, 1963),
+    ('BACK-1964', 'Recipe duplicate (full clone)',
+     'New POST /api/recipes/:id/duplicate endpoint clones a recipe end-to-end in a single transaction: recipe row (name overridden, everything else preserved — category_id, description, yield_qty, yield_unit_id, yield_unit_text, image_url, translations); global items; every market variation + its items; every PL variation + its items; every market+PL variation + its items. Sort order preserved. Audit log entry tagged source="duplicate" with source_recipe_id. Frontend gets a "Duplicate" button (Copy icon, btn-outline) next to Delete in the recipe header. App modal pre-fills the new name with "<original> (Copy)"; Enter to confirm, Esc/Cancel to dismiss; "Duplicating…" while in flight; on success the new row appears in the alphabetically-sorted left list and the detail panel auto-loads it.',
+     'story', 'high', 'done', '["recipes","productivity"]'::jsonb, 1964)
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 149: Changelog — recipe duplicate + new widget + sub-recipe unit ─
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-25', 'Recipe duplicate + Unquoted-in-Recipes widget + sub-recipe yield unit', '[
+     {"type":"added","description":"Recipe duplicate (BACK-1964). New POST /api/recipes/:id/duplicate clones a recipe end-to-end in a single transaction — recipe row + global items + every market / PL / market+PL variation with its items (sort_order preserved, translations carried). Frontend Duplicate button (Copy icon, btn-outline) next to Delete in the recipe header. App modal pre-fills the name with “<original> (Copy)”; Enter to confirm, Esc/Cancel to dismiss. On success the new recipe loads in the detail panel and the left list re-sorts."},
+     {"type":"added","description":"Dashboard widget: Unquoted Ingredients in Recipes (BACK-1963). Lists ingredients that appear in at least one recipe but have no active price quote — differs from the existing Missing Price Quotes widget by ignoring orphaned catalog rows. Optional menu filter narrows to recipes used by a specific menu (via mcogs_menu_sales_items → sales_items.recipe_id). Backed by GET /api/ingredients/unquoted-in-recipes?menu_id=<id>. Add via dashboard customise mode → + Add widget."},
+     {"type":"fixed","description":"BUG-1026: sub-recipe yield unit not displayed. When a sub-recipe was added as an ingredient in a parent recipe, the unit shown was the hardcoded word “portion” instead of the sub-recipe''s actual yield_unit_text. Backend GET /recipes/:id queries (global + 3 variations) now select COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit; frontend falls back through prep_unit → base_unit_abbr → sub_recipe_yield_unit → “portion”. A “Blue Cheese Dip Batch” sub-recipe with yield_unit_text=“50ml portion” now correctly displays “50ml portion” in the parent recipe ingredients list."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-25' AND title = 'Recipe duplicate + Unquoted-in-Recipes widget + sub-recipe yield unit'
+   )`,
+
   // ── Step 146: Changelog — recipe redesign + global switchers + hotfixes ───
   // Idempotent via WHERE NOT EXISTS.
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-04-25', 'Recipe detail redesign + global Display Currency / Language top bar', '[
      {"type":"changed","description":"Recipe detail page redesigned (BACK-1953). Header now has an image thumbnail, inline-edit name + yield qty + yield unit, CategoryPicker, and a delete button — the standalone Edit button is gone. Notes section moved out of the header into its own inline-editable card after Linked Sales Items. Market + Price Level + Currency selectors moved from above the KPI tiles down to a slim toolbar just above the Ingredients table, where the Create / Copy-to-Global / Delete Variation buttons live too."},
      {"type":"changed","description":"Variant mode is now auto-derived from the Market + Price Level selection (BACK-1955). Removed the redundant 🌍 Market / 💰 PL / 🌍💰 Market+PL toggle buttons; the combination of selectors fully determines which variant is active. activeItems now falls back specific → market → PL → global so the displayed list matches the pill (no more “shows global ingredients but pill says Market Variation” divergence)."},
-     {"type":"added","description":"Global Display Currency switcher (BACK-1954) in the top bar — banknote icon, label \"Show prices in\". New CurrencyContext exposes the user-selected currency code; RecipesPage and MenusPage Menu Engineer consume it via useCurrency() and the local Display Currency dropdowns are gone. LanguageSwitcher moved from Sidebar footer to the top bar. All three top-bar switchers (Market / Show prices in / Language) now have explicit labels."},
+     {"type":"added","description":"Global Display Currency switcher (BACK-1954) in the top bar — banknote icon, label “Show prices in”. New CurrencyContext exposes the user-selected currency code; RecipesPage and MenusPage Menu Engineer consume it via useCurrency() and the local Display Currency dropdowns are gone. LanguageSwitcher moved from Sidebar footer to the top bar. All three top-bar switchers (Market / Show prices in / Language) now have explicit labels."},
      {"type":"added","description":"Copy Ingredients modal (BACK-1956) — pick a source recipe, then a specific variant (Global / Market / PL / Market+PL) with item counts, Copy N items into the active variant on the target recipe. Alt+I keyboard shortcut opens Add Ingredient when a recipe is selected and no other modal is open."},
      {"type":"added","description":"CreateVariationModal (BACK-1957) replaces the old window.confirm + window.prompt dialogs. Radio rows show available copy sources with item counts; defaults to the first available source so blank input never silently creates an empty variation."},
      {"type":"added","description":"Inline-editable Quantity column (BACK-1958) on the recipe ingredients table — CalcInput supports math expressions (4000/8 → 500). Display capped at 3 decimal places via fmtQty() with trailing-zero stripping; phantom-PUT guard treats sub-millisecond differences as no-op so opening + blurring an unchanged cell does not silently truncate stored precision."},
      {"type":"added","description":"CategoryPicker allowCreate prop (BACK-1959). Default true; recipe header passes false to suppress the + New button (creating a category from a recipe header is overkill)."},
-     {"type":"changed","description":"Variant pill text clarified: \"🌍💰 United Kingdom · Delivery\" → \"✦ Variation: United Kingdom · Delivery\". Global pill now reads \"🌍 Global recipe\"."},
+     {"type":"changed","description":"Variant pill text clarified: “🌍💰 United Kingdom · Delivery” → “✦ Variation: United Kingdom · Delivery”. Global pill now reads “🌍 Global recipe”."},
      {"type":"fixed","description":"BUG-1024: MediaLibrary modal rendered behind the recipe image modal. Bumped the library portal to z-[10000] so it stacks above any other ui.tsx Modal."},
      {"type":"fixed","description":"BUG-1025: image upload looked broken because GET /api/recipes/:id was not selecting r.image_url, so loadDetail() re-read the field as undefined after a successful PUT. SELECT now includes image_url."},
      {"type":"changed","description":"EOS protocol step 2 (BACK-1960) — retrospective sweep. Each fix or feature shipped during a session must be matched against the bug + backlog tables; if not present, seed it with terminal status so the audit trail is complete. Pending hand-off tasks get seeded in non-terminal status so nothing falls off the board."}
