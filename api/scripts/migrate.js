@@ -3651,6 +3651,24 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-25' AND title = 'Recipe detail redesign + global Display Currency / Language top bar'
    )`,
+
+  // ── Step 150: BACK-1962 done — Inventory grid default + sticky headers ────
+  // BACK-1962 was seeded as 'todo' in step 145; now shipped, flip to done.
+  // Idempotent — only updates if still in a non-terminal state.
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-1962' AND status <> 'done'`,
+
+  // ── Step 151: Changelog — Inventory grid default + sticky headers ─────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-25', 'Inventory: grid view default + sticky table headers (BACK-1962)', '[
+     {"type":"changed","description":"Inventory Ingredients and Price Quotes tabs now default to grid view (was list). Choice persists per browser via localStorage keys inventory-ingredients-view and inventory-quotes-view, so returning users see whichever view they last picked."},
+     {"type":"added","description":"Sticky column headers across Inventory tabs — DataGrid HeaderCell, ColumnHeader, and the standalone list-view tables (missing-quotes view, ingredient list view, quotes list view) all gained position:sticky, top:0 with bg-surface-2 / bg-gray-200. Headers stay pinned at the top during long vertical scrolls instead of disappearing off-screen."},
+     {"type":"changed","description":"BACK-1962 marked done."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-25' AND title = 'Inventory: grid view default + sticky table headers (BACK-1962)'
+   )`,
 ];
 
 async function runMigrations(pool) {

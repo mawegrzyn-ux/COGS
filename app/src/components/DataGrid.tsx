@@ -375,6 +375,10 @@ function HeaderCell<T extends Record<string, any>>({
     <th
       className={[
         'px-0 py-0 text-xs font-semibold uppercase tracking-wide text-text-2 whitespace-nowrap select-none',
+        // Sticky header — sticks to top of the parent scroll container so column
+        // names stay visible during long scrolls. Background must be on the th
+        // (not just thead) for reliable cross-browser sticky rendering.
+        'sticky top-0 z-10 bg-surface-2',
         col.align === 'right' ? 'text-right' : 'text-left',
       ].join(' ')}
       style={col.minWidth ? { minWidth: col.minWidth } : undefined}
@@ -876,7 +880,7 @@ export function DataGrid<T extends Record<string, any>>({
                   onFilter={handleFilter}
                 />
               ))}
-              {showActions && <th className="w-20" />}
+              {showActions && <th className="w-20 sticky top-0 z-10 bg-surface-2" />}
             </tr>
           </thead>
           <tbody>

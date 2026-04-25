@@ -570,7 +570,15 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
   const [dbCategories, setDbCategories] = useState<{id: number; name: string}[]>([])
   const [loading,      setLoading]      = useState(true)
   const [search,       setSearch]       = useState('')
-  const [gridMode,     setGridMode]     = useState(false)
+  // Default to grid view — denser, easier to scan. Persisted per-browser so the
+  // user's last choice sticks across reloads.
+  const [gridMode,     setGridMode]     = useState<boolean>(() => {
+    const v = localStorage.getItem('inventory-ingredients-view')
+    return v === null ? true : v === 'grid'
+  })
+  useEffect(() => {
+    localStorage.setItem('inventory-ingredients-view', gridMode ? 'grid' : 'list')
+  }, [gridMode])
   const [modal,        setModal]        = useState<Ingredient | 'new' | null>(null)
   const [confirmDelete,setConfirmDelete]= useState<Ingredient | null>(null)
   const [toast,        setToast]        = useState<ToastState | null>(null)
@@ -1091,9 +1099,9 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
                       <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                       <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
                       <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-3">Allergens</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-3 sticky top-0 z-10 bg-surface-2">Allergens</th>
                       <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                      <th className="w-20" />
+                      <th className="w-20 sticky top-0 z-10 bg-surface-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -1542,7 +1550,14 @@ function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOp
   const [countries,     setCountries]    = useState<Country[]>([])
   const [loading,          setLoading]         = useState(true)
   const [search,           setSearch]          = useState('')
-  const [gridMode,         setGridMode]        = useState(false)
+  // Default to grid view (same as Ingredients tab) and persist the choice.
+  const [gridMode,         setGridMode]        = useState<boolean>(() => {
+    const v = localStorage.getItem('inventory-quotes-view')
+    return v === null ? true : v === 'grid'
+  })
+  useEffect(() => {
+    localStorage.setItem('inventory-quotes-view', gridMode ? 'grid' : 'list')
+  }, [gridMode])
   const [modal,            setModal]           = useState<Quote | 'new' | null>(null)
   const [confirmDelete,    setConfirmDelete]   = useState<Quote | null>(null)
   const [toast,            setToast]           = useState<ToastState | null>(null)
@@ -2006,15 +2021,15 @@ function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOp
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-200 border-b border-gray-300">
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Ingredient</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Category</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Base Unit</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Vendor</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Purchase Unit</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-36">Conv. to Base</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28">Price</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide">Per Base Unit</th>
-                    <th className="w-20" />
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Ingredient</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Category</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Base Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Vendor</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Purchase Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-36 sticky top-0 z-10 bg-gray-200">Conv. to Base</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28 sticky top-0 z-10 bg-gray-200">Price</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Per Base Unit</th>
+                    <th className="w-20 sticky top-0 z-10 bg-gray-200" />
                   </tr>
                 </thead>
                 <tbody>
@@ -2169,7 +2184,7 @@ function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOp
                       <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                       <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions}    filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
                       <ColumnHeader<Quote> label="Preferred"     field="is_preferred"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={preferredFilterOptions}  filterValues={getFilter('is_preferred')} onFilter={v => setFilter('is_preferred', v)} />
-                      <th className="w-16" />
+                      <th className="w-16 sticky top-0 z-10 bg-surface-2" />
                     </tr>
                   </thead>
                   <tbody>
