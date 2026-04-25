@@ -68,11 +68,13 @@ router.get('/:id', async (req, res) => {
              i.default_prep_unit,
              ub.abbreviation                  AS base_unit_abbr,
              ${srName}                        AS sub_recipe_name,
-             sr.yield_qty                     AS sub_recipe_yield_qty
+             sr.yield_qty                     AS sub_recipe_yield_qty,
+             COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit
       FROM   mcogs_recipe_items ri
       LEFT JOIN mcogs_ingredients i  ON i.id  = ri.ingredient_id
       LEFT JOIN mcogs_units ub       ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr     ON sr.id = ri.recipe_item_id
+      LEFT JOIN mcogs_units su       ON su.id = sr.yield_unit_id
       WHERE  ri.recipe_id = $1 AND ri.variation_id IS NULL AND ri.pl_variation_id IS NULL AND ri.market_pl_variation_id IS NULL
       ORDER BY COALESCE(ri.sort_order, ri.id) ASC, ri.id ASC
     `, lang ? [req.params.id, lang] : [req.params.id]);
@@ -98,13 +100,15 @@ router.get('/:id', async (req, res) => {
              i.default_prep_unit,
              ub.abbreviation AS base_unit_abbr,
              sr.name         AS sub_recipe_name,
-             sr.yield_qty    AS sub_recipe_yield_qty
+             sr.yield_qty    AS sub_recipe_yield_qty,
+             COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit
       FROM   mcogs_recipe_variations rv
       JOIN   mcogs_countries c ON c.id = rv.country_id
       LEFT JOIN mcogs_recipe_items ri ON ri.variation_id = rv.id
       LEFT JOIN mcogs_ingredients i   ON i.id  = ri.ingredient_id
       LEFT JOIN mcogs_units ub        ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr      ON sr.id = ri.recipe_item_id
+      LEFT JOIN mcogs_units su        ON su.id = sr.yield_unit_id
       WHERE  rv.recipe_id = $1
       ORDER BY rv.id ASC, COALESCE(ri.sort_order, ri.id) ASC NULLS LAST, ri.id ASC NULLS LAST
     `, [req.params.id]);
@@ -134,6 +138,7 @@ router.get('/:id', async (req, res) => {
           base_unit_abbr:          row.base_unit_abbr,
           sub_recipe_name:         row.sub_recipe_name,
           sub_recipe_yield_qty:    row.sub_recipe_yield_qty,
+          sub_recipe_yield_unit:   row.sub_recipe_yield_unit,
           waste_pct:               row.waste_pct,
           default_prep_unit:       row.default_prep_unit,
         });
@@ -163,13 +168,15 @@ router.get('/:id', async (req, res) => {
              i.default_prep_unit,
              ub.abbreviation AS base_unit_abbr,
              sr.name         AS sub_recipe_name,
-             sr.yield_qty    AS sub_recipe_yield_qty
+             sr.yield_qty    AS sub_recipe_yield_qty,
+             COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit
       FROM   mcogs_recipe_pl_variations plv
       JOIN   mcogs_price_levels pl ON pl.id = plv.price_level_id
       LEFT JOIN mcogs_recipe_items ri ON ri.pl_variation_id = plv.id
       LEFT JOIN mcogs_ingredients i   ON i.id  = ri.ingredient_id
       LEFT JOIN mcogs_units ub        ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr      ON sr.id = ri.recipe_item_id
+      LEFT JOIN mcogs_units su        ON su.id = sr.yield_unit_id
       WHERE  plv.recipe_id = $1
       ORDER BY plv.id ASC, COALESCE(ri.sort_order, ri.id) ASC NULLS LAST, ri.id ASC NULLS LAST
     `, [req.params.id]);
@@ -199,6 +206,7 @@ router.get('/:id', async (req, res) => {
           base_unit_abbr:          row.base_unit_abbr,
           sub_recipe_name:         row.sub_recipe_name,
           sub_recipe_yield_qty:    row.sub_recipe_yield_qty,
+          sub_recipe_yield_unit:   row.sub_recipe_yield_unit,
           waste_pct:               row.waste_pct,
           default_prep_unit:       row.default_prep_unit,
         });
@@ -229,7 +237,8 @@ router.get('/:id', async (req, res) => {
              i.default_prep_unit,
              ub.abbreviation  AS base_unit_abbr,
              sr.name          AS sub_recipe_name,
-             sr.yield_qty     AS sub_recipe_yield_qty
+             sr.yield_qty     AS sub_recipe_yield_qty,
+             COALESCE(sr.yield_unit_text, su.abbreviation) AS sub_recipe_yield_unit
       FROM   mcogs_recipe_market_pl_variations mplv
       JOIN   mcogs_countries    c  ON c.id  = mplv.country_id
       JOIN   mcogs_price_levels pl ON pl.id = mplv.price_level_id
@@ -237,6 +246,7 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN mcogs_ingredients i   ON i.id  = ri.ingredient_id
       LEFT JOIN mcogs_units ub        ON ub.id = i.base_unit_id
       LEFT JOIN mcogs_recipes sr      ON sr.id = ri.recipe_item_id
+      LEFT JOIN mcogs_units su        ON su.id = sr.yield_unit_id
       WHERE  mplv.recipe_id = $1
       ORDER BY mplv.id ASC, COALESCE(ri.sort_order, ri.id) ASC NULLS LAST, ri.id ASC NULLS LAST
     `, [req.params.id]);
@@ -267,6 +277,7 @@ router.get('/:id', async (req, res) => {
           base_unit_abbr:          row.base_unit_abbr,
           sub_recipe_name:         row.sub_recipe_name,
           sub_recipe_yield_qty:    row.sub_recipe_yield_qty,
+          sub_recipe_yield_unit:   row.sub_recipe_yield_unit,
           waste_pct:               row.waste_pct,
           default_prep_unit:       row.default_prep_unit,
         });
@@ -491,6 +502,120 @@ router.post('/', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create recipe' } });
+  }
+});
+
+// ── POST /recipes/:id/duplicate ───────────────────────────────────────────────
+// Duplicates a recipe end-to-end:
+//   - Copies the recipe row (name overridden by request body, everything else preserved)
+//   - Copies global items
+//   - Copies every market / PL / market+PL variation and all their items
+// Returns the new recipe id so the frontend can navigate to it.
+router.post('/:id/duplicate', async (req, res) => {
+  const srcId = parseInt(req.params.id, 10);
+  const newName = (req.body?.name || '').trim();
+  if (!srcId)         return res.status(400).json({ error: { message: 'invalid recipe id' } });
+  if (!newName)       return res.status(400).json({ error: { message: 'name is required' } });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1) Copy the recipe row
+    const { rows: [src] } = await client.query('SELECT * FROM mcogs_recipes WHERE id=$1', [srcId]);
+    if (!src) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Source recipe not found' } }); }
+
+    const { rows: [newRecipe] } = await client.query(`
+      INSERT INTO mcogs_recipes (name, category_id, description, yield_qty, yield_unit_id, yield_unit_text, image_url, translations)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
+    `, [
+      newName,
+      src.category_id,
+      src.description,
+      src.yield_qty,
+      src.yield_unit_id,
+      src.yield_unit_text,
+      src.image_url,
+      src.translations ?? {},
+    ]);
+
+    // 2) Copy global items (variation_id IS NULL etc.)
+    await client.query(`
+      INSERT INTO mcogs_recipe_items
+        (recipe_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order)
+      SELECT $1, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order
+      FROM   mcogs_recipe_items
+      WHERE  recipe_id = $2
+        AND  variation_id IS NULL
+        AND  pl_variation_id IS NULL
+        AND  market_pl_variation_id IS NULL
+    `, [newRecipe.id, srcId]);
+
+    // 3) Copy market variations + their items (re-mapping variation IDs)
+    const { rows: srcVars } = await client.query(`
+      SELECT id, country_id FROM mcogs_recipe_variations WHERE recipe_id=$1
+    `, [srcId]);
+    for (const v of srcVars) {
+      const { rows: [nv] } = await client.query(`
+        INSERT INTO mcogs_recipe_variations (recipe_id, country_id) VALUES ($1, $2) RETURNING id
+      `, [newRecipe.id, v.country_id]);
+      await client.query(`
+        INSERT INTO mcogs_recipe_items
+          (recipe_id, variation_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order)
+        SELECT $1, $2, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order
+        FROM   mcogs_recipe_items WHERE variation_id = $3
+      `, [newRecipe.id, nv.id, v.id]);
+    }
+
+    // 4) Copy PL variations + items
+    const { rows: srcPlVars } = await client.query(`
+      SELECT id, price_level_id FROM mcogs_recipe_pl_variations WHERE recipe_id=$1
+    `, [srcId]);
+    for (const v of srcPlVars) {
+      const { rows: [nv] } = await client.query(`
+        INSERT INTO mcogs_recipe_pl_variations (recipe_id, price_level_id) VALUES ($1, $2) RETURNING id
+      `, [newRecipe.id, v.price_level_id]);
+      await client.query(`
+        INSERT INTO mcogs_recipe_items
+          (recipe_id, pl_variation_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order)
+        SELECT $1, $2, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order
+        FROM   mcogs_recipe_items WHERE pl_variation_id = $3
+      `, [newRecipe.id, nv.id, v.id]);
+    }
+
+    // 5) Copy market+PL variations + items
+    const { rows: srcMplVars } = await client.query(`
+      SELECT id, country_id, price_level_id FROM mcogs_recipe_market_pl_variations WHERE recipe_id=$1
+    `, [srcId]);
+    for (const v of srcMplVars) {
+      const { rows: [nv] } = await client.query(`
+        INSERT INTO mcogs_recipe_market_pl_variations (recipe_id, country_id, price_level_id)
+        VALUES ($1, $2, $3) RETURNING id
+      `, [newRecipe.id, v.country_id, v.price_level_id]);
+      await client.query(`
+        INSERT INTO mcogs_recipe_items
+          (recipe_id, market_pl_variation_id, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order)
+        SELECT $1, $2, item_type, ingredient_id, recipe_item_id, prep_qty, prep_unit, prep_to_base_conversion, sort_order
+        FROM   mcogs_recipe_items WHERE market_pl_variation_id = $3
+      `, [newRecipe.id, nv.id, v.id]);
+    }
+
+    await client.query('COMMIT');
+
+    await logAudit(pool, req, {
+      action: 'create', entity_type: 'recipe', entity_id: newRecipe.id,
+      entity_label: newRecipe.name,
+      field_changes: { name: { old: null, new: newRecipe.name } },
+      context: { source: 'duplicate', source_recipe_id: srcId, source_recipe_name: src.name },
+    });
+
+    res.status(201).json({ ...newRecipe, yield_unit_abbr: newRecipe.yield_unit_text || null });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to duplicate recipe' } });
+  } finally {
+    client.release();
   }
 });
 

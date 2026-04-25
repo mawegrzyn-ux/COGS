@@ -26,6 +26,7 @@ interface RecipeItem {
   base_unit_abbr?:        string
   sub_recipe_name?:       string
   sub_recipe_yield_qty?:  number
+  sub_recipe_yield_unit?: string | null
   waste_pct?:             number
   cost?:                  number | null
   quote_is_preferred?:    boolean | null
@@ -191,6 +192,12 @@ export default function RecipesPage() {
 
   // Copy-ingredients-from-recipe modal
   const [showCopyModal, setShowCopyModal] = useState(false)
+
+  // Duplicate-recipe modal — when set, holds the proposed name (defaults to
+  // "<original name> (Copy)"). Submitting POSTs to /recipes/:id/duplicate and
+  // navigates the detail panel to the new recipe.
+  const [duplicateDraft, setDuplicateDraft] = useState<string | null>(null)
+  const [duplicating, setDuplicating] = useState(false)
 
   // Create-variation modal — replaces native window.confirm/prompt dialogs
   type CreateVariationCtx =
@@ -595,6 +602,25 @@ export default function RecipesPage() {
       showToast('Recipe deleted')
     } catch (err: any) {
       showToast(err.message || 'Delete failed', 'error')
+    }
+  }
+
+  // Duplicate the selected recipe — copies metadata, global items, and every
+  // variation (market / PL / market+PL) end-to-end. Backend handles all of
+  // it in a transaction; we just refresh the list and load the new id.
+  const duplicateRecipe = async (newName: string) => {
+    if (!selected) return
+    setDuplicating(true)
+    try {
+      const r = await api.post(`/recipes/${selected.id}/duplicate`, { name: newName })
+      setRecipes(prev => [...prev, r as Recipe].sort((a, b) => a.name.localeCompare(b.name)))
+      setDuplicateDraft(null)
+      showToast(`Duplicated "${selected.name}" → "${newName}"`)
+      loadDetail((r as Recipe).id)
+    } catch (err: any) {
+      showToast(err.message || 'Duplicate failed', 'error')
+    } finally {
+      setDuplicating(false)
     }
   }
 
@@ -1341,6 +1367,13 @@ export default function RecipesPage() {
 
                 <div className="flex items-center gap-2 shrink-0">
                   <button
+                    className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                    onClick={() => setDuplicateDraft(`${selected.name} (Copy)`)}
+                    title="Create a copy of this recipe with all ingredients and variations"
+                  >
+                    <CopyIcon size={12} /> Duplicate
+                  </button>
+                  <button
                     className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1.5"
                     onClick={() => setConfirmDelete({ type: 'recipe', id: selected.id })}
                   >
@@ -1700,7 +1733,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || 'portion') : '—')}
                                   </td>
                                 </tr>
                               )
@@ -1746,7 +1779,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || 'portion') : '—')}
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-mono text-xs">
                                     {localCost != null
@@ -1856,13 +1889,12 @@ export default function RecipesPage() {
                                     value={fmtQty(item.prep_qty)}
                                     onChange={v => saveItemQtyInline(item, v)}
                                   />
-                                  <span className="text-text-3">{item.prep_unit || item.base_unit_abbr || ''}</span>
-                                </span>
-                                {item.item_type === 'recipe' && (
-                                  <span className="ml-2 text-[10px] text-text-3">
-                                    portion{Number(item.prep_qty) !== 1 ? 's' : ''}
+                                  <span className="text-text-3">
+                                    {item.prep_unit
+                                      || item.base_unit_abbr
+                                      || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || `portion${Number(item.prep_qty) !== 1 ? 's' : ''}`) : '')}
                                   </span>
-                                )}
+                                </span>
                               </td>
                               {activeCogs && (
                                 <td className="px-4 py-2.5 text-right font-mono">
@@ -2199,6 +2231,45 @@ export default function RecipesPage() {
           )}
           apiPost={(p, b) => api.post(p, b)}
         />
+      )}
+
+      {duplicateDraft !== null && selected && (
+        <Modal title={`Duplicate "${selected.name}"`} onClose={() => !duplicating && setDuplicateDraft(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-text-2">
+              Creates a full copy of this recipe — all ingredients, variations, and metadata are preserved.
+              Only the name needs to differ.
+            </p>
+            <Field label="New recipe name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={duplicateDraft}
+                onChange={e => setDuplicateDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && duplicateDraft.trim() && !duplicating) {
+                    duplicateRecipe(duplicateDraft.trim())
+                  }
+                }}
+                disabled={duplicating}
+              />
+            </Field>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button
+                className="btn-outline px-3 py-1.5 text-sm"
+                onClick={() => setDuplicateDraft(null)}
+                disabled={duplicating}
+              >Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50"
+                disabled={!duplicateDraft.trim() || duplicating}
+                onClick={() => duplicateRecipe(duplicateDraft.trim())}
+              >
+                {duplicating ? 'Duplicating…' : (<><CopyIcon size={12} /> Duplicate</>)}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {showImageModal && selected && (

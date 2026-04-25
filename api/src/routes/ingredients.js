@@ -19,6 +19,67 @@ router.get('/stats', async (_req, res) => {
   }
 })
 
+// GET /ingredients/unquoted-in-recipes?menu_id=<id>
+// Returns ingredients used in recipes that have NO active price quotes.
+// Optional menu_id filter restricts to ingredients used in recipes that the
+// menu serves (via mcogs_menu_sales_items → mcogs_sales_items.recipe_id).
+// Combo recipes within sales items aren't traversed in v1 — direct recipe-type
+// sales items only.
+router.get('/unquoted-in-recipes', async (req, res) => {
+  try {
+    const { menu_id } = req.query
+    const lang = req.language && req.language !== 'en' ? req.language : null
+    const iName  = lang ? `COALESCE(i.translations->$2->>'name', i.name)` : `i.name`
+    const cName  = lang ? `COALESCE(cat.translations->$2->>'name', cat.name)` : `cat.name`
+    const rName  = lang ? `COALESCE(r.translations->$2->>'name', r.name)` : `r.name`
+
+    // Bind params: $1 = menu_id (or null sentinel — handled via WHERE), $2 = lang (only when lang)
+    // Build WHERE for the menu filter dynamically so the query stays simple
+    // when no menu is selected.
+    const params = []
+    let paramIdx = 1
+    let menuFilter = ''
+    if (menu_id) {
+      params.push(Number(menu_id))
+      menuFilter = `AND r.id IN (
+        SELECT si.recipe_id
+        FROM   mcogs_menu_sales_items msi
+        JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+        WHERE  msi.menu_id = $${paramIdx} AND si.recipe_id IS NOT NULL
+      )`
+      paramIdx++
+    }
+    if (lang) params.push(lang)
+
+    const sql = `
+      SELECT i.id,
+             ${iName} AS name,
+             u.abbreviation AS base_unit_abbr,
+             ${cName} AS category_name,
+             COUNT(DISTINCT r.id)::int AS recipe_count,
+             ARRAY_AGG(DISTINCT ${rName} ORDER BY ${rName}) AS used_in_recipes
+      FROM   mcogs_ingredients i
+      JOIN   mcogs_recipe_items ri ON ri.ingredient_id = i.id AND ri.item_type = 'ingredient'
+      JOIN   mcogs_recipes r ON r.id = ri.recipe_id
+      LEFT JOIN mcogs_units      u   ON u.id  = i.base_unit_id
+      LEFT JOIN mcogs_categories cat ON cat.id = i.category_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM mcogs_price_quotes pq
+        WHERE  pq.ingredient_id = i.id AND pq.is_active = TRUE
+      )
+      ${menuFilter}
+      GROUP BY i.id, i.name, i.translations, u.abbreviation, cat.name, cat.translations
+      ORDER BY ${iName} ASC
+    `
+    const { rows } = await pool.query(sql, params)
+    if (lang) res.setHeader('Content-Language', lang)
+    res.json(rows)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: { message: 'Failed to fetch unquoted ingredients in recipes' } })
+  }
+})
+
 // GET /ingredients?category_id=
 // Returns ingredient name + category name resolved via translations JSONB when
 // the request language (req.language) is non-English. Base column is the

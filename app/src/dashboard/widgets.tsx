@@ -1485,6 +1485,95 @@ function NewPriceQuoteWidget() {
   )
 }
 
+// ── Unquoted ingredients in recipes (with optional menu filter) ───────────────
+//
+// Different from "missing-quotes": this only counts ingredients that are
+// actually referenced by at least one recipe — so you see real costing gaps,
+// not orphaned catalog rows. Optional menu dropdown narrows the list to
+// ingredients used by recipes that the menu serves.
+
+interface UnquotedRow {
+  id: number
+  name: string
+  base_unit_abbr: string | null
+  category_name: string | null
+  recipe_count: number
+  used_in_recipes: string[]
+}
+
+function RecipeUnquotedIngredients() {
+  const api = useApi()
+  const { menus } = useDashboardData()
+  const [menuId, setMenuId] = useState<number | null>(null)
+  const [rows, setRows] = useState<UnquotedRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    const path = menuId
+      ? `/ingredients/unquoted-in-recipes?menu_id=${menuId}`
+      : `/ingredients/unquoted-in-recipes`
+    api.get(path)
+      .then((data: UnquotedRow[]) => { if (!cancelled) setRows(Array.isArray(data) ? data : []) })
+      .catch((err: { message?: string }) => { if (!cancelled) setError(err?.message || 'Failed to load') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [api, menuId])
+
+  return (
+    <div className="card p-5 h-full flex flex-col">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+        <SectionHeader title="Unquoted Ingredients in Recipes" count={loading ? undefined : rows.length} />
+        <select
+          className="input text-xs py-1 max-w-[200px]"
+          value={menuId ?? ''}
+          onChange={e => setMenuId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">All menus</option>
+          {menus.map(m => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2 flex-1">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+      ) : error ? (
+        <div className="text-red-500 text-sm">{error}</div>
+      ) : rows.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
+          <span className="badge-green text-sm">✓ Full coverage</span>
+          <p className="text-text-3 text-sm text-center">
+            {menuId
+              ? 'Every ingredient used by this menu has at least one active price quote.'
+              : 'Every ingredient referenced in a recipe has at least one active price quote.'}
+          </p>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto space-y-1">
+          {rows.map(item => (
+            <div key={item.id} className="flex items-start gap-2 px-3 py-2 rounded-lg hover:bg-surface-2">
+              <span className="text-amber-500 mt-0.5">⚠</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-text-1 text-sm font-medium truncate" title={item.name}>{item.name}</p>
+                <p className="text-text-3 text-xs truncate" title={item.used_in_recipes.join(', ')}>
+                  {item.category_name ? `${item.category_name} · ` : ''}
+                  Used in {item.recipe_count} recipe{item.recipe_count !== 1 ? 's' : ''}
+                  {item.recipe_count <= 3 ? `: ${item.used_in_recipes.join(', ')}` : ''}
+                </p>
+              </div>
+              <span className="text-text-3 text-xs shrink-0">{item.base_unit_abbr || ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'kpi-ingredients':   KpiIngredients,
   'kpi-recipes':       KpiRecipes,
@@ -1510,4 +1599,5 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'new-ingredient':    NewIngredientWidget,
   'new-price-quote':   NewPriceQuoteWidget,
   'country-region-map': CountryRegionMapWidget,
+  'recipe-unquoted-ingredients': RecipeUnquotedIngredients,
 }

@@ -28,6 +28,8 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'new-ingredient':    { id: 'new-ingredient',    label: 'New Ingredient',    description: 'Quick-add card — create a new ingredient (optionally with a first price quote) without leaving the dashboard.', defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
   'new-price-quote':   { id: 'new-price-quote',   label: 'New Price Quote',   description: 'Quick-add card — log a price quote for an existing ingredient + vendor in one click.',                                   defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
   'country-region-map': { id: 'country-region-map', label: 'Country Region Map', description: 'Zoomed-in map of the selected market\'s country, highlighting every region claimed by any market. City pins appear for locations with captured lat/lng.', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true, defaultRowSpan: 3, allowedRowSpans: [2, 3] },
+
+  'recipe-unquoted-ingredients': { id: 'recipe-unquoted-ingredients', label: 'Unquoted Ingredients in Recipes', description: 'Ingredients that appear in at least one recipe but have no active price quote. Optional menu filter narrows the list to recipes used by a specific menu.', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────
