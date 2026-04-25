@@ -399,6 +399,24 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     } finally { setBacklogLoading(false) }
   }, [api, backlogFilter])
 
+  // Kanban: change status from a tile's inline dropdown. Only dev users can
+  // change status server-side; we only render the select for them. Same
+  // optimistic-update + rollback pattern as the priority drop handler.
+  const onKanbanStatusChange = useCallback(async (id: number, newStatus: string) => {
+    const item = backlog.find(b => b.id === id)
+    if (!item || item.status === newStatus) return
+    const prev = item.status
+    setBacklog(list => list.map(b => b.id === id ? { ...b, status: newStatus } : b))
+    try {
+      await api.put(`/backlog/${id}`, { status: newStatus })
+      setToast({ message: `${item.key} status → ${newStatus.replace(/_/g, ' ')}`, type: 'success' })
+    } catch (err: unknown) {
+      setBacklog(list => list.map(b => b.id === id ? { ...b, status: prev } : b))
+      const msg = (err as { message?: string })?.message || 'Failed to update status'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, backlog])
+
   // Kanban drop handler — when a tile is dropped on a priority column, PUT
   // the new priority and update local state optimistically. Roll back on
   // error. Author-or-dev gating happens server-side; surface 403s as a toast.
@@ -976,7 +994,34 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                           <p className="text-xs text-text-1 leading-snug line-clamp-3">{b.summary}</p>
                           {b.status && (
                             <div className="mt-1.5 flex items-center justify-between gap-1.5">
-                              <span className="text-[10px] text-text-3 capitalize">{b.status.replace(/_/g, ' ')}</span>
+                              {isDev ? (
+                                // Inline status picker — dev-only, server enforces.
+                                // stopPropagation on click so opening the dropdown
+                                // doesn't open the detail modal; mousedown on
+                                // dragstart is not affected since the select is
+                                // its own event target.
+                                <select
+                                  className={`text-[10px] py-0 px-1 rounded border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent ${
+                                    b.status === 'todo' ? 'bg-blue-50 text-blue-700 font-semibold'
+                                    : b.status === 'in_progress' ? 'bg-amber-50 text-amber-700 font-semibold'
+                                    : b.status === 'in_review' ? 'bg-purple-50 text-purple-700 font-semibold'
+                                    : b.status === 'done' ? 'bg-emerald-50 text-emerald-700'
+                                    : b.status === 'wont_do' ? 'bg-gray-100 text-gray-500 line-through'
+                                    : 'bg-surface-2 text-text-3'
+                                  }`}
+                                  value={b.status}
+                                  onClick={e => e.stopPropagation()}
+                                  onMouseDown={e => e.stopPropagation()}
+                                  onChange={e => { e.stopPropagation(); onKanbanStatusChange(b.id, e.target.value) }}
+                                  title="Change status"
+                                >
+                                  {BACKLOG_STATUSES.map(s => (
+                                    <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-[10px] text-text-3 capitalize">{b.status.replace(/_/g, ' ')}</span>
+                              )}
                               {b.story_points != null && <span className="text-[10px] text-text-3">{b.story_points} pts</span>}
                             </div>
                           )}
