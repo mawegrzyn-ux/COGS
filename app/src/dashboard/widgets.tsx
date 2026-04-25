@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useCallback, useRef, createContext, useContext, ReactElement, ReactNode, lazy, Suspense } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useAddQuote } from '../contexts/AddQuoteContext'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { useApi } from '../hooks/useApi'
@@ -321,7 +321,7 @@ function MenuTiles() {
 // ── Missing quotes ─────────────────────────────────────────────────────────────
 
 function MissingQuotes() {
-  const navigate = useNavigate()
+  const { trigger: addQuoteFor } = useAddQuote()
   const { ingredients, quotes, loading } = useDashboardData()
   const quotedIds = useMemo(() => new Set(quotes.filter(q => q.is_active).map(q => q.ingredient_id)), [quotes])
   const missing = useMemo(() => ingredients.filter(i => !quotedIds.has(i.id)).slice(0, 10), [ingredients, quotedIds])
@@ -341,7 +341,7 @@ function MissingQuotes() {
             <button
               key={item.id}
               type="button"
-              onClick={() => navigate(`/inventory?addQuote=${item.id}`)}
+              onClick={() => addQuoteFor(item.id)}
               className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 text-left transition-colors group"
               title={`Add a price quote for ${item.name}`}
             >
@@ -1538,7 +1538,7 @@ interface UnquotedRow {
 
 function RecipeUnquotedIngredients() {
   const api = useApi()
-  const navigate = useNavigate()
+  const { trigger: addQuoteFor } = useAddQuote()
   const { menus } = useDashboardData()
   const [menuId, setMenuId] = useState<number | null>(null)
   const [rows, setRows] = useState<UnquotedRow[]>([])
@@ -1594,7 +1594,7 @@ function RecipeUnquotedIngredients() {
             <button
               key={item.id}
               type="button"
-              onClick={() => navigate(`/inventory?addQuote=${item.id}`)}
+              onClick={() => addQuoteFor(item.id)}
               className="w-full flex items-start gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 text-left transition-colors group"
               title={`Add a price quote for ${item.name}`}
             >

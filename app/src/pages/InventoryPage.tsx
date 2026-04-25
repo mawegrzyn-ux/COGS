@@ -1559,7 +1559,7 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
 
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
-function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOpenConsumed }: {
+export function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOpenConsumed }: {
   initialIngredientId?:     number
   /** When set, the tab opens the Add Quote modal immediately with this
    *  ingredient pre-selected. Triggered by the per-row "+ Quote" button on

@@ -6,6 +6,7 @@ import { TEMPLATES, WIDGET_REGISTRY, getTemplate, DEFAULT_TEMPLATE_ID } from '..
 import {
   DashboardConfig, SlotConfig, WidgetId, WidgetSize, WidgetHeight, sizeSpan, heightSpan,
 } from '../dashboard/types'
+import { AddQuoteProvider } from '../contexts/AddQuoteContext'
 
 // ── PWA install banner (preserved from old dashboard) ─────────────────────────
 
@@ -480,7 +481,9 @@ function DashboardInner() {
 export default function DashboardPage() {
   return (
     <DashboardDataProvider>
-      <DashboardInner />
+      <AddQuoteProvider>
+        <DashboardInner />
+      </AddQuoteProvider>
     </DashboardDataProvider>
   )
 }

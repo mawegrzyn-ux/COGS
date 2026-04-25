@@ -3697,6 +3697,22 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-25' AND title = 'BACK-1001 (group_name drop) + BACK-1961 (+ Quote stays on tab)'
    )`,
+
+  // ── Step 155: Changelog — Kanban + Suggest Priorities + widget click-to-add-quote + Pepper backlog tools + LanguageSwitcher fix + QuickLinks column layout
+  // No new mcogs_backlog rows for these — user requested no backlog noise for this batch.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-25', 'Backlog Kanban + AI Suggest Priorities + widget click-to-add-quote + Pepper backlog tools', '[
+     {"type":"added","description":"Backlog Kanban view on the Bugs & Backlog page. View toggle (☰ List | ▦ Kanban), persisted per browser. Five priority columns (Highest / High / Medium / Low / Lowest) with native HTML5 drag-and-drop between columns; drop fires PUT /api/backlog/:id { priority } with optimistic state + rollback on failure. Each tile also has an inline status dropdown (dev-only — server gates) with colour-coded states for todo / in_progress / in_review / done / wont_do / backlog. Tile click opens the existing detail modal."},
+     {"type":"added","description":"AI Suggest Priorities. New POST /api/backlog/suggest-priorities (dev-only) loads up to 200 open backlog items, calls Claude Haiku 4.5 with a conservative prompt, returns structured proposals JSON: {summary, proposals: [{key, current, proposed, reasoning}]}. Server-side validation drops invalid / unchanged proposals. Frontend ✨ Suggest Priorities button in the kanban toolbar opens a modal with all proposals pre-checked; user toggles individual rows or uses Select all / Clear all; Apply N changes batches PUT /backlog/:id calls. AI call logged to mcogs_ai_chat_log."},
+     {"type":"added","description":"Pepper get_backlog_stats tool — returns aggregate counts grouped by status / priority / item_type via cheap COUNT queries. Use this for how-many questions instead of list_backlog. list_backlog itself bumped: default 30→50, max 100→500; response now includes {total, returned, truncated, rows}; description column dropped from default SELECT to cut token use. Avoids the previous 5-minute hang where Pepper iterated through paginated results."},
+     {"type":"added","description":"Dashboard widget click-to-add-quote: Missing Price Quotes and Unquoted in Recipes tiles are now buttons that navigate to /inventory?addQuote=<ingredient_id>. InventoryPage reads the param via useSearchParams, sets autoOpenAddIngId, and strips the param via { replace: true } so reload does not re-open the modal. Combined with BACK-1961 the modal opens over the Ingredients tab without a tab switch."},
+     {"type":"added","description":"Quick Links widget Grid/Column layout toggle in edit mode. Column mode forces every tile to col-span-12 regardless of per-tile width, giving a single-column list layout. Persisted to localStorage(cogs-quick-links-layout). Per-tile width selector still works in Grid mode."},
+     {"type":"fixed","description":"LanguageSwitcher dropdown anchored top-down right-aligned (was bottom-up from sidebar footer). Now that the switcher lives in the top bar, the old anchor caused the menu to overflow off-screen above the viewport."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-25' AND title = 'Backlog Kanban + AI Suggest Priorities + widget click-to-add-quote + Pepper backlog tools'
+   )`,
 ];
 
 async function runMigrations(pool) {
