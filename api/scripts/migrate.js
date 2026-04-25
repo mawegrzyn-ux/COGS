@@ -3545,6 +3545,82 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-24' AND title = 'Sales Items: Excel grid view with inline editing (BACK-1942)'
    )`,
+
+  // ── Step 143: Bugs (resolved this session) ────────────────────────────────
+  // Idempotent via ON CONFLICT (key) DO NOTHING.
+  `INSERT INTO mcogs_bugs (key, summary, description, priority, severity, status, labels, page, resolution) VALUES
+    ('BUG-1024', 'MediaLibrary modal rendered behind ImageUpload modal',
+     'When opening Browse Library from inside the recipe image upload modal, the library appeared underneath. Modal stacking was z-50 vs the ui.tsx Modal at z-[9999].',
+     'medium', 'minor', 'resolved', '["recipes","media","modal-stacking"]'::jsonb, 'Recipes',
+     'Bumped MediaLibrary modal portal to z-[10000] so it stacks above any other ui.tsx Modal.'),
+    ('BUG-1025', 'GET /api/recipes/:id missing image_url field',
+     'Recipe detail SELECT did not include r.image_url, so even though PUT saved the URL correctly, loadDetail() re-read it as undefined and the header thumbnail always fell back to the placeholder. Made image upload look broken.',
+     'high', 'major', 'resolved', '["recipes","api","sql"]'::jsonb, 'Recipes',
+     'Added r.image_url to the SELECT list in GET /recipes/:id.')
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 144: Backlog (done this session) ─────────────────────────────────
+  // Captures every feature shipped — including ones the user requested
+  // mid-session without a pre-filed ticket (per EOS retrospective sweep).
+  `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+    ('BACK-1953', 'Recipe detail page redesign',
+     'Eight-item restructuring of the recipe detail panel: inline-edit name + yield + portion name in the header (replaces standalone Edit modal); image thumbnail icon before the name with click-to-open modal (change/remove image); CategoryPicker after recipe name (with allowCreate=false to suppress overkill + New); inline Notes section after Linked Sales Items; Market + Price Level + Currency selectors moved below KPIs to a slim toolbar above ingredients; conversion column dropped, qty column inline-editable via CalcInput.',
+     'epic', 'high', 'done', '["recipes","ui","redesign"]'::jsonb, 1953),
+    ('BACK-1954', 'Global Display Currency + Language switchers in top bar',
+     'New CurrencyContext + CurrencyProvider + CurrencySwitcher (banknote icon, "Show prices in" label). Mounted alongside MarketSwitcher in AppLayout top bar with explicit "Market" / "Show prices in" / "Language" labels. RecipesPage and MenusPage Menu Engineer wired to consume the global context — local Display Currency dropdowns removed from both pages. LanguageSwitcher moved from Sidebar footer to top bar. Selection persisted via localStorage("cogs-display-currency").',
+     'story', 'high', 'done', '["currency","i18n","layout"]'::jsonb, 1954),
+    ('BACK-1955', 'Auto-derive variantMode from Market+PriceLevel selection',
+     'Removed redundant 🌍 Market / 💰 PL / 🌍💰 Market+PL toggle buttons from the ingredients header. variantMode now computed via useMemo from (selectedCountryId, selectedPriceLevelId): Market only → market, PL only → price-level, both → market-pl, neither → global. Contextual Create / Copy-to-Global / Delete Variation buttons live next to the selectors that drive them. activeItems gained a fallback chain (specific → market → PL → global) so the displayed list matches what the variant pill claims when no exact-match variation exists.',
+     'story', 'high', 'done', '["recipes","variations"]'::jsonb, 1955),
+    ('BACK-1956', 'Copy Ingredients modal + Alt+I shortcut for Add Ingredient',
+     '+ Copy Ingredients button opens a two-step modal: pick a source recipe (with search), then pick a specific source variant (Global / Market / PL / Market+PL) shown as radio rows with item counts. "Copy N items" appends them into the currently active variant of the target recipe via the appropriate POST endpoint. Generic AltShortcut helper (skips when typing in inputs) wires Alt+I to openAddIngredient when a recipe is selected and no other modal is open.',
+     'story', 'medium', 'done', '["recipes","productivity"]'::jsonb, 1956),
+    ('BACK-1957', 'CreateVariationModal replaces window.confirm/prompt',
+     'New app-style modal for creating variations — replaces the ugly browser confirm + prompt dialogs (which silently created empty variations on blank prompt input). Radio rows show available copy sources with item counts; defaults to first available source (market > PL > global > empty); disables sources with no items. Single component handles all three variation types (Market, PL, Market+PL).',
+     'story', 'medium', 'done', '["recipes","ux","variations"]'::jsonb, 1957),
+    ('BACK-1958', 'Recipe ingredient qty display capped at 3 decimals',
+     'New fmtQty() helper rounds to 3dp and strips trailing zeros (4000.00000000 → "4000", 1.00000000 → "1", 0.001 → "0.001"). Applied to the inline-edit CalcInput in the recipe ingredients table. Phantom-PUT guard added to saveItemQtyInline: differences below 0.0005 are treated as no-op so opening + blurring an unchanged cell does not silently truncate DB-side precision past the 3rd decimal.',
+     'task', 'medium', 'done', '["recipes","ui"]'::jsonb, 1958),
+    ('BACK-1959', 'CategoryPicker allowCreate prop',
+     'Added allowCreate prop (default true) to CategoryPicker. When false the inline + New button is suppressed — used on the recipe header where creating a category from the dropdown is overkill (full categories admin is one click away).',
+     'task', 'low', 'done', '["recipes","ui","ux"]'::jsonb, 1959),
+    ('BACK-1960', 'EOS protocol — retrospective backlog sweep',
+     'Updated CLAUDE.md End-of-Session protocol step 2 to require sweeping for items that were worked on but never logged. Each fix or feature shipped during the session must be matched against existing mcogs_bugs / mcogs_backlog rows; if not present, seed one with terminal status (resolved / done) so the audit trail is complete even when the user requested work mid-session without a pre-filed ticket. Pending hand-off tasks get seeded in non-terminal status.',
+     'task', 'medium', 'done', '["process","claude-md"]'::jsonb, 1960)
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 145: Backlog (paused for EOS — pending follow-up) ────────────────
+  // User asked for these mid-session but paused to run EOS first. Seeded
+  // with non-terminal status so they don't fall off the board.
+  `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+    ('BACK-1961', 'Inventory: + Quote button should not switch tabs',
+     'Clicking + Quote on an ingredient row currently switches the user to the Price Quotes tab and opens the Add Quote modal. The user expects the Add Quote modal to appear over the Ingredients tab instead, so they keep their context. Likely fix: render a global Add Quote modal at the InventoryPage level (or always-mount PriceQuotesTab in a hidden container) so the modal portal opens on top of the active tab without a tab switch.',
+     'task', 'medium', 'todo', '["inventory","ux"]'::jsonb, 1961),
+    ('BACK-1962', 'Inventory: grid view default + fixed table header',
+     'Default the Ingredients and Price Quotes tabs to the grid view (currently default to list). Make column headers stick to top while body scrolls (position: sticky on the thead row, so headers stay visible during long scroll). Apply to both tabs.',
+     'story', 'medium', 'todo', '["inventory","ui"]'::jsonb, 1962)
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 146: Changelog — recipe redesign + global switchers + hotfixes ───
+  // Idempotent via WHERE NOT EXISTS.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-25', 'Recipe detail redesign + global Display Currency / Language top bar', '[
+     {"type":"changed","description":"Recipe detail page redesigned (BACK-1953). Header now has an image thumbnail, inline-edit name + yield qty + yield unit, CategoryPicker, and a delete button — the standalone Edit button is gone. Notes section moved out of the header into its own inline-editable card after Linked Sales Items. Market + Price Level + Currency selectors moved from above the KPI tiles down to a slim toolbar just above the Ingredients table, where the Create / Copy-to-Global / Delete Variation buttons live too."},
+     {"type":"changed","description":"Variant mode is now auto-derived from the Market + Price Level selection (BACK-1955). Removed the redundant 🌍 Market / 💰 PL / 🌍💰 Market+PL toggle buttons; the combination of selectors fully determines which variant is active. activeItems now falls back specific → market → PL → global so the displayed list matches the pill (no more “shows global ingredients but pill says Market Variation” divergence)."},
+     {"type":"added","description":"Global Display Currency switcher (BACK-1954) in the top bar — banknote icon, label \"Show prices in\". New CurrencyContext exposes the user-selected currency code; RecipesPage and MenusPage Menu Engineer consume it via useCurrency() and the local Display Currency dropdowns are gone. LanguageSwitcher moved from Sidebar footer to the top bar. All three top-bar switchers (Market / Show prices in / Language) now have explicit labels."},
+     {"type":"added","description":"Copy Ingredients modal (BACK-1956) — pick a source recipe, then a specific variant (Global / Market / PL / Market+PL) with item counts, Copy N items into the active variant on the target recipe. Alt+I keyboard shortcut opens Add Ingredient when a recipe is selected and no other modal is open."},
+     {"type":"added","description":"CreateVariationModal (BACK-1957) replaces the old window.confirm + window.prompt dialogs. Radio rows show available copy sources with item counts; defaults to the first available source so blank input never silently creates an empty variation."},
+     {"type":"added","description":"Inline-editable Quantity column (BACK-1958) on the recipe ingredients table — CalcInput supports math expressions (4000/8 → 500). Display capped at 3 decimal places via fmtQty() with trailing-zero stripping; phantom-PUT guard treats sub-millisecond differences as no-op so opening + blurring an unchanged cell does not silently truncate stored precision."},
+     {"type":"added","description":"CategoryPicker allowCreate prop (BACK-1959). Default true; recipe header passes false to suppress the + New button (creating a category from a recipe header is overkill)."},
+     {"type":"changed","description":"Variant pill text clarified: \"🌍💰 United Kingdom · Delivery\" → \"✦ Variation: United Kingdom · Delivery\". Global pill now reads \"🌍 Global recipe\"."},
+     {"type":"fixed","description":"BUG-1024: MediaLibrary modal rendered behind the recipe image modal. Bumped the library portal to z-[10000] so it stacks above any other ui.tsx Modal."},
+     {"type":"fixed","description":"BUG-1025: image upload looked broken because GET /api/recipes/:id was not selecting r.image_url, so loadDetail() re-read the field as undefined after a successful PUT. SELECT now includes image_url."},
+     {"type":"changed","description":"EOS protocol step 2 (BACK-1960) — retrospective sweep. Each fix or feature shipped during a session must be matched against the bug + backlog tables; if not present, seed it with terminal status so the audit trail is complete. Pending hand-off tasks get seeded in non-terminal status so nothing falls off the board."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-25' AND title = 'Recipe detail redesign + global Display Currency / Language top bar'
+   )`,
 ];
 
 async function runMigrations(pool) {

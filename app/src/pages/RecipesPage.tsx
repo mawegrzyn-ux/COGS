@@ -1700,7 +1700,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
                                   </td>
                                 </tr>
                               )
@@ -1746,7 +1746,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-mono text-xs">
                                     {localCost != null
