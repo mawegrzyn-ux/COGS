@@ -3669,6 +3669,34 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-25' AND title = 'Inventory: grid view default + sticky table headers (BACK-1962)'
    )`,
+
+  // ── Step 152: BACK-1001 done — drop mcogs_categories.group_name ───────────
+  // Legacy VARCHAR column kept for back-compat once mcogs_category_groups +
+  // group_id FK became canonical (back in migration step 81). Verified all
+  // current routes resolve "group_name" via the JOIN to mcogs_category_groups
+  // (categories.js, ingredients.js, recipes.js, sales-items.js, ai-chat.js,
+  // combos.js) — no INSERT/UPDATE writes to the legacy column anywhere. Safe
+  // to drop. Idempotent via IF EXISTS.
+  `ALTER TABLE mcogs_categories DROP COLUMN IF EXISTS group_name`,
+
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-1001' AND status <> 'done'`,
+
+  // ── Step 153: BACK-1961 done — + Quote stays on Ingredients tab ───────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-1961' AND status <> 'done'`,
+
+  // ── Step 154: Changelog — BACK-1001 + BACK-1961 ───────────────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-25', 'BACK-1001 (group_name drop) + BACK-1961 (+ Quote stays on tab)', '[
+     {"type":"removed","description":"BACK-1001: dropped the legacy mcogs_categories.group_name VARCHAR column. group_id FK to mcogs_category_groups has been the canonical mechanism since migration step 81 — every read path already resolves the human-readable name via JOIN. Verified no INSERT/UPDATE writes to the column anywhere; CategoriesPage UI already reads group_name from the JOIN response, not the column. ALTER TABLE DROP COLUMN IF EXISTS in step 152 is idempotent."},
+     {"type":"changed","description":"BACK-1961: clicking + Quote on an ingredient row no longer switches the user to the Price Quotes tab. The Add Quote modal now appears over the Ingredients tab instead, so the user keeps their context and the modal is just a popover, not a tab switch + UI shift."},
+     {"type":"changed","description":"Both items marked done."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-25' AND title = 'BACK-1001 (group_name drop) + BACK-1961 (+ Quote stays on tab)'
+   )`,
 ];
 
 async function runMigrations(pool) {

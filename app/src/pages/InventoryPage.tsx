@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
@@ -133,6 +134,22 @@ export default function InventoryPage() {
   // so a tab re-mount doesn't re-open the modal.
   const [autoOpenAddIngId, setAutoOpenAddIngId] = useState<number | undefined>(undefined)
 
+  // ?addQuote=<ingId> deep-link — opens the Add Quote modal pre-filled with
+  // that ingredient. Used by the dashboard widgets (Missing Quotes, Unquoted
+  // in Recipes) so the user lands here in the Ingredients tab and the modal
+  // appears over it. Param is consumed once and cleared so reloading the URL
+  // doesn't re-open the modal.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const raw = searchParams.get('addQuote')
+    if (!raw) return
+    const id = parseInt(raw, 10)
+    if (Number.isFinite(id) && id > 0) setAutoOpenAddIngId(id)
+    const next = new URLSearchParams(searchParams)
+    next.delete('addQuote')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
   // Single lightweight stats call for header badges — avoids full-table fetches just for counts
   useEffect(() => {
     api.get('/ingredients/stats').then((s: any) => {
@@ -203,18 +220,28 @@ export default function InventoryPage() {
         {tab === 'ingredients'   && <IngredientsTab
           onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }}
           onAddQuote={id => {
-            setInitialQuoteIngId(id)
+            // BACK-1961: don't switch tab — just trigger the Add Quote modal
+            // via the always-mounted PriceQuotesTab below. The modal uses
+            // createPortal to <body> so it renders over whatever tab is active.
             setAutoOpenAddIngId(id)
-            setTab('quotes')
-            localStorage.setItem('inventory-tab', 'quotes')
           }}
         />}
-        {tab === 'quotes'        && <PriceQuotesTab
-          initialIngredientId={initialQuoteIngId}
-          autoOpenAddIngredientId={autoOpenAddIngId}
-          onAutoOpenConsumed={() => setAutoOpenAddIngId(undefined)}
-        />}
         {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
+
+        {/* PriceQuotesTab is always mounted when (a) the user is on the quotes
+            tab, OR (b) someone elsewhere triggered an Add Quote modal that
+            this tab owns. In case (b), the tab body is hidden but the
+            portal-based Modal renders normally. Keeps the user's current tab
+            context intact. */}
+        {(tab === 'quotes' || autoOpenAddIngId !== undefined) && (
+          <div className={tab === 'quotes' ? 'flex-1 overflow-hidden flex flex-col' : 'sr-only'} aria-hidden={tab !== 'quotes'}>
+            <PriceQuotesTab
+              initialIngredientId={initialQuoteIngId}
+              autoOpenAddIngredientId={autoOpenAddIngId}
+              onAutoOpenConsumed={() => setAutoOpenAddIngId(undefined)}
+            />
+          </div>
+        )}
       </div>
     </div>
   )

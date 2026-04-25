@@ -50,7 +50,9 @@ export default function LanguageSwitcher({ compact = false }: { compact?: boolea
       </button>
 
       {open && (
-        <div className="absolute bottom-full mb-1 left-0 w-40 bg-surface border border-border rounded-lg shadow-lg z-50 py-1 max-h-64 overflow-y-auto">
+        // Anchored top-down + right-aligned to match MarketSwitcher / CurrencySwitcher
+        // in the top bar. (The old bottom-up anchor was for the sidebar footer.)
+        <div className="absolute top-full mt-1 right-0 w-40 bg-surface border border-border rounded-lg shadow-lg z-50 py-1 max-h-64 overflow-y-auto">
           {languages.map(l => (
             <button
               key={l.code}

@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useCallback, useRef, createContext, useContext, ReactElement, ReactNode, lazy, Suspense } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { useApi } from '../hooks/useApi'
@@ -320,6 +321,7 @@ function MenuTiles() {
 // ── Missing quotes ─────────────────────────────────────────────────────────────
 
 function MissingQuotes() {
+  const navigate = useNavigate()
   const { ingredients, quotes, loading } = useDashboardData()
   const quotedIds = useMemo(() => new Set(quotes.filter(q => q.is_active).map(q => q.ingredient_id)), [quotes])
   const missing = useMemo(() => ingredients.filter(i => !quotedIds.has(i.id)).slice(0, 10), [ingredients, quotedIds])
@@ -336,11 +338,17 @@ function MissingQuotes() {
       ) : (
         <div className="space-y-1">
           {missing.map(item => (
-            <div key={item.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2">
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => navigate(`/inventory?addQuote=${item.id}`)}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 text-left transition-colors group"
+              title={`Add a price quote for ${item.name}`}
+            >
               <span className="text-amber-500">⚠</span>
               <span className="text-text-1 text-sm flex-1 truncate">{item.name}</span>
-              <span className="text-text-3 text-xs">No quote</span>
-            </div>
+              <span className="text-accent text-xs opacity-0 group-hover:opacity-100 transition-opacity">+ Add quote</span>
+            </button>
           ))}
           {missing.length === 10 && (
             <p className="text-text-3 text-xs text-center pt-2">Showing first 10 — visit Inventory for full list</p>
@@ -459,6 +467,16 @@ const QL_DEFAULT: QuickLink[] = QL_DEFAULT_IDS
   .filter((l): l is QuickLink => !!l)
 
 const QL_STORAGE_KEY = 'cogs-quick-links-v1'
+const QL_LAYOUT_STORAGE_KEY = 'cogs-quick-links-layout'
+
+type QLLayout = 'grid' | 'column'
+
+function loadQuickLinksLayout(): QLLayout {
+  try { return (localStorage.getItem(QL_LAYOUT_STORAGE_KEY) === 'column') ? 'column' : 'grid' } catch { return 'grid' }
+}
+function saveQuickLinksLayout(layout: QLLayout) {
+  try { localStorage.setItem(QL_LAYOUT_STORAGE_KEY, layout) } catch { /* ignore */ }
+}
 
 function loadQuickLinksConfig(): QuickLink[] {
   try {
@@ -491,9 +509,11 @@ function QuickLinks() {
   const { flags, loading: flagsLoading } = useFeatureFlags()
   const [links,  setLinks]  = useState<QuickLink[]>(() => loadQuickLinksConfig())
   const [addOpen, setAddOpen] = useState(false)
+  const [layout, setLayout] = useState<QLLayout>(() => loadQuickLinksLayout())
 
   // Persist any change to localStorage.
   useEffect(() => { saveQuickLinksConfig(links) }, [links])
+  useEffect(() => { saveQuickLinksLayout(layout) }, [layout])
 
   // Edit-mode DnD state — whole tile is draggable.
   const dragId  = useRef<string | null>(null)
@@ -556,6 +576,19 @@ function QuickLinks() {
         <SectionHeader title="Quick Links" />
         {editing && (
           <div className="flex items-center gap-2 text-xs">
+            {/* Layout toggle — single-column or multi-tile grid */}
+            <div className="inline-flex rounded-md border border-border overflow-hidden">
+              <button
+                onClick={() => setLayout('grid')}
+                className={`px-1.5 py-0.5 text-[11px] transition-colors ${layout === 'grid' ? 'bg-accent text-white' : 'bg-surface text-text-2 hover:bg-surface-2'}`}
+                title="Grid layout (use per-tile width)"
+              >▦ Grid</button>
+              <button
+                onClick={() => setLayout('column')}
+                className={`px-1.5 py-0.5 text-[11px] transition-colors border-l border-border ${layout === 'column' ? 'bg-accent text-white' : 'bg-surface text-text-2 hover:bg-surface-2'}`}
+                title="Single-column layout (one tile per row)"
+              >☰ Column</button>
+            </div>
             <div className="relative">
               <button
                 onClick={() => setAddOpen(o => !o)}
@@ -605,7 +638,9 @@ function QuickLinks() {
           {visibleLinks.map(link => {
             const isDragging  = dragId.current === link.id
             const isDropOver  = dragOverId === link.id && dragId.current && dragId.current !== link.id
-            const sizeCls     = QL_SIZE_CLASS[link.size] + ' ' + QL_ROW_CLASS[link.rowSpan]
+            // Column layout overrides per-tile width — every tile gets a full
+            // row, height stays user-controlled.
+            const sizeCls     = (layout === 'column' ? 'col-span-12' : QL_SIZE_CLASS[link.size]) + ' ' + QL_ROW_CLASS[link.rowSpan]
             const tileClasses = `relative ${sizeCls} ${editing ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-40' : ''} ${isDropOver ? 'ring-2 ring-accent rounded-xl' : ''}`
 
             const tileInner = (
@@ -1503,6 +1538,7 @@ interface UnquotedRow {
 
 function RecipeUnquotedIngredients() {
   const api = useApi()
+  const navigate = useNavigate()
   const { menus } = useDashboardData()
   const [menuId, setMenuId] = useState<number | null>(null)
   const [rows, setRows] = useState<UnquotedRow[]>([])
@@ -1555,18 +1591,27 @@ function RecipeUnquotedIngredients() {
       ) : (
         <div className="flex-1 overflow-y-auto space-y-1">
           {rows.map(item => (
-            <div key={item.id} className="flex items-start gap-2 px-3 py-2 rounded-lg hover:bg-surface-2">
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => navigate(`/inventory?addQuote=${item.id}`)}
+              className="w-full flex items-start gap-2 px-3 py-2 rounded-lg hover:bg-surface-2 text-left transition-colors group"
+              title={`Add a price quote for ${item.name}`}
+            >
               <span className="text-amber-500 mt-0.5">⚠</span>
               <div className="flex-1 min-w-0">
-                <p className="text-text-1 text-sm font-medium truncate" title={item.name}>{item.name}</p>
+                <p className="text-text-1 text-sm font-medium truncate">{item.name}</p>
                 <p className="text-text-3 text-xs truncate" title={item.used_in_recipes.join(', ')}>
                   {item.category_name ? `${item.category_name} · ` : ''}
                   Used in {item.recipe_count} recipe{item.recipe_count !== 1 ? 's' : ''}
                   {item.recipe_count <= 3 ? `: ${item.used_in_recipes.join(', ')}` : ''}
                 </p>
               </div>
-              <span className="text-text-3 text-xs shrink-0">{item.base_unit_abbr || ''}</span>
-            </div>
+              <div className="flex flex-col items-end shrink-0 gap-0.5">
+                <span className="text-text-3 text-xs">{item.base_unit_abbr || ''}</span>
+                <span className="text-accent text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">+ Add quote</span>
+              </div>
+            </button>
           ))}
         </div>
       )}

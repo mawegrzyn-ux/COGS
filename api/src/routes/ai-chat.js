@@ -260,7 +260,7 @@ CONFIRMATION REQUIRED before calling.`,
   },
   {
     name: 'list_backlog',
-    description: 'Returns backlog items (stories, tasks, epics), filterable by status, priority, and type.',
+    description: 'Returns backlog items (stories, tasks, epics), filterable by status, priority, and type. Use get_backlog_stats first if you only need counts — list_backlog returns full rows and is slow over large result sets.',
     input_schema: {
       type: 'object',
       properties: {
@@ -268,10 +268,15 @@ CONFIRMATION REQUIRED before calling.`,
         priority:  { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
         item_type: { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
         search:    { type: 'string', description: 'Search in summary/description' },
-        limit:     { type: 'integer', description: 'Max rows (default 30)' },
+        limit:     { type: 'integer', description: 'Max rows (default 50, max 500)' },
       },
       required: [],
     },
+  },
+  {
+    name: 'get_backlog_stats',
+    description: 'Returns total counts of backlog items grouped by status, priority, and item_type. Cheap and fast — use this for "how many?" questions instead of list_backlog. Always returns the entire table aggregated.',
+    input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'create_backlog_item',
@@ -2136,7 +2141,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'list_backlog': {
-      const { status, priority, item_type, search, limit = 30 } = input;
+      const { status, priority, item_type, search, limit = 50 } = input;
       const conditions = [];
       const vals = [];
       if (status)    conditions.push(`status = $${vals.push(status)}`);
@@ -2144,12 +2149,31 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       if (item_type) conditions.push(`item_type = $${vals.push(item_type)}`);
       if (search)    conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-      vals.push(Math.min(parseInt(limit, 10) || 30, 100));
+      const cap = Math.min(parseInt(limit, 10) || 50, 500);
+      // Cheap COUNT(*) so Pepper can tell whether the LIMIT is truncating the
+      // result — the previous version silently capped at 30 rows with no signal.
+      const { rows: [totalRow] } = await localPool.query(
+        `SELECT COUNT(*)::int AS total FROM mcogs_backlog ${where}`, vals
+      );
+      vals.push(cap);
+      // Drop description from the default SELECT — keeps payload small for
+      // listing/counting. Callers that need it can use update_backlog_status
+      // or hit the REST API directly.
       const { rows } = await localPool.query(
-        `SELECT id, key, summary, item_type, priority, status, requested_by_email, assigned_to, story_points, sprint, sort_order, created_at FROM mcogs_backlog ${where} ORDER BY sort_order ASC, created_at DESC LIMIT $${vals.length}`,
+        `SELECT id, key, summary, item_type, priority, status, story_points, sprint, sort_order, created_at FROM mcogs_backlog ${where} ORDER BY sort_order ASC, created_at DESC LIMIT $${vals.length}`,
         vals
       );
-      return rows.length ? rows : 'No backlog items found.';
+      const total = totalRow?.total ?? rows.length;
+      if (rows.length === 0) return 'No backlog items found.';
+      return { total, returned: rows.length, truncated: rows.length < total, rows };
+    }
+
+    case 'get_backlog_stats': {
+      const { rows: byStatus }   = await localPool.query(`SELECT status,    COUNT(*)::int AS count FROM mcogs_backlog GROUP BY status    ORDER BY count DESC`);
+      const { rows: byPriority } = await localPool.query(`SELECT priority,  COUNT(*)::int AS count FROM mcogs_backlog GROUP BY priority  ORDER BY count DESC`);
+      const { rows: byType }     = await localPool.query(`SELECT item_type, COUNT(*)::int AS count FROM mcogs_backlog GROUP BY item_type ORDER BY count DESC`);
+      const { rows: [{ total }] } = await localPool.query(`SELECT COUNT(*)::int AS total FROM mcogs_backlog`);
+      return { total, by_status: byStatus, by_priority: byPriority, by_item_type: byType };
     }
 
     case 'create_backlog_item': {
