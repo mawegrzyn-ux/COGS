@@ -319,6 +319,28 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
   const [deleteBacklog, setDeleteBacklog] = useState<BacklogItem | null>(null)
   const [epics, setEpics] = useState<EpicSummary[]>([])
+  // View mode for the backlog tab — list (table) or kanban (priority columns).
+  // Persisted per browser so the user's last choice sticks.
+  const [backlogView, setBacklogView] = useState<'list' | 'kanban'>(() => {
+    const v = localStorage.getItem('backlog-view-mode')
+    return v === 'kanban' ? 'kanban' : 'list'
+  })
+  useEffect(() => { localStorage.setItem('backlog-view-mode', backlogView) }, [backlogView])
+  // Tile currently being dragged in the kanban — `id` of the BacklogItem.
+  const [kanbanDragId, setKanbanDragId] = useState<number | null>(null)
+  const [kanbanDragOverPriority, setKanbanDragOverPriority] = useState<string | null>(null)
+
+  // AI-suggested priority proposals — populated by POST /backlog/suggest-priorities.
+  // null = modal closed; populated array = modal showing proposals.
+  interface PriorityProposal {
+    id: number; key: string; summary: string;
+    current: string; proposed: string; reasoning: string;
+    accepted: boolean
+  }
+  const [suggestLoading, setSuggestLoading] = useState(false)
+  const [suggestProposals, setSuggestProposals] = useState<PriorityProposal[] | null>(null)
+  const [suggestSummary, setSuggestSummary] = useState<string>('')
+  const [applyingSuggestions, setApplyingSuggestions] = useState(false)
 
   // ── Changelog state ─────────────────────────────────────────────────
   const [changelog, setChangelog] = useState<ChangelogEntry[]>([])
@@ -376,6 +398,25 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       setBacklogTotal(data?.total || 0)
     } finally { setBacklogLoading(false) }
   }, [api, backlogFilter])
+
+  // Kanban drop handler — when a tile is dropped on a priority column, PUT
+  // the new priority and update local state optimistically. Roll back on
+  // error. Author-or-dev gating happens server-side; surface 403s as a toast.
+  const onKanbanDrop = useCallback(async (id: number, newPriority: string) => {
+    const item = backlog.find(b => b.id === id)
+    if (!item || item.priority === newPriority) return
+    const prev = item.priority
+    setBacklog(list => list.map(b => b.id === id ? { ...b, priority: newPriority } : b))
+    try {
+      await api.put(`/backlog/${id}`, { priority: newPriority })
+      setToast({ message: `${item.key} → ${newPriority}`, type: 'success' })
+    } catch (err: unknown) {
+      // Rollback
+      setBacklog(list => list.map(b => b.id === id ? { ...b, priority: prev } : b))
+      const msg = (err as { message?: string })?.message || 'Failed to update priority'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, backlog])
 
   const loadEpics = useCallback(async () => {
     try {
@@ -826,6 +867,44 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               {epics.map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary.length > 30 ? ep.summary.slice(0, 30) + '…' : ep.summary}</option>)}
             </select>
             <div className="flex-1" />
+            {/* AI Suggest priorities — only when in kanban view + dev */}
+            {backlogView === 'kanban' && isDev && (
+              <button
+                className="btn-outline text-xs flex items-center gap-1 disabled:opacity-50"
+                disabled={suggestLoading}
+                onClick={async () => {
+                  setSuggestLoading(true)
+                  try {
+                    const r = await api.post('/backlog/suggest-priorities', {}) as { summary: string; proposals: Omit<PriorityProposal, 'accepted'>[] }
+                    if (!r.proposals?.length) {
+                      setToast({ message: r.summary || 'No changes proposed', type: 'success' })
+                    } else {
+                      setSuggestSummary(r.summary || '')
+                      setSuggestProposals(r.proposals.map(p => ({ ...p, accepted: true })))
+                    }
+                  } catch (err: unknown) {
+                    const msg = (err as { message?: string })?.message || 'Failed to suggest priorities'
+                    setToast({ message: msg, type: 'error' })
+                  } finally { setSuggestLoading(false) }
+                }}
+                title="Ask Pepper to suggest priority adjustments for open backlog items"
+              >
+                {suggestLoading ? '✨ Thinking…' : '✨ Suggest Priorities'}
+              </button>
+            )}
+            {/* View toggle — list (table) vs kanban (priority columns) */}
+            <div className="inline-flex rounded-lg border border-border overflow-hidden text-xs">
+              <button
+                className={`px-2.5 py-1 transition-colors ${backlogView === 'list' ? 'bg-accent text-white' : 'bg-surface text-text-2 hover:bg-surface-2'}`}
+                onClick={() => setBacklogView('list')}
+                title="Table view"
+              >☰ List</button>
+              <button
+                className={`px-2.5 py-1 transition-colors border-l border-border ${backlogView === 'kanban' ? 'bg-accent text-white' : 'bg-surface text-text-2 hover:bg-surface-2'}`}
+                onClick={() => setBacklogView('kanban')}
+                title="Kanban — drag tiles between priority columns"
+              >▦ Kanban</button>
+            </div>
             {isDev && jiraStatus?.configured && (
               <button className="btn-outline text-xs flex items-center gap-1" disabled={jiraSyncing === 'bulk'}
                 onClick={async () => {
@@ -846,9 +925,68 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
             {can('backlog', 'write') && <button className="btn-primary text-sm" onClick={() => setShowBacklogModal(true)}>+ Add Item</button>}
           </div>
 
-          {/* Table */}
+          {/* Body — Kanban or Table */}
           {backlogLoading ? <Spinner /> : !backlog.length ? (
             <div className="text-center text-text-3 py-12">No backlog items found</div>
+          ) : backlogView === 'kanban' ? (
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(220px, 1fr))' }}>
+              {(['highest', 'high', 'medium', 'low', 'lowest'] as const).map(prio => {
+                const colItems = backlog.filter(b => b.priority === prio)
+                const isOver   = kanbanDragOverPriority === prio
+                const headerColor = PRIORITY_COLOURS[prio] || 'bg-gray-100 text-gray-600'
+                return (
+                  <div
+                    key={prio}
+                    className={`flex flex-col rounded-lg border bg-surface-2 transition-colors ${isOver ? 'border-accent bg-accent-dim/30' : 'border-border'}`}
+                    onDragOver={e => { e.preventDefault(); setKanbanDragOverPriority(prio) }}
+                    onDragLeave={() => setKanbanDragOverPriority(p => p === prio ? null : p)}
+                    onDrop={e => {
+                      e.preventDefault()
+                      setKanbanDragOverPriority(null)
+                      if (kanbanDragId !== null) {
+                        onKanbanDrop(kanbanDragId, prio)
+                        setKanbanDragId(null)
+                      }
+                    }}
+                  >
+                    {/* Column header */}
+                    <div className={`px-3 py-2 rounded-t-lg flex items-center justify-between text-xs font-semibold uppercase tracking-wide ${headerColor}`}>
+                      <span>{prio}</span>
+                      <span className="opacity-70">{colItems.length}</span>
+                    </div>
+
+                    {/* Tiles */}
+                    <div className="flex-1 p-2 space-y-2 min-h-[80px]">
+                      {colItems.length === 0 ? (
+                        <div className="text-xs text-text-3 italic text-center py-4">No items</div>
+                      ) : colItems.map(b => (
+                        <div
+                          key={b.id}
+                          draggable={can('backlog', 'write')}
+                          onDragStart={() => setKanbanDragId(b.id)}
+                          onDragEnd={() => { setKanbanDragId(null); setKanbanDragOverPriority(null) }}
+                          onClick={() => openBacklogDetail(b)}
+                          className={`bg-surface border border-border rounded-md p-2.5 shadow-sm hover:border-accent hover:shadow cursor-grab active:cursor-grabbing transition-all ${kanbanDragId === b.id ? 'opacity-40' : ''}`}
+                          title={can('backlog', 'write') ? 'Drag to change priority — click to open' : 'Click to open'}
+                        >
+                          <div className="flex items-center justify-between gap-1.5 mb-1">
+                            <span className="font-mono text-[10px] text-accent">{b.key}</span>
+                            <span className="text-[10px] text-text-3 capitalize">{b.item_type}</span>
+                          </div>
+                          <p className="text-xs text-text-1 leading-snug line-clamp-3">{b.summary}</p>
+                          {b.status && (
+                            <div className="mt-1.5 flex items-center justify-between gap-1.5">
+                              <span className="text-[10px] text-text-3 capitalize">{b.status.replace(/_/g, ' ')}</span>
+                              {b.story_points != null && <span className="text-[10px] text-text-3">{b.story_points} pts</span>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           ) : (
             <div className="card overflow-x-auto">
               <table className="w-full text-sm">
@@ -1292,6 +1430,83 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               onPost={(text, parentId) => postComment('backlog', backlogDetail.id, text, parentId)}
               onDelete={(cid) => deleteComment('backlog', backlogDetail.id, cid)}
               userSub={user?.sub} isDev={isDev} />
+          </div>
+        </Modal>
+      )}
+
+      {/* AI priority-proposal modal */}
+      {suggestProposals && (
+        <Modal title="Suggested priority changes" onClose={() => !applyingSuggestions && setSuggestProposals(null)}>
+          <div className="space-y-4">
+            {suggestSummary && (
+              <p className="text-sm text-text-2 italic">{suggestSummary}</p>
+            )}
+            <div className="flex items-center justify-between text-xs text-text-3">
+              <span>{suggestProposals.filter(p => p.accepted).length} of {suggestProposals.length} selected</span>
+              <div className="flex gap-2">
+                <button className="text-accent hover:underline" onClick={() => setSuggestProposals(ps => ps?.map(p => ({ ...p, accepted: true })) ?? null)}>Select all</button>
+                <span className="text-text-3">·</span>
+                <button className="text-accent hover:underline" onClick={() => setSuggestProposals(ps => ps?.map(p => ({ ...p, accepted: false })) ?? null)}>Clear all</button>
+              </div>
+            </div>
+            <div className="border border-border rounded-lg max-h-[60vh] overflow-y-auto">
+              {suggestProposals.map((p, idx) => (
+                <label
+                  key={p.id}
+                  className={`flex items-start gap-3 px-3 py-2.5 border-b border-border last:border-0 cursor-pointer transition-colors ${p.accepted ? 'bg-accent-dim/30' : 'hover:bg-surface-2'}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 shrink-0"
+                    checked={p.accepted}
+                    onChange={e => {
+                      const checked = e.target.checked
+                      setSuggestProposals(ps => ps?.map((x, i) => i === idx ? { ...x, accepted: checked } : x) ?? null)
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs text-accent">{p.key}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${PRIORITY_COLOURS[p.current] || 'bg-gray-100'}`}>{p.current}</span>
+                      <span className="text-text-3">→</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${PRIORITY_COLOURS[p.proposed] || 'bg-gray-100'}`}>{p.proposed}</span>
+                    </div>
+                    <p className="text-sm text-text-1 mt-1 leading-snug line-clamp-2">{p.summary}</p>
+                    <p className="text-xs text-text-3 mt-1 italic">{p.reasoning}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button
+                className="btn-outline px-3 py-1.5 text-sm"
+                onClick={() => setSuggestProposals(null)}
+                disabled={applyingSuggestions}
+              >Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                disabled={applyingSuggestions || suggestProposals.filter(p => p.accepted).length === 0}
+                onClick={async () => {
+                  const accepted = suggestProposals.filter(p => p.accepted)
+                  if (accepted.length === 0) return
+                  setApplyingSuggestions(true)
+                  let ok = 0, fail = 0
+                  for (const p of accepted) {
+                    try { await api.put(`/backlog/${p.id}`, { priority: p.proposed }); ok++ }
+                    catch { fail++ }
+                  }
+                  setApplyingSuggestions(false)
+                  setSuggestProposals(null)
+                  setToast({
+                    message: fail === 0 ? `Applied ${ok} priority change${ok !== 1 ? 's' : ''}` : `Applied ${ok}, ${fail} failed`,
+                    type: fail === 0 ? 'success' : 'error',
+                  })
+                  loadBacklog()
+                }}
+              >
+                {applyingSuggestions ? 'Applying…' : `Apply ${suggestProposals.filter(p => p.accepted).length} change${suggestProposals.filter(p => p.accepted).length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

@@ -1,5 +1,7 @@
-const router = require('express').Router();
-const pool   = require('../db/local-pool');
+const router    = require('express').Router();
+const pool      = require('../db/local-pool');
+const Anthropic = require('@anthropic-ai/sdk');
+const aiConfig  = require('../helpers/aiConfig');
 const { logAudit, diffFields } = require('../helpers/audit');
 
 // ── GET / — list backlog with filters ───────────────────────────────────────
@@ -353,6 +355,146 @@ router.delete('/:id/comments/:commentId', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete comment' } });
+  }
+});
+
+// ── POST /backlog/suggest-priorities ──────────────────────────────────────
+// Claude reads all open backlog items and proposes priority adjustments.
+// Returns a structured `{summary, proposals: [{key, summary, current, proposed, reasoning}]}`
+// payload — the frontend Kanban modal lets the user accept/reject each one
+// and batches PUTs through the existing PUT /backlog/:id endpoint.
+router.post('/suggest-priorities', async (req, res) => {
+  if (!req.user?.is_dev) {
+    return res.status(403).json({ error: { message: 'Only developers can request priority suggestions' } });
+  }
+
+  try {
+    // 1. Load all OPEN backlog items (skip done/wont_do — no need to reprioritise)
+    const { rows: items } = await pool.query(`
+      SELECT b.id, b.key, b.summary, b.description, b.item_type, b.priority,
+             b.status, b.story_points, b.labels,
+             ep.key AS epic_key, ep.summary AS epic_summary
+      FROM   mcogs_backlog b
+      LEFT JOIN mcogs_backlog ep ON ep.id = b.epic_id
+      WHERE  b.status IN ('backlog', 'todo', 'in_progress', 'in_review')
+      ORDER BY b.created_at DESC
+      LIMIT 200
+    `);
+
+    if (items.length === 0) {
+      return res.json({ summary: 'No open backlog items to triage.', proposals: [] });
+    }
+
+    // 2. Build a compact representation for the AI — drop fields it doesn't need
+    const compact = items.map(i => ({
+      key:           i.key,
+      summary:       i.summary,
+      description:   (i.description || '').slice(0, 500), // cap to keep token use reasonable
+      item_type:     i.item_type,
+      current_priority: i.priority,
+      status:        i.status,
+      story_points:  i.story_points,
+      labels:        Array.isArray(i.labels) ? i.labels : [],
+      epic:          i.epic_key ? `${i.epic_key} — ${i.epic_summary}` : null,
+    }));
+
+    // 3. System prompt — strict JSON contract, conservative defaults
+    const systemPrompt = `You are a product manager helping triage a software backlog.
+
+Priorities (highest → lowest):
+- highest: blocks revenue, security, or compliance; user-facing breakage; legal/regulatory deadline
+- high: significant UX pain, frequent customer complaint, blocks other work
+- medium: meaningful improvement, planned feature work
+- low: nice-to-have, cosmetic, niche edge case
+- lowest: backlog noise, "someday/maybe", trivial
+
+You will be given a list of open backlog items. Propose a priority for each AS A JSON OBJECT with this exact structure:
+
+{
+  "summary": "<one-sentence overview of the proposed reprioritisation>",
+  "proposals": [
+    {
+      "key": "<item key like BACK-1234>",
+      "current": "<current priority>",
+      "proposed": "<proposed priority>",
+      "reasoning": "<one short sentence — why>"
+    }
+  ]
+}
+
+Rules:
+- Only include items where you would CHANGE the priority. If the current priority is correct, OMIT the item.
+- Be conservative — small adjustments are fine; aggressive sweeps cause churn.
+- Use the description, item_type, status, story_points, labels, and epic context to inform the call.
+- If you can't tell, leave the item alone (omit it).
+- Output ONLY the JSON object, no preamble, no code fences.`;
+
+    // 4. Call Claude Haiku
+    const apiKey = aiConfig.get('ANTHROPIC_API_KEY');
+    if (!apiKey) return res.status(503).json({ error: { message: 'AI is not configured. Set an Anthropic API key in Settings → AI.' } });
+    const anthropic = new Anthropic({ apiKey });
+
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: `Backlog items:\n${JSON.stringify(compact, null, 2)}` }],
+    });
+
+    // 5. Parse JSON response (forgiving — strip code fences if present)
+    const text = response.content?.[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch?.[0] || text);
+    } catch {
+      parsed = { summary: 'Could not parse AI response', proposals: [], raw: text };
+    }
+
+    // 6. Enrich proposals with the item id + summary for the modal
+    const byKey = new Map(items.map(i => [i.key, i]));
+    const proposals = (parsed.proposals || [])
+      .map(p => {
+        const it = byKey.get(p.key);
+        if (!it) return null;
+        const valid = ['highest', 'high', 'medium', 'low', 'lowest'];
+        if (!valid.includes(p.proposed) || !valid.includes(p.current)) return null;
+        if (p.proposed === it.priority) return null; // sanity check — must be a change
+        return {
+          key:       it.key,
+          id:        it.id,
+          summary:   it.summary,
+          current:   it.priority,
+          proposed:  p.proposed,
+          reasoning: String(p.reasoning || '').slice(0, 300),
+        };
+      })
+      .filter(Boolean);
+
+    // 7. Log the AI call
+    try {
+      await pool.query(`
+        INSERT INTO mcogs_ai_chat_log (user_sub, messages, tools_called, input_tokens, output_tokens)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        req.user?.sub || null,
+        JSON.stringify([
+          { role: 'user', content: `Suggest priorities for ${items.length} open backlog items` },
+          { role: 'assistant', content: text },
+        ]),
+        JSON.stringify(['suggest_backlog_priorities']),
+        response.usage?.input_tokens || 0,
+        response.usage?.output_tokens || 0,
+      ]);
+    } catch { /* silent */ }
+
+    res.json({
+      summary:   parsed.summary || `${proposals.length} proposed change${proposals.length !== 1 ? 's' : ''}.`,
+      proposals,
+    });
+  } catch (err) {
+    console.error('[suggest-priorities]', err);
+    res.status(500).json({ error: { message: 'Failed to generate priority suggestions' } });
   }
 });
 
