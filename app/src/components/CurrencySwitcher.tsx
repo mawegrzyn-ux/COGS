@@ -35,9 +35,11 @@ export default function CurrencySwitcher() {
         }`}
         title="Display currency"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <line x1="12" y1="1" x2="12" y2="23"/>
-          <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
+        {/* Banknote icon — generic "money" glyph, currency-agnostic. */}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="6" width="20" height="12" rx="2"/>
+          <circle cx="12" cy="12" r="2.5"/>
+          <path d="M6 10v.01M18 14v.01"/>
         </svg>
         <span className="font-medium">
           {currencyCode === '' ? 'Market' : currencyCode === '__BASE__' ? 'USD' : currencyCode}

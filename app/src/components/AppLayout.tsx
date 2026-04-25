@@ -447,7 +447,7 @@ export default function AppLayout() {
               <MarketSwitcher />
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-text-3 hidden sm:inline">Currency</span>
+              <span className="text-xs font-medium text-text-3 hidden sm:inline">Show prices in</span>
               <CurrencySwitcher />
             </div>
             <div className="flex items-center gap-1.5">
