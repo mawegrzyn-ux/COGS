@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
@@ -1171,10 +1171,17 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                         </Field>
                         <div className="grid grid-cols-2 gap-4">
                           <Field label="Category">
-                            <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-                              <option value="">No category…</option>
-                              {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                            </select>
+                            <CategoryPicker
+                              value={form.category_id}
+                              onChange={v => setForm(f => ({ ...f, category_id: v }))}
+                              categories={categories}
+                              scope="for_ingredients"
+                              onCategoryCreated={cat => setDbCategories(prev =>
+                                [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                              )}
+                              apiPost={(p, b) => api.post(p, b)}
+                              placeholder="No category…"
+                            />
                           </Field>
                           <Field label="Base Unit" required error={errors.base_unit_id}>
                             <select className="select w-full" value={form.base_unit_id} onChange={e => {
@@ -1293,10 +1300,17 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Category">
-                <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-                  <option value="">No category…</option>
-                  {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                </select>
+                <CategoryPicker
+                  value={form.category_id}
+                  onChange={v => setForm(f => ({ ...f, category_id: v }))}
+                  categories={categories}
+                  scope="for_ingredients"
+                  onCategoryCreated={cat => setDbCategories(prev =>
+                    [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                  )}
+                  apiPost={(p, b) => api.post(p, b)}
+                  placeholder="No category…"
+                />
               </Field>
               <Field label="Base Unit" required error={errors.base_unit_id}>
                 <select className="select w-full" value={form.base_unit_id} onChange={e => {

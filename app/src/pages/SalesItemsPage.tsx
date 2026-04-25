@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useApi } from '../hooks/useApi'
-import { Field, Spinner, Modal, Toast } from '../components/ui'
+import { Field, Spinner, Modal, Toast, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
 
@@ -115,11 +115,17 @@ function ComboFormModal({ mode, initial, onSave, saving, onClose }: {
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
         </Field>
         <Field label="Category">
-          <select className="input w-full" value={form.category_id}
-            onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-            <option value="">No category…</option>
-            {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={categories}
+            scope="for_sales_items"
+            onCategoryCreated={cat => setCategories(prev =>
+              [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+            )}
+            apiPost={(p, b) => api.post(p, b)}
+            placeholder="No category…"
+          />
         </Field>
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description}
@@ -267,10 +273,17 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
           </Field>
         )}
         <Field label="Category">
-          <select className="input w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-            <option value="">No category…</option>
-            {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={siCategories}
+            scope="for_sales_items"
+            onCategoryCreated={cat => setSiCategories(prev =>
+              [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+            )}
+            apiPost={(p, b) => api.post(p, b)}
+            placeholder="No category…"
+          />
         </Field>
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
@@ -1440,11 +1453,18 @@ export default function SalesItemsPage() {
                     {/* Category */}
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
-                      <select className="input w-full text-sm" value={panelForm.category_id}
-                        onChange={e => setPanelForm(f => f ? { ...f, category_id: e.target.value } : f)}>
-                        <option value="">No category…</option>
-                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                      </select>
+                      <CategoryPicker
+                        value={panelForm.category_id}
+                        onChange={v => setPanelForm(f => f ? { ...f, category_id: v } : f)}
+                        categories={siCategories}
+                        scope="for_sales_items"
+                        onCategoryCreated={cat => setSiCategories(prev =>
+                          [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                        )}
+                        apiPost={(p, b) => api.post(p, b)}
+                        className="input w-full text-sm"
+                        placeholder="No category…"
+                      />
                     </div>
 
                     {/* Description */}
@@ -1817,11 +1837,18 @@ export default function SalesItemsPage() {
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
-                      <select className="input w-full text-sm" value={cpComboForm.category_id}
-                        onChange={e => setCpComboForm(f => f ? { ...f, category_id: e.target.value } : f)}>
-                        <option value="">No category…</option>
-                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                      </select>
+                      <CategoryPicker
+                        value={cpComboForm.category_id}
+                        onChange={v => setCpComboForm(f => f ? { ...f, category_id: v } : f)}
+                        categories={siCategories}
+                        scope="for_sales_items"
+                        onCategoryCreated={cat => setSiCategories(prev =>
+                          [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                        )}
+                        apiPost={(p, b) => api.post(p, b)}
+                        className="input w-full text-sm"
+                        placeholder="No category…"
+                      />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Description</label>

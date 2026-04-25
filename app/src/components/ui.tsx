@@ -452,6 +452,127 @@ export function CalcInput({
   )
 }
 
+// ── CategoryPicker — select + inline "create new" affordance ─────────────────
+// Reusable across Recipes / Sales Items / Inventory / any other form that
+// needs to assign a category and might want to create one inline. The new
+// category gets `for_<scope>=true` by default so it appears in the relevant
+// dropdown straight away. Falls back to the parent calling `onCategoryCreated`
+// to refresh the list — the picker doesn't own the categories array.
+
+export type CategoryScope = 'for_ingredients' | 'for_recipes' | 'for_sales_items'
+
+interface CategoryPickerProps {
+  /** Selected category id as a string (matches existing form state shape). */
+  value:    string
+  onChange: (id: string) => void
+  /** All categories already loaded by the parent — pre-filtered to the right
+   *  scope where appropriate (e.g. `for_recipes=true`). */
+  categories: { id: number; name: string }[]
+  /** Which scope flag the new category should have on creation. The picker
+   *  doesn't infer — it's caller-side context (recipe form → for_recipes). */
+  scope: CategoryScope
+  /** Called after a successful POST /categories with the freshly-created row.
+   *  Parent should append to its categories state and trigger any reload. */
+  onCategoryCreated: (cat: { id: number; name: string }) => void
+  /** Auth0 bearer + Content-Type wrapper. Parent provides — we don't import
+   *  useApi here to keep ui.tsx free of app-level hook dependencies. */
+  apiPost: (path: string, body: unknown) => Promise<unknown>
+  className?:   string
+  placeholder?: string
+  disabled?:    boolean
+  required?:    boolean
+  /** Optional extra scope flags to also flip true on creation — e.g. recipe
+   *  forms that also want the new category visible in Sales Items. */
+  alsoSetScopes?: CategoryScope[]
+}
+
+export function CategoryPicker({
+  value, onChange, categories, scope, onCategoryCreated, apiPost,
+  className = 'input w-full', placeholder = 'Select category…', disabled, required, alsoSetScopes,
+}: CategoryPickerProps) {
+  const [creating, setCreating] = useState(false)
+  const [draft,    setDraft]    = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  async function commit() {
+    const name = draft.trim()
+    if (!name) { setError('Name required'); return }
+    if (categories.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+      setError('A category with that name already exists'); return
+    }
+    setSaving(true); setError(null)
+    try {
+      const body: Record<string, unknown> = { name, [scope]: true }
+      for (const s of alsoSetScopes || []) body[s] = true
+      const created = await apiPost('/categories', body) as { id: number; name: string }
+      onCategoryCreated({ id: created.id, name: created.name })
+      onChange(String(created.id))
+      setCreating(false); setDraft('')
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message
+      setError(msg || 'Failed to create category')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (creating) {
+    return (
+      <div className="space-y-1">
+        <div className="flex gap-1.5">
+          <input
+            className="input flex-1 text-sm"
+            placeholder="New category name…"
+            value={draft}
+            onChange={e => { setDraft(e.target.value); setError(null) }}
+            onKeyDown={e => {
+              if (e.key === 'Enter')  { e.preventDefault(); commit() }
+              if (e.key === 'Escape') { setCreating(false); setDraft(''); setError(null) }
+            }}
+            autoFocus
+            disabled={saving}
+          />
+          <button type="button"
+            className="btn-primary px-3 text-sm whitespace-nowrap"
+            onClick={commit}
+            disabled={saving || !draft.trim()}
+          >{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button"
+            className="btn-ghost px-2 text-sm whitespace-nowrap"
+            onClick={() => { setCreating(false); setDraft(''); setError(null) }}
+            disabled={saving}
+          >Cancel</button>
+        </div>
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex gap-1.5 items-center">
+      <select
+        className={className}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        required={required}
+      >
+        <option value="">{placeholder}</option>
+        {categories.map(c => (
+          <option key={c.id} value={String(c.id)}>{c.name}</option>
+        ))}
+      </select>
+      <button type="button"
+        className="btn-ghost px-2 py-1 text-xs whitespace-nowrap border border-border rounded hover:bg-surface-2"
+        onClick={() => setCreating(true)}
+        disabled={disabled}
+        title="Create a new category"
+      >+ New</button>
+    </div>
+  )
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────────
 interface ToastProps {
   message: string

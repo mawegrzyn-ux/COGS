@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, CalcInput } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 import TranslationEditor from '../components/TranslationEditor'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
@@ -458,7 +458,19 @@ export default function RecipesPage() {
       if (isNew) {
         const r = await api.post('/recipes', payload)
         if (form.createSalesItem) {
-          try { await api.post('/sales-items', { name: r.name, item_type: 'recipe', recipe_id: r.id }) } catch {}
+          // Carry the recipe's category onto the sales item so the user
+          // doesn't have to re-pick it. The backend POST /sales-items will
+          // also auto-flip the category's `for_sales_items` flag to true if
+          // it wasn't already, so the new item is visible in Sales Items
+          // category dropdowns straight away.
+          try {
+            await api.post('/sales-items', {
+              name:        r.name,
+              item_type:   'recipe',
+              recipe_id:   r.id,
+              category_id: r.category_id ?? null,
+            })
+          } catch {}
         }
         setRecipes(prev => [...prev, r].sort((a,b) => a.name.localeCompare(b.name)))
         showToast('Recipe created')
@@ -1907,6 +1919,10 @@ export default function RecipesPage() {
           categories={categories}
           onSave={saveRecipe}
           onClose={() => setRecipeModal(null)}
+          onCategoryCreated={cat => setApiCategories(prev =>
+            [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+          )}
+          apiPost={(p, b) => api.post(p, b)}
         />
       )}
 
@@ -1973,11 +1989,13 @@ interface RecipeForm {
   createSalesItem?: boolean
 }
 
-function RecipeFormModal({ recipe, categories, onSave, onClose }: {
+function RecipeFormModal({ recipe, categories, onSave, onClose, onCategoryCreated, apiPost }: {
   recipe: Recipe | null
   categories: {id: number; name: string}[]
   onSave: (f: RecipeForm) => void
   onClose: () => void
+  onCategoryCreated: (cat: { id: number; name: string }) => void
+  apiPost: (path: string, body: unknown) => Promise<unknown>
 }) {
   const [form, setForm] = useState<RecipeForm>({
     name:            recipe?.name           ?? '',
@@ -2009,12 +2027,22 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           </label>
         )}
 
-        {/* Category select */}
+        {/* Category — picker with inline-create. New categories created from
+            here are flagged `for_recipes=true` so they appear in this list
+            immediately, plus `for_sales_items=true` if the user has the
+            "Create Sales Item" toggle on (the same category will be needed
+            on the resulting sales item). */}
         <Field label="Category">
-          <select className="select w-full" value={form.category_id} onChange={set('category_id')}>
-            <option value="">No category…</option>
-            {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={categories}
+            scope="for_recipes"
+            alsoSetScopes={form.createSalesItem ? ['for_sales_items'] : undefined}
+            onCategoryCreated={onCategoryCreated}
+            apiPost={apiPost}
+            placeholder="No category…"
+          />
         </Field>
 
         <div className="grid grid-cols-2 gap-3">

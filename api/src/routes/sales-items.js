@@ -195,6 +195,21 @@ router.post('/', async (req, res, next) => {
        recipe_id || null, ingredient_id || null, combo_id || null,
        manual_cost || null, image_url || null, sort_order || 0, qty != null ? qty : 1]
     );
+
+    // Auto-promote the linked category to the sales-items scope. When users
+    // flag a recipe as a sales item, the recipe's category arrives here with
+    // only `for_recipes=true` set — without this flip, the category wouldn't
+    // appear in the Sales Items "category" dropdown afterwards. Idempotent
+    // and side-effect-free for categories that are already scoped.
+    if (category_id) {
+      await pool.query(
+        `UPDATE mcogs_categories
+         SET for_sales_items = TRUE, updated_at = NOW()
+         WHERE id = $1 AND for_sales_items = FALSE`,
+        [category_id]
+      );
+    }
+
     const full = await fetchFull(rows[0].id);
     logAudit(pool, req, { action: 'create', entity_type: 'sales_item', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(full);
