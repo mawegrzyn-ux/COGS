@@ -484,11 +484,17 @@ interface CategoryPickerProps {
   /** Optional extra scope flags to also flip true on creation — e.g. recipe
    *  forms that also want the new category visible in Sales Items. */
   alsoSetScopes?: CategoryScope[]
+  /** Show the "+ New" inline-create button. Default true. Set false in
+   *  contexts where creating a category from the dropdown is overkill —
+   *  e.g. the recipe header, where a full categories admin already exists
+   *  one click away. */
+  allowCreate?: boolean
 }
 
 export function CategoryPicker({
   value, onChange, categories, scope, onCategoryCreated, apiPost,
   className = 'input w-full', placeholder = 'Select category…', disabled, required, alsoSetScopes,
+  allowCreate = true,
 }: CategoryPickerProps) {
   const [creating, setCreating] = useState(false)
   const [draft,    setDraft]    = useState('')
@@ -563,12 +569,14 @@ export function CategoryPicker({
           <option key={c.id} value={String(c.id)}>{c.name}</option>
         ))}
       </select>
-      <button type="button"
-        className="btn-ghost px-2 py-1 text-xs whitespace-nowrap border border-border rounded hover:bg-surface-2"
-        onClick={() => setCreating(true)}
-        disabled={disabled}
-        title="Create a new category"
-      >+ New</button>
+      {allowCreate && (
+        <button type="button"
+          className="btn-ghost px-2 py-1 text-xs whitespace-nowrap border border-border rounded hover:bg-surface-2"
+          onClick={() => setCreating(true)}
+          disabled={disabled}
+          title="Create a new category"
+        >+ New</button>
+      )}
     </div>
   )
 }

@@ -137,6 +137,15 @@ interface SimpleMenu {
 const fmt     = (n: number | string | null | undefined, dp = 3) => Number(n ?? 0).toFixed(dp)
 const fmtCost = (n: number | string | null | undefined) => Number(n ?? 0).toFixed(2)
 
+// Display qty with at most 3 decimals AND strip trailing zeros
+// (4000.00000000 → "4000", 1.5 → "1.5", 0.001 → "0.001"). DB keeps full
+// precision; only the displayed string is trimmed.
+const fmtQty = (n: number | string | null | undefined): string => {
+  const num = Number(n ?? 0)
+  if (!isFinite(num)) return ''
+  return parseFloat(num.toFixed(3)).toString()
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RecipesPage() {
@@ -698,7 +707,10 @@ export default function RecipesPage() {
       return
     }
     const qty = Number(trimmed)
-    if (qty === Number(item.prep_qty)) return  // no-op
+    // Display is rounded to 3dp — treat sub-millisecond differences as no-op
+    // so opening then blurring an unchanged cell doesn't fire a phantom PUT
+    // that would silently strip DB-side precision past the 3rd decimal.
+    if (Math.abs(qty - Number(item.prep_qty)) < 0.0005) return
 
     const body = {
       prep_qty:                qty,
@@ -1261,6 +1273,7 @@ export default function RecipesPage() {
                           apiPost={(p, b) => api.post(p, b)}
                           className="input text-xs py-1"
                           placeholder="Category…"
+                          allowCreate={false}
                         />
                       </div>
 
@@ -1840,7 +1853,7 @@ export default function RecipesPage() {
                                 <span className="inline-flex items-center gap-1.5">
                                   <CalcInput
                                     className="input w-24 py-0.5 px-1.5 font-mono text-sm"
-                                    value={String(item.prep_qty)}
+                                    value={fmtQty(item.prep_qty)}
                                     onChange={v => saveItemQtyInline(item, v)}
                                   />
                                   <span className="text-text-3">{item.prep_unit || item.base_unit_abbr || ''}</span>
