@@ -838,10 +838,12 @@ export default function MediaLibrary({ open, onClose, onInsert, formKey, mode = 
     )
   }
 
-  // Modal mode: render via portal with backdrop
+  // Modal mode: render via portal with backdrop. z-[10000] so it stacks above
+  // ui.tsx Modal (z-[9999]) — the library is often opened from inside another
+  // modal (ImageUpload's "Browse Library" button on the recipe image modal).
   const modalClass = fullscreen
-    ? 'fixed inset-0 z-50 flex flex-col bg-surface'
-    : 'fixed inset-0 z-50 flex items-center justify-center p-4'
+    ? 'fixed inset-0 z-[10000] flex flex-col bg-surface'
+    : 'fixed inset-0 z-[10000] flex items-center justify-center p-4'
 
   const dialogClass = fullscreen
     ? 'flex flex-col flex-1 w-full h-full bg-surface overflow-hidden'

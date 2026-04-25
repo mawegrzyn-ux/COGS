@@ -47,6 +47,7 @@ router.get('/:id', async (req, res) => {
     const { rows: [recipe] } = await pool.query(`
       SELECT r.id, ${rName} AS name, ${rDesc} AS description,
              r.category_id, r.yield_qty, r.yield_unit_id, r.yield_unit_text,
+             r.image_url,
              r.created_at, r.updated_at, r.translations,
              COALESCE(r.yield_unit_text, u.abbreviation) AS yield_unit_abbr
       FROM   mcogs_recipes r

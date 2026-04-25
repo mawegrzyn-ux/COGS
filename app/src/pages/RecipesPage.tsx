@@ -169,7 +169,6 @@ export default function RecipesPage() {
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [itemModalForPlVariation, setItemModalForPlVariation] = useState<number | null>(null) // pl_variation_id when adding to a PL variation
   const [itemModalForMarketPlVariation, setItemModalForMarketPlVariation] = useState<number | null>(null) // market_pl_variation_id when adding to a market+PL variation
-  const [variantMode, setVariantMode] = useState<'market' | 'price-level' | 'market-pl'>('market')
   const [showComparison,        setShowComparison]        = useState(false)
 
   // Inline-edit state for recipe header (name / yield qty / yield unit)
@@ -196,6 +195,22 @@ export default function RecipesPage() {
   const [loadingMenuAssign,   setLoadingMenuAssign]    = useState(false)
   const [priceLevels,         setPriceLevels]         = useState<PriceLevel[]>([])
   const [selectedPriceLevelId,setSelectedPriceLevelId]= useState<number | null>(null)
+
+  // variantMode is DERIVED from (selectedCountryId, selectedPriceLevelId) — no
+  // separate toggle. The combination of selectors fully determines which kind
+  // of variant we're targeting:
+  //   market = real, PL = none → market variation
+  //   market = none/GLOBAL, PL = real → PL variation
+  //   market = real, PL = real → market+PL variation
+  //   market = GLOBAL/empty, PL = none → global recipe (variantMode='market'
+  //     but activeVariation will be null → activeItems falls back to global)
+  const variantMode = useMemo<'market' | 'price-level' | 'market-pl'>(() => {
+    const hasMarket = typeof selectedCountryId === 'number'
+    const hasPL     = !!selectedPriceLevelId
+    if (hasMarket && hasPL) return 'market-pl'
+    if (hasPL && !hasMarket) return 'price-level'
+    return 'market'
+  }, [selectedCountryId, selectedPriceLevelId])
   const [menuAssignVersion,   setMenuAssignVersion]   = useState(0)
   const [editingTilePrice,    setEditingTilePrice]    = useState<string | null>(null)
 
@@ -405,11 +420,21 @@ export default function RecipesPage() {
     ) ?? null
   }, [selected, selectedPriceLevelId, variantMode, selectedCountryId])
 
+  // Fallback chain: most-specific variant first, then less-specific, then global.
+  // This matches the pill in the ingredients header — e.g. when (India, Dine In)
+  // is selected but no Market+PL variation exists yet, we still show India's
+  // market variation items (and the pill shows "Market Variation").
   const activeItems = useMemo(() => {
-    if (variantMode === 'market-pl' && activeMarketPlVariation) return activeMarketPlVariation.items
+    if (!selected) return []
+    if (variantMode === 'market-pl') {
+      if (activeMarketPlVariation) return activeMarketPlVariation.items
+      if (activeVariation)         return activeVariation.items
+      if (activePlVariation)       return activePlVariation.items
+      return selected.items ?? []
+    }
     if (variantMode === 'price-level' && activePlVariation) return activePlVariation.items
-    if (variantMode === 'market' && activeVariation) return activeVariation.items
-    return selected?.items ?? []
+    if (variantMode === 'market' && activeVariation)        return activeVariation.items
+    return selected.items ?? []
   }, [variantMode, activeMarketPlVariation, activePlVariation, activeVariation, selected])
 
   // Open Add Ingredient modal — wires up the correct variation context based
@@ -1485,8 +1510,10 @@ export default function RecipesPage() {
                     </div>
                   )}
 
-                  {activeCogs && activeVariation && (
-                    <div className="flex items-center gap-2 ml-auto">
+                  {/* Contextual variant actions — driven entirely by the
+                      Market + Price Level selection above. */}
+                  <div className="flex items-center gap-2 ml-auto flex-wrap">
+                    {activeCogs && activeVariation && (
                       <button
                         onClick={() => setShowComparison(p => !p)}
                         className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${showComparison ? 'border-accent bg-accent text-white' : 'border-border text-text-2 hover:border-accent hover:text-accent bg-surface'}`}
@@ -1494,49 +1521,10 @@ export default function RecipesPage() {
                       >
                         ⇄ Compare
                       </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ── Ingredients table ── */}
-              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
-
-                {/* Table header bar */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
-                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                    <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
-                    {variantMode === 'market-pl' && activeMarketPlVariation
-                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">🌍💰 {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
-                      : variantMode === 'price-level' && activePlVariation
-                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
-                        : activeCogs?.has_variation
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
-                    }
-                    {/* Variant mode toggle — hidden when variations feature flag is off */}
-                    {variationsEnabled && priceLevels.length > 0 && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('market')}
-                          title="Market variations — different ingredients per country"
-                        >🌍 Market</button>
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'price-level' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('price-level')}
-                          title="Price level variations — different ingredients per price level (global)"
-                        >💰 Price Level</button>
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market-pl' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('market-pl')}
-                          title="Market+PL variations — specific ingredients for a market+price level combination"
-                        >🌍💰 Market+PL</button>
-                      </div>
                     )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {variantMode === 'market' && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && (
+
+                    {/* Market variation actions */}
+                    {variantMode === 'market' && variationsEnabled && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && (
                       activeCogs?.has_variation && activeCogs.variation_id ? (
                         <>
                           <button
@@ -1571,7 +1559,9 @@ export default function RecipesPage() {
                         </button>
                       )
                     )}
-                    {variantMode === 'price-level' && selectedPriceLevelId && (
+
+                    {/* Price-level variation actions */}
+                    {variantMode === 'price-level' && variationsEnabled && selectedPriceLevelId && (
                       activePlVariation ? (
                         <>
                           <button
@@ -1602,18 +1592,20 @@ export default function RecipesPage() {
                           }}
                           title="Create a price-level-specific variation of this recipe"
                         >
-                          ⊞ Create PL Variation
+                          ✦ Create Variation
                         </button>
                       )
                     )}
-                    {variantMode === 'market-pl' && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && selectedPriceLevelId && (
+
+                    {/* Market+PL variation actions */}
+                    {variantMode === 'market-pl' && variationsEnabled && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && selectedPriceLevelId && (
                       activeMarketPlVariation ? (
                         <button
                           className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
                           onClick={() => setConfirmDelete({ type: 'market-pl-variation', id: activeMarketPlVariation.id })}
                           title="Delete this market+PL variation"
                         >
-                          <TrashIcon size={11} /> Delete Market+PL
+                          <TrashIcon size={11} /> Delete Variation
                         </button>
                       ) : (
                         <button
@@ -1627,7 +1619,7 @@ export default function RecipesPage() {
                             const copyLabel = choices.length > 1
                               ? `\n\nCopy from: global (G), market variation (M)${hasPlVar ? ', PL variation (P)' : ''}?\nEnter G, M${hasPlVar ? ', P' : ''} or leave blank for empty.`
                               : `\n\nCopy global ingredients as starting point?`
-                            const ans = window.prompt(`Create Market+PL variation for ${countryName} · ${levelName}?${copyLabel}`)
+                            const ans = window.prompt(`Create variation for ${countryName} · ${levelName}?${copyLabel}`)
                             if (ans === null) return
                             const copyFrom = ans.trim().toUpperCase() === 'M' ? 'market'
                               : ans.trim().toUpperCase() === 'P' ? 'pl'
@@ -1637,10 +1629,32 @@ export default function RecipesPage() {
                           }}
                           title="Create a market+price-level-specific variation"
                         >
-                          🌍💰 Create Market+PL
+                          ✦ Create Variation
                         </button>
                       )
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Ingredients table ── */}
+              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+
+                {/* Table header bar */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                    <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
+                    {/* Variant pill — derived from current Market + Price Level selection */}
+                    {variantMode === 'market-pl' && activeMarketPlVariation
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">🌍💰 {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
+                      : variantMode === 'price-level' && activePlVariation
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
+                        : activeCogs?.has_variation
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
+                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
+                    }
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
                       onClick={() => setShowCopyModal(true)}
