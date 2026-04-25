@@ -3,6 +3,7 @@ import ImageUpload from '../components/ImageUpload'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
+import { useCurrency } from '../contexts/CurrencyContext'
 import { useCogsThresholds, type CogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
@@ -2273,9 +2274,8 @@ function ScenarioTool({
     .finally(() => setAllLevelsLoading(false))
   }, [levelId, menuId, priceLevels, api, refreshKey]) // eslint-disable-line
 
-  // ── Display currency ───────────────────────────────────────────────────────
-  const [dispCurrCode, setDispCurrCode] = useState<string>('')
-  useEffect(() => { setDispCurrCode('') }, [menuId])
+  // ── Display currency (driven by global top-bar switcher) ──────────────────
+  const { currencyCode: dispCurrCode } = useCurrency()
 
   // ── Save / Load state ──────────────────────────────────────────────────────
   const [savedScenarios,   setSavedScenarios]   = useState<SavedScenario[]>([])
@@ -2483,23 +2483,6 @@ function ScenarioTool({
   }, [menus, countries, menuId])
 
   const marketRate = Number(menuCountry?.exchange_rate ?? 1)
-
-  const currencyOptions = useMemo(() => {
-    const seen = new Set<string>()
-    const opts: { value: string; label: string; sym: string }[] = []
-    if (menuCountry) {
-      opts.push({ value: '', label: `${menuCountry.currency_code} ${menuCountry.currency_symbol} (market)`, sym: menuCountry.currency_symbol })
-      seen.add(menuCountry.currency_code)
-    }
-    for (const c of countries) {
-      if (!seen.has(c.currency_code)) {
-        seen.add(c.currency_code)
-        opts.push({ value: c.currency_code, label: `${c.currency_code} ${c.currency_symbol}`, sym: c.currency_symbol })
-      }
-    }
-    if (!seen.has('USD')) opts.push({ value: '__BASE__', label: 'USD $ (base)', sym: '$' })
-    return opts
-  }, [countries, menuCountry])
 
   const { dispRate, dispSym } = useMemo(() => {
     if (!dispCurrCode || !menuCountry) return { dispRate: 1, dispSym: menuCountry?.currency_symbol ?? '' }
@@ -3062,18 +3045,6 @@ ${tableHtml}
           </div>
 
           {/* Display currency */}
-          {menuCountry && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Display</span>
-              <select
-                className="select select-sm"
-                value={dispCurrCode}
-                onChange={e => setDispCurrCode(e.target.value)}
-              >
-                {currencyOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-          )}
 
           {/* Compact + Excel / Print / Share — aligned right in the selector row */}
           {(levelId === 'ALL' || !!data) && (

@@ -6,7 +6,6 @@ import Logo from './Logo'
 import { usePermissions } from '../hooks/usePermissions'
 import type { Feature } from '../hooks/usePermissions'
 import PwaInstallModal, { PwaInstallLink } from './PwaInstallModal'
-import LanguageSwitcher from './LanguageSwitcher'
 import { useFeatureFlags, FeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // A null entry renders as a divider line between groups
@@ -167,9 +166,6 @@ export default function Sidebar() {
                   <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
                 </svg>
               </button>
-            </div>
-            <div className="mt-2">
-              <LanguageSwitcher />
             </div>
           </>
         )}

@@ -32,6 +32,7 @@ import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
 import { MarketProvider }   from './contexts/MarketContext'
 import { LanguageProvider } from './contexts/LanguageContext'
+import { CurrencyProvider } from './contexts/CurrencyContext'
 import { FeatureFlagsProvider, useFeatureFlags } from './contexts/FeatureFlagsContext'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -65,6 +66,7 @@ export default function App() {
         <FeatureFlagsProvider>
         <LanguageProvider>
         <MarketProvider>
+        <CurrencyProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 
@@ -115,6 +117,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </CurrencyProvider>
         </MarketProvider>
         </LanguageProvider>
         </FeatureFlagsProvider>

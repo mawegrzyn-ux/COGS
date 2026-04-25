@@ -5,6 +5,8 @@ import AiChat, { type PepperMode } from './AiChat'
 import { useIsMobile, useKeyboardInset } from '../hooks/useIsMobile'
 import MediaLibrary from './MediaLibrary'
 import MarketSwitcher from './MarketSwitcher'
+import CurrencySwitcher from './CurrencySwitcher'
+import LanguageSwitcher from './LanguageSwitcher'
 
 const PANEL_WIDTH_KEY   = 'pepper-panel-width'
 const MIN_PANEL_WIDTH   = 280
@@ -437,9 +439,11 @@ export default function AppLayout() {
       <div className={`flex flex-1 min-w-0 ${isBottom ? 'flex-col' : 'flex-row'}`}>
         {/* Main content — order:2 in row mode (left=1, right=3), order:1 in col mode */}
         <main className="flex-1 overflow-y-auto min-w-0 flex flex-col" style={{ order: isBottom ? 1 : 2 }}>
-          {/* Thin top bar — holds the global MarketSwitcher. Sits above all pages. */}
+          {/* Thin top bar — global Market + Display Currency + Language switchers. */}
           <div className="flex-shrink-0 flex items-center justify-end gap-2 px-6 py-2 border-b border-border bg-surface print:hidden">
             <MarketSwitcher />
+            <CurrencySwitcher />
+            <LanguageSwitcher />
           </div>
           <div className="flex-1 min-h-0">
             <Outlet />
