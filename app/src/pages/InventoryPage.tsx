@@ -127,6 +127,11 @@ export default function InventoryPage() {
   const [vendorCount,     setVendorCount]     = useState<number>(0)
   const [countryCount,    setCountryCount]    = useState<number>(0)
   const [initialQuoteIngId, setInitialQuoteIngId] = useState<number | undefined>(undefined)
+  // Set when the user clicks "+ Quote" on an ingredient row — switches to
+  // the Quotes tab AND tells PriceQuotesTab to immediately open the Add
+  // Quote modal pre-filled with that ingredient. Cleared after consumption
+  // so a tab re-mount doesn't re-open the modal.
+  const [autoOpenAddIngId, setAutoOpenAddIngId] = useState<number | undefined>(undefined)
 
   // Single lightweight stats call for header badges — avoids full-table fetches just for counts
   useEffect(() => {
@@ -195,8 +200,20 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col">
-        {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }} />}
-        {tab === 'quotes'        && <PriceQuotesTab initialIngredientId={initialQuoteIngId} />}
+        {tab === 'ingredients'   && <IngredientsTab
+          onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }}
+          onAddQuote={id => {
+            setInitialQuoteIngId(id)
+            setAutoOpenAddIngId(id)
+            setTab('quotes')
+            localStorage.setItem('inventory-tab', 'quotes')
+          }}
+        />}
+        {tab === 'quotes'        && <PriceQuotesTab
+          initialIngredientId={initialQuoteIngId}
+          autoOpenAddIngredientId={autoOpenAddIngId}
+          onAutoOpenConsumed={() => setAutoOpenAddIngId(undefined)}
+        />}
         {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
       </div>
     </div>
@@ -540,7 +557,12 @@ function QuoteHoverPopover({ ing, onViewQuotes }: {
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
-function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void }) {
+function IngredientsTab({ onViewQuotes, onAddQuote }: {
+  onViewQuotes?: (id: number) => void
+  /** Switch to the Quotes tab AND auto-open the Add Quote modal pre-filled
+   *  with this ingredient. Triggered by the per-row `+ Quote` button. */
+  onAddQuote?:   (id: number) => void
+}) {
   const api = useApi()
 
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -1033,6 +1055,15 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             }}
             onEdit={openEdit}
             onDelete={ing => setConfirmDelete(ing)}
+            renderActions={onAddQuote ? (ing => (
+              <button
+                className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-accent-dim transition-colors whitespace-nowrap"
+                title="Add a price quote for this ingredient"
+                onClick={() => onAddQuote(ing.id)}
+              >
+                + Quote
+              </button>
+            )) : undefined}
             showToast={showToast}
             hintRight="Tab from last cell saves row · Esc reverts"
           />
@@ -1103,9 +1134,19 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                           <QuoteHoverPopover ing={ing} onViewQuotes={onViewQuotes} />
                         </td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                          <div className="flex gap-2 justify-end">
+                          <div className="flex gap-2 justify-end items-center">
+                            {onAddQuote && (
+                              <button
+                                className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent-dim transition-colors whitespace-nowrap"
+                                title="Add a price quote for this ingredient"
+                                onClick={() => onAddQuote(ing.id)}
+                              >
+                                + Quote
+                              </button>
+                            )}
                             <button
                               className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              title="Delete ingredient"
                               onClick={() => setConfirmDelete(ing)}
                             >
                               <TrashIcon size={12} />
@@ -1483,7 +1524,16 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
-function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number }) {
+function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOpenConsumed }: {
+  initialIngredientId?:     number
+  /** When set, the tab opens the Add Quote modal immediately with this
+   *  ingredient pre-selected. Triggered by the per-row "+ Quote" button on
+   *  the Ingredients tab — saves a click. */
+  autoOpenAddIngredientId?: number
+  /** Called after the auto-open has run so the parent can clear the signal
+   *  and we don't re-open every time this component re-mounts. */
+  onAutoOpenConsumed?:      () => void
+}) {
   const api = useApi()
 
   const [quotes,        setQuotes]       = useState<Quote[]>([])
@@ -1739,6 +1789,21 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
     setToast({ message, type })
 
   function openAdd() { setModal('new'); setForm(blankForm); setErrors({}) }
+
+  // Auto-open the Add Quote modal pre-filled with a specific ingredient.
+  // Triggered by the "+ Quote" button on the Ingredients tab — Inventory
+  // page passes the id via `autoOpenAddIngredientId`. We only fire it once
+  // (the parent clears its signal via `onAutoOpenConsumed`). Wait until
+  // ingredients load so the form's combobox can render the selected name
+  // immediately.
+  useEffect(() => {
+    if (autoOpenAddIngredientId == null) return
+    if (loading) return
+    setModal('new')
+    setForm({ ...blankForm, ingredient_id: String(autoOpenAddIngredientId) })
+    setErrors({})
+    onAutoOpenConsumed?.()
+  }, [autoOpenAddIngredientId, loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openEdit(q: Quote) {
     setModal(q)
