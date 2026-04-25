@@ -30,15 +30,42 @@ async function pickFirstBaseUnit(page: Page): Promise<boolean> {
   return true;
 }
 
+// "Add Ingredient" — strict match. Avoids `/add|new/i` which also matches
+// "Add Quote", "Add Vendor", "+ New" (CategoryPicker's inline-create button,
+// rendered inside the modal once it's open), etc. Pre-existing flakiness was
+// caused by the page defaulting to the Quotes tab, where the first /add/
+// match is "Add Quote" — fixed below by pinning the tab via localStorage
+// before navigation.
+const addIngredientButton = (page: Page) =>
+  page.getByRole('button', { name: 'Add Ingredient', exact: true }).first();
+
+// Save / Update — scoped to the dialog so we don't accidentally hit a "Save"
+// button somewhere else on the page (the CategoryPicker's inline-create has
+// its own Save button while in create-mode, for example).
+const saveButton = (page: Page) =>
+  page.getByRole('dialog').getByRole('button', { name: /^(Save|Save Changes|Create|Update)$/i }).first();
+
 test.describe('Ingredient CRUD', () => {
+  // The Inventory page remembers the last viewed tab in localStorage
+  // (key: "inventory-tab") and the **default is 'quotes', not 'ingredients'**.
+  // Without forcing the tab, /inventory loads on Price Quotes and the
+  // "Add Ingredient" button isn't rendered at all — first add-button match
+  // would then be "Add Quote", and the Quote modal has no "Name" field, so
+  // `getByLabel(/^Name$/i)` times out. addInitScript runs before every page
+  // load in this context, so both tests reliably land on Ingredients.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      try { localStorage.setItem('inventory-tab', 'ingredients'); } catch { /* ignore */ }
+    });
+  });
+
   test('create an ingredient and verify it appears', async ({ page }) => {
     const name = `${ts()}_TestIngredient`;
     await page.goto('/inventory');
 
     await expect(page.getByRole('heading', { name: /Inventory/i })).toBeVisible();
-
-    // Click the "+ Add Ingredient" / "+ New" button.
-    await page.getByRole('button', { name: /add|new/i }).first().click();
+    await expect(addIngredientButton(page)).toBeVisible({ timeout: 10_000 });
+    await addIngredientButton(page).click();
 
     // Modal should be open with the name input focused
     await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
@@ -49,7 +76,7 @@ test.describe('Ingredient CRUD', () => {
     const hasUnits = await pickFirstBaseUnit(page);
     test.skip(!hasUnits, 'No base units on staging DB — seed Configuration → Base Units first.');
 
-    await page.getByRole('button', { name: /save|create/i }).first().click();
+    await saveButton(page).click();
 
     await expect(page.getByText(name)).toBeVisible({ timeout: 10_000 });
   });
@@ -59,19 +86,21 @@ test.describe('Ingredient CRUD', () => {
     const updated  = `${original}_EDITED`;
 
     await page.goto('/inventory');
-    await page.getByRole('button', { name: /add|new/i }).first().click();
+    await expect(addIngredientButton(page)).toBeVisible({ timeout: 10_000 });
+    await addIngredientButton(page).click();
+
     await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
     await nameInput(page).fill(original);
     const hasUnits = await pickFirstBaseUnit(page);
     test.skip(!hasUnits, 'No base units on staging DB — seed Configuration → Base Units first.');
-    await page.getByRole('button', { name: /save|create/i }).first().click();
-    await expect(page.getByText(original)).toBeVisible();
+    await saveButton(page).click();
+    await expect(page.getByText(original)).toBeVisible({ timeout: 10_000 });
 
     // Open the just-created row's edit modal
     await page.getByText(original).click();
     await expect(nameInput(page)).toBeVisible({ timeout: 5_000 });
     await nameInput(page).fill(updated);
-    await page.getByRole('button', { name: /save|update/i }).first().click();
+    await saveButton(page).click();
 
     await expect(page.getByText(updated)).toBeVisible({ timeout: 10_000 });
   });

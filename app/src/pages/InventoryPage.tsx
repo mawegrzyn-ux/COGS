@@ -112,11 +112,14 @@ type ToastState = { message: string; type: 'success' | 'error' }
 
 export default function InventoryPage() {
   const api = useApi()
+  // Default to the Ingredients tab — that's the primary "inventory" data
+  // and what new users expect to see first when they click Inventory in the
+  // sidebar. Returning users still get their last-viewed tab via localStorage.
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem('inventory-tab') as Tab | null
     return (saved && ['ingredients', 'quotes', 'vendors'].includes(saved))
       ? saved
-      : 'quotes'
+      : 'ingredients'
   })
 
   const [ingredientCount, setIngredientCount] = useState<number>(0)
