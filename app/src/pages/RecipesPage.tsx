@@ -183,6 +183,13 @@ export default function RecipesPage() {
   // Copy-ingredients-from-recipe modal
   const [showCopyModal, setShowCopyModal] = useState(false)
 
+  // Create-variation modal — replaces native window.confirm/prompt dialogs
+  type CreateVariationCtx =
+    | { kind: 'market';    countryId: number }
+    | { kind: 'pl';        priceLevelId: number }
+    | { kind: 'market-pl'; countryId: number; priceLevelId: number }
+  const [createVariationCtx, setCreateVariationCtx] = useState<CreateVariationCtx | null>(null)
+
   // ── Ingredient list sort + drag-to-reorder ────────────────────────────────
   const [itemSortField, setItemSortField] = useState<ItemSortField>('custom')
   const [itemSortDir,   setItemSortDir]   = useState<'asc' | 'desc'>('asc')
@@ -1545,14 +1552,7 @@ export default function RecipesPage() {
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
-                            if (window.confirm(`Create a market variation for ${countryName}?\n\nThis lets you define different ingredients for this market. The global recipe remains unchanged.\n\nCopy global ingredients as a starting point?`)) {
-                              createVariation(selectedCountryId as number, true)
-                            } else if (window.confirm('Create empty variation instead?')) {
-                              createVariation(selectedCountryId as number, false)
-                            }
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'market', countryId: selectedCountryId as number })}
                           title="Create a market-specific variation of this recipe"
                         >
                           ✦ Create Variation
@@ -1582,14 +1582,7 @@ export default function RecipesPage() {
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const levelName = priceLevels.find(l => l.id === selectedPriceLevelId)?.name ?? 'this price level'
-                            if (window.confirm(`Create a price level variation for ${levelName}?\n\nThis lets you define different ingredients for this price level. The global recipe remains unchanged.\n\nCopy global ingredients as a starting point?`)) {
-                              createPlVariation(selectedPriceLevelId, true)
-                            } else if (window.confirm('Create empty PL variation instead?')) {
-                              createPlVariation(selectedPriceLevelId, false)
-                            }
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'pl', priceLevelId: selectedPriceLevelId })}
                           title="Create a price-level-specific variation of this recipe"
                         >
                           ✦ Create Variation
@@ -1610,23 +1603,7 @@ export default function RecipesPage() {
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
-                            const levelName   = priceLevels.find(l => l.id === selectedPriceLevelId)?.name ?? 'this price level'
-                            const hasMktVar   = selected.variations.some(v => v.country_id === selectedCountryId)
-                            const hasPlVar    = selected.pl_variations?.some(v => v.price_level_id === selectedPriceLevelId)
-                            const choices = ['global', hasMktVar && 'market', hasPlVar && 'pl'].filter(Boolean) as string[]
-                            const copyLabel = choices.length > 1
-                              ? `\n\nCopy from: global (G), market variation (M)${hasPlVar ? ', PL variation (P)' : ''}?\nEnter G, M${hasPlVar ? ', P' : ''} or leave blank for empty.`
-                              : `\n\nCopy global ingredients as starting point?`
-                            const ans = window.prompt(`Create variation for ${countryName} · ${levelName}?${copyLabel}`)
-                            if (ans === null) return
-                            const copyFrom = ans.trim().toUpperCase() === 'M' ? 'market'
-                              : ans.trim().toUpperCase() === 'P' ? 'pl'
-                              : ans.trim() === '' ? null
-                              : 'global'
-                            createMarketPlVariation(selectedCountryId as number, selectedPriceLevelId, copyFrom)
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'market-pl', countryId: selectedCountryId as number, priceLevelId: selectedPriceLevelId })}
                           title="Create a market+price-level-specific variation"
                         >
                           ✦ Create Variation
@@ -1646,12 +1623,12 @@ export default function RecipesPage() {
                     <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
                     {/* Variant pill — derived from current Market + Price Level selection */}
                     {variantMode === 'market-pl' && activeMarketPlVariation
-                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">🌍💰 {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">✦ Variation: {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
                       : variantMode === 'price-level' && activePlVariation
-                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">✦ Variation: {activePlVariation.price_level_name}</span>
                         : activeCogs?.has_variation
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Variation: {selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'Market'}</span>
+                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">🌍 Global recipe</span>
                     }
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -2283,6 +2260,26 @@ export default function RecipesPage() {
         />
       )}
 
+      {createVariationCtx && selected && (
+        <CreateVariationModal
+          ctx={createVariationCtx}
+          recipe={selected}
+          priceLevels={priceLevels}
+          onConfirm={({ copyFrom }) => {
+            const ctx = createVariationCtx
+            if (ctx.kind === 'market') {
+              createVariation(ctx.countryId, copyFrom === 'global')
+            } else if (ctx.kind === 'pl') {
+              createPlVariation(ctx.priceLevelId, copyFrom === 'global')
+            } else {
+              createMarketPlVariation(ctx.countryId, ctx.priceLevelId, copyFrom)
+            }
+            setCreateVariationCtx(null)
+          }}
+          onClose={() => setCreateVariationCtx(null)}
+        />
+      )}
+
       {confirmDelete && (
         <ConfirmDialog
           message={
@@ -2476,6 +2473,154 @@ function CopyIngredientsModal({ recipes, api, targetLabel, onCopy, onClose }: {
           >
             <CopyIcon size={12} />
             {copying ? 'Copying…' : chosen ? `Copy ${chosen.itemCount} item${chosen.itemCount !== 1 ? 's' : ''}` : 'Copy'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Create Variation Modal ────────────────────────────────────────────────
+// Replaces the old window.confirm + window.prompt flow. Picks the source to
+// copy ingredients from (or empty start). Shows only options that make sense
+// for the variant kind being created and the variations that already exist.
+
+type CreateVariationCopyFrom = 'global' | 'market' | 'pl' | null
+
+function CreateVariationModal({ ctx, recipe, priceLevels, onConfirm, onClose }: {
+  ctx:
+    | { kind: 'market';    countryId: number }
+    | { kind: 'pl';        priceLevelId: number }
+    | { kind: 'market-pl'; countryId: number; priceLevelId: number }
+  recipe: RecipeDetail
+  priceLevels: PriceLevel[]
+  onConfirm: (opts: { copyFrom: CreateVariationCopyFrom }) => void
+  onClose: () => void
+}) {
+  // Resolve labels
+  const countryName = ctx.kind !== 'pl'
+    ? recipe.cogs_by_country.find(c => c.country_id === ctx.countryId)?.country_name ?? 'this market'
+    : null
+  const levelName = ctx.kind !== 'market'
+    ? priceLevels.find(l => l.id === ctx.priceLevelId)?.name ?? 'this price level'
+    : null
+
+  const scopeLabel = ctx.kind === 'market'
+    ? countryName
+    : ctx.kind === 'pl'
+      ? levelName
+      : `${countryName} · ${levelName}`
+
+  // What can we copy from?
+  const hasGlobal = (recipe.items?.length ?? 0) > 0
+  const hasMarketSource = ctx.kind === 'market-pl'
+    && recipe.variations?.some(v => v.country_id === ctx.countryId && v.items.length > 0)
+  const hasPlSource = ctx.kind === 'market-pl'
+    && recipe.pl_variations?.some(v => v.price_level_id === ctx.priceLevelId && v.items.length > 0)
+
+  // Default selection — first available source, fall back to empty.
+  const initialCopyFrom: CreateVariationCopyFrom =
+    hasMarketSource ? 'market'
+    : hasPlSource     ? 'pl'
+    : hasGlobal       ? 'global'
+    : null
+  const [copyFrom, setCopyFrom] = useState<CreateVariationCopyFrom>(initialCopyFrom)
+
+  // Count of items each option would copy (used in the labels).
+  const globalCount = recipe.items?.length ?? 0
+  const marketCount = ctx.kind === 'market-pl'
+    ? (recipe.variations?.find(v => v.country_id === ctx.countryId)?.items.length ?? 0)
+    : 0
+  const plCount = ctx.kind === 'market-pl'
+    ? (recipe.pl_variations?.find(v => v.price_level_id === ctx.priceLevelId)?.items.length ?? 0)
+    : 0
+
+  return (
+    <Modal title={`Create variation — ${scopeLabel}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-text-2">
+          Pick a starting point for this variation. The original recipe and any other
+          variations are not changed.
+        </p>
+
+        <div className="border border-border rounded-lg overflow-hidden">
+          {/* Market source — Market+PL only, shown first when present */}
+          {ctx.kind === 'market-pl' && (
+            <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasMarketSource ? 'opacity-50 cursor-not-allowed' : copyFrom === 'market' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+              <input
+                type="radio"
+                name="copy-from"
+                className="mt-1"
+                disabled={!hasMarketSource}
+                checked={copyFrom === 'market'}
+                onChange={() => setCopyFrom('market')}
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-text-1">Copy from {countryName} market variation</div>
+                <div className="text-xs text-text-3">
+                  {hasMarketSource ? `${marketCount} ingredient${marketCount !== 1 ? 's' : ''} from the existing market variation.` : 'No market variation exists for this market.'}
+                </div>
+              </div>
+            </label>
+          )}
+
+          {/* PL source — Market+PL only */}
+          {ctx.kind === 'market-pl' && (
+            <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasPlSource ? 'opacity-50 cursor-not-allowed' : copyFrom === 'pl' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+              <input
+                type="radio"
+                name="copy-from"
+                className="mt-1"
+                disabled={!hasPlSource}
+                checked={copyFrom === 'pl'}
+                onChange={() => setCopyFrom('pl')}
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-text-1">Copy from {levelName} price-level variation</div>
+                <div className="text-xs text-text-3">
+                  {hasPlSource ? `${plCount} ingredient${plCount !== 1 ? 's' : ''} from the existing PL variation.` : 'No price-level variation exists for this level.'}
+                </div>
+              </div>
+            </label>
+          )}
+
+          {/* Global */}
+          <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasGlobal ? 'opacity-50 cursor-not-allowed' : copyFrom === 'global' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+            <input
+              type="radio"
+              name="copy-from"
+              className="mt-1"
+              disabled={!hasGlobal}
+              checked={copyFrom === 'global'}
+              onChange={() => setCopyFrom('global')}
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text-1">Copy from global recipe</div>
+              <div className="text-xs text-text-3">
+                {hasGlobal
+                  ? `${globalCount} ingredient${globalCount !== 1 ? 's' : ''} from the base recipe.`
+                  : 'Global recipe has no ingredients yet.'}
+              </div>
+            </div>
+          </label>
+
+          {/* Empty — last */}
+          <label className={`flex items-start gap-3 px-3 py-2 last:border-0 cursor-pointer transition-colors ${copyFrom === null ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+            <input type="radio" name="copy-from" className="mt-1" checked={copyFrom === null} onChange={() => setCopyFrom(null)} />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text-1">Empty variation</div>
+              <div className="text-xs text-text-3">Add ingredients manually after creation.</div>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+          <button className="btn-outline px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-primary px-3 py-1.5 text-sm"
+            onClick={() => onConfirm({ copyFrom })}
+          >
+            Create Variation
           </button>
         </div>
       </div>

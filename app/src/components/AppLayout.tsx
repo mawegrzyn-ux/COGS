@@ -439,11 +439,21 @@ export default function AppLayout() {
       <div className={`flex flex-1 min-w-0 ${isBottom ? 'flex-col' : 'flex-row'}`}>
         {/* Main content — order:2 in row mode (left=1, right=3), order:1 in col mode */}
         <main className="flex-1 overflow-y-auto min-w-0 flex flex-col" style={{ order: isBottom ? 1 : 2 }}>
-          {/* Thin top bar — global Market + Display Currency + Language switchers. */}
-          <div className="flex-shrink-0 flex items-center justify-end gap-2 px-6 py-2 border-b border-border bg-surface print:hidden">
-            <MarketSwitcher />
-            <CurrencySwitcher />
-            <LanguageSwitcher />
+          {/* Thin top bar — global Market + Display Currency + Language switchers,
+              each prefixed with a label so the role of every dropdown is obvious. */}
+          <div className="flex-shrink-0 flex items-center justify-end gap-4 px-6 py-2 border-b border-border bg-surface print:hidden">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-text-3 hidden sm:inline">Market</span>
+              <MarketSwitcher />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-text-3 hidden sm:inline">Currency</span>
+              <CurrencySwitcher />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-text-3 hidden sm:inline">Language</span>
+              <LanguageSwitcher />
+            </div>
           </div>
           <div className="flex-1 min-h-0">
             <Outlet />
