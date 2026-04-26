@@ -1774,7 +1774,6 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
 
   const [generating, setGenerating] = useState(false)
   const [error,      setError]      = useState('')
-  const [preview,    setPreview]    = useState<{ label: string; qty: number; price: string }[] | null>(null)
 
   // Validation
   const catTotal   = categories.reduce((s, [c]) => s + (parseFloat(catPcts[c])    || 0), 0)
@@ -1785,7 +1784,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
   const canGo      = catValid && levelValid && revValid
 
   async function generate() {
-    setGenerating(true); setError(''); setPreview(null)
+    setGenerating(true); setError('')
     try {
       const revenue     = parseFloat(targetRevenue)
       const activeLevels = priceLevels.filter(l => (parseFloat(String(levelPcts[l.id])) || 0) > 0)
@@ -1873,9 +1872,13 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         }
       }
 
-      setPreview(previewRows)
-      // Store qMap in a ref so Apply can use it
+      // Apply immediately — user explicitly asked for one-step generate-and-apply.
+      // Skip the intermediate preview/Apply step and just push qMap into the
+      // scenario; the modal closes via the parent's onGenerate handler.
+      void previewRows  // unused — kept around as a future affordance if we add a confirmation
       pendingQMap.current = qMap
+      onGenerate(qMap)
+      return
     } catch (err: any) {
       setError(err.message || 'Failed to generate mix')
     } finally {
@@ -1888,11 +1891,10 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
   const sym = currencySymbol
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
+    // Backdrop intentionally does NOT close the modal — user must click Cancel
+    // or Generate to dismiss. Prevents accidentally losing inputs.
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
           <div>
@@ -2067,77 +2069,40 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
             </div>
           )}
 
-          {/* Preview results */}
-          {preview && (
-            <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-emerald-700 font-semibold text-sm">✓ Generated quantities</span>
-                <span className="text-xs text-emerald-600">— click Apply to load into scenario</span>
-              </div>
-              <div className="max-h-40 overflow-y-auto space-y-1">
-                {preview.map(row => (
-                  <div key={row.label} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-700 truncate flex-1 min-w-0">{row.label}</span>
-                    <span className="text-gray-400 text-xs mx-3">{row.price}/ptn</span>
-                    <span className="font-semibold tabular-nums text-gray-900 shrink-0">
-                      {row.qty.toLocaleString()} sold
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 pt-2 border-t border-emerald-200 text-xs text-emerald-700">
-                Est. gross revenue: {sym}{preview.reduce((s, r) => {
-                  const price = parseFloat(r.price.replace(/[^0-9.]/g, ''))
-                  return s + r.qty * price
-                }, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                {' '}(target: {sym}{parseFloat(targetRevenue).toLocaleString()})
-              </div>
-            </div>
-          )}
-
           {error && (
             <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠ {error}</p>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            {catMix.totalQty > 0 && (
-              <button
-                className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50"
-                onClick={onReset}
-                title="Clear all quantities in the scenario"
-              >↺ Reset Quantities</button>
-            )}
-            <p className="text-xs text-gray-400 hidden sm:block">
-              Revenue split equally per item within each category
-            </p>
-          </div>
-          <div className="flex gap-2 items-center">
-            <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
-            {!preview ? (
-              <button
-                className="btn btn-sm btn-primary"
-                disabled={!canGo || generating}
-                onClick={generate}
-              >
-                {generating ? (
-                  <><Spinner /> Calculating…</>
-                ) : '⚡ Generate'}
-              </button>
-            ) : (
-              <>
-                <button
-                  className="btn btn-sm btn-outline"
-                  onClick={() => { setPreview(null); pendingQMap.current = {} }}
-                >← Adjust</button>
-                <button
-                  className="btn btn-sm btn-primary"
-                  onClick={() => onGenerate(pendingQMap.current)}
-                >✓ Apply to Scenario</button>
-              </>
-            )}
+        {/* Footer — Reset Quantities | spacer | Cancel + Generate (right-aligned) */}
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center gap-3 shrink-0">
+          {catMix.totalQty > 0 && (
+            <button
+              className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50"
+              onClick={onReset}
+              title="Clear all quantities in the scenario"
+            >↺ Reset Quantities</button>
+          )}
+          <p className="text-xs text-gray-400 hidden md:block flex-1">
+            Revenue split equally per item within each category
+          </p>
+          <div className="flex gap-2 items-center ml-auto">
+            <button className="btn btn-sm btn-outline" onClick={onClose} disabled={generating}>Cancel</button>
+            <button
+              className="btn btn-sm btn-primary min-w-[120px] justify-center inline-flex items-center gap-1.5"
+              disabled={!canGo || generating}
+              onClick={generate}
+            >
+              {generating ? (
+                <>
+                  <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Generating…
+                </>
+              ) : '⚡ Generate'}
+            </button>
           </div>
         </div>
       </div>

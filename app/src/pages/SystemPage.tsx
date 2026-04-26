@@ -2074,8 +2074,8 @@ const SECTIONS: SectionDef[] = [
   { id: 'tests',            icon: '✅', label: 'Tests',            gate: 'dev'   },
   { id: 'doc-library',      icon: '📄', label: 'Doc Library' },
   { id: 'pos-tester',       icon: '🏪', label: 'POS Mockup' },
-  { id: 'localization',     icon: '🌍', label: 'Localization' },
   // ── Documentation / reference ──
+  { id: 'localization',     icon: '🌍', label: 'Localization',     isDoc: true },
   { id: 'architecture',     icon: '🏗️', label: 'Architecture',     isDoc: true },
   { id: 'api-reference',    icon: '📡', label: 'API Reference',    isDoc: true },
   { id: 'security',         icon: '🔒', label: 'Security',         isDoc: true },
