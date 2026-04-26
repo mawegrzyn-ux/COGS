@@ -1134,10 +1134,26 @@ function TestDataTab() {
     <div className="max-w-2xl">
       <div className="mb-6">
         <h2 className="text-base font-bold text-text-1 mb-1">Test Data</h2>
-        <p className="text-sm text-text-3">
+        <p className="text-sm text-text-3 mb-3">
           Load a full set of realistic dummy data to explore and test the app, or wipe the database to start fresh.
           All operations run inside a transaction and roll back on error.
         </p>
+        {/* Destructive-action warning — every button on this tab wipes the
+            entire database before doing anything else. Loud red banner on
+            top so it can't be missed. */}
+        <div className="border-2 border-red-500 bg-red-50 rounded-lg px-4 py-3 flex items-start gap-3">
+          <svg className="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div className="text-sm">
+            <p className="font-bold text-red-700">⚠ Destructive actions on this page</p>
+            <p className="text-red-700 mt-0.5">
+              Every button below <strong>wipes the entire database</strong> before doing anything else.
+              You will lose all production data — users, recipes, menus, scenarios, audit log, everything.
+              Confirmation requires typing today's date in <code className="font-mono bg-red-100 px-1 rounded">ddmmyyyy</code> format.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Load Test Data card */}

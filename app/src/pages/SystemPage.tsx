@@ -1644,19 +1644,33 @@ function ApiBenchmarkPanel() {
   }
 
   async function run() {
+    const total = iterations * BENCH_ENDPOINTS.length
+    // Rate limit is 10000/15min for authenticated users (was 500). Warn
+    // anyway when a single run will burn a lot of the budget — gives the
+    // user a chance to back out before they accidentally rate-limit
+    // themselves (and other dashboards on the same IP).
+    if (total > 5000) {
+      if (!confirm(`This run will fire ${total.toLocaleString()} requests in ~${Math.ceil(total * 0.5 / 60)} min. The server rate-limits at 10,000 requests / 15 minutes per authenticated user. Continue?`)) return
+    }
     setRunning(true)
     setResults({})
     setHistory({})
     cancelRef.current = false
-    const total = iterations * BENCH_ENDPOINTS.length
     setProgress({ done: 0, total })
     let done = 0
+    let rateLimited = false
     try {
       for (let it = 0; it < iterations; it++) {
-        if (cancelRef.current) break
+        if (cancelRef.current || rateLimited) break
         const tasks = BENCH_ENDPOINTS.map(async ep => {
-          if (cancelRef.current) return
+          if (cancelRef.current || rateLimited) return
           const r = await callOnce(ep)
+          // Stop the whole run on first 429 — continuing would just pile up
+          // more 429s and the data we already have is still useful.
+          if (r.status === 429) {
+            rateLimited = true
+            cancelRef.current = true
+          }
           setResults(prev => ({ ...prev, [ep.path]: r }))
           setHistory(prev => ({ ...prev, [ep.path]: [...(prev[ep.path] || []), r.ms] }))
           done++
@@ -1674,6 +1688,9 @@ function ApiBenchmarkPanel() {
     } finally {
       setRunning(false)
       setProgress(null)
+      if (rateLimited) {
+        alert('Rate limit hit (HTTP 429). Run stopped early.\n\nThe server allows ~10,000 requests / 15 minutes per authenticated user. Wait ~15 minutes before re-running, or run with fewer iterations.\n\nThe partial data above is still valid for whichever endpoints completed before the limit kicked in.')
+      }
     }
   }
 

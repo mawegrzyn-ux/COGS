@@ -23,7 +23,19 @@ app.use(cors({
   exposedHeaders: ['Content-Language'],
   credentials: true,
 }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false }));
+// Rate limit — split by auth state. Unauthenticated requests are still
+// throttled tightly (brute-force / scraping), but authenticated users get a
+// much higher cap because dashboards + benchmarks legitimately fire 100s of
+// requests in normal use. Brute-force on auth itself is handled by Auth0.
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: (req) => (req.headers.authorization?.startsWith('Bearer ') ? 10000 : 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Internal service-to-service calls (Pepper tool executor, etc.) bypass
+  // entirely — they already authenticate via INTERNAL_SERVICE_KEY.
+  skip: (req) => req.headers['x-internal-service'] != null,
+}));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
