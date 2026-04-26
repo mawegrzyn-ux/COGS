@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import SettingsPage from './SettingsPage'
 import PosTesterPage from './PosTesterPage'
 import BugsBacklogPage from './BugsBacklogPage'
@@ -1597,17 +1597,38 @@ interface BenchResult {
   error?:   string
 }
 
+// localStorage key for user-customised thresholds (per-endpoint ms target)
+const BENCH_THRESHOLDS_KEY = 'cogs-bench-thresholds'
+
+function loadCustomThresholds(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(BENCH_THRESHOLDS_KEY) || '{}') } catch { return {} }
+}
+function saveCustomThresholds(t: Record<string, number>) {
+  try { localStorage.setItem(BENCH_THRESHOLDS_KEY, JSON.stringify(t)) } catch { /* ignore */ }
+}
+
 function ApiBenchmarkPanel() {
   const api = useApi()
   const [running, setRunning] = useState(false)
   const [results, setResults] = useState<Record<string, BenchResult | null>>({})
   const [iterations, setIterations] = useState(1)
   const [parallel, setParallel] = useState(false)
+  // User-customised thresholds. Empty for an endpoint = use the default
+  // baked-in soft target. Persisted per-browser.
+  const [customThresholds, setCustomThresholds] = useState<Record<string, number>>(() => loadCustomThresholds())
+  // Aborts a running batch — useful for the high-iteration mini-load tests.
+  const cancelRef = useRef(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
   // Cycle through endpoints. For multi-iteration runs we keep the latest
   // single-call timing per endpoint plus the running average — so the table
   // updates live as the run progresses.
   const [history, setHistory] = useState<Record<string, number[]>>({})
+
+  // Resolved threshold for an endpoint (custom override OR baked-in default).
+  function thresholdFor(path: string): number {
+    return customThresholds[path] ?? BENCH_ENDPOINTS.find(e => e.path === path)?.threshold ?? 1000
+  }
 
   async function callOnce(ep: BenchEndpoint): Promise<BenchResult> {
     const t0 = performance.now()
@@ -1626,22 +1647,66 @@ function ApiBenchmarkPanel() {
     setRunning(true)
     setResults({})
     setHistory({})
+    cancelRef.current = false
+    const total = iterations * BENCH_ENDPOINTS.length
+    setProgress({ done: 0, total })
+    let done = 0
     try {
       for (let it = 0; it < iterations; it++) {
+        if (cancelRef.current) break
         const tasks = BENCH_ENDPOINTS.map(async ep => {
+          if (cancelRef.current) return
           const r = await callOnce(ep)
           setResults(prev => ({ ...prev, [ep.path]: r }))
           setHistory(prev => ({ ...prev, [ep.path]: [...(prev[ep.path] || []), r.ms] }))
+          done++
+          setProgress({ done, total })
         })
         if (parallel) {
           await Promise.all(tasks)
         } else {
-          for (const t of tasks) await t
+          for (const t of tasks) {
+            if (cancelRef.current) break
+            await t
+          }
         }
       }
     } finally {
       setRunning(false)
+      setProgress(null)
     }
+  }
+
+  function stop() {
+    cancelRef.current = true
+  }
+
+  // Set custom thresholds based on the current run averages × multiplier.
+  // Useful to "calibrate to my actual stack" — accept whatever this server +
+  // network combo gives you, then use deviations from that as the signal.
+  function calibrateFromRun(multiplier = 1.5) {
+    if (!confirm(`Replace all thresholds with the current avg × ${multiplier}? Endpoints with no data are left alone.`)) return
+    const next = { ...customThresholds }
+    for (const ep of BENCH_ENDPOINTS) {
+      const arr = history[ep.path] || []
+      if (arr.length === 0) continue
+      const avg = arr.reduce((a, b) => a + b, 0) / arr.length
+      next[ep.path] = Math.round(avg * multiplier)
+    }
+    setCustomThresholds(next)
+    saveCustomThresholds(next)
+  }
+
+  function resetThresholds() {
+    if (!confirm('Reset all thresholds to defaults?')) return
+    setCustomThresholds({})
+    saveCustomThresholds({})
+  }
+
+  function setThreshold(path: string, ms: number) {
+    const next = { ...customThresholds, [path]: ms }
+    setCustomThresholds(next)
+    saveCustomThresholds(next)
   }
 
   const total = useMemo(() => {
@@ -1671,16 +1736,20 @@ function ApiBenchmarkPanel() {
     return { avg, min, max, runs: arr.length, threshold }
   }
 
+  const totalCalls = iterations * BENCH_ENDPOINTS.length
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-border bg-surface-2 flex items-center justify-between flex-wrap gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-text-1">API benchmark</h3>
-          <p className="text-xs text-text-3">
-            Read-only GET requests with per-endpoint thresholds. Compares your live API against soft targets.
+          <p className="text-xs text-text-3 leading-snug">
+            Read-only GET requests with per-endpoint soft thresholds.
+            <strong className="text-text-2"> Thresholds are heuristics</strong> — your stack adds ~400-500ms fixed overhead
+            (cross-region SSL + Auth0 + nginx + pg pool). Use <em>Calibrate</em> after a clean run to set
+            realistic targets for your environment.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-2 text-xs flex-wrap">
           <label className="flex items-center gap-1 text-text-2">
             Iterations
             <select
@@ -1689,22 +1758,54 @@ function ApiBenchmarkPanel() {
               onChange={e => setIterations(Number(e.target.value))}
               disabled={running}
             >
-              {[1, 3, 5, 10].map(n => <option key={n} value={n}>{n}</option>)}
+              {[1, 3, 5, 10, 25, 50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-1 text-text-2">
             <input type="checkbox" checked={parallel} onChange={e => setParallel(e.target.checked)} disabled={running} />
             Parallel
           </label>
+          {!running ? (
+            <button
+              className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
+              onClick={run}
+              title={`${totalCalls.toLocaleString()} requests total`}
+            >▶ Run ({totalCalls.toLocaleString()} calls)</button>
+          ) : (
+            <button
+              className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+              onClick={stop}
+            >■ Stop</button>
+          )}
           <button
-            className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
-            onClick={run}
+            className="btn-outline text-xs px-2.5 py-1 disabled:opacity-50"
+            onClick={() => calibrateFromRun(1.5)}
+            disabled={running || Object.keys(history).length === 0}
+            title="Set all thresholds to (current avg × 1.5) so the live response patterns become the baseline"
+          >Calibrate (×1.5)</button>
+          <button
+            className="btn-ghost text-xs px-2 py-1 text-text-3"
+            onClick={resetThresholds}
             disabled={running}
-          >
-            {running ? 'Running…' : '▶ Run benchmark'}
-          </button>
+            title="Restore default thresholds"
+          >Reset</button>
         </div>
       </div>
+
+      {/* Progress bar — visible during a run */}
+      {progress && (
+        <div className="px-4 py-2 bg-accent-dim/30 border-b border-border flex items-center gap-3 text-xs">
+          <div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all"
+              style={{ width: `${(progress.done / progress.total) * 100}%` }}
+            />
+          </div>
+          <span className="font-mono text-text-3 shrink-0">
+            {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
+          </span>
+        </div>
+      )}
 
       <table className="w-full text-sm">
         <thead>
@@ -1721,19 +1822,32 @@ function ApiBenchmarkPanel() {
         </thead>
         <tbody>
           {BENCH_ENDPOINTS.map(ep => {
-            const r = results[ep.path]
-            const s = summaryFor(ep.path, ep.threshold)
+            const r  = results[ep.path]
+            const tr = thresholdFor(ep.path)
+            const s  = summaryFor(ep.path, tr)
+            const customised = customThresholds[ep.path] != null
             return (
               <tr key={ep.path} className="border-b border-border last:border-0">
                 <td className="px-4 py-2">
                   <span className="font-mono text-xs text-text-2">{ep.path}</span>
                   <span className="ml-2 text-xs text-text-3">{ep.label}</span>
                 </td>
-                <td className="px-4 py-2 text-right text-xs text-text-3">{ep.threshold} ms</td>
-                <td className={`px-4 py-2 text-right font-mono text-xs ${r ? bandClass(r.ms, ep.threshold) : 'text-text-3'}`}>
+                <td className="px-4 py-2 text-right text-xs">
+                  <input
+                    type="number"
+                    min={1}
+                    step={50}
+                    className={`input text-xs py-0 px-1 w-20 text-right font-mono ${customised ? 'text-accent font-semibold' : 'text-text-3'}`}
+                    value={tr}
+                    onChange={e => setThreshold(ep.path, Math.max(1, Number(e.target.value) || 0))}
+                    title={customised ? 'Custom threshold (click Reset to restore default)' : 'Default threshold — type a new value to override'}
+                  />
+                  <span className="ml-1 text-text-3">ms</span>
+                </td>
+                <td className={`px-4 py-2 text-right font-mono text-xs ${r ? bandClass(r.ms, tr) : 'text-text-3'}`}>
                   {r ? `${r.ms} ms` : '—'}
                 </td>
-                <td className={`px-4 py-2 text-right font-mono text-xs ${s ? bandClass(s.avg, ep.threshold) : 'text-text-3'}`}>
+                <td className={`px-4 py-2 text-right font-mono text-xs ${s ? bandClass(s.avg, tr) : 'text-text-3'}`}>
                   {s ? `${s.avg} ms` : '—'}
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-xs text-text-3">

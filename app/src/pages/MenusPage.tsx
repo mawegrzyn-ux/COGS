@@ -5789,10 +5789,12 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
   onClose(): void
 }) {
   const api = useApi()
-  const [items,   setItems]   = useState<SalesItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [search,  setSearch]  = useState('')
-  const [adding,  setAdding]  = useState<number | null>(null)
+  const [items,    setItems]    = useState<SalesItem[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [search,   setSearch]   = useState('')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [adding,   setAdding]   = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -5810,10 +5812,66 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
     )
   }, [items, search, alreadyAdded])
 
-  async function pick(si: SalesItem) {
-    setAdding(si.id)
-    try { await onAdd(si.id) }
-    finally { setAdding(null) }
+  // Drop selections for items that vanish from the filtered list (e.g. user
+  // typed a more specific search term). Otherwise they'd "select-all" a
+  // hidden item.
+  const visibleIds = useMemo(() => new Set(filtered.map(si => si.id)), [filtered])
+  useEffect(() => {
+    setSelected(prev => {
+      let changed = false
+      const next = new Set<number>()
+      for (const id of prev) {
+        if (visibleIds.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [visibleIds])
+
+  function toggle(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function selectAllVisible() {
+    setSelected(prev => {
+      const next = new Set(prev)
+      filtered.forEach(si => next.add(si.id))
+      return next
+    })
+  }
+  function clearAll() {
+    setSelected(new Set())
+  }
+
+  async function addSelected() {
+    if (selected.size === 0) return
+    const ids = Array.from(selected)
+    setAdding(true)
+    setProgress({ done: 0, total: ids.length })
+    let done = 0
+    let failed = 0
+    try {
+      // Sequential so the menu's sort_order is preserved in pick order, and
+      // so the backend doesn't see N concurrent inserts.
+      for (const id of ids) {
+        try { await onAdd(id) } catch { failed++ }
+        done++
+        setProgress({ done, total: ids.length })
+      }
+      if (failed === 0) onClose()
+      else {
+        // Leave failed selections checked, drop successful ones.
+        // Backend's onAdd typically refreshes alreadyAdded so successful items
+        // are filtered out of the list naturally.
+        setSelected(new Set(ids.slice(ids.length - failed)))
+      }
+    } finally {
+      setAdding(false)
+      setProgress(null)
+    }
   }
 
   const TYPE_BADGE: Record<string, string> = {
@@ -5823,21 +5881,36 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
     combo: 'bg-orange-50 text-orange-600 border-orange-200',
   }
 
+  const allVisibleSelected = filtered.length > 0 && filtered.every(si => selected.has(si.id))
+
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={e => { if (e.target === e.currentTarget && !adding) onClose() }}>
       <div className="bg-white rounded-xl shadow-xl flex flex-col w-full max-w-lg max-h-[80vh]">
         <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
-          <h2 className="font-semibold text-gray-900">Add Sales Item to Menu</h2>
-          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
+          <h2 className="font-semibold text-gray-900">Add Sales Items to Menu</h2>
+          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose} disabled={adding}>×</button>
         </div>
-        <div className="px-4 py-3 border-b shrink-0">
+        <div className="px-4 py-3 border-b shrink-0 space-y-2">
           <input
             className="input w-full"
             placeholder="Search by name or category…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             autoFocus
+            disabled={adding}
           />
+          {filtered.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <button
+                className="hover:text-accent transition-colors"
+                onClick={allVisibleSelected ? clearAll : selectAllVisible}
+                disabled={adding}
+              >
+                {allVisibleSelected ? `Clear ${selected.size}` : `Select all ${filtered.length}${search ? ' matching' : ''}`}
+              </button>
+              <span>{selected.size} selected</span>
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {loading && (
@@ -5850,8 +5923,19 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
           )}
           {!loading && filtered.map(si => {
             const defaultPrices = si.prices ?? []
+            const isSelected = selected.has(si.id)
             return (
-              <div key={si.id} className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 hover:bg-gray-50">
+              <label
+                key={si.id}
+                className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 cursor-pointer transition-colors ${isSelected ? 'bg-accent-dim/40' : 'hover:bg-gray-50'} ${adding ? 'pointer-events-none opacity-60' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  className="shrink-0"
+                  checked={isSelected}
+                  onChange={() => toggle(si.id)}
+                  disabled={adding}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm text-gray-900">{si.name}</span>
@@ -5872,19 +5956,37 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
                     </div>
                   )}
                 </div>
-                <button
-                  className="btn btn-sm btn-primary shrink-0"
-                  disabled={adding !== null}
-                  onClick={() => pick(si)}
-                >
-                  {adding === si.id ? <Spinner /> : 'Add'}
-                </button>
-              </div>
+              </label>
             )
           })}
         </div>
-        <div className="px-5 py-3 border-t flex justify-end shrink-0">
-          <button className="btn btn-outline" onClick={onClose}>Close</button>
+
+        {/* Progress bar — visible during a bulk add so the user knows it's working */}
+        {progress && (
+          <div className="px-4 py-2 bg-accent-dim/40 border-t border-border flex items-center gap-3 text-xs shrink-0">
+            <div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+              <div className="h-full bg-accent transition-all" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+            </div>
+            <span className="font-mono text-text-3 shrink-0">
+              {progress.done} / {progress.total}
+            </span>
+          </div>
+        )}
+
+        <div className="px-5 py-3 border-t flex items-center justify-between shrink-0">
+          <span className="text-xs text-gray-500">
+            {selected.size === 0 ? 'Tick the items you want to add.' : `${selected.size} item${selected.size !== 1 ? 's' : ''} ready to add.`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-outline" onClick={onClose} disabled={adding}>Close</button>
+            <button
+              className="btn btn-primary disabled:opacity-50"
+              onClick={addSelected}
+              disabled={adding || selected.size === 0}
+            >
+              {adding ? `Adding ${progress?.done ?? 0}/${progress?.total ?? 0}…` : `Add ${selected.size || ''} item${selected.size !== 1 ? 's' : ''}`}
+            </button>
+          </div>
         </div>
       </div>
     </div>,
