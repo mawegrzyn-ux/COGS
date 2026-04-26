@@ -68,7 +68,7 @@ async function truncateUserTables() {
     'mcogs_user_profiles',
     'mcogs_memory_daily',
     'mcogs_memory_monthly',
-    'mcogs_user_brand_partners',
+    'mcogs_user_scope',
     'mcogs_users',
     'mcogs_role_permissions',
     'mcogs_roles',

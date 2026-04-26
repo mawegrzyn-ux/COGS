@@ -3713,6 +3713,48 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-25' AND title = 'Backlog Kanban + AI Suggest Priorities + widget click-to-add-quote + Pepper backlog tools'
    )`,
+
+  // ── Step 156: mcogs_user_scope — granular RBAC scope ──────────────────────
+  // Replaces mcogs_user_brand_partners with a richer model that supports:
+  //   - BP grants (current behaviour) AND deny overrides
+  //   - Direct country grants (markets outside any of the user's BPs)
+  //   - Direct country denies (limit BP coverage)
+  //   - Per-scope role override (different role on different markets/BPs;
+  //     NULL means inherit user.role_id)
+  //
+  // Resolution order for a given country: country grant > country deny >
+  // BP grant > BP deny > user default. Country override beats BP override
+  // beats user default for the role too.
+  `CREATE TABLE IF NOT EXISTS mcogs_user_scope (
+     id          SERIAL PRIMARY KEY,
+     user_id     INTEGER NOT NULL REFERENCES mcogs_users(id) ON DELETE CASCADE,
+     scope_type  VARCHAR(20) NOT NULL CHECK (scope_type IN ('brand_partner', 'country')),
+     scope_id    INTEGER NOT NULL,
+     access_mode VARCHAR(10) NOT NULL DEFAULT 'grant' CHECK (access_mode IN ('grant', 'deny')),
+     role_id     INTEGER REFERENCES mcogs_roles(id) ON DELETE SET NULL,
+     created_at  TIMESTAMPTZ DEFAULT NOW(),
+     updated_at  TIMESTAMPTZ DEFAULT NOW(),
+     UNIQUE(user_id, scope_type, scope_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_user_scope_user ON mcogs_user_scope(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_user_scope_country ON mcogs_user_scope(scope_id) WHERE scope_type = 'country'`,
+  `CREATE INDEX IF NOT EXISTS idx_user_scope_bp      ON mcogs_user_scope(scope_id) WHERE scope_type = 'brand_partner'`,
+
+  // Test env: drop legacy mcogs_user_brand_partners (per user direction).
+  `DROP TABLE IF EXISTS mcogs_user_brand_partners`,
+
+  // ── Step 157: Changelog — granular RBAC ───────────────────────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-26', 'Granular user scope (Phase 1 — schema + auth middleware)', '[
+     {"type":"added","description":"New mcogs_user_scope table replaces mcogs_user_brand_partners. Supports BP grants/denies, direct country grants/denies, and a per-scope role override (NULL = inherit user.role_id). Resolution order: country grant > country deny > BP grant > BP deny > user default."},
+     {"type":"changed","description":"Auth middleware loadScopedAccess() resolves the per-market role + permissions map. req.user now exposes scopedAccess (per-country roleId/roleName/permissions) and req.user.permissions is the union of all per-market permissions, so feature gating at the sidebar / nav level still works without callsite changes."},
+     {"type":"added","description":"requirePermissionInMarket(feature, level, getCountryId) factory for routes that mutate market-scoped data — enforces the user has write access in the specific country being acted on."},
+     {"type":"removed","description":"Legacy mcogs_user_brand_partners table dropped (test env, no data migration needed)."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-26' AND title = 'Granular user scope (Phase 1 — schema + auth middleware)'
+   )`,
 ];
 
 async function runMigrations(pool) {

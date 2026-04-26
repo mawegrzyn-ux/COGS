@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, DateConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
@@ -2978,9 +2978,19 @@ interface AppUser {
   role_id:       number | null
   role_name:     string | null
   is_dev:        boolean
-  brand_partners: { id: number; name: string }[]
+  scope: ScopeRow[]
   created_at:    string
   last_login_at: string | null
+}
+
+interface ScopeRow {
+  id?:         number
+  scope_type:  'brand_partner' | 'country'
+  scope_id:    number
+  scope_name?: string | null
+  access_mode: 'grant' | 'deny'
+  role_id:     number | null
+  role_name?:  string | null
 }
 
 interface Role {
@@ -2992,8 +3002,15 @@ interface Role {
 }
 
 interface BrandPartner {
-  id:   number
-  name: string
+  id:         number
+  name:       string
+  countries?: { id: number; name: string }[]
+}
+
+interface CountryRef {
+  id:                number
+  name:              string
+  brand_partner_id?: number | null
 }
 
 const STATUS_LABELS: Record<AppUser['status'], string> = {
@@ -3014,11 +3031,12 @@ function UsersTab() {
   const [users, setUsers]   = useState<AppUser[]>([])
   const [roles, setRoles]   = useState<Role[]>([])
   const [bps,   setBps]     = useState<BrandPartner[]>([])
+  const [countries, setCountries] = useState<CountryRef[]>([])
   const [loading, setLoading] = useState(true)
 
   const [editing,    setEditing]    = useState<AppUser | null>(null)
   const [editRoleId, setEditRoleId] = useState<number | null>(null)
-  const [editBpIds,  setEditBpIds]  = useState<number[]>([])
+  const [editScope,  setEditScope]  = useState<ScopeRow[]>([])
   const [saving, setSaving] = useState(false)
 
   const [confirming, setConfirming] = useState<{ user: AppUser; action: 'disable' | 'enable' | 'delete' } | null>(null)
@@ -3027,14 +3045,16 @@ function UsersTab() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [u, r, b] = await Promise.all([
+      const [u, r, b, c] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
         api.get('/brand-partners'),
+        api.get('/countries'),
       ])
       setUsers(u  || [])
       setRoles(r  || [])
       setBps(b    || [])
+      setCountries(c || [])
     } catch { /* handled by toast */ }
     finally { setLoading(false) }
   }, [api])
@@ -3050,16 +3070,23 @@ function UsersTab() {
   function openEdit(u: AppUser) {
     setEditing(u)
     setEditRoleId(u.role_id)
-    setEditBpIds(u.brand_partners.map(bp => bp.id))
+    setEditScope([...(u.scope || [])])
   }
 
   async function handleSaveEdit() {
     if (!editing) return
     setSaving(true)
     try {
-      await api.put(`/users/${editing.id}`, {
-        role_id:           editRoleId,
-        brand_partner_ids: editBpIds,
+      // Default role + status update
+      await api.put(`/users/${editing.id}`, { role_id: editRoleId })
+      // Scope replace — backend computes deltas + writes one audit entry per change
+      await api.put(`/users/${editing.id}/scope`, {
+        scope: editScope.map(s => ({
+          scope_type:  s.scope_type,
+          scope_id:    s.scope_id,
+          access_mode: s.access_mode,
+          role_id:     s.role_id ?? null,
+        })),
       })
       setToast({ message: 'User updated', type: 'success' })
       setEditing(null)
@@ -3109,9 +3136,55 @@ function UsersTab() {
     }
   }
 
-  function toggleBp(id: number) {
-    setEditBpIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
+  // ── Live preview: resolve editScope into a per-country effective role map ──
+  const previewRows = useMemo(() => {
+    if (!editing) return []
+    const bpToCountries = new Map<number, CountryRef[]>()
+    for (const c of countries) {
+      if (c.brand_partner_id) {
+        if (!bpToCountries.has(c.brand_partner_id)) bpToCountries.set(c.brand_partner_id, [])
+        bpToCountries.get(c.brand_partner_id)!.push(c)
+      }
+    }
+    const effective = new Map<number, { roleId: number | null; via: string }>()
+    // BP grants
+    for (const s of editScope) {
+      if (s.scope_type === 'brand_partner' && s.access_mode === 'grant') {
+        const cs = bpToCountries.get(s.scope_id) || []
+        for (const c of cs) effective.set(c.id, { roleId: s.role_id ?? editRoleId, via: `BP: ${s.scope_name || s.scope_id}` })
+      }
+    }
+    // BP denies → drop everything from that BP
+    for (const s of editScope) {
+      if (s.scope_type === 'brand_partner' && s.access_mode === 'deny') {
+        const cs = bpToCountries.get(s.scope_id) || []
+        for (const c of cs) effective.delete(c.id)
+      }
+    }
+    // Country grants
+    for (const s of editScope) {
+      if (s.scope_type === 'country' && s.access_mode === 'grant') {
+        effective.set(s.scope_id, { roleId: s.role_id ?? editRoleId, via: `Direct grant` })
+      }
+    }
+    // Country denies
+    for (const s of editScope) {
+      if (s.scope_type === 'country' && s.access_mode === 'deny') effective.delete(s.scope_id)
+    }
+    const out: { country_id: number; country_name: string; role_name: string; via: string }[] = []
+    for (const [cid, val] of effective) {
+      const c = countries.find(x => x.id === cid)
+      const role = roles.find(r => r.id === val.roleId)
+      out.push({
+        country_id:   cid,
+        country_name: c?.name || `country:${cid}`,
+        role_name:    role?.name || (val.roleId ? `role:${val.roleId}` : '— no role —'),
+        via:          val.via,
+      })
+    }
+    out.sort((a, b) => a.country_name.localeCompare(b.country_name))
+    return out
+  }, [editing, editScope, editRoleId, countries, roles])
 
   if (loading) return <Spinner />
 
@@ -3170,9 +3243,11 @@ function UsersTab() {
                 </td>
                 <td className="px-4 py-3 text-text-2">{u.role_name || <span className="text-text-3 italic">None</span>}</td>
                 <td className="px-4 py-3">
-                  {u.brand_partners.length === 0
+                  {(u.scope?.length ?? 0) === 0
                     ? <span className="text-xs text-text-3">All markets</span>
-                    : <span className="text-xs text-text-2">{u.brand_partners.map(b => b.name).join(', ')}</span>
+                    : <span className="text-xs text-text-2">
+                        {u.scope.map(s => `${s.access_mode === 'deny' ? '✕ ' : ''}${s.scope_name || `${s.scope_type}:${s.scope_id}`}`).join(', ')}
+                      </span>
                   }
                 </td>
                 <td className="px-4 py-3 text-xs text-text-3">
@@ -3246,48 +3321,20 @@ function UsersTab() {
       </div>
 
       {editing && (
-        <Modal title={`Edit — ${editing.name || editing.email}`} onClose={() => setEditing(null)}>
-          <div className="space-y-5">
-            <Field label="Role">
-              <select
-                className="input w-full"
-                value={editRoleId ?? ''}
-                onChange={e => setEditRoleId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">No role</option>
-                {roles.map(r => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Market scope" hint="Leave all unchecked for unrestricted access to all markets.">
-              <div className="border border-border rounded-xl overflow-hidden">
-                {bps.length === 0
-                  ? <p className="text-xs text-text-3 px-3 py-3">No brand partners configured</p>
-                  : bps.map(bp => (
-                    <label key={bp.id} className="flex items-center gap-3 px-3 py-2.5 border-b last:border-0 border-border cursor-pointer hover:bg-surface-2/50">
-                      <input
-                        type="checkbox"
-                        className="accent-accent"
-                        checked={editBpIds.includes(bp.id)}
-                        onChange={() => toggleBp(bp.id)}
-                      />
-                      <span className="text-sm text-text-1">{bp.name}</span>
-                    </label>
-                  ))
-                }
-              </div>
-              {editBpIds.length === 0 && (
-                <p className="text-xs text-text-3 mt-1.5">All markets accessible (no restriction)</p>
-              )}
-            </Field>
-            <div className="flex justify-end gap-2 pt-1">
-              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSaveEdit} disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
+        <Modal title={`Edit — ${editing.name || editing.email}`} onClose={() => setEditing(null)} width="max-w-3xl">
+          <ScopeEditor
+            roles={roles}
+            bps={bps}
+            countries={countries}
+            defaultRoleId={editRoleId}
+            setDefaultRoleId={setEditRoleId}
+            scope={editScope}
+            setScope={setEditScope}
+            previewRows={previewRows}
+            onSave={handleSaveEdit}
+            onCancel={() => setEditing(null)}
+            saving={saving}
+          />
         </Modal>
       )}
 
@@ -3317,6 +3364,280 @@ function UsersTab() {
       )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
+// ── Scope Editor (used by UsersTab edit modal) ────────────────────────────────
+//
+// Lets the admin pick BP-level and country-level scope rows for a user, with
+// an optional per-row role override and grant/deny mode. Includes bulk-add
+// (multi-select pickers) and a live preview pane that resolves the scope
+// rows into a per-country effective role map. The default user role at the
+// top is the fallback for any scope row that doesn't override.
+
+function ScopeEditor({
+  roles, bps, countries,
+  defaultRoleId, setDefaultRoleId,
+  scope, setScope,
+  previewRows,
+  onSave, onCancel, saving,
+}: {
+  roles: Role[]
+  bps: BrandPartner[]
+  countries: CountryRef[]
+  defaultRoleId: number | null
+  setDefaultRoleId: (id: number | null) => void
+  scope: ScopeRow[]
+  setScope: (next: ScopeRow[] | ((prev: ScopeRow[]) => ScopeRow[])) => void
+  previewRows: { country_id: number; country_name: string; role_name: string; via: string }[]
+  onSave: () => void
+  onCancel: () => void
+  saving: boolean
+}) {
+  const [bpAddOpen,  setBpAddOpen]  = useState(false)
+  const [ctyAddOpen, setCtyAddOpen] = useState(false)
+  const [bpPicked,   setBpPicked]   = useState<Set<number>>(new Set())
+  const [ctyPicked,  setCtyPicked]  = useState<Set<number>>(new Set())
+
+  const usedBpIds  = useMemo(() => new Set(scope.filter(s => s.scope_type === 'brand_partner').map(s => s.scope_id)), [scope])
+  const usedCtyIds = useMemo(() => new Set(scope.filter(s => s.scope_type === 'country').map(s => s.scope_id)), [scope])
+
+  const availableBps      = bps.filter(b => !usedBpIds.has(b.id))
+  const availableCountries = countries.filter(c => !usedCtyIds.has(c.id))
+
+  function addPickedBps() {
+    const adds: ScopeRow[] = Array.from(bpPicked).map(id => ({
+      scope_type: 'brand_partner', scope_id: id, access_mode: 'grant', role_id: null,
+      scope_name: bps.find(b => b.id === id)?.name || null,
+    }))
+    setScope(prev => [...prev, ...adds])
+    setBpPicked(new Set())
+    setBpAddOpen(false)
+  }
+  function addPickedCountries() {
+    const adds: ScopeRow[] = Array.from(ctyPicked).map(id => ({
+      scope_type: 'country', scope_id: id, access_mode: 'grant', role_id: null,
+      scope_name: countries.find(c => c.id === id)?.name || null,
+    }))
+    setScope(prev => [...prev, ...adds])
+    setCtyPicked(new Set())
+    setCtyAddOpen(false)
+  }
+
+  function updateRow(idx: number, patch: Partial<ScopeRow>) {
+    setScope(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
+  }
+  function removeRow(idx: number) {
+    setScope(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const bpRows  = scope.map((s, i) => ({ s, i })).filter(({ s }) => s.scope_type === 'brand_partner')
+  const ctyRows = scope.map((s, i) => ({ s, i })).filter(({ s }) => s.scope_type === 'country')
+
+  return (
+    <div className="space-y-5">
+
+      {/* Default role */}
+      <Field label="Default role" hint="Used for any scope row that doesn't override the role.">
+        <select
+          className="input w-full"
+          value={defaultRoleId ?? ''}
+          onChange={e => setDefaultRoleId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">No role</option>
+          {roles.map(r => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
+      </Field>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Brand Partner scope */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-text-1">Brand Partners</h4>
+            <button className="btn-outline text-xs" onClick={() => setBpAddOpen(true)} disabled={availableBps.length === 0}>
+              + Add BP
+            </button>
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            {bpRows.length === 0 ? (
+              <p className="text-xs text-text-3 px-3 py-3 italic">No BP-level scope rows</p>
+            ) : bpRows.map(({ s, i }) => (
+              <ScopeRowEditor
+                key={`bp-${s.scope_id}`}
+                row={s}
+                roles={roles}
+                onChange={patch => updateRow(i, patch)}
+                onRemove={() => removeRow(i)}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Country scope */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-text-1">Direct countries</h4>
+            <button className="btn-outline text-xs" onClick={() => setCtyAddOpen(true)} disabled={availableCountries.length === 0}>
+              + Add country
+            </button>
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            {ctyRows.length === 0 ? (
+              <p className="text-xs text-text-3 px-3 py-3 italic">No country-level overrides</p>
+            ) : ctyRows.map(({ s, i }) => (
+              <ScopeRowEditor
+                key={`cty-${s.scope_id}`}
+                row={s}
+                roles={roles}
+                onChange={patch => updateRow(i, patch)}
+                onRemove={() => removeRow(i)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Live preview */}
+      <div>
+        <h4 className="text-sm font-semibold text-text-1 mb-2">Effective access ({previewRows.length} market{previewRows.length !== 1 ? 's' : ''})</h4>
+        <div className="border border-border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+          {scope.length === 0 ? (
+            <p className="text-xs text-text-3 px-3 py-3">No scope rows — user is unrestricted (access to all markets with default role).</p>
+          ) : previewRows.length === 0 ? (
+            <p className="text-xs text-text-3 px-3 py-3 italic">No markets resolve from the current scope rows.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-surface-2 sticky top-0">
+                <tr className="text-left text-text-3">
+                  <th className="px-3 py-1.5">Country</th>
+                  <th className="px-3 py-1.5">Role</th>
+                  <th className="px-3 py-1.5">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRows.map(p => (
+                  <tr key={p.country_id} className="border-t border-border">
+                    <td className="px-3 py-1.5 text-text-1">{p.country_name}</td>
+                    <td className="px-3 py-1.5 text-text-2">{p.role_name}</td>
+                    <td className="px-3 py-1.5 text-text-3">{p.via}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1 border-t border-border">
+        <button className="btn-outline px-4 py-2 text-sm" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="btn-primary px-4 py-2 text-sm" onClick={onSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+
+      {/* Bulk-add BP picker */}
+      {bpAddOpen && (
+        <Modal title="Add brand partners" onClose={() => setBpAddOpen(false)} width="max-w-md">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">Select one or more to add as scope rows.</p>
+            <div className="border border-border rounded-lg max-h-72 overflow-y-auto">
+              {availableBps.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">All BPs already in scope.</p>
+              ) : availableBps.map(bp => (
+                <label key={bp.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-0 cursor-pointer hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    checked={bpPicked.has(bp.id)}
+                    onChange={() => setBpPicked(s => { const n = new Set(s); n.has(bp.id) ? n.delete(bp.id) : n.add(bp.id); return n })}
+                  />
+                  <span className="text-sm text-text-1">{bp.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setBpAddOpen(false)}>Cancel</button>
+              <button className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50" onClick={addPickedBps} disabled={bpPicked.size === 0}>
+                Add {bpPicked.size}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk-add country picker */}
+      {ctyAddOpen && (
+        <Modal title="Add countries" onClose={() => setCtyAddOpen(false)} width="max-w-md">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">Select one or more countries to add. Use country grants to add markets that aren't covered by any of the user's BPs, or country denies to punch holes in BP coverage.</p>
+            <div className="border border-border rounded-lg max-h-72 overflow-y-auto">
+              {availableCountries.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">All countries already in scope.</p>
+              ) : availableCountries.map(c => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-0 cursor-pointer hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    checked={ctyPicked.has(c.id)}
+                    onChange={() => setCtyPicked(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })}
+                  />
+                  <span className="text-sm text-text-1 flex-1">{c.name}</span>
+                  {c.brand_partner_id && (
+                    <span className="text-[10px] text-text-3">via BP</span>
+                  )}
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setCtyAddOpen(false)}>Cancel</button>
+              <button className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50" onClick={addPickedCountries} disabled={ctyPicked.size === 0}>
+                Add {ctyPicked.size}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function ScopeRowEditor({ row, roles, onChange, onRemove }: {
+  row: ScopeRow
+  roles: Role[]
+  onChange: (patch: Partial<ScopeRow>) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="px-3 py-2 border-b border-border last:border-0 flex items-center gap-2">
+      <span className="text-sm text-text-1 flex-1 truncate">{row.scope_name || `${row.scope_type}:${row.scope_id}`}</span>
+      <select
+        className="input text-xs py-0.5 px-1"
+        value={row.access_mode}
+        onChange={e => onChange({ access_mode: e.target.value as 'grant' | 'deny' })}
+        title="Grant or deny access"
+      >
+        <option value="grant">grant</option>
+        <option value="deny">deny</option>
+      </select>
+      <select
+        className="input text-xs py-0.5 px-1 w-32"
+        value={row.role_id ?? ''}
+        onChange={e => onChange({ role_id: e.target.value ? Number(e.target.value) : null })}
+        title="Override role for this scope (blank = inherit default)"
+        disabled={row.access_mode === 'deny'}
+      >
+        <option value="">— inherit —</option>
+        {roles.map(r => (
+          <option key={r.id} value={r.id}>{r.name}</option>
+        ))}
+      </select>
+      <button
+        className="text-text-3 hover:text-red-500 transition-colors"
+        onClick={onRemove}
+        title="Remove scope row"
+      >✕</button>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, RefObject } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useVoiceInput } from '../hooks/useVoiceInput'
 import { useVoiceOutput } from '../hooks/useVoiceOutput'
@@ -560,6 +560,7 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
     }
   }, [getAccessTokenSilently])
   const location   = useLocation()
+  const navigate   = useNavigate()
 
   const [view,               setView]               = useState<PanelView>('chat')
   const [messages,           setMessages]           = useState<Message[]>([])
@@ -583,6 +584,12 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
   // Stash the user's pre-voice input so a short hold doesn't wipe what they
   // were typing — we append the transcript instead.
   const preVoiceInputRef = useRef('')
+  // Set when push-to-talk was activated via keyboard shortcut: when the
+  // transcript callback fires, auto-send instead of leaving it in the input.
+  const autoSendOnTranscriptRef = useRef(false)
+  // Forward-reference to sendCore so the voice hook can call it; populated
+  // after sendCore is defined further down the component body.
+  const sendCoreRef = useRef<((text?: string, file?: File | null) => Promise<void>) | null>(null)
   const voice = useVoiceInput({
     lang: 'en-GB',
     apiBase: API_BASE,
@@ -590,7 +597,13 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
     onTranscript: (text) => {
       if (!text) return
       const base = preVoiceInputRef.current
-      setInput(base ? `${base} ${text}` : text)
+      const merged = base ? `${base} ${text}` : text
+      setInput(merged)
+      if (autoSendOnTranscriptRef.current) {
+        autoSendOnTranscriptRef.current = false
+        // Defer one tick so React commits the input update before send fires.
+        setTimeout(() => { sendCoreRef.current?.(merged) }, 0)
+      }
     },
     onError: (_err) => { /* swallow — mic permission denial is user-visible */ },
   })
@@ -831,6 +844,15 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
                 return msgs
               })
             }
+            if (event.type === 'navigate' && typeof event.path === 'string') {
+              // Pepper-driven page navigation. Server emits this from
+              // navigate_to_page tool. Only relative paths are accepted to
+              // prevent injection of external URLs through prompt manipulation.
+              const path = event.path
+              if (path.startsWith('/') && !path.startsWith('//')) {
+                navigate(path)
+              }
+            }
             if (event.type === 'done') setToolLabel(null)
           } catch { /* ignore parse errors */ }
         }
@@ -853,9 +875,53 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
 
   const send        = useCallback(() => sendCore(),          [sendCore])
 
+  // Keep the ref in sync so the voice hook (which is set up earlier in the
+  // component body, before sendCore exists) can call the latest sendCore.
+  useEffect(() => { sendCoreRef.current = sendCore }, [sendCore])
+
   const handleKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }, [send])
+
+  // ── Push-to-talk keyboard shortcut (Alt+Space) ─────────────────────────────
+  // Hold Alt+Space anywhere in the app to record. Release auto-sends the
+  // transcript without needing to click Send. Skipped when the chat panel is
+  // closed or voice isn't available on this device.
+  useEffect(() => {
+    if (!voice.available) return
+    let active = false  // local guard: only fire on the *first* keydown, ignore OS auto-repeat
+
+    function isMatch(e: KeyboardEvent) { return e.altKey && e.code === 'Space' }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (!isMatch(e)) return
+      if (e.repeat || active) { e.preventDefault(); return }
+      // Don't fight a focused input — let users hold Alt+Space without
+      // accidentally triggering inside another text field.
+      const t = e.target as HTMLElement | null
+      if (t?.isContentEditable) return
+      e.preventDefault()
+      active = true
+      preVoiceInputRef.current = inputRef.current?.value ?? ''
+      autoSendOnTranscriptRef.current = true
+      voice.start()
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (!active) return
+      // Stop on either key release (Alt or Space).
+      if (e.code === 'Space' || e.key === 'Alt') {
+        active = false
+        e.preventDefault()
+        voice.stop()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [voice])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null

@@ -13,8 +13,9 @@ router.get('/', requireAuth, (req, res) => {
     role_id:         req.user.role_id,
     role_name:       req.user.role_name,
     is_dev:           req.user.is_dev,
-    permissions:     req.user.permissions,
-    allowedCountries: req.user.allowedCountries,
+    permissions:      req.user.permissions,        // union across all markets
+    allowedCountries: req.user.allowedCountries,    // null = unrestricted
+    scopedAccess:     req.user.scopedAccess || {},  // { country_id: { roleId, roleName, permissions } }
   });
 });
 

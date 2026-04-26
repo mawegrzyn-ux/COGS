@@ -1459,6 +1459,29 @@ Always call list_menus first to resolve the menu ID. No confirmation needed — 
     },
   },
 
+  // ── Page navigation ──────────────────────────────────────────────────────────
+  {
+    name: 'navigate_to_page',
+    description: `Navigates the user to a different page in the app. Use when the user says "open / take me to / show me / go to <page>" — e.g. "open recipes", "show me the dashboard", "go to inventory".
+The browser will switch to the chosen page; the user keeps their current chat and the conversation continues. Always confirm verbally first (e.g. "Opening the Recipes page now") so the user knows what's about to happen.
+Pages map roughly to sidebar items. Pick the closest match. Do NOT invent URLs — the path enum is the full set.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+          enum: [
+            'dashboard', 'inventory', 'recipes', 'sales-items', 'menus',
+            'allergens', 'haccp', 'audits', 'stock-manager', 'media',
+            'configuration', 'system', 'help',
+          ],
+          description: 'The destination page (sidebar key).',
+        },
+      },
+      required: ['page'],
+    },
+  },
+
   // ── Excel Export ─────────────────────────────────────────────────────────────
   {
     name: 'export_to_excel',
@@ -1723,6 +1746,27 @@ async function executeTool(name, input, send = null, userCtx = {}) {
   const _tSel = (alias, field, paramIdx) =>
     _lang ? `COALESCE(${alias}.translations->$${paramIdx}->>'${field}', ${alias}.${field})`
           : `${alias}.${field}`;
+
+  // Per-market write enforcement. Returns null if the user has write access
+  // for `feature` in the given country, or an { error } object the tool can
+  // return early with. Unrestricted users (allowedCountries === null) always
+  // pass — same as the user's union permissions. Restricted users with no
+  // entry for the country, or read-only access, get a clear error.
+  const _assertMarketWrite = (feature, countryId) => {
+    if (countryId == null) return null;
+    const allowed = userCtx?.allowedCountries;
+    if (allowed === null || allowed === undefined) return null; // unrestricted
+    const cid = Number(countryId);
+    const scoped = userCtx?.scopedAccess || {};
+    const entry  = scoped[cid];
+    const access = entry?.permissions?.[feature] || 'none';
+    if (access !== 'write') {
+      return { error: `You do not have write access to ${feature} in this market (country ${cid}). Ask an admin to grant access.` };
+    }
+    return null;
+  };
+  // Suppress unused-var warning when this helper isn't used by a particular branch
+  void _assertMarketWrite;
 
   switch (name) {
 
@@ -2531,6 +2575,8 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'set_preferred_vendor': {
       const { ingredient_id, country_id, vendor_id, quote_id } = input;
+      const denied = _assertMarketWrite('inventory', country_id);
+      if (denied) return denied;
       const { rows } = await pool.query(`
         INSERT INTO mcogs_ingredient_preferred_vendor
           (ingredient_id, country_id, vendor_id, quote_id)
@@ -3645,6 +3691,22 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     // ── Excel Export ───────────────────────────────────────────────────────────
+
+    case 'navigate_to_page': {
+      const page = String(input?.page || '').trim();
+      const allowed = new Set([
+        'dashboard', 'inventory', 'recipes', 'sales-items', 'menus',
+        'allergens', 'haccp', 'audits', 'stock-manager', 'media',
+        'configuration', 'system', 'help',
+      ]);
+      if (!allowed.has(page)) return { error: `Unknown page "${page}"` };
+      const path = `/${page}`;
+      // Emit an SSE 'navigate' event so the browser switches routes. The
+      // tool result string is what Claude sees in the conversation; the SSE
+      // event is the side-channel that actually drives the browser.
+      if (send) send({ type: 'navigate', path });
+      return { ok: true, opened: path, message: `Opened ${page} for the user.` };
+    }
 
     case 'export_to_excel': {
       try {

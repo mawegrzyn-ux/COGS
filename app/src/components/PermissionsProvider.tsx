@@ -40,8 +40,17 @@ export default function PermissionsProvider({ children }: { children: React.Reac
 
   useEffect(() => { reload() }, [reload])
 
-  const can = useCallback((feature: Feature, level: 'read' | 'write'): boolean => {
+  const can = useCallback((feature: Feature, level: 'read' | 'write', marketId?: number | null): boolean => {
     if (!user || user.status !== 'active') return false
+    // Per-market check: when a marketId is provided AND the user is restricted,
+    // resolve against the per-market scopedAccess snapshot. Unrestricted users
+    // always pass the market check (they can act in any market).
+    if (marketId != null && user.allowedCountries !== null) {
+      const entry = user.scopedAccess?.[marketId]
+      const access: AccessLevel = entry?.permissions?.[feature] || 'none'
+      return level === 'read' ? (access === 'read' || access === 'write') : access === 'write'
+    }
+    // No marketId → union check (current behaviour, used by sidebar/nav)
     const access: AccessLevel = user.permissions?.[feature] || 'none'
     return level === 'read' ? (access === 'read' || access === 'write') : access === 'write'
   }, [user])

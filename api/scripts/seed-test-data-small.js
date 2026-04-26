@@ -526,7 +526,7 @@ async function clearData(client) {
   // seed-test-data.js — see that file for the full rationale.
   //
   //   mcogs_allergens / mcogs_roles / mcogs_role_permissions  — reference data
-  //   mcogs_users / mcogs_user_brand_partners                 — auth data
+  //   mcogs_users / mcogs_user_scope                          — auth data
   //   mcogs_ai_chat_log / mcogs_feedback / mcogs_import_jobs  — history / staging
   //   mcogs_audit_log / mcogs_user_notes / mcogs_user_profiles — compliance / memory
   //   mcogs_settings / mcogs_changelog                        — global config + history

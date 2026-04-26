@@ -533,7 +533,7 @@ async function clearData(client) {
   //
   //   mcogs_allergens          — FIC 1169 reference data (migration-seeded)
   //   mcogs_roles, mcogs_role_permissions — RBAC reference data (migration-seeded)
-  //   mcogs_users, mcogs_user_brand_partners — auth data (would break login)
+  //   mcogs_users, mcogs_user_scope — auth data (would break login)
   //   mcogs_ai_chat_log        — AI assistant history
   //   mcogs_feedback           — user-submitted bug/feature reports
   //   mcogs_import_jobs        — import staging data
