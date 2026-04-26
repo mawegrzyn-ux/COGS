@@ -3639,42 +3639,51 @@ function ScopeRowEditor({ row, roles, onChange, onRemove, hint }: {
   onRemove: () => void
   hint?: string | null
 }) {
+  // Stacked layout — the name takes the full width on its own line so it's
+  // impossible to miss. Controls go on a second row underneath. Previous
+  // single-line layout squeezed the name into ~60px next to the dropdowns
+  // and made it look invisible.
+  const displayName = row.scope_name || `${row.scope_type}:${row.scope_id}`
   return (
-    <div className="px-3 py-2 border-b border-border last:border-0 flex items-center gap-2">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-text-1 truncate">
-          {row.scope_name || `${row.scope_type}:${row.scope_id}`}
+    <div className="px-3 py-2.5 border-b border-border last:border-0">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-text-1 break-words leading-snug">
+            {displayName}
+          </div>
+          {hint && (
+            <div className="text-[11px] text-text-3 mt-0.5 break-words">{hint}</div>
+          )}
         </div>
-        {hint && (
-          <div className="text-[10px] text-text-3 truncate">{hint}</div>
-        )}
+        <button
+          className="text-text-3 hover:text-red-500 transition-colors shrink-0 text-base leading-none"
+          onClick={onRemove}
+          title="Remove this scope row"
+        >✕</button>
       </div>
-      <select
-        className="input text-xs py-0.5 px-1"
-        value={row.access_mode}
-        onChange={e => onChange({ access_mode: e.target.value as 'grant' | 'deny' })}
-        title="Allow or block access"
-      >
-        <option value="grant">Allow</option>
-        <option value="deny">Block</option>
-      </select>
-      <select
-        className="input text-xs py-0.5 px-1 w-32"
-        value={row.role_id ?? ''}
-        onChange={e => onChange({ role_id: e.target.value ? Number(e.target.value) : null })}
-        title="Override role for this scope (blank = inherit default)"
-        disabled={row.access_mode === 'deny'}
-      >
-        <option value="">— inherit role —</option>
-        {roles.map(r => (
-          <option key={r.id} value={r.id}>{r.name}</option>
-        ))}
-      </select>
-      <button
-        className="text-text-3 hover:text-red-500 transition-colors"
-        onClick={onRemove}
-        title="Remove scope row"
-      >✕</button>
+      <div className="flex items-center gap-2">
+        <select
+          className="input text-xs py-0.5 px-1 flex-1"
+          value={row.access_mode}
+          onChange={e => onChange({ access_mode: e.target.value as 'grant' | 'deny' })}
+          title="Allow or block access"
+        >
+          <option value="grant">Allow</option>
+          <option value="deny">Block</option>
+        </select>
+        <select
+          className="input text-xs py-0.5 px-1 flex-1"
+          value={row.role_id ?? ''}
+          onChange={e => onChange({ role_id: e.target.value ? Number(e.target.value) : null })}
+          title="Override role for this scope (blank = inherit default)"
+          disabled={row.access_mode === 'deny'}
+        >
+          <option value="">— inherit role —</option>
+          {roles.map(r => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
+      </div>
     </div>
   )
 }
