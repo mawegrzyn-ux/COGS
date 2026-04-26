@@ -495,22 +495,23 @@ function StockConfigSection() {
 // ── Users & Roles combined section ────────────────────────────────────────────
 
 function UsersRolesSection() {
-  const [subTab, setSubTab] = useState<'users' | 'roles'>('users')
+  const [subTab, setSubTab] = useState<'users' | 'roles' | 'templates'>('users')
+  const TAB_LABEL = { users: 'Users', roles: 'Roles', templates: 'Scope templates' }
   return (
     <div className="flex flex-col h-full">
       {/* Mini tab bar */}
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border">
-        {(['users', 'roles'] as const).map(t => (
+        {(['users', 'roles', 'templates'] as const).map(t => (
           <button
             key={t}
             onClick={() => setSubTab(t)}
-            className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors whitespace-nowrap capitalize
+            className={`px-4 py-2.5 text-sm font-semibold rounded-t transition-colors whitespace-nowrap
               ${subTab === t
                 ? 'text-accent border-b-2 border-accent bg-accent-dim/50'
                 : 'text-text-3 hover:text-text-1'
               }`}
           >
-            {t === 'users' ? 'Users' : 'Roles'}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>

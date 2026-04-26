@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, DateConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
 import ImportPage from './ImportPage'
@@ -34,7 +34,7 @@ interface AppSettings {
 
 type CostingMethod = 'best' | 'average'
 
-type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles'
+type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles' | 'templates'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -50,6 +50,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'import':       'Import',
   'users':        'Users',
   'roles':        'Roles',
+  'templates':    'Scope templates',
 }
 
 const TAB_TUTORIALS: Record<Tab, string> = {
@@ -64,6 +65,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
   'users':        'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
   'roles':        'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
+  'templates':    'What are Scope Templates? Explain how to save a user\'s scope as a reusable template, apply it to other users, and when this is useful (onboarding similar roles across markets).',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -97,6 +99,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
         {t === 'import'       && <ImportPage hideHeader />}
         {t === 'users'        && <UsersTab />}
         {t === 'roles'        && <RolesTab />}
+        {t === 'templates'    && <ScopeTemplatesTab />}
       </>
     )
   }
@@ -3041,6 +3044,7 @@ function UsersTab() {
 
   const [confirming, setConfirming] = useState<{ user: AppUser; action: 'disable' | 'enable' | 'delete' } | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -3190,6 +3194,19 @@ function UsersTab() {
 
   const pending = users.filter(u => u.status === 'pending')
 
+  // Search across name, email, role, scope_name + scope_type. Plain string
+  // contains, case-insensitive — matches any column the user might be looking
+  // at. Disabled status, market labels, and emails all searchable.
+  const searchLc = search.trim().toLowerCase()
+  const filteredUsers = !searchLc ? users : users.filter(u => {
+    const haystack = [
+      u.name, u.email, u.status, u.role_name,
+      ...(u.scope || []).map(s => s.scope_name || ''),
+      ...(u.scope || []).map(s => s.role_name || ''),
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(searchLc)
+  })
+
   return (
     <div>
       {pending.length > 0 && (
@@ -3202,6 +3219,31 @@ function UsersTab() {
           </span>
         </div>
       )}
+
+      {/* Search bar — filters across name / email / role / scope labels */}
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 4a7 7 0 100 14 7 7 0 000-14z" />
+          </svg>
+          <input
+            className="input pl-8 w-full text-sm"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search name, email, role, market…"
+          />
+          {search && (
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1"
+              onClick={() => setSearch('')}
+              title="Clear search"
+            >✕</button>
+          )}
+        </div>
+        <span className="text-xs text-text-3">
+          {filteredUsers.length} of {users.length}
+        </span>
+      </div>
 
       <div className="bg-surface border border-border rounded-xl overflow-hidden">
         <table className="w-full text-sm">
@@ -3216,10 +3258,12 @@ function UsersTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {users.length === 0 && (
-              <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-sm text-text-3">No users yet</td></tr>
+            {filteredUsers.length === 0 && (
+              <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-sm text-text-3">
+                {users.length === 0 ? 'No users yet' : `No users match "${search}"`}
+              </td></tr>
             )}
-            {users.map(u => (
+            {filteredUsers.map(u => (
               <tr key={u.id} className={`hover:bg-surface-2/50 ${u.id === me?.id ? 'bg-accent-dim/20' : ''}`}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2.5">
@@ -3864,6 +3908,301 @@ function ScopeRowEditor({ row, roles, onChange, onRemove, hint }: {
           ))}
         </select>
       </div>
+    </div>
+  )
+}
+
+// ── Scope Templates Tab ──────────────────────────────────────────────────────
+//
+// Manages the reusable scope bundles that admins save from a user's edit
+// modal. Lists every template with its scope contents (expandable), allows
+// rename / description edit / delete. Templates are applied via the user
+// edit modal's "Load template" button — this tab is purely management.
+
+interface TemplateRow {
+  id:          number
+  name:        string
+  description: string | null
+  scope:       Omit<ScopeRow, 'scope_name'>[]
+  created_by:  string | null
+  created_at:  string
+  updated_at:  string
+  row_count:   number
+}
+
+function ScopeTemplatesTab() {
+  const api = useApi()
+  const { can } = usePermissions()
+  const canWrite = can('users', 'write')
+
+  const [templates, setTemplates] = useState<TemplateRow[]>([])
+  const [bps,       setBps]       = useState<BrandPartner[]>([])
+  const [countries, setCountries] = useState<CountryRef[]>([])
+  const [roles,     setRoles]     = useState<Role[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [search,    setSearch]    = useState('')
+  const [expanded,  setExpanded]  = useState<Set<number>>(new Set())
+  const [editing,   setEditing]   = useState<TemplateRow | null>(null)
+  const [editName,  setEditName]  = useState('')
+  const [editDesc,  setEditDesc]  = useState('')
+  const [saving,    setSaving]    = useState(false)
+  const [toast,     setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [t, b, c, r] = await Promise.all([
+        api.get('/users/scope-templates/list'),
+        api.get('/brand-partners'),
+        api.get('/countries'),
+        api.get('/roles'),
+      ])
+      setTemplates(t || [])
+      setBps(b || [])
+      setCountries(c || [])
+      setRoles(r || [])
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Failed to load templates', type: 'error' })
+    } finally { setLoading(false) }
+  }, [api])
+  useEffect(() => { load() }, [load])
+
+  if (!can('users', 'read')) return <EmptyState message="You don't have permission to view templates." />
+  if (loading) return <Spinner />
+
+  const bpById   = new Map(bps.map(b => [b.id, b]))
+  const ctyById  = new Map(countries.map(c => [c.id, c]))
+  const roleById = new Map(roles.map(r => [r.id, r]))
+
+  function labelFor(s: Omit<ScopeRow, 'scope_name'>): string {
+    if (s.scope_type === 'brand_partner') return bpById.get(s.scope_id)?.name || `BP #${s.scope_id}`
+    if (s.scope_type === 'country')       return ctyById.get(s.scope_id)?.name || `Market #${s.scope_id}`
+    return `${s.scope_type}:${s.scope_id}`
+  }
+
+  const searchLc = search.trim().toLowerCase()
+  const filtered = !searchLc ? templates : templates.filter(t => {
+    const haystack = [
+      t.name, t.description, t.created_by,
+      ...(t.scope || []).map(labelFor),
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(searchLc)
+  })
+
+  function toggleExpand(id: number) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function openEdit(t: TemplateRow) {
+    setEditing(t); setEditName(t.name); setEditDesc(t.description || '')
+  }
+
+  async function saveEdit() {
+    if (!editing) return
+    const name = editName.trim()
+    if (!name) { setToast({ message: 'Name required', type: 'error' }); return }
+    setSaving(true)
+    try {
+      await api.put(`/users/scope-templates/${editing.id}`, {
+        name, description: editDesc.trim() || null,
+      })
+      setEditing(null)
+      await load()
+      setToast({ message: 'Template updated', type: 'success' })
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Save failed', type: 'error' })
+    } finally { setSaving(false) }
+  }
+
+  async function deleteTemplate(t: TemplateRow) {
+    if (!confirm(`Delete template "${t.name}"? Users created from it are not affected.`)) return
+    try {
+      await api.delete(`/users/scope-templates/${t.id}`)
+      await load()
+      setToast({ message: 'Template deleted', type: 'success' })
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Delete failed', type: 'error' })
+    }
+  }
+
+  return (
+    <div>
+      <div className="mb-3">
+        <p className="text-xs text-text-3">
+          Templates store a snapshot of scope rows (BPs + markets + access modes + role overrides). Apply them when
+          editing a user via the <strong>Load template</strong> button on the scope editor.
+        </p>
+      </div>
+
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 4a7 7 0 100 14 7 7 0 000-14z" />
+          </svg>
+          <input
+            className="input pl-8 w-full text-sm"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name, description, or scope contents…"
+          />
+          {search && (
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1" onClick={() => setSearch('')} title="Clear">✕</button>
+          )}
+        </div>
+        <span className="text-xs text-text-3">
+          {filtered.length} of {templates.length}
+        </span>
+      </div>
+
+      {templates.length === 0 ? (
+        <div className="bg-surface-2 border border-border rounded-xl px-4 py-8 text-center text-sm text-text-3">
+          No templates saved yet. Open a user's scope editor and click <strong>Save as template</strong> to create one.
+        </div>
+      ) : (
+        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border">
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3 w-8"></th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Name</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Description</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Rows</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Created by</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Updated</th>
+                {canWrite && <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-3">Actions</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.length === 0 ? (
+                <tr><td colSpan={canWrite ? 7 : 6} className="px-4 py-8 text-center text-sm text-text-3">
+                  No templates match "{search}"
+                </td></tr>
+              ) : filtered.map(t => {
+                const isOpen = expanded.has(t.id)
+                const bpRows  = (t.scope || []).filter(s => s.scope_type === 'brand_partner')
+                const ctyRows = (t.scope || []).filter(s => s.scope_type === 'country')
+                return (
+                  <Fragment key={t.id}>
+                    <tr className="hover:bg-surface-2/50">
+                      <td className="px-4 py-2.5">
+                        <button
+                          className="text-text-3 hover:text-accent transition-transform"
+                          onClick={() => toggleExpand(t.id)}
+                          style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                          title={isOpen ? 'Collapse' : 'Expand'}
+                        >▶</button>
+                      </td>
+                      <td className="px-4 py-2.5 font-semibold text-text-1">{t.name}</td>
+                      <td className="px-4 py-2.5 text-text-2 text-xs">{t.description || <span className="text-text-3 italic">—</span>}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{t.row_count}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{t.created_by || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{new Date(t.updated_at).toLocaleDateString()}</td>
+                      {canWrite && (
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                              title="Rename / edit description"
+                              onClick={() => openEdit(t)}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                            <button
+                              className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-red-600 transition-colors"
+                              title="Delete template"
+                              onClick={() => deleteTemplate(t)}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={canWrite ? 7 : 6} className="bg-surface-2/30 px-4 py-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                            <div>
+                              <div className="font-semibold text-text-2 mb-1">Brand Partners ({bpRows.length})</div>
+                              {bpRows.length === 0 ? <div className="text-text-3 italic">none</div> : bpRows.map((s, i) => (
+                                <div key={`bp-${s.scope_id}-${i}`} className="flex items-center justify-between gap-2 px-2 py-1 border-b border-border last:border-0">
+                                  <span className="text-text-1 truncate">{labelFor(s)}</span>
+                                  <span className={`shrink-0 ${s.access_mode === 'deny' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    {s.access_mode === 'deny' ? 'Block' : 'Allow'}
+                                    {s.role_id && ` · ${roleById.get(s.role_id)?.name || `role:${s.role_id}`}`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-text-2 mb-1">Direct markets ({ctyRows.length})</div>
+                              {ctyRows.length === 0 ? <div className="text-text-3 italic">none</div> : ctyRows.map((s, i) => (
+                                <div key={`cty-${s.scope_id}-${i}`} className="flex items-center justify-between gap-2 px-2 py-1 border-b border-border last:border-0">
+                                  <span className="text-text-1 truncate">{labelFor(s)}</span>
+                                  <span className={`shrink-0 ${s.access_mode === 'deny' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    {s.access_mode === 'deny' ? 'Block' : 'Allow'}
+                                    {s.role_id && ` · ${roleById.get(s.role_id)?.name || `role:${s.role_id}`}`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && (
+        <Modal title={`Edit template — ${editing.name}`} onClose={() => !saving && setEditing(null)}>
+          <div className="space-y-3">
+            <Field label="Name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                disabled={saving}
+              />
+            </Field>
+            <Field label="Description" hint="Optional — shown in the picker.">
+              <input
+                className="input w-full"
+                value={editDesc}
+                onChange={e => setEditDesc(e.target.value)}
+                disabled={saving}
+              />
+            </Field>
+            <p className="text-xs text-text-3 italic">
+              To change the scope contents (BPs / markets / role overrides), open a user's edit modal,
+              load this template, edit the rows, and save it back as a new template (or delete this one and re-save).
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setEditing(null)} disabled={saving}>Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                onClick={saveEdit}
+                disabled={saving || !editName.trim()}
+              >{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   )
 }
