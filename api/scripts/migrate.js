@@ -3743,6 +3743,20 @@ const migrations = [
   // Test env: drop legacy mcogs_user_brand_partners (per user direction).
   `DROP TABLE IF EXISTS mcogs_user_brand_partners`,
 
+  // ── Step 156b: User scope templates — reusable scope presets ──────────────
+  // Store a named bundle of scope rows so admins don't have to rebuild the
+  // same BP/market layout for every new user. Saved as JSONB so the shape
+  // matches mcogs_user_scope rows directly: [{scope_type, scope_id, access_mode, role_id}]
+  `CREATE TABLE IF NOT EXISTS mcogs_user_scope_templates (
+     id          SERIAL PRIMARY KEY,
+     name        VARCHAR(100) NOT NULL UNIQUE,
+     description TEXT,
+     scope       JSONB NOT NULL DEFAULT '[]'::jsonb,
+     created_by  VARCHAR(255),
+     created_at  TIMESTAMPTZ DEFAULT NOW(),
+     updated_at  TIMESTAMPTZ DEFAULT NOW()
+   )`,
+
   // ── Step 157: Changelog — granular RBAC ───────────────────────────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-04-26', 'Granular user scope (Phase 1 — schema + auth middleware)', '[

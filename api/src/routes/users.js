@@ -237,4 +237,109 @@ router.delete('/:id', auth, admin, async (req, res) => {
   }
 });
 
+// ── User scope templates ─────────────────────────────────────────────────────
+// Reusable bundles of scope rows. Admin saves a user's current scope as a
+// named template, then applies it later when onboarding similar users.
+
+// GET /api/users/scope-templates — list
+router.get('/scope-templates/list', auth, adminRead, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, name, description, scope, created_by, created_at, updated_at,
+             jsonb_array_length(scope) AS row_count
+      FROM   mcogs_user_scope_templates
+      ORDER  BY name ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// POST /api/users/scope-templates — create
+router.post('/scope-templates', auth, admin, async (req, res) => {
+  const name        = String(req.body?.name || '').trim();
+  const description = String(req.body?.description || '').trim() || null;
+  const incoming    = Array.isArray(req.body?.scope) ? req.body.scope : null;
+  if (!name)     return res.status(400).json({ error: { message: 'name is required' } });
+  if (!incoming) return res.status(400).json({ error: { message: 'scope (array) is required' } });
+
+  // Validate each row (same rules as PUT /:id/scope)
+  const valid = [];
+  for (const row of incoming) {
+    const scope_type  = String(row.scope_type || '').trim();
+    const scope_id    = Number(row.scope_id);
+    const access_mode = String(row.access_mode || 'grant').trim();
+    const role_id     = row.role_id == null ? null : Number(row.role_id);
+    if (!['brand_partner', 'country'].includes(scope_type))   return res.status(400).json({ error: { message: `Invalid scope_type "${scope_type}"` } });
+    if (!Number.isFinite(scope_id) || scope_id <= 0)          return res.status(400).json({ error: { message: 'scope_id must be a positive integer' } });
+    if (!['grant', 'deny'].includes(access_mode))             return res.status(400).json({ error: { message: `Invalid access_mode "${access_mode}"` } });
+    valid.push({ scope_type, scope_id, access_mode, role_id });
+  }
+
+  try {
+    const { rows } = await pool.query(`
+      INSERT INTO mcogs_user_scope_templates (name, description, scope, created_by)
+      VALUES ($1, $2, $3::jsonb, $4) RETURNING *
+    `, [name, description, JSON.stringify(valid), req.user?.email || req.user?.sub || null]);
+    logAudit(pool, req, {
+      action: 'create', entity_type: 'user_scope_template', entity_id: rows[0].id, entity_label: name,
+      field_changes: { scope: { old: null, new: valid } },
+    });
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'A template with that name already exists' } });
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// PUT /api/users/scope-templates/:id — rename / replace scope / edit description
+router.put('/scope-templates/:id', auth, admin, async (req, res) => {
+  const { id } = req.params;
+  const updates = [];
+  const vals    = [];
+  let   idx     = 1;
+  if (req.body?.name !== undefined) {
+    const n = String(req.body.name).trim();
+    if (!n) return res.status(400).json({ error: { message: 'name cannot be empty' } });
+    updates.push(`name = $${idx++}`); vals.push(n);
+  }
+  if (req.body?.description !== undefined) {
+    updates.push(`description = $${idx++}`); vals.push(String(req.body.description).trim() || null);
+  }
+  if (req.body?.scope !== undefined) {
+    if (!Array.isArray(req.body.scope)) return res.status(400).json({ error: { message: 'scope must be an array' } });
+    updates.push(`scope = $${idx++}::jsonb`); vals.push(JSON.stringify(req.body.scope));
+  }
+  if (updates.length === 0) return res.status(400).json({ error: { message: 'No fields to update' } });
+  updates.push(`updated_at = NOW()`);
+
+  try {
+    vals.push(id);
+    const { rows } = await pool.query(
+      `UPDATE mcogs_user_scope_templates SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ error: { message: 'Template not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'user_scope_template', entity_id: Number(id), entity_label: rows[0].name });
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: { message: 'A template with that name already exists' } });
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// DELETE /api/users/scope-templates/:id
+router.delete('/scope-templates/:id', auth, admin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { rows: [old] } = await pool.query('SELECT name FROM mcogs_user_scope_templates WHERE id=$1', [id]);
+    await pool.query('DELETE FROM mcogs_user_scope_templates WHERE id = $1', [id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'user_scope_template', entity_id: Number(id), entity_label: old?.name });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
 module.exports = router;

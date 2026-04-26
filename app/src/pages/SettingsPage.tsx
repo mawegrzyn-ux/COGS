@@ -3395,10 +3395,86 @@ function ScopeEditor({
   onCancel: () => void
   saving: boolean
 }) {
+  const api = useApi()
   const [bpAddOpen,  setBpAddOpen]  = useState(false)
   const [ctyAddOpen, setCtyAddOpen] = useState(false)
   const [bpPicked,   setBpPicked]   = useState<Set<number>>(new Set())
   const [ctyPicked,  setCtyPicked]  = useState<Set<number>>(new Set())
+
+  // ── User scope templates ────────────────────────────────────────────────
+  interface Template {
+    id:          number
+    name:        string
+    description: string | null
+    scope:       Omit<ScopeRow, 'scope_name'>[]
+    created_by:  string | null
+    row_count:   number
+  }
+  const [templates,   setTemplates]   = useState<Template[]>([])
+  const [tplOpen,     setTplOpen]     = useState<'load' | 'save' | null>(null)
+  const [tplSaveName, setTplSaveName] = useState('')
+  const [tplSaveDesc, setTplSaveDesc] = useState('')
+  const [tplBusy,     setTplBusy]     = useState(false)
+  const [tplErr,      setTplErr]      = useState<string | null>(null)
+
+  const loadTemplates = useCallback(async () => {
+    try {
+      const data = await api.get('/users/scope-templates/list') as Template[]
+      setTemplates(data || [])
+    } catch (e: any) {
+      setTplErr(e?.message || 'Failed to load templates')
+    }
+  }, [api])
+  useEffect(() => { loadTemplates() }, [loadTemplates])
+
+  // Apply a template — replaces the current scope. We re-resolve scope_name
+  // from the live bps/countries lists so freshly-loaded rows have proper labels.
+  function applyTemplate(t: Template) {
+    const enriched: ScopeRow[] = t.scope.map(r => ({
+      ...r,
+      scope_name: r.scope_type === 'brand_partner'
+        ? (bps.find(b => b.id === r.scope_id)?.name || null)
+        : (countries.find(c => c.id === r.scope_id)?.name || null),
+    }))
+    setScope(enriched)
+    setTplOpen(null)
+  }
+
+  async function saveTemplate() {
+    const name = tplSaveName.trim()
+    if (!name) { setTplErr('Name required'); return }
+    setTplBusy(true); setTplErr(null)
+    try {
+      await api.post('/users/scope-templates', {
+        name,
+        description: tplSaveDesc.trim() || null,
+        // Only persist the structural fields — names get re-resolved on load
+        scope: scope.map(s => ({
+          scope_type:  s.scope_type,
+          scope_id:    s.scope_id,
+          access_mode: s.access_mode,
+          role_id:     s.role_id ?? null,
+        })),
+      })
+      setTplSaveName(''); setTplSaveDesc('')
+      setTplOpen(null)
+      await loadTemplates()
+    } catch (e: any) {
+      setTplErr(e?.message || 'Save failed')
+    } finally {
+      setTplBusy(false)
+    }
+  }
+
+  async function deleteTemplate(id: number) {
+    if (!confirm('Delete this template? Users already created from it are not affected.')) return
+    try {
+      await api.delete(`/users/scope-templates/${id}`)
+      await loadTemplates()
+    } catch (e: any) {
+      setTplErr(e?.message || 'Delete failed')
+    }
+  }
 
   const usedBpIds  = useMemo(() => new Set(scope.filter(s => s.scope_type === 'brand_partner').map(s => s.scope_id)), [scope])
   const usedCtyIds = useMemo(() => new Set(scope.filter(s => s.scope_type === 'country').map(s => s.scope_id)), [scope])
@@ -3450,6 +3526,29 @@ function ScopeEditor({
 
   return (
     <div className="space-y-5">
+
+      {/* Templates toolbar */}
+      <div className="flex items-center justify-between gap-2 -mt-1">
+        <div className="text-xs text-text-3">
+          📋 Templates {templates.length > 0 && <span className="font-mono text-text-3">({templates.length})</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-outline text-xs px-2.5 py-1 disabled:opacity-50"
+            onClick={() => setTplOpen('load')}
+            disabled={templates.length === 0}
+            title={templates.length === 0 ? 'No templates saved yet' : 'Apply a saved scope template'}
+          >Load template</button>
+          <button
+            type="button"
+            className="btn-outline text-xs px-2.5 py-1 disabled:opacity-50"
+            onClick={() => { setTplSaveName(''); setTplSaveDesc(''); setTplErr(null); setTplOpen('save') }}
+            disabled={scope.length === 0}
+            title={scope.length === 0 ? 'Add at least one BP or market first' : 'Save the current scope as a reusable template'}
+          >Save as template</button>
+        </div>
+      </div>
 
       {/* Default role */}
       <Field label="Default role" hint="Used for any scope row that doesn't override the role.">
@@ -3624,6 +3723,87 @@ function ScopeEditor({
               <button className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50" onClick={addPickedCountries} disabled={ctyPicked.size === 0}>
                 Add {ctyPicked.size}
               </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Load template picker */}
+      {tplOpen === 'load' && (
+        <Modal title="Load scope template" onClose={() => setTplOpen(null)} width="max-w-lg">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">
+              Applying a template <strong>replaces</strong> the current scope rows. The default role is unchanged.
+            </p>
+            {tplErr && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{tplErr}</div>}
+            <div className="border border-border rounded-lg max-h-80 overflow-y-auto">
+              {templates.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">No templates saved yet — save the current scope first.</p>
+              ) : templates.map(t => (
+                <div key={t.id} className="flex items-center gap-3 px-3 py-2 border-b border-border last:border-0 hover:bg-surface-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-text-1 truncate">{t.name}</div>
+                    {t.description && <div className="text-xs text-text-3 truncate">{t.description}</div>}
+                    <div className="text-[11px] text-text-3">
+                      {t.row_count} scope row{t.row_count !== 1 ? 's' : ''}
+                      {t.created_by && ` · by ${t.created_by}`}
+                    </div>
+                  </div>
+                  <button
+                    className="btn-primary text-xs px-2.5 py-1"
+                    onClick={() => applyTemplate(t)}
+                    title="Apply this template (replaces current scope)"
+                  >Apply</button>
+                  <button
+                    className="text-text-3 hover:text-red-500 transition-colors text-base leading-none"
+                    onClick={() => deleteTemplate(t.id)}
+                    title="Delete this template"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setTplOpen(null)}>Close</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Save template */}
+      {tplOpen === 'save' && (
+        <Modal title="Save scope as template" onClose={() => !tplBusy && setTplOpen(null)} width="max-w-md">
+          <div className="space-y-3">
+            <p className="text-xs text-text-3">
+              Captures all {scope.length} scope row{scope.length !== 1 ? 's' : ''} (BPs + markets + access modes + role overrides). Apply to other users from any user's edit modal.
+            </p>
+            <Field label="Template name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={tplSaveName}
+                onChange={e => { setTplSaveName(e.target.value); setTplErr(null) }}
+                onKeyDown={e => { if (e.key === 'Enter' && tplSaveName.trim() && !tplBusy) saveTemplate() }}
+                placeholder="e.g. UK Operator, India Admin, Read-only Reviewer"
+                disabled={tplBusy}
+              />
+            </Field>
+            <Field label="Description" hint="Optional — shown in the picker.">
+              <input
+                className="input w-full"
+                value={tplSaveDesc}
+                onChange={e => setTplSaveDesc(e.target.value)}
+                placeholder="What's this template for?"
+                disabled={tplBusy}
+              />
+            </Field>
+            {tplErr && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{tplErr}</div>}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setTplOpen(null)} disabled={tplBusy}>Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                onClick={saveTemplate}
+                disabled={tplBusy || !tplSaveName.trim()}
+              >{tplBusy ? 'Saving…' : 'Save template'}</button>
             </div>
           </div>
         </Modal>
