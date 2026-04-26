@@ -3406,6 +3406,19 @@ function ScopeEditor({
   const availableBps      = bps.filter(b => !usedBpIds.has(b.id))
   const availableCountries = countries.filter(c => !usedCtyIds.has(c.id))
 
+  // BP → linked country count, used to surface the "this BP covers N markets"
+  // hint on each BP row + to detect "0 markets" misconfigurations.
+  const bpMarketCount = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const c of countries) {
+      if (c.brand_partner_id) m.set(c.brand_partner_id, (m.get(c.brand_partner_id) || 0) + 1)
+    }
+    return m
+  }, [countries])
+
+  const totalGrantedBps        = scope.filter(s => s.scope_type === 'brand_partner' && s.access_mode === 'grant').length
+  const grantedBpsWithNoMarket = scope.filter(s => s.scope_type === 'brand_partner' && s.access_mode === 'grant' && (bpMarketCount.get(s.scope_id) || 0) === 0).length
+
   function addPickedBps() {
     const adds: ScopeRow[] = Array.from(bpPicked).map(id => ({
       scope_type: 'brand_partner', scope_id: id, access_mode: 'grant', role_id: null,
@@ -3465,29 +3478,36 @@ function ScopeEditor({
           <div className="border border-border rounded-lg overflow-hidden">
             {bpRows.length === 0 ? (
               <p className="text-xs text-text-3 px-3 py-3 italic">No BP-level scope rows</p>
-            ) : bpRows.map(({ s, i }) => (
-              <ScopeRowEditor
-                key={`bp-${s.scope_id}`}
-                row={s}
-                roles={roles}
-                onChange={patch => updateRow(i, patch)}
-                onRemove={() => removeRow(i)}
-              />
-            ))}
+            ) : bpRows.map(({ s, i }) => {
+              const cnt = bpMarketCount.get(s.scope_id) || 0
+              const hint = cnt === 0
+                ? '⚠ No markets linked to this BP — link them in Configuration → Location Structure'
+                : `Covers ${cnt} market${cnt !== 1 ? 's' : ''}`
+              return (
+                <ScopeRowEditor
+                  key={`bp-${s.scope_id}`}
+                  row={s}
+                  roles={roles}
+                  onChange={patch => updateRow(i, patch)}
+                  onRemove={() => removeRow(i)}
+                  hint={hint}
+                />
+              )
+            })}
           </div>
         </div>
 
-        {/* Country scope */}
+        {/* Direct market scope */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-semibold text-text-1">Direct countries</h4>
+            <h4 className="text-sm font-semibold text-text-1">Direct markets</h4>
             <button className="btn-outline text-xs" onClick={() => setCtyAddOpen(true)} disabled={availableCountries.length === 0}>
-              + Add country
+              + Add market
             </button>
           </div>
           <div className="border border-border rounded-lg overflow-hidden">
             {ctyRows.length === 0 ? (
-              <p className="text-xs text-text-3 px-3 py-3 italic">No country-level overrides</p>
+              <p className="text-xs text-text-3 px-3 py-3 italic">No market-level overrides</p>
             ) : ctyRows.map(({ s, i }) => (
               <ScopeRowEditor
                 key={`cty-${s.scope_id}`}
@@ -3508,12 +3528,21 @@ function ScopeEditor({
           {scope.length === 0 ? (
             <p className="text-xs text-text-3 px-3 py-3">No scope rows — user is unrestricted (access to all markets with default role).</p>
           ) : previewRows.length === 0 ? (
-            <p className="text-xs text-text-3 px-3 py-3 italic">No markets resolve from the current scope rows.</p>
+            <div className="px-3 py-3 text-xs text-text-3 space-y-1">
+              <p className="italic">No markets resolve from the current scope rows.</p>
+              {grantedBpsWithNoMarket > 0 && totalGrantedBps === grantedBpsWithNoMarket && (
+                <p className="text-amber-700">
+                  ⚠ The granted BP{totalGrantedBps !== 1 ? 's are' : ' is'} not linked to any markets yet.
+                  Open <strong>Configuration → Location Structure → Markets</strong>,
+                  pick a market, and assign it to a Brand Partner. Then this scope will start resolving.
+                </p>
+              )}
+            </div>
           ) : (
             <table className="w-full text-xs">
               <thead className="bg-surface-2 sticky top-0">
                 <tr className="text-left text-text-3">
-                  <th className="px-3 py-1.5">Country</th>
+                  <th className="px-3 py-1.5">Market</th>
                   <th className="px-3 py-1.5">Role</th>
                   <th className="px-3 py-1.5">Source</th>
                 </tr>
@@ -3568,14 +3597,14 @@ function ScopeEditor({
         </Modal>
       )}
 
-      {/* Bulk-add country picker */}
+      {/* Bulk-add market picker */}
       {ctyAddOpen && (
-        <Modal title="Add countries" onClose={() => setCtyAddOpen(false)} width="max-w-md">
+        <Modal title="Add markets" onClose={() => setCtyAddOpen(false)} width="max-w-md">
           <div className="space-y-2">
-            <p className="text-xs text-text-3">Select one or more countries to add. Use country grants to add markets that aren't covered by any of the user's BPs, or country denies to punch holes in BP coverage.</p>
+            <p className="text-xs text-text-3">Select one or more markets to add. Use market grants to add markets that aren't covered by any of the user's BPs, or market denies to punch holes in BP coverage.</p>
             <div className="border border-border rounded-lg max-h-72 overflow-y-auto">
               {availableCountries.length === 0 ? (
-                <p className="text-xs text-text-3 px-3 py-3 italic">All countries already in scope.</p>
+                <p className="text-xs text-text-3 px-3 py-3 italic">All markets already in scope.</p>
               ) : availableCountries.map(c => (
                 <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-0 cursor-pointer hover:bg-surface-2">
                   <input
@@ -3603,23 +3632,31 @@ function ScopeEditor({
   )
 }
 
-function ScopeRowEditor({ row, roles, onChange, onRemove }: {
+function ScopeRowEditor({ row, roles, onChange, onRemove, hint }: {
   row: ScopeRow
   roles: Role[]
   onChange: (patch: Partial<ScopeRow>) => void
   onRemove: () => void
+  hint?: string | null
 }) {
   return (
     <div className="px-3 py-2 border-b border-border last:border-0 flex items-center gap-2">
-      <span className="text-sm text-text-1 flex-1 truncate">{row.scope_name || `${row.scope_type}:${row.scope_id}`}</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-text-1 truncate">
+          {row.scope_name || `${row.scope_type}:${row.scope_id}`}
+        </div>
+        {hint && (
+          <div className="text-[10px] text-text-3 truncate">{hint}</div>
+        )}
+      </div>
       <select
         className="input text-xs py-0.5 px-1"
         value={row.access_mode}
         onChange={e => onChange({ access_mode: e.target.value as 'grant' | 'deny' })}
-        title="Grant or deny access"
+        title="Allow or block access"
       >
-        <option value="grant">grant</option>
-        <option value="deny">deny</option>
+        <option value="grant">Allow</option>
+        <option value="deny">Block</option>
       </select>
       <select
         className="input text-xs py-0.5 px-1 w-32"
@@ -3628,7 +3665,7 @@ function ScopeRowEditor({ row, roles, onChange, onRemove }: {
         title="Override role for this scope (blank = inherit default)"
         disabled={row.access_mode === 'deny'}
       >
-        <option value="">— inherit —</option>
+        <option value="">— inherit role —</option>
         {roles.map(r => (
           <option key={r.id} value={r.id}>{r.name}</option>
         ))}
