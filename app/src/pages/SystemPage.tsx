@@ -1546,9 +1546,225 @@ function TestsSection() {
         )}
       </div>
 
+      <ApiBenchmarkPanel />
+
       <div className="card p-4 text-xs text-text-3 leading-relaxed">
         <strong className="text-text-2">Tip:</strong> E2E (Playwright) only runs on push to <code className="bg-surface-2 px-1 rounded">main</code> in the default CI config — a manual dispatch on any branch will execute typecheck, lint, api-test and app-test. Adjust <code className="bg-surface-2 px-1 rounded">.github/workflows/test.yml</code> if you want E2E on feature branches too.
       </div>
+    </div>
+  )
+}
+
+// ── ApiBenchmarkPanel — measure response times across read endpoints ─────────
+//
+// Issues a HEAD-like read across a config list of GET endpoints and records
+// how long each call takes. Runs are issued sequentially by default to give a
+// realistic single-user latency profile (parallel runs hit max-conn limits on
+// pg, which would skew toward errors).
+//
+// Each endpoint has a soft threshold: under it = green ✓, 1-2× over = amber ⚠,
+// > 2× over = red ✕. The total badge sums up everything.
+
+interface BenchEndpoint {
+  label:     string
+  path:      string  // appended to /api
+  threshold: number  // ms — soft target for "fast"
+}
+
+const BENCH_ENDPOINTS: BenchEndpoint[] = [
+  { label: 'health',                path: '/health',                threshold: 50 },
+  { label: '/me',                   path: '/me',                    threshold: 200 },
+  { label: 'ingredients/stats',     path: '/ingredients/stats',     threshold: 200 },
+  { label: 'ingredients (list)',    path: '/ingredients',           threshold: 800 },
+  { label: 'recipes (list)',        path: '/recipes',               threshold: 800 },
+  { label: 'menus (list)',          path: '/menus',                 threshold: 400 },
+  { label: 'sales-items',           path: '/sales-items',           threshold: 800 },
+  { label: 'price-quotes',          path: '/price-quotes',          threshold: 800 },
+  { label: 'vendors',               path: '/vendors',               threshold: 300 },
+  { label: 'countries',             path: '/countries',             threshold: 300 },
+  { label: 'categories',            path: '/categories',            threshold: 300 },
+  { label: 'units',                 path: '/units',                 threshold: 200 },
+  { label: 'price-levels',          path: '/price-levels',          threshold: 200 },
+  { label: 'backlog (50 rows)',     path: '/backlog?limit=50',      threshold: 600 },
+  { label: 'bugs (50 rows)',        path: '/bugs?limit=50',         threshold: 600 },
+  { label: 'audit (last 30)',       path: '/audit?limit=30',        threshold: 600 },
+]
+
+interface BenchResult {
+  ms:       number
+  status:   number
+  bytes:    number | null
+  error?:   string
+}
+
+function ApiBenchmarkPanel() {
+  const api = useApi()
+  const [running, setRunning] = useState(false)
+  const [results, setResults] = useState<Record<string, BenchResult | null>>({})
+  const [iterations, setIterations] = useState(1)
+  const [parallel, setParallel] = useState(false)
+
+  // Cycle through endpoints. For multi-iteration runs we keep the latest
+  // single-call timing per endpoint plus the running average — so the table
+  // updates live as the run progresses.
+  const [history, setHistory] = useState<Record<string, number[]>>({})
+
+  async function callOnce(ep: BenchEndpoint): Promise<BenchResult> {
+    const t0 = performance.now()
+    try {
+      const data = await api.get(ep.path)
+      const ms    = Math.round(performance.now() - t0)
+      const bytes = (() => { try { return JSON.stringify(data).length } catch { return null } })()
+      return { ms, status: 200, bytes }
+    } catch (e: any) {
+      const ms = Math.round(performance.now() - t0)
+      return { ms, status: e?.status ?? 0, bytes: null, error: e?.message || 'Request failed' }
+    }
+  }
+
+  async function run() {
+    setRunning(true)
+    setResults({})
+    setHistory({})
+    try {
+      for (let it = 0; it < iterations; it++) {
+        const tasks = BENCH_ENDPOINTS.map(async ep => {
+          const r = await callOnce(ep)
+          setResults(prev => ({ ...prev, [ep.path]: r }))
+          setHistory(prev => ({ ...prev, [ep.path]: [...(prev[ep.path] || []), r.ms] }))
+        })
+        if (parallel) {
+          await Promise.all(tasks)
+        } else {
+          for (const t of tasks) await t
+        }
+      }
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const total = useMemo(() => {
+    let sum = 0
+    let count = 0
+    for (const ep of BENCH_ENDPOINTS) {
+      const arr = history[ep.path] || []
+      if (arr.length === 0) continue
+      sum += arr.reduce((a, b) => a + b, 0)
+      count += arr.length
+    }
+    return { sum, count, avg: count ? Math.round(sum / count) : 0 }
+  }, [history])
+
+  function bandClass(ms: number, threshold: number): string {
+    if (ms <= threshold)      return 'text-emerald-600'
+    if (ms <= threshold * 2)  return 'text-amber-600'
+    return 'text-red-600'
+  }
+
+  function summaryFor(path: string, threshold: number) {
+    const arr = history[path] || []
+    if (arr.length === 0) return null
+    const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
+    const min = Math.min(...arr)
+    const max = Math.max(...arr)
+    return { avg, min, max, runs: arr.length, threshold }
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-4 py-3 border-b border-border bg-surface-2 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-text-1">API benchmark</h3>
+          <p className="text-xs text-text-3">
+            Read-only GET requests with per-endpoint thresholds. Compares your live API against soft targets.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <label className="flex items-center gap-1 text-text-2">
+            Iterations
+            <select
+              className="input text-xs py-0.5 px-1"
+              value={iterations}
+              onChange={e => setIterations(Number(e.target.value))}
+              disabled={running}
+            >
+              {[1, 3, 5, 10].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-text-2">
+            <input type="checkbox" checked={parallel} onChange={e => setParallel(e.target.checked)} disabled={running} />
+            Parallel
+          </label>
+          <button
+            className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
+            onClick={run}
+            disabled={running}
+          >
+            {running ? 'Running…' : '▶ Run benchmark'}
+          </button>
+        </div>
+      </div>
+
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-text-3 border-b border-border bg-surface-2/50">
+            <th className="px-4 py-2 font-semibold">Endpoint</th>
+            <th className="px-4 py-2 font-semibold text-right">Threshold</th>
+            <th className="px-4 py-2 font-semibold text-right">Latest</th>
+            <th className="px-4 py-2 font-semibold text-right">Avg</th>
+            <th className="px-4 py-2 font-semibold text-right">Min / Max</th>
+            <th className="px-4 py-2 font-semibold text-right">Runs</th>
+            <th className="px-4 py-2 font-semibold text-right">Bytes</th>
+            <th className="px-4 py-2 font-semibold">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {BENCH_ENDPOINTS.map(ep => {
+            const r = results[ep.path]
+            const s = summaryFor(ep.path, ep.threshold)
+            return (
+              <tr key={ep.path} className="border-b border-border last:border-0">
+                <td className="px-4 py-2">
+                  <span className="font-mono text-xs text-text-2">{ep.path}</span>
+                  <span className="ml-2 text-xs text-text-3">{ep.label}</span>
+                </td>
+                <td className="px-4 py-2 text-right text-xs text-text-3">{ep.threshold} ms</td>
+                <td className={`px-4 py-2 text-right font-mono text-xs ${r ? bandClass(r.ms, ep.threshold) : 'text-text-3'}`}>
+                  {r ? `${r.ms} ms` : '—'}
+                </td>
+                <td className={`px-4 py-2 text-right font-mono text-xs ${s ? bandClass(s.avg, ep.threshold) : 'text-text-3'}`}>
+                  {s ? `${s.avg} ms` : '—'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-text-3">
+                  {s ? `${s.min} / ${s.max}` : '—'}
+                </td>
+                <td className="px-4 py-2 text-right text-xs text-text-3">{s ? s.runs : '—'}</td>
+                <td className="px-4 py-2 text-right text-xs text-text-3">
+                  {r?.bytes != null ? `${(r.bytes / 1024).toFixed(1)} KB` : '—'}
+                </td>
+                <td className="px-4 py-2 text-xs">
+                  {!r ? <span className="text-text-3">—</span>
+                    : r.error ? <span className="text-red-600">✕ {r.error}</span>
+                    : r.status === 200 ? <span className="text-emerald-600">✓ {r.status}</span>
+                    : <span className="text-amber-600">⚠ {r.status}</span>}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="border-t border-border bg-surface-2/50 text-xs">
+            <td className="px-4 py-2 font-semibold text-text-2" colSpan={3}>
+              Total: {total.count} call{total.count !== 1 ? 's' : ''} · {total.sum.toLocaleString()} ms
+            </td>
+            <td className="px-4 py-2 text-right font-mono font-semibold text-text-1">
+              {total.avg ? `${total.avg} ms avg` : '—'}
+            </td>
+            <td colSpan={4} />
+          </tr>
+        </tfoot>
+      </table>
     </div>
   )
 }

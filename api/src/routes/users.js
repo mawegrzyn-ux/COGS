@@ -11,35 +11,53 @@ const adminRead = requirePermission('users', 'read');
 // ── GET /api/users — list every user with role + scope rows ──────────────────
 router.get('/', auth, adminRead, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        u.id, u.auth0_sub, u.email, u.name, u.picture,
-        u.status, u.is_dev, u.created_at, u.last_login_at,
-        u.role_id,
-        r.name AS role_name,
-        COALESCE((
-          SELECT json_agg(json_build_object(
-            'id',          us.id,
-            'scope_type',  us.scope_type,
-            'scope_id',    us.scope_id,
-            'scope_name',
-              CASE us.scope_type
-                WHEN 'brand_partner' THEN (SELECT name FROM mcogs_brand_partners WHERE id = us.scope_id)
-                WHEN 'country'       THEN (SELECT name FROM mcogs_countries      WHERE id = us.scope_id)
-              END,
-            'access_mode', us.access_mode,
-            'role_id',     us.role_id,
-            'role_name',   (SELECT name FROM mcogs_roles WHERE id = us.role_id)
-          ) ORDER BY us.scope_type, us.scope_id)
-          FROM mcogs_user_scope us
-          WHERE us.user_id = u.id
-        ), '[]') AS scope
-      FROM mcogs_users u
+    // Resolve scope rows in a separate flat query so PostgreSQL's join planner
+    // can use indexes — and so the JSON we return is constructed in JS where
+    // the field names and null-handling are unambiguous (the previous inline
+    // CASE-in-json_build_object form was returning scope_name as null on some
+    // PostgreSQL versions).
+    const usersResult = await pool.query(`
+      SELECT u.id, u.auth0_sub, u.email, u.name, u.picture,
+             u.status, u.is_dev, u.created_at, u.last_login_at,
+             u.role_id, r.name AS role_name
+      FROM   mcogs_users u
       LEFT JOIN mcogs_roles r ON r.id = u.role_id
-      ORDER BY u.created_at ASC
+      ORDER  BY u.created_at ASC
     `);
-    res.json(rows);
+
+    const scopeResult = await pool.query(`
+      SELECT us.id, us.user_id, us.scope_type, us.scope_id, us.access_mode, us.role_id,
+             COALESCE(bp.name, c.name) AS scope_name,
+             rr.name AS role_name
+      FROM   mcogs_user_scope us
+      LEFT JOIN mcogs_brand_partners bp ON us.scope_type = 'brand_partner' AND bp.id = us.scope_id
+      LEFT JOIN mcogs_countries      c  ON us.scope_type = 'country'       AND c.id  = us.scope_id
+      LEFT JOIN mcogs_roles          rr ON rr.id = us.role_id
+      ORDER BY us.scope_type, us.scope_id
+    `);
+
+    // Bucket scope rows by user_id
+    const scopeByUser = new Map();
+    for (const r of scopeResult.rows) {
+      if (!scopeByUser.has(r.user_id)) scopeByUser.set(r.user_id, []);
+      scopeByUser.get(r.user_id).push({
+        id:          r.id,
+        scope_type:  r.scope_type,
+        scope_id:    r.scope_id,
+        scope_name:  r.scope_name,
+        access_mode: r.access_mode,
+        role_id:     r.role_id,
+        role_name:   r.role_name,
+      });
+    }
+
+    const out = usersResult.rows.map(u => ({
+      ...u,
+      scope: scopeByUser.get(u.id) || [],
+    }));
+    res.json(out);
   } catch (err) {
+    console.error('[users:list]', err);
     res.status(500).json({ error: { message: err.message } });
   }
 });
@@ -49,12 +67,12 @@ router.get('/:id/scope', auth, adminRead, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT us.id, us.scope_type, us.scope_id, us.access_mode, us.role_id,
-             CASE us.scope_type
-               WHEN 'brand_partner' THEN (SELECT name FROM mcogs_brand_partners WHERE id = us.scope_id)
-               WHEN 'country'       THEN (SELECT name FROM mcogs_countries      WHERE id = us.scope_id)
-             END AS scope_name,
-             (SELECT name FROM mcogs_roles WHERE id = us.role_id) AS role_name
-      FROM mcogs_user_scope us
+             COALESCE(bp.name, c.name) AS scope_name,
+             rr.name AS role_name
+      FROM   mcogs_user_scope us
+      LEFT JOIN mcogs_brand_partners bp ON us.scope_type = 'brand_partner' AND bp.id = us.scope_id
+      LEFT JOIN mcogs_countries      c  ON us.scope_type = 'country'       AND c.id  = us.scope_id
+      LEFT JOIN mcogs_roles          rr ON rr.id = us.role_id
       WHERE us.user_id = $1
       ORDER BY us.scope_type, us.scope_id
     `, [req.params.id]);
