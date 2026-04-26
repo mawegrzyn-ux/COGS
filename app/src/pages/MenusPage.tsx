@@ -2339,7 +2339,6 @@ function ScenarioTool({
 
   // ── Modals ─────────────────────────────────────────────────────────────────
   const [showWhatIf,       setShowWhatIf]       = useState(false)
-  const [showSmartScenario, setShowSmartScenario] = useState(false)
   const [showScenarioModal, setShowScenarioModal] = useState(false)
 
   // ── Reset helpers ──────────────────────────────────────────────────────────
@@ -2356,25 +2355,54 @@ function ScenarioTool({
   }
 
   // ── What If ────────────────────────────────────────────────────────────────
+  // Bumps every price (and/or every cost) by the given percentage. Works for
+  // both single-level mode (uses `rows`) and ALL-levels mode (uses
+  // `allLevelRows`). Previously only the ALL-levels path was wired up — when
+  // the user was on a specific level the What If button silently did nothing.
   function applyWhatIf(pricePct: number, costPct: number) {
-    if (pricePct !== 0 && allLevelRows.length) {
+    const isAll = levelId === 'ALL'
+    const hasData = isAll ? allLevelRows.length > 0 : rows.length > 0
+    if (!hasData) return
+
+    if (pricePct !== 0) {
       const f = 1 + pricePct / 100
-      const next: Record<string, string> = {}
-      for (const row of allLevelRows) {
-        for (const p of row.perLevel) {
-          const base = p.is_price_overridden ? (parseFloat(priceOverrides[p.price_override_key]) || p.base_price_gross) : p.base_price_gross
-          if (base > 0) next[p.price_override_key] = String(Math.round(base * f * 100) / 100)
+      const next: Record<string, string> = { ...priceOverrides }
+      if (isAll) {
+        for (const row of allLevelRows) {
+          for (const p of row.perLevel) {
+            const cur = priceOverrides[p.price_override_key]
+            const base = cur !== undefined ? (parseFloat(cur) || p.base_price_gross) : p.base_price_gross
+            if (base > 0) next[p.price_override_key] = String(Math.round(base * f * 100) / 100)
+          }
+        }
+      } else {
+        for (const row of rows) {
+          const key = `${row.menu_item_id}_l${levelId}`
+          const cur = priceOverrides[key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_price_gross) : row.base_price_gross
+          if (base > 0) next[key] = String(Math.round(base * f * 100) / 100)
         }
       }
       setPriceOverrides(next)
       addHistoryEntry('whatif', `Prices ${pricePct > 0 ? '+' : ''}${pricePct}%`)
     }
-    if (costPct !== 0 && allLevelRows.length) {
+
+    if (costPct !== 0) {
       const f = 1 + costPct / 100
-      const next: Record<string, string> = {}
-      for (const row of allLevelRows) {
-        const base = row.is_cost_overridden ? (parseFloat(costOverrides[row.cost_override_key]) || row.base_cost_display) : row.base_cost_display
-        if (base > 0) next[row.cost_override_key] = String(Math.round(base * f * 100) / 100)
+      const next: Record<string, string> = { ...costOverrides }
+      if (isAll) {
+        for (const row of allLevelRows) {
+          const cur = costOverrides[row.cost_override_key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_cost_display) : row.base_cost_display
+          if (base > 0) next[row.cost_override_key] = String(Math.round(base * f * 100) / 100)
+        }
+      } else {
+        for (const row of rows) {
+          const key = row.nat_key
+          const cur = costOverrides[key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_cost_display) : row.base_cost_display
+          if (base > 0) next[key] = String(Math.round(base * f * 100) / 100)
+        }
       }
       setCostOverrides(next)
       addHistoryEntry('whatif', `Costs ${costPct > 0 ? '+' : ''}${costPct}%`)
@@ -3071,6 +3099,19 @@ ${tableHtml}
                   onClick={() => onShare(menuId, savedId)}
                 >🔗 Share</button>
               )}
+              {/* Notes, History & Comments — moved next to Share, opens in right panel */}
+              <button
+                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 ${scenarioNotes || history.length > 0 || (comments && comments.length > 0) ? 'text-gray-700' : 'text-gray-400'}`}
+                title="Notes, change history & comments"
+                onClick={() => setShowHistoryNotes(true)}
+              >
+                📋 Notes
+                {(history.length > 0 || (comments && comments.length > 0)) && (
+                  <span className="ml-0.5 text-[10px] text-gray-400">
+                    ({history.length + (comments?.length ?? 0)})
+                  </span>
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -3083,22 +3124,17 @@ ${tableHtml}
             <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
           )}
 
-          {/* What If */}
+          {/* What If — combined modal: manual % shift + AI-suggested per-item changes */}
           {menuId && (
-            <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
-          )}
-
-          {/* Smart Scenario */}
-          {menuId && (
-            <button className="btn btn-sm btn-outline text-xs" title="AI-powered pricing changes" onClick={() => setShowSmartScenario(true)}>🧠 Smart</button>
+            <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes — manual % shift or AI suggestions" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
           )}
 
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (
-            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Reset price changes</button>
           )}
           {Object.keys(costOverrides).length > 0 && (
-            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Reset cost changes</button>
           )}
 
           {/* Push prices to live menu — always visible when a menu is loaded */}
@@ -3108,23 +3144,9 @@ ${tableHtml}
               title={Object.keys(priceOverrides).length > 0 ? 'Write scenario price overrides to the live menu' : 'No price differences — scenario matches live menu'}
               onClick={handlePushPrices}
             >
-              → Menu
+              → Push to menu
             </button>
           )}
-
-          {/* Notes, History & Comments */}
-          <button
-            className={`btn btn-sm btn-ghost text-xs ${scenarioNotes || history.length > 0 || (comments && comments.length > 0) ? 'text-gray-600' : 'text-gray-400'}`}
-            title="Notes, change history & comments"
-            onClick={() => setShowHistoryNotes(true)}
-          >
-            📋 Notes
-            {(history.length > 0 || (comments && comments.length > 0)) && (
-              <span className="ml-1 text-[10px] text-gray-400">
-                ({history.length + (comments?.length ?? 0)})
-              </span>
-            )}
-          </button>
 
         </div>
 
@@ -3173,33 +3195,26 @@ ${tableHtml}
           />
         )}
 
-        {/* ── What If Modal ──────────────────────────────────────────────── */}
+        {/* ── What If Modal (combined: manual % + AI suggestions) ────────── */}
         {showWhatIf && (
           <WhatIfModal
-            onApply={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
-            onClose={() => setShowWhatIf(false)}
-          />
-        )}
-
-        {/* ── Smart Scenario Modal ───────────────────────────────────────── */}
-        {showSmartScenario && menuId && (
-          <SmartScenarioModal
             menuId={menuId}
             scenarioId={savedId}
             priceLevelId={typeof levelId === 'number' ? levelId : null}
             currencySymbol={dispSym}
             api={api}
-            onClose={() => setShowSmartScenario(false)}
-            onApply={(changes, prompt) => {
+            onApplyManual={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
+            onApplySmart={(changes, prompt) => {
               const newPriceOv = { ...priceOverrides }
-              const newCostOv = { ...costOverrides }
+              const newCostOv  = { ...costOverrides }
               for (const c of changes) {
                 if (c.field === 'price' && c.level_id) {
                   const key = `${c.menu_item_id}_l${c.level_id}`
                   newPriceOv[key] = String(Math.round(c.new_value * 100) / 100)
                 } else if (c.field === 'cost') {
-                  // Cost overrides use nat_key — find it from allLevelRows
+                  // Cost overrides use nat_key — find it from allLevelRows or rows
                   const row = allLevelRows.find(r => r.menu_item_id === c.menu_item_id)
+                              ?? rows.find(r => r.menu_item_id === c.menu_item_id)
                   if (row?.nat_key) {
                     newCostOv[row.nat_key] = String(Math.round(c.new_value * 100) / 100)
                   }
@@ -3209,8 +3224,9 @@ ${tableHtml}
               setCostOverrides(newCostOv)
               addHistoryEntry('smart_scenario', `AI: ${prompt} (${changes.length} changes)`)
               markDirty()
-              setShowSmartScenario(false)
+              setShowWhatIf(false)
             }}
+            onClose={() => setShowWhatIf(false)}
           />
         )}
 
@@ -4132,59 +4148,240 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
 
 // ── WhatIfModal ────────────────────────────────────────────────────────────────
 
-function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: number): void; onClose(): void }) {
+// Combined What-If modal — replaces the old separate "What If" + "Smart" buttons.
+// Two tabs in one modal:
+//   1. Manual % — apply a flat percentage shift to all prices and/or costs
+//   2. AI suggest — natural language prompt → Claude proposes per-item changes
+function WhatIfModal({
+  menuId, scenarioId, priceLevelId, currencySymbol, api,
+  onApplyManual, onApplySmart, onClose,
+}: {
+  menuId: number | null
+  scenarioId: number | null
+  priceLevelId: number | null
+  currencySymbol: string
+  api: { post: (path: string, body?: any) => Promise<any> }
+  onApplyManual(pricePct: number, costPct: number): void
+  onApplySmart(changes: SmartChange[], prompt: string): void
+  onClose(): void
+}) {
+  const [tab, setTab] = useState<'manual' | 'ai'>('manual')
+
+  // Manual % state
   const [pricePct, setPricePct] = useState('')
   const [costPct,  setCostPct]  = useState('')
-
   const pN = parseFloat(pricePct) || 0
   const cN = parseFloat(costPct)  || 0
 
+  // AI state
+  const [prompt, setPrompt]   = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
+  const [result, setResult]   = useState<{ summary: string; changes: SmartChange[] } | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+
+  const analyse = async () => {
+    if (!prompt.trim() || !menuId) return
+    setLoading(true); setError(''); setResult(null)
+    try {
+      const data = await api.post('/scenarios/smart', {
+        menu_id: menuId,
+        scenario_id: scenarioId || undefined,
+        price_level_id: priceLevelId || undefined,
+        prompt: prompt.trim(),
+      })
+      if (data.error) { setError(data.error); return }
+      setResult(data)
+      setChecked(new Set(data.changes?.map((_: any, i: number) => i) || []))
+    } catch (err: any) {
+      setError(err.message || 'Failed to analyse scenario')
+    } finally { setLoading(false) }
+  }
+
+  const handleApplyAi = () => {
+    if (!result?.changes?.length) return
+    const selected = result.changes.filter((_: any, i: number) => checked.has(i))
+    onApplySmart(selected, prompt)
+  }
+
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-80" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-800">⚡ What If…</h3>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        {/* Header — tab bar */}
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex gap-1">
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${tab === 'manual' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('manual')}
+            >⚡ Manual %</button>
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${tab === 'ai' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('ai')}
+              disabled={!menuId}
+              title={!menuId ? 'Select a menu first' : 'AI-powered per-item suggestions'}
+            >🧠 AI suggest</button>
+          </div>
           <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
         </div>
-        <div className="px-5 py-4 space-y-4">
-          <p className="text-xs text-gray-500">Apply a percentage shift to all prices and/or costs across the scenario.</p>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Price change (%)</label>
-            <div className="flex gap-2 items-center">
-              <input type="number" step="0.5" className="input flex-1 text-sm"
-                placeholder="e.g. +5 or -10"
-                value={pricePct} onChange={e => setPricePct(e.target.value)} autoFocus />
-              <div className="flex gap-1">
-                {[-10, -5, +5, +10].map(v => (
-                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
-                    onClick={() => setPricePct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
-                ))}
+
+        {/* Manual % tab */}
+        {tab === 'manual' && (
+          <>
+            <div className="px-5 py-4 space-y-4 overflow-y-auto">
+              <p className="text-xs text-gray-500">Apply a percentage shift to all prices and/or costs across the scenario. Changes are reversible — use <strong>↺ Reset price changes</strong> in the toolbar to undo.</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Price change (%)</label>
+                <div className="flex gap-2 items-center">
+                  <input type="number" step="0.5" className="input flex-1 text-sm"
+                    placeholder="e.g. +5 or -10"
+                    value={pricePct} onChange={e => setPricePct(e.target.value)} autoFocus />
+                  <div className="flex gap-1">
+                    {[-10, -5, +5, +10].map(v => (
+                      <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                        onClick={() => setPricePct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Cost change (%)</label>
+                <div className="flex gap-2 items-center">
+                  <input type="number" step="0.5" className="input flex-1 text-sm"
+                    placeholder="e.g. +3 or -5"
+                    value={costPct} onChange={e => setCostPct(e.target.value)} />
+                  <div className="flex gap-1">
+                    {[-10, -5, +5, +10].map(v => (
+                      <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                        onClick={() => setCostPct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Cost change (%)</label>
-            <div className="flex gap-2 items-center">
-              <input type="number" step="0.5" className="input flex-1 text-sm"
-                placeholder="e.g. +3 or -5"
-                value={costPct} onChange={e => setCostPct(e.target.value)} />
-              <div className="flex gap-1">
-                {[-10, -5, +5, +10].map(v => (
-                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
-                    onClick={() => setCostPct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
-                ))}
-              </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
+              <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={pN === 0 && cN === 0}
+                onClick={() => { if (pN !== 0 || cN !== 0) onApplyManual(pN, cN) }}
+              >Apply</button>
             </div>
-          </div>
-        </div>
-        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
-          <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
-          <button
-            className="btn btn-sm btn-primary"
-            disabled={pN === 0 && cN === 0}
-            onClick={() => { if (pN !== 0 || cN !== 0) onApply(pN, cN) }}
-          >Apply</button>
-        </div>
+          </>
+        )}
+
+        {/* AI suggest tab */}
+        {tab === 'ai' && (
+          <>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-text-2 mb-1.5">What would you like to change?</label>
+                <textarea
+                  className="input w-full text-sm"
+                  rows={3}
+                  placeholder={'e.g. Increase all chicken items by 3%\nSet all wings to 28% COGS target\nRound all prices to nearest .99'}
+                  value={prompt}
+                  onChange={e => setPrompt(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) { e.preventDefault(); analyse() } }}
+                  disabled={loading}
+                  autoFocus
+                />
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-[10px] text-text-3">Only pricing changes are accepted. Pepper cannot modify recipes, ingredients, or other data.</p>
+                  <button
+                    className="btn-primary text-sm py-1.5 px-4 rounded"
+                    disabled={!prompt.trim() || loading}
+                    onClick={analyse}
+                  >
+                    {loading ? (
+                      <span className="flex items-center gap-2">
+                        <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        Analysing...
+                      </span>
+                    ) : 'Analyse'}
+                  </button>
+                </div>
+              </div>
+
+              {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
+
+              {result && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-accent-dim rounded-lg border border-accent/20">
+                    <p className="text-sm font-medium text-accent">{result.summary}</p>
+                  </div>
+                  {result.changes?.length > 0 ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-text-3 font-semibold uppercase tracking-wide">
+                          Proposed changes ({checked.size} of {result.changes.length} selected)
+                        </p>
+                        <div className="flex gap-2">
+                          <button className="text-xs text-accent hover:underline" onClick={() => setChecked(new Set(result.changes.map((_: any, i: number) => i)))}>Select all</button>
+                          <button className="text-xs text-text-3 hover:underline" onClick={() => setChecked(new Set())}>Deselect all</button>
+                        </div>
+                      </div>
+                      <div className="border border-border rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
+                              <th className="px-3 py-2 w-8"></th>
+                              <th className="text-left px-3 py-2">Item</th>
+                              <th className="text-left px-3 py-2">Type</th>
+                              <th className="text-left px-3 py-2">Level</th>
+                              <th className="text-right px-3 py-2">Current</th>
+                              <th className="text-right px-3 py-2">Proposed</th>
+                              <th className="text-right px-3 py-2">Change</th>
+                              <th className="text-left px-3 py-2">Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.changes.map((c: SmartChange, i: number) => {
+                              const pctChange = c.old_value > 0
+                                ? Math.round(((c.new_value - c.old_value) / c.old_value) * 1000) / 10
+                                : null
+                              return (
+                                <tr key={i} className={`border-t border-border ${checked.has(i) ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                                  <td className="px-3 py-2">
+                                    <input type="checkbox" checked={checked.has(i)}
+                                      onChange={() => setChecked(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next })} />
+                                  </td>
+                                  <td className="px-3 py-2 font-medium">{c.item_name}</td>
+                                  <td className="px-3 py-2">
+                                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${c.field === 'cost' ? 'bg-orange-50 text-orange-700' : 'bg-blue-50 text-blue-700'}`}>{c.field}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-text-3">{c.level_name || '—'}</td>
+                                  <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_value).toFixed(2)}</td>
+                                  <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_value).toFixed(2)}</td>
+                                  <td className={`px-3 py-2 text-right font-mono text-xs ${pctChange && pctChange > 0 ? 'text-red-600' : pctChange && pctChange < 0 ? 'text-green-600' : 'text-text-3'}`}>
+                                    {pctChange != null ? `${pctChange > 0 ? '+' : ''}${pctChange}%` : '—'}
+                                  </td>
+                                  <td className="px-3 py-2 text-xs text-text-3">{c.reason}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-text-3 text-center py-4">No price changes proposed.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            {result?.changes?.length ? (
+              <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border bg-surface-2">
+                <button className="btn-outline py-1.5 px-4 rounded text-sm" onClick={onClose}>Cancel</button>
+                <button
+                  className="btn-primary py-1.5 px-4 rounded text-sm"
+                  disabled={checked.size === 0}
+                  onClick={handleApplyAi}
+                >Apply {checked.size} change{checked.size !== 1 ? 's' : ''}</button>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </div>,
     document.body
@@ -4204,197 +4401,8 @@ interface SmartChange {
   reason: string
 }
 
-function SmartScenarioModal({ menuId, scenarioId, priceLevelId, currencySymbol, onApply, onClose, api }: {
-  menuId: number
-  scenarioId: number | null
-  priceLevelId: number | null
-  currencySymbol: string
-  onApply: (changes: SmartChange[], prompt: string) => void
-  onClose: () => void
-  api: { post: (path: string, body?: any) => Promise<any> }
-}) {
-  const [prompt, setPrompt] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [result, setResult] = useState<{ summary: string; changes: SmartChange[] } | null>(null)
-  const [checked, setChecked] = useState<Set<number>>(new Set())
+// SmartScenarioModal removed — its UI is now the "AI suggest" tab inside WhatIfModal above.
 
-  const analyse = async () => {
-    if (!prompt.trim()) return
-    setLoading(true)
-    setError('')
-    setResult(null)
-    try {
-      const data = await api.post('/scenarios/smart', {
-        menu_id: menuId,
-        scenario_id: scenarioId || undefined,
-        price_level_id: priceLevelId || undefined,
-        prompt: prompt.trim(),
-      })
-      if (data.error) {
-        setError(data.error)
-        return
-      }
-      setResult(data)
-      setChecked(new Set(data.changes?.map((_: any, i: number) => i) || []))
-    } catch (err: any) {
-      setError(err.message || 'Failed to analyse scenario')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleApply = () => {
-    if (!result?.changes?.length) return
-    const selected = result.changes.filter((_: any, i: number) => checked.has(i))
-    onApply(selected, prompt)
-  }
-
-  return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-surface rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div>
-            <h2 className="text-base font-bold text-text-1">Smart Scenario</h2>
-            <p className="text-xs text-text-3 mt-0.5">Describe a pricing change in plain English</p>
-          </div>
-          <button onClick={onClose} className="text-text-3 hover:text-text-1 p-1">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-          {/* Input */}
-          <div>
-            <label className="block text-sm font-semibold text-text-2 mb-1.5">What would you like to change?</label>
-            <textarea
-              className="input w-full text-sm"
-              rows={3}
-              placeholder={'e.g. Increase all chicken items by 3%\nSet all wings to 28% COGS target\nRound all prices to nearest .99'}
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) { e.preventDefault(); analyse() } }}
-              disabled={loading}
-              autoFocus
-            />
-            <div className="flex items-center justify-between mt-2">
-              <p className="text-[10px] text-text-3">Only pricing changes are accepted. Pepper cannot modify recipes, ingredients, or other data.</p>
-              <button
-                className="btn-primary text-sm py-1.5 px-4 rounded"
-                disabled={!prompt.trim() || loading}
-                onClick={analyse}
-              >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                    Analysing...
-                  </span>
-                ) : 'Analyse'}
-              </button>
-            </div>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
-          )}
-
-          {/* Results */}
-          {result && (
-            <div className="space-y-3">
-              <div className="p-3 bg-accent-dim rounded-lg border border-accent/20">
-                <p className="text-sm font-medium text-accent">{result.summary}</p>
-              </div>
-
-              {result.changes?.length > 0 ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-text-3 font-semibold uppercase tracking-wide">
-                      Proposed changes ({checked.size} of {result.changes.length} selected)
-                    </p>
-                    <div className="flex gap-2">
-                      <button className="text-xs text-accent hover:underline" onClick={() => setChecked(new Set(result.changes.map((_: any, i: number) => i)))}>Select all</button>
-                      <button className="text-xs text-text-3 hover:underline" onClick={() => setChecked(new Set())}>Deselect all</button>
-                    </div>
-                  </div>
-
-                  <div className="border border-border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
-                          <th className="px-3 py-2 w-8"></th>
-                          <th className="text-left px-3 py-2">Item</th>
-                          <th className="text-left px-3 py-2">Type</th>
-                          <th className="text-left px-3 py-2">Level</th>
-                          <th className="text-right px-3 py-2">Current</th>
-                          <th className="text-right px-3 py-2">Proposed</th>
-                          <th className="text-right px-3 py-2">Change</th>
-                          <th className="text-left px-3 py-2">Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.changes.map((c: SmartChange, i: number) => {
-                          const pctChange = c.old_value > 0
-                            ? Math.round(((c.new_value - c.old_value) / c.old_value) * 1000) / 10
-                            : null
-                          return (
-                            <tr key={i} className={`border-t border-border ${checked.has(i) ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
-                              <td className="px-3 py-2">
-                                <input type="checkbox" checked={checked.has(i)}
-                                  onChange={() => setChecked(prev => {
-                                    const next = new Set(prev)
-                                    next.has(i) ? next.delete(i) : next.add(i)
-                                    return next
-                                  })} />
-                              </td>
-                              <td className="px-3 py-2 font-medium">{c.item_name}</td>
-                              <td className="px-3 py-2">
-                                <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${c.field === 'cost' ? 'bg-orange-50 text-orange-700' : 'bg-blue-50 text-blue-700'}`}>
-                                  {c.field}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-text-3">{c.level_name || '—'}</td>
-                              <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_value).toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_value).toFixed(2)}</td>
-                              <td className={`px-3 py-2 text-right font-mono text-xs ${pctChange && pctChange > 0 ? 'text-red-600' : pctChange && pctChange < 0 ? 'text-green-600' : 'text-text-3'}`}>
-                                {pctChange != null ? `${pctChange > 0 ? '+' : ''}${pctChange}%` : '\u2014'}
-                              </td>
-                              <td className="px-3 py-2 text-xs text-text-3">{c.reason}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-text-3 text-center py-4">No price changes proposed.</p>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        {result?.changes?.length ? (
-          <div className="flex items-center justify-end gap-2 px-6 py-3 border-t border-border bg-surface-2">
-            <button className="btn-outline py-1.5 px-4 rounded text-sm" onClick={onClose}>Cancel</button>
-            <button
-              className="btn-primary py-1.5 px-4 rounded text-sm"
-              disabled={checked.size === 0}
-              onClick={handleApply}
-            >
-              Apply {checked.size} change{checked.size !== 1 ? 's' : ''}
-            </button>
-          </div>
-        ) : null}
-      </div>
-    </div>,
-    document.body
-  )
-}
 
 // ── HistoryNotesModal ──────────────────────────────────────────────────────────
 
@@ -4472,8 +4480,8 @@ function HistoryNotesModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex justify-end bg-black/30" onClick={onClose}>
+      <div className="bg-white shadow-2xl w-full sm:w-[480px] h-full flex flex-col border-l border-border" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex gap-1">

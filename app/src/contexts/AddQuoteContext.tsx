@@ -22,9 +22,17 @@ const PriceQuotesTab = lazy(() => import('../pages/InventoryPage').then(m => ({ 
 
 export function AddQuoteProvider({ children }: { children: ReactNode }) {
   const [autoOpenIngId, setAutoOpenIngId] = useState<number | undefined>(undefined)
+  // Sticky flag — once we've triggered at least once we keep PriceQuotesTab
+  // mounted (hidden, no DOM cost beyond the data fetch). Without this the
+  // wrapper unmounts the moment onAutoOpenConsumed clears autoOpenIngId,
+  // which would tear down the freshly-opened modal too.
+  const [mounted, setMounted] = useState(false)
 
   const trigger = useCallback((ingredientId: number) => {
-    if (Number.isFinite(ingredientId) && ingredientId > 0) setAutoOpenIngId(ingredientId)
+    if (Number.isFinite(ingredientId) && ingredientId > 0) {
+      setMounted(true)
+      setAutoOpenIngId(ingredientId)
+    }
   }, [])
 
   const value = useMemo(() => ({ trigger }), [trigger])
@@ -32,9 +40,10 @@ export function AddQuoteProvider({ children }: { children: ReactNode }) {
   return (
     <AddQuoteContext.Provider value={value}>
       {children}
-      {/* Hidden PriceQuotesTab — only rendered when triggered. The Modal uses
-          createPortal(document.body) so it overlays the active page. */}
-      {autoOpenIngId !== undefined && (
+      {/* Hidden PriceQuotesTab — mounted on first trigger and kept around for
+          subsequent triggers. The Modal uses createPortal(document.body) so it
+          overlays the active page. */}
+      {mounted && (
         <div className="sr-only" aria-hidden>
           <Suspense fallback={null}>
             <PriceQuotesTab

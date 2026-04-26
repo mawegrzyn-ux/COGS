@@ -133,6 +133,11 @@ export default function InventoryPage() {
   // Quote modal pre-filled with that ingredient. Cleared after consumption
   // so a tab re-mount doesn't re-open the modal.
   const [autoOpenAddIngId, setAutoOpenAddIngId] = useState<number | undefined>(undefined)
+  // Sticky flag — once a + Quote auto-open has been triggered we keep
+  // PriceQuotesTab mounted (hidden) for the rest of the page lifetime.
+  // Without this, the wrapper unmounts the moment onAutoOpenConsumed clears
+  // autoOpenAddIngId, taking the freshly-opened modal with it.
+  const [quoteTabMounted, setQuoteTabMounted] = useState(false)
 
   // ?addQuote=<ingId> deep-link — opens the Add Quote modal pre-filled with
   // that ingredient. Used by the dashboard widgets (Missing Quotes, Unquoted
@@ -223,6 +228,9 @@ export default function InventoryPage() {
             // BACK-1961: don't switch tab — just trigger the Add Quote modal
             // via the always-mounted PriceQuotesTab below. The modal uses
             // createPortal to <body> so it renders over whatever tab is active.
+            // Set the sticky-mount flag first so the wrapper doesn't unmount
+            // immediately when PriceQuotesTab calls onAutoOpenConsumed.
+            setQuoteTabMounted(true)
             setAutoOpenAddIngId(id)
           }}
         />}
@@ -231,9 +239,10 @@ export default function InventoryPage() {
         {/* PriceQuotesTab is always mounted when (a) the user is on the quotes
             tab, OR (b) someone elsewhere triggered an Add Quote modal that
             this tab owns. In case (b), the tab body is hidden but the
-            portal-based Modal renders normally. Keeps the user's current tab
-            context intact. */}
-        {(tab === 'quotes' || autoOpenAddIngId !== undefined) && (
+            portal-based Modal renders normally. Once mounted via (b) we keep
+            it mounted (quoteTabMounted is sticky) so the modal doesn't
+            disappear when onAutoOpenConsumed clears autoOpenAddIngId. */}
+        {(tab === 'quotes' || quoteTabMounted) && (
           <div className={tab === 'quotes' ? 'flex-1 overflow-hidden flex flex-col' : 'sr-only'} aria-hidden={tab !== 'quotes'}>
             <PriceQuotesTab
               initialIngredientId={initialQuoteIngId}
