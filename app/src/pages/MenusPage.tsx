@@ -39,6 +39,11 @@ interface CogsItem {
   qty:                  number
   base_unit_abbr:       string
   cost_per_portion:     number
+  // Cost to ADD when the "Include modifier cost" toggle is on. In market
+  // currency, qty already applied. Frontend multiplies by dispRate before
+  // displaying. Server-computed: full required modifier cost for non-combo
+  // items, delta-beyond-current for combo items.
+  modifier_cost_adder?: number
   sell_price_gross:     number
   sell_price_net:       number
   tax_rate:             number
@@ -2415,6 +2420,17 @@ function ScenarioTool({
   const [showWhatIf,       setShowWhatIf]       = useState(false)
   const [showScenarioModal, setShowScenarioModal] = useState(false)
 
+  // "Include modifier cost" toggle — sits next to What If. When ON, every
+  // item's displayed cost = base cost + (modifier_cost_adder × dispRate). The
+  // adder is computed server-side using avg × min_select per modifier group.
+  // Persisted per-browser so the user's last choice survives a reload.
+  const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
+    try { return localStorage.getItem('me-include-modifier-cost') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('me-include-modifier-cost', includeModifierCost ? '1' : '0') } catch { /* ignore */ }
+  }, [includeModifierCost])
+
   // ── Reset helpers ──────────────────────────────────────────────────────────
   function resetPrices() {
     setPriceOverrides({})
@@ -2649,8 +2665,12 @@ function ScenarioTool({
       const perLevelKey  = typeof levelId === 'number' ? `${key}__l${levelId}` : ''
       const q            = Math.max(0, parseFloat(qty[key] || (perLevelKey ? qty[perLevelKey] : '') || '0') || 0)
       const baseCost     = item.cost_per_portion * dispRate
+      // When the toggle is ON, add the server-computed modifier cost adder
+      // (market currency × qty) — kept separate from override so users can
+      // tweak base cost manually and still see the modifier impact.
+      const modAdder     = includeModifierCost ? (item.modifier_cost_adder || 0) * dispRate : 0
       const costOvStr    = costOverrides[key]
-      const cost         = costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost
+      const cost         = (costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost) + modAdder
 
       const basePriceGross = item.sell_price_gross * dispRate
       const basePriceNet   = item.sell_price_net   * dispRate
@@ -2682,7 +2702,7 @@ function ScenarioTool({
         cogs_pct:          net_rev > 0 ? (totalCost / net_rev) * 100 : null,
       }
     })
-  }, [data, qty, dispRate, costOverrides, priceOverrides, levelId])
+  }, [data, qty, dispRate, costOverrides, priceOverrides, levelId, includeModifierCost])
 
   const totalQty     = rows.reduce((s, r) => s + r.qty, 0)
   const totalGross   = rows.reduce((s, r) => s + r.gross_revenue, 0)
@@ -2752,9 +2772,10 @@ function ScenarioTool({
     return baseItems.map(item => {
       const natKey         = `si_${item.sales_item_id}`
       const baseCostDisp   = item.cost_per_portion * dispRate
+      const modAdder       = includeModifierCost ? (item.modifier_cost_adder || 0) * dispRate : 0
       const costOvKey      = natKey
       const costOvVal      = costOverrides[costOvKey]
-      const cost           = costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp
+      const cost           = (costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp) + modAdder
       const isCostOv       = costOvKey in costOverrides
       // Per-level qty — each level has its own qty key e.g. "r_1__l2"
       const perLevel = allLevelsData.map(({ level, data }) => {
@@ -2793,7 +2814,7 @@ function ScenarioTool({
         perLevel,
       }
     })
-  }, [levelId, allLevelsData, qty, dispRate, priceOverrides, costOverrides])
+  }, [levelId, allLevelsData, qty, dispRate, priceOverrides, costOverrides, includeModifierCost])
 
   const allLevelCategorised = useMemo(() => {
     const map: Record<string, AllLevelRow[]> = {}
@@ -3215,6 +3236,21 @@ ${tableHtml}
               >⚡ What If</button>
             )
           })()}
+
+          {/* Include modifier cost — toggle that adds avg×min_select for each
+              attached modifier group to the displayed cost/COGS%. Sits next to
+              What If by request. Persisted to localStorage. */}
+          {menuId && (
+            <button
+              className={`btn btn-sm text-xs ${includeModifierCost ? 'btn-primary' : 'btn-outline'}`}
+              title={includeModifierCost
+                ? 'Modifier costs included in COGS (avg × min selections required). Click to exclude.'
+                : 'Click to include the cost of required modifiers in COGS (avg × min selections per group).'}
+              onClick={() => setIncludeModifierCost(v => !v)}
+            >
+              {includeModifierCost ? '✓ Modifiers in COGS' : '+ Modifiers in COGS'}
+            </button>
+          )}
 
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (

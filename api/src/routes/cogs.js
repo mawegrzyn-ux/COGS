@@ -966,6 +966,119 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
   return total;
 }
 
+/**
+ * Load per-item modifier-cost adders for the "Include modifier cost" toggle.
+ *
+ * Returns:
+ *   {
+ *     bySi:    { [sales_item_id]: USD_adder },
+ *     byCombo: { [combo_id]:      USD_adder }
+ *   }
+ *
+ * The adder represents the *additional* cost to add to `cost_per_portion`
+ * when the toggle is on — i.e. it's a delta, not an absolute. Values are in
+ * USD base; caller multiplies by the menu's exchange_rate (and qty).
+ *
+ * - Sales-Item-level groups: full required cost (avg × min_select). NOT in
+ *   `cost_per_portion`, so add the whole thing.
+ * - Combo step option groups: delta over the avg×1 already embedded by
+ *   `calcComboCost`. avg × (min_select − 1) per group, averaged across
+ *   options within a step (matching calcComboCost's avg-per-step semantics),
+ *   summed across steps.
+ */
+async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
+  const { countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId } = ctx;
+  const bySi = {};
+  const byCombo = {};
+
+  if (salesItemIds.length) {
+    const { rows: siModRows } = await pool.query(
+      `SELECT simgj.sales_item_id, mg.id AS modifier_group_id, mg.min_select,
+              mo.id AS option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
+              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_sales_item_modifier_groups simgj
+       JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
+       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  simgj.sales_item_id = ANY($1::int[])`,
+      [salesItemIds]
+    );
+    const siGroups = {};
+    for (const r of siModRows) {
+      const k1 = r.sales_item_id, k2 = r.modifier_group_id;
+      if (!siGroups[k1]) siGroups[k1] = {};
+      if (!siGroups[k1][k2]) siGroups[k1][k2] = { min_select: Number(r.min_select || 0), options: [] };
+      if (r.option_id != null) siGroups[k1][k2].options.push(r);
+    }
+    for (const siId of salesItemIds) {
+      const groups = siGroups[siId] || {};
+      let adder = 0;
+      for (const g of Object.values(groups)) {
+        if (!g.options.length || !g.min_select) continue;
+        const costs = g.options.map(o => {
+          const unit = resolveOptionCost(o, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
+          return unit * Number(o.qty || 1);
+        });
+        const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+        adder += avg * g.min_select;
+      }
+      bySi[siId] = adder;
+    }
+  }
+
+  if (comboIds.length) {
+    const { rows: csoModRows } = await pool.query(
+      `SELECT cs.combo_id, cso.combo_step_id, cso.id AS option_id,
+              mg.id AS modifier_group_id, mg.min_select,
+              mo.id AS mod_option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
+              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_combo_step_option_modifier_groups csomgj
+       JOIN   mcogs_combo_step_options cso ON cso.id = csomgj.combo_step_option_id
+       JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
+       JOIN   mcogs_modifier_groups mg ON mg.id = csomgj.modifier_group_id
+       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  cs.combo_id = ANY($1::int[])`,
+      [comboIds]
+    );
+    const tree = {};
+    for (const r of csoModRows) {
+      const c = r.combo_id, s = r.combo_step_id, o = r.option_id, g = r.modifier_group_id;
+      tree[c] ??= {};
+      tree[c][s] ??= {};
+      tree[c][s][o] ??= {};
+      tree[c][s][o][g] ??= { min_select: Number(r.min_select || 0), options: [] };
+      if (r.mod_option_id != null) tree[c][s][o][g].options.push(r);
+    }
+    for (const comboId of comboIds) {
+      const steps = tree[comboId] || {};
+      let comboDelta = 0;
+      for (const stepId of Object.keys(steps)) {
+        const optionsTree = steps[stepId];
+        const optionDeltas = Object.values(optionsTree).map(groupsByGroupId => {
+          let optDelta = 0;
+          for (const g of Object.values(groupsByGroupId)) {
+            if (!g.options.length) continue;
+            const costs = g.options.map(o => {
+              const unit = resolveOptionCost(o, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
+              return unit * Number(o.qty || 1);
+            });
+            const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+            optDelta += avg * (Number(g.min_select) - 1);
+          }
+          return optDelta;
+        });
+        if (optionDeltas.length) {
+          comboDelta += optionDeltas.reduce((a, b) => a + b, 0) / optionDeltas.length;
+        }
+      }
+      byCombo[comboId] = comboDelta;
+    }
+  }
+
+  return { bySi, byCombo };
+}
+
 router.get('/menu-sales/:menu_id', async (req, res) => {
   const menuId       = Number(req.params.menu_id);
   const priceLevelId = req.query.price_level_id ? Number(req.query.price_level_id) : null;
@@ -1091,6 +1204,16 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
     let totalCost = 0, totalSellNet = 0, totalSellGross = 0;
     const exchRate = Number(menu.exchange_rate) || 1;
 
+    // ── Modifier-cost adders (USD base) per item ───────────────────────────
+    // Used by the "Include modifier cost" toggle in Menu Engineer / Shared.
+    // See loadModifierCostAdders() above for the math (full × min_select for
+    // SI groups, delta-over-avg×1 for combo step option groups).
+    const _siIds = [...new Set(items.map(i => Number(i.sales_item_id)))];
+    const { bySi: modifierCostAdderBySi, byCombo: modifierCostAdderByComboId } =
+      await loadModifierCostAdders(_siIds, comboIds, {
+        countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId,
+      });
+
     for (const item of items) {
       const itemType = item.item_type;
       const qty      = Number(item.qty || 1);
@@ -1114,6 +1237,14 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) * qty;
       }
       const cpp = Math.round(cppUsd * exchRate * 10000) / 10000;
+
+      // Modifier-cost adder for the "Include modifiers" toggle. Combine SI-level
+      // groups (full × min_select) + combo step option groups delta (avg × (min−1)).
+      const siAdderUsd  = modifierCostAdderBySi[siId] || 0;
+      const comboAdderUsd = (itemType === 'combo' && item.combo_id)
+        ? (modifierCostAdderByComboId[Number(item.combo_id)] || 0)
+        : 0;
+      const modifierCostAdder = Math.round((siAdderUsd + comboAdderUsd) * exchRate * qty * 10000) / 10000;
 
       // Sell price
       const itemPrices = priceMap[item.id] || {};
@@ -1156,6 +1287,11 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         qty,
         base_unit_abbr:     item.base_unit_abbr || '',
         cost_per_portion:   cpp,
+        // Cost to ADD when the "include modifiers" toggle is on. Already in
+        // market currency × qty. For non-combo items it's the full required
+        // modifier cost; for combo items it's the delta beyond the avg×1
+        // already embedded in cost_per_portion.
+        modifier_cost_adder: modifierCostAdder,
         sell_price_gross:   Math.round(sellGross * 10000) / 10000,
         sell_price_net:     Math.round(sellNet   * 10000) / 10000,
         tax_rate:           taxRate,
@@ -1190,4 +1326,4 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
   }
 });
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax, loadModifierCostAdders };

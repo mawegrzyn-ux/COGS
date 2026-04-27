@@ -23,6 +23,7 @@ const {
   loadComboData,
   calcComboCost,
   resolveItemTax,
+  loadModifierCostAdders,
 } = require('./cogs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -935,6 +936,15 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
     const defaultTaxMap = {};
     for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = { rate: Number(r.rate), name: r.name };
 
+    // Modifier-cost adders for the "Include modifier cost" toggle in shared
+    // view. priceLevelId=null because shared items expose a single base cost
+    // field (per-level `cogs_pct` is computed downstream).
+    const _siIdsShared = [...new Set(items.map(i => Number(i.sales_item_id)))];
+    const { bySi: modAdderBySi, byCombo: modAdderByCombo } =
+      await loadModifierCostAdders(_siIdsShared, comboIds, {
+        countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId: null,
+      });
+
     const taxRateCache = {};
 
     function getCppForLevel(item, levelId) {
@@ -995,6 +1005,14 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         };
       }
 
+      // Modifier adder in market currency × qty.
+      const qtyN = Number(item.qty || 1);
+      const siAdderUsd    = modAdderBySi[item.sales_item_id] || 0;
+      const comboAdderUsd = (itemType === 'combo' && item.combo_id)
+        ? (modAdderByCombo[Number(item.combo_id)] || 0)
+        : 0;
+      const modifierCostAdder = Math.round((siAdderUsd + comboAdderUsd) * exchangeRate * qtyN * 10000) / 10000;
+
       return {
         menu_item_id: item.id,   // = menu_sales_item_id
         nat_key:      `si_${item.sales_item_id}`,
@@ -1002,6 +1020,7 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         item_type:    itemType,
         category:     item.category || '',
         cost:         cpp,
+        modifier_cost_adder: modifierCostAdder,
         levels:       rowLevels,
       };
     }));

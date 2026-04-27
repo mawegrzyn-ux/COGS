@@ -41,6 +41,11 @@ interface SharedItem {
   item_type:    'recipe' | 'ingredient' | 'manual' | 'combo'
   category:     string
   cost:         number
+  // Cost adder used by the "Include modifier cost" toggle. In market currency,
+  // qty already applied. Computed server-side: full × min_select for any
+  // attached modifier groups (combo items receive the delta beyond avg×1
+  // already embedded in `cost`).
+  modifier_cost_adder?: number
   levels:       Record<number, LevelEntry>
 }
 
@@ -197,6 +202,17 @@ export default function SharedMenuPage() {
   const [viewMode,          setViewMode]          = useState<'table' | 'grid' | 'excel'>('table')
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(true)
   const [mobileLevelFilter, setMobileLevelFilter] = useState<number | 'all'>('all')
+
+  // "Include modifier cost" toggle — same feature as the Menu Engineer button.
+  // Adds avg × min_select per attached modifier group to every item's cost
+  // (and recomputes cogs_pct / gp_net per level on the fly). Persisted per
+  // browser, scoped to the shared slug.
+  const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
+    try { return localStorage.getItem(`shared-include-mod-cost-${slug}`) === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(`shared-include-mod-cost-${slug}`, includeModifierCost ? '1' : '0') } catch { /* ignore */ }
+  }, [includeModifierCost, slug])
 
   // Context menu (right-click to comment on an item)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: SharedItem } | null>(null)
@@ -364,11 +380,47 @@ export default function SharedMenuPage() {
 
   // ── Category helpers ─────────────────────────────────────────────────────────
 
+  // Derived items list — applies the "Include modifier cost" toggle by adding
+  // each item's `modifier_cost_adder` (market currency, qty applied) on top of
+  // its base cost AND recomputing per-level cogs_pct + gp_net so every place
+  // that reads `data.items` downstream picks up the adjusted figures without
+  // needing toggle-aware code at every render site.
+  const effectiveItems = useMemo<SharedItem[]>(() => {
+    if (!data) return []
+    if (!includeModifierCost) return data.items
+    return data.items.map(item => {
+      const adder = item.modifier_cost_adder || 0
+      if (adder <= 0) return item
+      const cost = item.cost + adder
+      const newLevels: Record<number, LevelEntry> = {}
+      for (const [k, lvl] of Object.entries(item.levels)) {
+        const lid = Number(k)
+        if (lvl.set && lvl.net != null && lvl.net > 0) {
+          newLevels[lid] = {
+            ...lvl,
+            cogs_pct: Math.round((cost / lvl.net) * 10000) / 100,
+            gp_net:   Math.round((lvl.net - cost) * 10000) / 10000,
+          }
+        } else {
+          newLevels[lid] = lvl
+        }
+      }
+      return { ...item, cost, levels: newLevels }
+    })
+  }, [data, includeModifierCost])
+
+  // True when at least one item has a non-zero adder — used to disable the
+  // toggle on menus where it would have no effect (avoids confusion).
+  const hasAnyModifierAdder = useMemo(() => {
+    if (!data) return false
+    return data.items.some(i => (i.modifier_cost_adder || 0) > 0)
+  }, [data])
+
   const categories = useMemo(() => {
     if (!data) return []
-    const cats = [...new Set(data.items.map(i => i.category || 'Uncategorised'))].sort()
+    const cats = [...new Set(effectiveItems.map(i => i.category || 'Uncategorised'))].sort()
     return cats
-  }, [data])
+  }, [data, effectiveItems])
 
   function toggleCat(cat: string) {
     setCollapsedCats(prev => {
@@ -403,7 +455,9 @@ export default function SharedMenuPage() {
     const qtyData    = data.scenario_qty_data       || {}
     const scenLvlId  = data.scenario_price_level_id || null
     const levels     = data.price_levels
-    const items      = data.items
+    // Use effectiveItems so toggling "Include modifier cost" flows into every
+    // KPI, level breakdown, and category aggregate downstream.
+    const items      = effectiveItems
     const hasQty     = Object.values(qtyData).some(v => Number(v) > 0)
 
     // ── KPI aggregates ────────────────────────────────────────────────────────
@@ -528,7 +582,7 @@ export default function SharedMenuPage() {
       catBreakdown,
       levelBreakdown,
     }
-  }, [data])
+  }, [data, effectiveItems])
 
   // ── Stable levels + mobile filter ────────────────────────────────────────────
   // MUST be declared before any early returns to keep hook call count stable
@@ -775,6 +829,27 @@ export default function SharedMenuPage() {
                 </svg>
                 <span className="hidden sm:inline">Help</span>
               </button>
+
+              {/* Include modifier cost toggle — same feature as Menu Engineer.
+                  Shown only when at least one item has a non-zero adder. */}
+              {hasAnyModifierAdder && (
+                <button
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    includeModifierCost
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                  onClick={() => setIncludeModifierCost(v => !v)}
+                  title={includeModifierCost
+                    ? 'Modifier costs included in COGS (avg × min selections required). Click to exclude.'
+                    : 'Include the cost of required modifiers in COGS (avg × min selections per group).'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
+                  </svg>
+                  <span className="hidden sm:inline">{includeModifierCost ? 'Modifiers in COGS' : 'Modifiers'}</span>
+                </button>
+              )}
 
               {/* View mode toggle: Table / Excel / Grid */}
               <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
@@ -1210,7 +1285,7 @@ export default function SharedMenuPage() {
               <div className="flex-1 min-h-0 overflow-auto pb-2">
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {categories.map(cat => {
-                    const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                    const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
                     return (
                       <React.Fragment key={cat}>
                         {/* Category label spanning full row */}
@@ -1335,7 +1410,7 @@ export default function SharedMenuPage() {
 
                   <tbody>
                     {categories.map(cat => {
-                      const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                      const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
                       const isCollapsed = collapsedCats.has(cat)
                       const setPriced   = catItems.filter(i => levels.some(l => i.levels[l.id]?.set))
                       // Per-level average COGS for category header row
@@ -1514,7 +1589,7 @@ export default function SharedMenuPage() {
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400" /> ≤ 28% Good</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"   /> 28–35% Watch</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-red-400"     /> &gt; 35% High</span>
-                {data.items.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
+                {effectiveItems.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
                   <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> Scenario override</span>
                 )}
                 {isEdit && <span className="text-amber-600 font-medium">Edit mode — saves to live database</span>}
@@ -1562,7 +1637,7 @@ export default function SharedMenuPage() {
                   </thead>
                   <tbody>
                     {categories.map(cat => {
-                      const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                      const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
                       const isCollapsed = collapsedCats.has(cat)
                       const avgCogsPerLevel = Object.fromEntries(
                         levels.map(l => {
