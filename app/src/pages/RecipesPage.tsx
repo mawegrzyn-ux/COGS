@@ -198,6 +198,11 @@ export default function RecipesPage() {
   // navigates the detail panel to the new recipe.
   const [duplicateDraft, setDuplicateDraft] = useState<string | null>(null)
   const [duplicating, setDuplicating] = useState(false)
+  // When ticked, the duplicate flow also creates a sales item linked to the
+  // new recipe so it can be added to a menu without a separate trip to the
+  // Sales Items page. Defaults true — most duplicates are made specifically
+  // to put on a menu with a tweaked variant.
+  const [duplicateAlsoSalesItem, setDuplicateAlsoSalesItem] = useState(true)
 
   // Create-variation modal — replaces native window.confirm/prompt dialogs
   type CreateVariationCtx =
@@ -608,15 +613,38 @@ export default function RecipesPage() {
   // Duplicate the selected recipe — copies metadata, global items, and every
   // variation (market / PL / market+PL) end-to-end. Backend handles all of
   // it in a transaction; we just refresh the list and load the new id.
-  const duplicateRecipe = async (newName: string) => {
+  // When `alsoSalesItem` is true we also POST /sales-items with the new
+  // recipe linked so the duplicate is immediately puttable on a menu. The
+  // sales item inherits the recipe's category (the sales-items API
+  // auto-flips for_sales_items=true on the linked category if needed).
+  const duplicateRecipe = async (newName: string, alsoSalesItem: boolean) => {
     if (!selected) return
     setDuplicating(true)
     try {
-      const r = await api.post(`/recipes/${selected.id}/duplicate`, { name: newName })
-      setRecipes(prev => [...prev, r as Recipe].sort((a, b) => a.name.localeCompare(b.name)))
+      const r = await api.post(`/recipes/${selected.id}/duplicate`, { name: newName }) as Recipe
+      setRecipes(prev => [...prev, r].sort((a, b) => a.name.localeCompare(b.name)))
+
+      let salesItemMsg = ''
+      if (alsoSalesItem) {
+        try {
+          await api.post('/sales-items', {
+            item_type:    'recipe',
+            name:         newName,
+            display_name: newName,
+            category_id:  r.category_id ?? null,
+            recipe_id:    r.id,
+          })
+          salesItemMsg = ' (sales item created)'
+        } catch (e: any) {
+          // Non-fatal — the recipe duplicate succeeded; surface the failure
+          // in the toast so the user knows to create the sales item manually.
+          salesItemMsg = ` (⚠ sales item failed: ${e?.message || 'unknown error'})`
+        }
+      }
+
       setDuplicateDraft(null)
-      showToast(`Duplicated "${selected.name}" → "${newName}"`)
-      loadDetail((r as Recipe).id)
+      showToast(`Duplicated "${selected.name}" → "${newName}"${salesItemMsg}`)
+      loadDetail(r.id)
     } catch (err: any) {
       showToast(err.message || 'Duplicate failed', 'error')
     } finally {
@@ -2248,12 +2276,33 @@ export default function RecipesPage() {
                 onChange={e => setDuplicateDraft(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && duplicateDraft.trim() && !duplicating) {
-                    duplicateRecipe(duplicateDraft.trim())
+                    duplicateRecipe(duplicateDraft.trim(), duplicateAlsoSalesItem)
                   }
                 }}
                 disabled={duplicating}
               />
             </Field>
+
+            {/* Also create a sales item linked to the new recipe so the
+                duplicate is ready to drop on a menu. The category gets
+                for_sales_items=true automatically (sales-items API handles it). */}
+            <label className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-surface-2 -mx-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={duplicateAlsoSalesItem}
+                onChange={e => setDuplicateAlsoSalesItem(e.target.checked)}
+                disabled={duplicating}
+              />
+              <div className="text-sm">
+                <div className="font-medium text-text-1">Create matching sales item</div>
+                <div className="text-xs text-text-3">
+                  Adds a recipe-type sales item with the same name + category, linked to the new recipe.
+                  Lets you drop it on a menu without a separate trip to Sales Items.
+                </div>
+              </div>
+            </label>
+
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
               <button
                 className="btn-outline px-3 py-1.5 text-sm"
@@ -2263,7 +2312,7 @@ export default function RecipesPage() {
               <button
                 className="btn-primary px-3 py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50"
                 disabled={!duplicateDraft.trim() || duplicating}
-                onClick={() => duplicateRecipe(duplicateDraft.trim())}
+                onClick={() => duplicateRecipe(duplicateDraft.trim(), duplicateAlsoSalesItem)}
               >
                 {duplicating ? 'Duplicating…' : (<><CopyIcon size={12} /> Duplicate</>)}
               </button>

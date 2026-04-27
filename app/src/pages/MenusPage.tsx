@@ -1532,15 +1532,17 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
         </div>
       )}
 
-      {/* Filter bar */}
-      <div className="flex gap-2 mb-3 items-center min-w-0">
+      {/* Filter bar — selects need explicit widths because the .input class
+          applies w-full; without an override each select tries to take the
+          full row, breaking the layout into one stretched dropdown. */}
+      <div className="flex gap-2 mb-3 items-center min-w-0 flex-wrap">
         <input
-          className="input text-sm flex-1 min-w-0"
+          className="input text-sm flex-1 min-w-[180px]"
           placeholder="Search items…"
           value={itemFilterQ}
           onChange={e => onFilterQ(e.target.value)}
         />
-        <select className="input text-sm shrink-0" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
+        <select className="input text-sm shrink-0 !w-auto" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
           <option value="">All Types</option>
           <option value="recipe">Recipe</option>
           <option value="ingredient">Ingredient</option>
@@ -1548,12 +1550,12 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           <option value="combo">Combo</option>
         </select>
         {categories.length > 0 && (
-          <select className="input text-sm shrink-0" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
+          <select className="input text-sm shrink-0 !w-auto" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
             <option value="">All Categories</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
-        <select className="input text-sm shrink-0" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
+        <select className="input text-sm shrink-0 !w-auto" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="green">✓ Excellent</option>
           <option value="yellow">~ Acceptable</option>
@@ -1877,6 +1879,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
       // scenario; the modal closes via the parent's onGenerate handler.
       void previewRows  // unused — kept around as a future affordance if we add a confirmation
       pendingQMap.current = qMap
+      console.log('[mix-gen] Generated qMap', { keys: Object.keys(qMap).length, sample: Object.entries(qMap).slice(0, 5) })
       onGenerate(qMap)
       return
     } catch (err: any) {
@@ -2327,7 +2330,12 @@ function ScenarioTool({
   function applyWhatIf(pricePct: number, costPct: number) {
     const isAll = levelId === 'ALL'
     const hasData = isAll ? allLevelRows.length > 0 : rows.length > 0
-    if (!hasData) return
+    console.log('[whatif] applyWhatIf called', { pricePct, costPct, isAll, levelId, allLevelRowsLen: allLevelRows.length, rowsLen: rows.length, hasData })
+    if (!hasData) {
+      console.warn('[whatif] no data — returning early. levelId=', levelId, 'allLevelsData.length=', allLevelsData.length, 'data?', !!data)
+      showToast('No data to apply changes to. Wait for the menu to finish loading.', 'error')
+      return
+    }
 
     if (pricePct !== 0) {
       const f = 1 + pricePct / 100
@@ -3090,9 +3098,17 @@ ${tableHtml}
           )}
 
           {/* What If — combined modal: manual % shift + AI-suggested per-item changes */}
-          {menuId && (
-            <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes — manual % shift or AI suggestions" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
-          )}
+          {menuId && (() => {
+            const hasData = levelId === 'ALL' ? allLevelRows.length > 0 : rows.length > 0
+            return (
+              <button
+                className="btn btn-sm btn-outline text-xs"
+                title={hasData ? 'Model price/cost changes — manual % shift or AI suggestions' : 'Loading menu data — please wait'}
+                disabled={!hasData}
+                onClick={() => setShowWhatIf(true)}
+              >⚡ What If</button>
+            )
+          })()}
 
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (
@@ -3219,6 +3235,7 @@ ${tableHtml}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
             currentQty={qty}
             onGenerate={qMap => {
+              console.log('[mix-gen] onGenerate received in parent', { keys: Object.keys(qMap).length })
               setManualQtyKeys(new Set())
               onReplaceQty(qMap)
               dirtyRef.current = true
@@ -3396,21 +3413,31 @@ ${tableHtml}
                               <td className="px-3 py-2.5">
                                 <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
                               </td>
-                              {/* Qty — moved before Cost/ptn */}
+                              {/* Qty — moved before Cost/ptn.
+                                  Read falls back to per-level key when single-level mode is active —
+                                  Mix Manager always stores per-level keys (si_X__lN), so without
+                                  the fallback the input shows empty after a generate. */}
+                              {(() => {
+                                const perLevelKey = typeof levelId === 'number' ? `${row.nat_key}__l${levelId}` : ''
+                                const displayVal = qty[row.nat_key] ?? (perLevelKey ? qty[perLevelKey] : undefined) ?? ''
+                                const writeKey = perLevelKey || row.nat_key
+                                return (
                               <td className="px-1.5 py-1.5 text-right">
                                 <input
                                   type="number"
                                   min="0"
                                   step="1"
-                                  value={qty[row.nat_key] ?? ''}
-                                  onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
+                                  value={displayVal}
+                                  onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, writeKey])); onQtyChange(writeKey, e.target.value) }}
                                   placeholder="0"
                                   className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                    ${manualQtyKeys.has(row.nat_key)
+                                    ${manualQtyKeys.has(writeKey) || manualQtyKeys.has(row.nat_key)
                                       ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                       : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                 />
                               </td>
+                                )
+                              })()}
                               {/* Cost/ptn — editable */}
                               <td className="px-1.5 py-1.5 text-right">
                                 <div className="relative inline-flex items-center">
