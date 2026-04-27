@@ -5,6 +5,32 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { logAudit, diffFields } = require('../helpers/audit');
+const {
+  loadQuoteLookup, loadAllRecipeItemsDeep,
+  loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap,
+} = require('./cogs');
+
+// Resolve cost for one modifier/combo-step option in USD base.
+// Mirrors resolveOptionCost() in cogs.js but is duplicated here to avoid
+// exporting a private symbol. Returns cost per unit (qty applied by caller).
+function _optionUnitCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
+  const calcRecipeCost = require('./cogs').calcRecipeCost;
+  if (opt.item_type === 'manual') return Number(opt.manual_cost || 0);
+  if (opt.item_type === 'ingredient') {
+    const q = quoteLookup[opt.ingredient_id]?.[countryId];
+    return q ? q.price_per_base_unit : 0;
+  }
+  if (opt.item_type === 'recipe' && opt.recipe_id) {
+    const rItems = recipeItemsMap[opt.recipe_id] || [];
+    const { cost } = calcRecipeCost(
+      { id: opt.recipe_id, yield_qty: opt.recipe_yield_qty || 1 },
+      rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null,
+      priceLevelId, plVariationMap, marketPlVariationMap
+    );
+    return cost;
+  }
+  return 0;
+}
 
 // ─── helper: full row with prices + override flags ───────────────────────────
 async function fetchRow(id, client) {
@@ -251,7 +277,7 @@ router.get('/:id/price-diff', async (req, res, next) => {
 
 // ─── Helpers: load sub-price structure ────────────────────────────────────────
 
-async function loadModifierGroupsForItem(salesItemId, msiId) {
+async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
   const { rows: mgRows } = await pool.query(
     `SELECT mg.id AS modifier_group_id, mg.name, mg.display_name, mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show, simgj.auto_show
      FROM   mcogs_sales_item_modifier_groups simgj
@@ -263,9 +289,13 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
   if (!mgRows.length) return [];
 
   const mgIds = mgRows.map(r => r.modifier_group_id);
+  // Pull qty + linked recipe yield so we can compute per-option cost.
   const { rows: optRows } = await pool.query(
-    `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type
+    `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
+            mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty,
+            r.yield_qty AS recipe_yield_qty
      FROM   mcogs_modifier_options mo
+     LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
      WHERE  mo.modifier_group_id = ANY($1)
      ORDER  BY mo.sort_order, mo.id`,
     [mgIds]
@@ -286,24 +316,48 @@ async function loadModifierGroupsForItem(salesItemId, msiId) {
     }
   }
 
+  // Compute per-option cost (USD base × exchange_rate = market currency).
+  // qty multiplier is applied here so the figure reflects the actual amount
+  // consumed per selection (e.g. 50 g sauce vs 100 g).
+  const computeCost = (o) => {
+    if (!costCtx) return 0;
+    const unit = _optionUnitCost(o, costCtx.countryId, costCtx.quoteLookup, costCtx.recipeItemsMap, costCtx.variationMap, costCtx.plVariationMap, costCtx.marketPlVariationMap, costCtx.priceLevelId);
+    const qty = Number(o.qty || 1);
+    return unit * qty * (costCtx.exchangeRate || 1);
+  };
+
   const optByMg = {};
   for (const o of optRows) {
     if (!optByMg[o.modifier_group_id]) optByMg[o.modifier_group_id] = [];
-    optByMg[o.modifier_group_id].push({ id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type, prices: priceMap[o.id] || {} });
+    const cost = computeCost(o);
+    optByMg[o.modifier_group_id].push({
+      id: o.id, name: o.name, display_name: o.display_name || null,
+      item_type: o.item_type, qty: Number(o.qty || 1),
+      cost,
+      prices: priceMap[o.id] || {},
+    });
   }
-  return mgRows.map(mg => ({
-    modifier_group_id: mg.modifier_group_id,
-    name: mg.name,
-    display_name: mg.display_name || null,
-    min_select: mg.min_select,
-    max_select: mg.max_select,
-    allow_repeat_selection: mg.allow_repeat_selection || false,
-    auto_show: mg.auto_show != null ? mg.auto_show : (mg.default_auto_show ?? true),
-    options: optByMg[mg.modifier_group_id] || [],
-  }));
+  return mgRows.map(mg => {
+    const opts = optByMg[mg.modifier_group_id] || [];
+    const costs = opts.map(o => o.cost || 0);
+    const avg_cost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
+    const min_cost = costs.length ? Math.min(...costs) : 0;
+    const max_cost = costs.length ? Math.max(...costs) : 0;
+    return {
+      modifier_group_id: mg.modifier_group_id,
+      name: mg.name,
+      display_name: mg.display_name || null,
+      min_select: mg.min_select,
+      max_select: mg.max_select,
+      allow_repeat_selection: mg.allow_repeat_selection || false,
+      auto_show: mg.auto_show != null ? mg.auto_show : (mg.default_auto_show ?? true),
+      avg_cost, min_cost, max_cost,
+      options: opts,
+    };
+  });
 }
 
-async function loadComboStructure(comboId, msiId) {
+async function loadComboStructure(comboId, msiId, costCtx) {
   const { rows: steps } = await pool.query(
     `SELECT id, name, sort_order, min_select, max_select, auto_select
      FROM   mcogs_combo_steps WHERE combo_id = $1 ORDER BY sort_order`, [comboId]
@@ -312,8 +366,11 @@ async function loadComboStructure(comboId, msiId) {
 
   const stepIds = steps.map(s => s.id);
   const { rows: opts } = await pool.query(
-    `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type
+    `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type,
+            cso.recipe_id, cso.ingredient_id, cso.manual_cost,
+            r.yield_qty AS recipe_yield_qty
      FROM   mcogs_combo_step_options cso
+     LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
      WHERE  cso.combo_step_id = ANY($1) ORDER BY cso.sort_order`, [stepIds]
   );
 
@@ -332,6 +389,13 @@ async function loadComboStructure(comboId, msiId) {
     }
   }
 
+  const computeOptCost = (o) => {
+    if (!costCtx) return 0;
+    const unit = _optionUnitCost(o, costCtx.countryId, costCtx.quoteLookup, costCtx.recipeItemsMap, costCtx.variationMap, costCtx.plVariationMap, costCtx.marketPlVariationMap, costCtx.priceLevelId);
+    // Combo step options have no qty column — treat as qty=1.
+    return unit * (costCtx.exchangeRate || 1);
+  };
+
   // Load modifier groups for each combo step option
   const optModMap = {};
   if (optIds.length) {
@@ -344,8 +408,11 @@ async function loadComboStructure(comboId, msiId) {
     const optMgIds = [...new Set(csomgRows.map(r => r.modifier_group_id))];
     if (optMgIds.length) {
       const { rows: modOptRows } = await pool.query(
-        `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type
+        `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
+                mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty,
+                r.yield_qty AS recipe_yield_qty
          FROM   mcogs_modifier_options mo
+         LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
          WHERE  mo.modifier_group_id = ANY($1) ORDER BY mo.sort_order`, [optMgIds]
       );
       const modOptIds = modOptRows.map(o => o.id);
@@ -362,18 +429,35 @@ async function loadComboStructure(comboId, msiId) {
           modPriceMap[p.modifier_option_id][p.price_level_id] = Number(p.sell_price);
         }
       }
+      const computeModCost = (o) => {
+        if (!costCtx) return 0;
+        const unit = _optionUnitCost(o, costCtx.countryId, costCtx.quoteLookup, costCtx.recipeItemsMap, costCtx.variationMap, costCtx.plVariationMap, costCtx.marketPlVariationMap, costCtx.priceLevelId);
+        const qty = Number(o.qty || 1);
+        return unit * qty * (costCtx.exchangeRate || 1);
+      };
       const modOptByMg = {};
       for (const o of modOptRows) {
         if (!modOptByMg[o.modifier_group_id]) modOptByMg[o.modifier_group_id] = [];
-        modOptByMg[o.modifier_group_id].push({ id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type, prices: modPriceMap[o.id] || {} });
+        modOptByMg[o.modifier_group_id].push({
+          id: o.id, name: o.name, display_name: o.display_name || null,
+          item_type: o.item_type, qty: Number(o.qty || 1),
+          cost: computeModCost(o),
+          prices: modPriceMap[o.id] || {},
+        });
       }
       for (const r of csomgRows) {
         if (!optModMap[r.combo_step_option_id]) optModMap[r.combo_step_option_id] = [];
+        const groupOpts = modOptByMg[r.modifier_group_id] || [];
+        const costs = groupOpts.map(o => o.cost || 0);
+        const avg_cost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
+        const min_cost = costs.length ? Math.min(...costs) : 0;
+        const max_cost = costs.length ? Math.max(...costs) : 0;
         optModMap[r.combo_step_option_id].push({
           modifier_group_id: r.modifier_group_id, name: r.name, display_name: r.display_name || null,
           min_select: r.min_select, max_select: r.max_select, allow_repeat_selection: r.allow_repeat_selection || false,
           auto_show: r.auto_show != null ? r.auto_show : (r.default_auto_show ?? true),
-          options: modOptByMg[r.modifier_group_id] || [],
+          avg_cost, min_cost, max_cost,
+          options: groupOpts,
         });
       }
     }
@@ -384,38 +468,116 @@ async function loadComboStructure(comboId, msiId) {
     if (!optByStep[o.combo_step_id]) optByStep[o.combo_step_id] = [];
     optByStep[o.combo_step_id].push({
       id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type,
+      cost: computeOptCost(o),
       prices: priceMap[o.id] || {},
       modifier_groups: optModMap[o.id] || [],
     });
   }
-  return steps.map(s => ({
-    id: s.id, name: s.name, sort_order: s.sort_order,
-    min_select: s.min_select, max_select: s.max_select, auto_select: s.auto_select ?? false,
-    options: optByStep[s.id] || [],
-  }));
+  // Per-step avg/min/max cost = average of its options (matches calcComboCost
+  // semantics: 1 option = fixed cost, N options = avg cost).
+  return steps.map(s => {
+    const stepOpts = optByStep[s.id] || [];
+    const costs = stepOpts.map(o => o.cost || 0);
+    const avg_cost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
+    const min_cost = costs.length ? Math.min(...costs) : 0;
+    const max_cost = costs.length ? Math.max(...costs) : 0;
+    return {
+      id: s.id, name: s.name, sort_order: s.sort_order,
+      min_select: s.min_select, max_select: s.max_select, auto_select: s.auto_select ?? false,
+      avg_cost, min_cost, max_cost,
+      options: stepOpts,
+    };
+  });
 }
 
 // ─── GET /menu-sales-items/:id/sub-prices ─────────────────────────────────────
-// Returns combo steps/options structure + modifier groups/options with menu-level prices
+// Returns combo steps/options structure + modifier groups/options with menu-level
+// prices AND per-option cost (in market currency) so the Menu Engineer can show
+// a cost figure next to each modifier/combo option.
 router.get('/:id/sub-prices', async (req, res, next) => {
   try {
     const msiId = Number(req.params.id);
+    const priceLevelId = req.query.price_level_id ? Number(req.query.price_level_id) : null;
     const { rows: msiRows } = await pool.query(
-      `SELECT msi.id, msi.sales_item_id, si.item_type, si.combo_id,
+      `SELECT msi.id, msi.sales_item_id, msi.menu_id,
+              si.item_type, si.combo_id,
+              m.country_id, c.exchange_rate,
               (SELECT COUNT(*) FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
        FROM   mcogs_menu_sales_items msi
        JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+       JOIN   mcogs_menus m ON m.id = msi.menu_id
+       JOIN   mcogs_countries c ON c.id = m.country_id
        WHERE  msi.id = $1`, [msiId]
     );
     if (!msiRows.length) return res.status(404).json({ error: { message: 'Not found' } });
     const msi = msiRows[0];
 
+    // Build cost-resolution context once. Recipe-typed options need the deep
+    // recipe items map + market/PL variation overrides — same data the COGS
+    // engine pulls. Failures here shouldn't block the structural response, so
+    // wrap in try/catch and fall back to costCtx=null (cost=0 in the output).
+    let costCtx = null;
+    try {
+      const [quoteLookup, recipeIds] = await Promise.all([
+        loadQuoteLookup(),
+        // Collect recipe ids referenced by this item's modifier/combo options
+        // so loadAllRecipeItemsDeep can pull their full ingredient trees.
+        (async () => {
+          const ids = new Set();
+          if (Number(msi.modifier_group_count) > 0) {
+            const { rows } = await pool.query(
+              `SELECT DISTINCT mo.recipe_id
+               FROM   mcogs_modifier_options mo
+               JOIN   mcogs_sales_item_modifier_groups simg ON simg.modifier_group_id = mo.modifier_group_id
+               WHERE  simg.sales_item_id = $1 AND mo.recipe_id IS NOT NULL`, [msi.sales_item_id]
+            );
+            for (const r of rows) if (r.recipe_id) ids.add(r.recipe_id);
+          }
+          if (msi.item_type === 'combo' && msi.combo_id) {
+            const { rows } = await pool.query(
+              `SELECT DISTINCT cso.recipe_id
+               FROM   mcogs_combo_step_options cso
+               JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
+               WHERE  cs.combo_id = $1 AND cso.recipe_id IS NOT NULL
+               UNION
+               SELECT DISTINCT mo.recipe_id
+               FROM   mcogs_modifier_options mo
+               JOIN   mcogs_combo_step_option_modifier_groups csomg ON csomg.modifier_group_id = mo.modifier_group_id
+               JOIN   mcogs_combo_step_options cso ON cso.id = csomg.combo_step_option_id
+               JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
+               WHERE  cs.combo_id = $1 AND mo.recipe_id IS NOT NULL`, [msi.combo_id]
+            );
+            for (const r of rows) if (r.recipe_id) ids.add(r.recipe_id);
+          }
+          return [...ids];
+        })(),
+      ]);
+      const [recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap] = await Promise.all([
+        loadAllRecipeItemsDeep(recipeIds),
+        loadVariationItemsMap(recipeIds),
+        loadPlVariationItemsMap(recipeIds),
+        loadMarketPlVariationItemsMap(recipeIds),
+      ]);
+      costCtx = {
+        countryId:    msi.country_id,
+        exchangeRate: Number(msi.exchange_rate || 1),
+        priceLevelId,
+        quoteLookup,
+        recipeItemsMap,
+        variationMap,
+        plVariationMap,
+        marketPlVariationMap,
+      };
+    } catch (err) {
+      console.warn('[sub-prices] cost context load failed:', err.message);
+    }
+
     const [modifierGroups, comboSteps] = await Promise.all([
       Number(msi.modifier_group_count) > 0
-        ? loadModifierGroupsForItem(msi.sales_item_id, msiId)
+        ? loadModifierGroupsForItem(msi.sales_item_id, msiId, costCtx)
         : Promise.resolve([]),
       msi.item_type === 'combo' && msi.combo_id
-        ? loadComboStructure(msi.combo_id, msiId)
+        ? loadComboStructure(msi.combo_id, msiId, costCtx)
         : Promise.resolve([]),
     ]);
 

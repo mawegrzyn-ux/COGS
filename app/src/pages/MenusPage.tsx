@@ -54,11 +54,14 @@ interface CogsItem {
 }
 
 // Sub-price structures for combo step options + modifier options (menu-level pricing)
+// `cost` is in market currency (USD base × menu country's exchange_rate); the
+// frontend then multiplies by dispRate to land in the user's display currency.
+// `avg_cost` / `min_cost` / `max_cost` on a group/step summarise its options.
 interface SubOptPrices { [price_level_id: number]: number }
-interface SubModOption { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices }
-interface SubModGroup  { modifier_group_id: number; name: string; display_name?: string | null; min_select: number; max_select: number; options: SubModOption[] }
-interface SubComboOpt  { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices; modifier_groups: SubModGroup[] }
-interface SubComboStep { id: number; name: string; display_name?: string | null; min_select: number; max_select: number; auto_select?: boolean; options: SubComboOpt[] }
+interface SubModOption { id: number; name: string; display_name?: string | null; item_type: string; qty?: number; cost?: number; prices: SubOptPrices }
+interface SubModGroup  { modifier_group_id: number; name: string; display_name?: string | null; min_select: number; max_select: number; avg_cost?: number; min_cost?: number; max_cost?: number; options: SubModOption[] }
+interface SubComboOpt  { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; prices: SubOptPrices; modifier_groups: SubModGroup[] }
+interface SubComboStep { id: number; name: string; display_name?: string | null; min_select: number; max_select: number; auto_select?: boolean; avg_cost?: number; min_cost?: number; max_cost?: number; options: SubComboOpt[] }
 interface SubPriceData { item_type: string; combo_steps: SubComboStep[]; modifier_groups: SubModGroup[] }
 
 interface CogsSummary {
@@ -1006,16 +1009,19 @@ export default function MenusPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── SubPriceRow — inline editable price row for combo options / modifier options
-function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, borderClass, marginLeft, onSave }: {
+function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, borderClass, marginLeft, dispRate, onSave }: {
   msiId: number
   kind: 'combo' | 'modifier'
-  option: { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
+  option: { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; qty?: number; prices: Record<number, number> }
   levelId: number | null
   sym: string
   colCount: number
   indent: number
   borderClass?: string
   marginLeft?: string
+  // dispRate = display→market conversion. option.cost is in market currency
+  // (USD × exchange_rate); multiply by dispRate to land in display currency.
+  dispRate?: number
   onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
 }) {
   const existing = levelId && option.prices[levelId] != null ? option.prices[levelId] : null
@@ -1035,17 +1041,32 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, bord
 
   const ITEM_BADGE: Record<string, string> = { recipe: 'bg-blue-50 text-blue-700', ingredient: 'bg-green-50 text-green-700', manual: 'bg-gray-100 text-gray-600', sales_item: 'bg-purple-50 text-purple-700' }
 
+  // Convert market-currency cost into display currency for the cell.
+  const dispCost = option.cost != null ? option.cost * (dispRate || 1) : null
+
   return (
     <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
         <div className={`flex items-center gap-1.5 ${borderClass ? `${borderClass} pl-2` : ''}`} style={marginLeft ? { marginLeft } : undefined}>
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
           <span className="text-xs text-text-2">{option.display_name || option.name}</span>
+          {option.qty != null && option.qty !== 1 && (
+            <span className="text-[10px] text-text-3" title="Quantity per selection">×{option.qty}</span>
+          )}
         </div>
       </td>
-      {/* empty cells for category, type, qty, cost cols */}
-      {Array.from({ length: colCount - 6 }).map((_, i) => <td key={i} />)}
-      {/* price cell */}
+      {/* Padding cells before Cost — leaves Type, Qty empty (and any extra
+          padding columns that the parent table has between Item and Cost/ptn).
+          The full 10-col ME single-level table has 2 such gap cells; the Menu
+          Builder's 11/12-col table has more. Total cells after Item =
+          padding + Cost(1) + Price(1) + trailing(5) = colCount, so padding
+          is colCount - 7. */}
+      {Array.from({ length: Math.max(0, colCount - 7) }).map((_, i) => <td key={`pad-${i}`} />)}
+      {/* Cost/ptn (col 3) — show option cost in display currency */}
+      <td className="px-3 py-1.5 text-right text-xs font-mono text-text-2">
+        {dispCost != null && dispCost > 0 ? `${sym}${dispCost.toFixed(2)}` : <span className="text-text-3">—</span>}
+      </td>
+      {/* Price (col 4) — editable extra charge */}
       <td className="px-3 py-1.5 text-right text-xs" colSpan={1}>
         {editing ? (
           <div className="flex items-center justify-end gap-1">
@@ -1070,21 +1091,23 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, bord
           </span>
         )}
       </td>
-      {/* remaining cells */}
+      {/* remaining 5 cells: Sales Mix, Revenue, Rev Mix, Cost, COGS% */}
       <td colSpan={5} />
     </tr>
   )
 }
 
 // ── SubPriceRowME — inline editable price row for ALL LEVELS (Menu Engineer) view
-function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, onSave }: {
+function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, dispRate, onSave }: {
   msiId:           number
   kind:            'combo' | 'modifier'
-  option:          { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
+  option:          { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; qty?: number; prices: Record<number, number> }
   levels:          PriceLevel[]
   sym:             string
   allLevelsCompact: boolean
   indent:          number
+  // dispRate = display→market conversion. option.cost is in market currency.
+  dispRate?:       number
   onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
 }) {
   const [editingLevel, setEditingLevel] = useState<number | null>(null)
@@ -1109,12 +1132,19 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
     setEditingLevel(null)
   }
 
+  // Per-level cost is the same value (option cost doesn't change with price level).
+  // Convert from market currency to display currency for the cell.
+  const dispCost = option.cost != null ? option.cost * (dispRate || 1) : null
+
   return (
     <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
         <div className="flex items-center gap-1.5">
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
           <span className="text-xs text-text-2">{option.display_name || option.name}</span>
+          {option.qty != null && option.qty !== 1 && (
+            <span className="text-[10px] text-text-3" title="Quantity per selection">×{option.qty}</span>
+          )}
         </div>
       </td>
       {levels.map(level => {
@@ -1124,8 +1154,10 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
           <Fragment key={level.id}>
             {/* Qty — empty */}
             <td className="border-l border-gray-100" />
-            {/* Cost — empty */}
-            <td />
+            {/* Cost — show option cost (same across levels) */}
+            <td className="px-1 py-1 text-right text-xs font-mono text-text-2">
+              {dispCost != null && dispCost > 0 ? `${sym}${dispCost.toFixed(2)}` : <span className="text-text-3">—</span>}
+            </td>
             {/* Price — editable */}
             <td className="px-1 py-1 text-right text-xs">
               {isEditing ? (
@@ -3594,47 +3626,81 @@ ${tableHtml}
                               </tr>
                             ) : subDataME ? (
                               <Fragment key={`${msiId}-sub`}>
-                                {subDataME.combo_steps.map(step => (
+                                {subDataME.combo_steps.map(step => {
+                                  const stepAvg = step.avg_cost != null ? step.avg_cost * dispRate : null
+                                  const stepMin = step.min_cost != null ? step.min_cost * dispRate : null
+                                  const stepMax = step.max_cost != null ? step.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
                                         {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                                        {stepAvg != null && stepAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this step's options (this is what flows into the parent COGS)">
+                                            avg {sym}{stepAvg.toFixed(2)}
+                                            {stepMin != null && stepMax != null && stepMin !== stepMax && (
+                                              <span className="ml-1 text-text-3">({sym}{stepMin.toFixed(2)}–{sym}{stepMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
                                       <Fragment key={`${msiId}-copt-${opt.id}`}>
-                                        <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} onSave={saveSubOptionPriceME} />
-                                        {opt.modifier_groups.map(mg => (
+                                        <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
+                                        {opt.modifier_groups.map(mg => {
+                                          const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                          return (
                                           <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={10} className="py-1" style={{ paddingLeft: '3.5rem' }}>
                                                 <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                {mgAvg != null && mgAvg > 0 && (
+                                                  <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                                    avg {sym}{mgAvg.toFixed(2)}
+                                                  </span>
+                                                )}
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
-                                              <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={singleLevelId} sym={sym} colCount={9} indent={14} onSave={saveSubOptionPriceME} />
+                                              <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={singleLevelId} sym={sym} colCount={9} indent={14} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                             ))}
                                           </Fragment>
-                                        ))}
+                                          )
+                                        })}
                                       </Fragment>
                                     ))}
                                   </Fragment>
-                                ))}
-                                {subDataME.modifier_groups.map(mg => (
+                                  )
+                                })}
+                                {subDataME.modifier_groups.map(mg => {
+                                  const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                  const mgMin = mg.min_cost != null ? mg.min_cost * dispRate : null
+                                  const mgMax = mg.max_cost != null ? mg.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                                        {mgAvg != null && mgAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                            avg {sym}{mgAvg.toFixed(2)}
+                                            {mgMin != null && mgMax != null && mgMin !== mgMax && (
+                                              <span className="ml-1 text-text-3">({sym}{mgMin.toFixed(2)}–{sym}{mgMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {mg.options.map(opt => (
-                                      <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} onSave={saveSubOptionPriceME} />
+                                      <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                                 {subDataME.combo_steps.length === 0 && subDataME.modifier_groups.length === 0 && (
                                   <tr className="bg-surface-2/50 border-b border-border">
                                     <td colSpan={10} className="px-6 py-2 text-xs text-text-3 italic">
@@ -3903,48 +3969,82 @@ ${tableHtml}
                             ) : subDataME ? (
                               <Fragment key={`${msiId}-sub-me`}>
                                 {/* Combo steps → options → modifier groups */}
-                                {subDataME.combo_steps.map(step => (
+                                {subDataME.combo_steps.map(step => {
+                                  const stepAvg = step.avg_cost != null ? step.avg_cost * dispRate : null
+                                  const stepMin = step.min_cost != null ? step.min_cost * dispRate : null
+                                  const stepMax = step.max_cost != null ? step.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-me-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
                                         {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                                        {stepAvg != null && stepAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this step's options">
+                                            avg {sym}{stepAvg.toFixed(2)}
+                                            {stepMin != null && stepMax != null && stepMin !== stepMax && (
+                                              <span className="ml-1 text-text-3">({sym}{stepMin.toFixed(2)}–{sym}{stepMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
                                       <Fragment key={`${msiId}-me-copt-${opt.id}`}>
-                                        <SubPriceRowME msiId={msiId} kind="combo" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
-                                        {opt.modifier_groups.map(mg => (
+                                        <SubPriceRowME msiId={msiId} kind="combo" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
+                                        {opt.modifier_groups.map(mg => {
+                                          const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                          return (
                                           <Fragment key={`${msiId}-me-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={meColSpan} className="py-1" style={{ paddingLeft: '3.5rem' }}>
                                                 <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                {mgAvg != null && mgAvg > 0 && (
+                                                  <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                                    avg {sym}{mgAvg.toFixed(2)}
+                                                  </span>
+                                                )}
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
-                                              <SubPriceRowME key={`${msiId}-me-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={14} onSave={saveSubOptionPriceME} />
+                                              <SubPriceRowME key={`${msiId}-me-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={14} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                             ))}
                                           </Fragment>
-                                        ))}
+                                          )
+                                        })}
                                       </Fragment>
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                                 {/* Sales item modifier groups */}
-                                {subDataME.modifier_groups.map(mg => (
+                                {subDataME.modifier_groups.map(mg => {
+                                  const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                  const mgMin = mg.min_cost != null ? mg.min_cost * dispRate : null
+                                  const mgMax = mg.max_cost != null ? mg.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-me-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                                        {mgAvg != null && mgAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                            avg {sym}{mgAvg.toFixed(2)}
+                                            {mgMin != null && mgMax != null && mgMin !== mgMax && (
+                                              <span className="ml-1 text-text-3">({sym}{mgMin.toFixed(2)}–{sym}{mgMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {mg.options.map(opt => (
-                                      <SubPriceRowME key={`${msiId}-me-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
+                                      <SubPriceRowME key={`${msiId}-me-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                               {/* Empty state — no steps/modifiers */}
                               {subDataME.combo_steps.length === 0 && subDataME.modifier_groups.length === 0 && (
                                 <tr className="bg-surface-2/50 border-b border-border">
