@@ -205,10 +205,11 @@ export default function SharedMenuPage() {
 
   // "Include modifier cost" toggle — same feature as the Menu Engineer button.
   // Adds avg × min_select per attached modifier group to every item's cost
-  // (and recomputes cogs_pct / gp_net per level on the fly). Persisted per
-  // browser, scoped to the shared slug.
+  // (and recomputes cogs_pct / gp_net per level on the fly). Defaults to ON;
+  // persisted per browser, scoped to the shared slug, so a viewer that turned
+  // it off keeps it off on subsequent visits to the same link.
   const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
-    try { return localStorage.getItem(`shared-include-mod-cost-${slug}`) === '1' } catch { return false }
+    try { return localStorage.getItem(`shared-include-mod-cost-${slug}`) !== '0' } catch { return true }
   })
   useEffect(() => {
     try { localStorage.setItem(`shared-include-mod-cost-${slug}`, includeModifierCost ? '1' : '0') } catch { /* ignore */ }

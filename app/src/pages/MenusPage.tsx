@@ -2423,9 +2423,11 @@ function ScenarioTool({
   // "Include modifier cost" toggle — sits next to What If. When ON, every
   // item's displayed cost = base cost + (modifier_cost_adder × dispRate). The
   // adder is computed server-side using avg × min_select per modifier group.
-  // Persisted per-browser so the user's last choice survives a reload.
+  // Defaults to ON — required modifiers are part of true plate cost. Persisted
+  // per-browser so the user's last choice survives a reload (treat any value
+  // other than '0' as on, including the unset state for first-time visitors).
   const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
-    try { return localStorage.getItem('me-include-modifier-cost') === '1' } catch { return false }
+    try { return localStorage.getItem('me-include-modifier-cost') !== '0' } catch { return true }
   })
   useEffect(() => {
     try { localStorage.setItem('me-include-modifier-cost', includeModifierCost ? '1' : '0') } catch { /* ignore */ }
@@ -2654,6 +2656,11 @@ function ScenarioTool({
     total_cost:         number   // qty × cost
     gp:                 number   // net_revenue - total_cost
     cogs_pct:           number | null  // total_cost / net_revenue × 100
+    // Modifier-cost portion of `cost` in display currency (0 when toggle off
+    // or no required modifiers). Surfaced separately so the cost cell can
+    // show "59.84 (+34.81)" — recipe cost stays editable, modifier add is
+    // read-only.
+    modifier_cost_disp: number
   }
 
   const rows = useMemo((): ScenRow[] => {
@@ -2700,6 +2707,7 @@ function ScenarioTool({
         total_cost:        totalCost,
         gp:                net_rev - totalCost,
         cogs_pct:          net_rev > 0 ? (totalCost / net_rev) * 100 : null,
+        modifier_cost_disp: modAdder,
       }
     })
   }, [data, qty, dispRate, costOverrides, priceOverrides, levelId, includeModifierCost])
@@ -2750,6 +2758,7 @@ function ScenarioTool({
     base_cost_display:    number   // original recipe cost in display currency
     cost_override_key:    string   // = nat_key
     is_cost_overridden:   boolean
+    modifier_cost_disp:   number   // modifier portion of `cost` (display currency)
     total_qty:            number   // sum of per-level qtys
     total_cost:           number   // total_qty × cost
     perLevel: {
@@ -2810,6 +2819,7 @@ function ScenarioTool({
         modifier_group_count: item.modifier_group_count ?? 0,
         cost, base_cost_display: baseCostDisp,
         cost_override_key: costOvKey, is_cost_overridden: isCostOv,
+        modifier_cost_disp: modAdder,
         total_qty, total_cost,
         perLevel,
       }
@@ -3582,7 +3592,11 @@ ${tableHtml}
                               </td>
                                 )
                               })()}
-                              {/* Cost/ptn — editable */}
+                              {/* Cost/ptn — editable. Recipe cost goes in the
+                                  input; the modifier portion (if any) shows
+                                  read-only in brackets next to it so the user
+                                  can still tweak the recipe cost while seeing
+                                  the modifier load against the same row. */}
                               <td className="px-1.5 py-1.5 text-right">
                                 <div className="relative inline-flex items-center">
                                   <input
@@ -3603,6 +3617,12 @@ ${tableHtml}
                                   {row.nat_key in costOverrides && (
                                     <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to recipe cost"
                                       onClick={() => { setCostOverrides(prev => (({ [row.nat_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                  )}
+                                  {row.modifier_cost_disp > 0 && (
+                                    <span
+                                      className="ml-1 text-[11px] text-text-3 font-mono whitespace-nowrap"
+                                      title={`Modifier cost (avg × min selections): ${sym}${row.modifier_cost_disp.toFixed(2)}`}
+                                    >(+{sym}{row.modifier_cost_disp.toFixed(2)})</span>
                                   )}
                                 </div>
                               </td>
@@ -3952,6 +3972,12 @@ ${tableHtml}
                                       {row.is_cost_overridden && (
                                         <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
                                           onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                      )}
+                                      {row.modifier_cost_disp > 0 && (
+                                        <span
+                                          className="ml-1 text-[11px] text-text-3 font-mono whitespace-nowrap"
+                                          title={`Modifier cost (avg × min selections): ${sym}${row.modifier_cost_disp.toFixed(2)}`}
+                                        >(+{sym}{row.modifier_cost_disp.toFixed(2)})</span>
                                       )}
                                     </div>
                                   </td>
