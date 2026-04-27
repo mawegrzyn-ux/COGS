@@ -1338,14 +1338,22 @@ export default function RecipesPage() {
                             autoFocus
                             className="input font-mono font-semibold text-text-2 w-20 text-sm py-0.5 px-1"
                             value={headerDraft}
-                            onChange={v => {
-                              const n = Number(v)
+                            // CalcInput.onChange fires on every keystroke for
+                            // plain numeric input — only update local draft
+                            // here; commit and unmount on blur/Enter so focus
+                            // doesn't drop after the first digit.
+                            onChange={v => setHeaderDraft(v)}
+                            onBlur={() => {
+                              const n = Number(headerDraft)
                               if (!Number.isNaN(n) && n > 0 && n !== Number(selected.yield_qty)) {
                                 updateRecipeField({ yield_qty: n })
                               }
                               setEditingHeaderField(null)
                             }}
-                            onKeyDown={e => { if (e.key === 'Escape') setEditingHeaderField(null) }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                              else if (e.key === 'Escape') setEditingHeaderField(null)
+                            }}
                           />
                         ) : (
                           <span
