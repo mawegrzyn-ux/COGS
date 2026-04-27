@@ -1702,12 +1702,20 @@ interface SalesMixGenProps {
   menuId:         number
   currencySymbol: string
   currentQty:     Record<string, string>
+  // Scenario price overrides (display currency) — overlay on top of the menu's
+  // base prices so items priced only in the scenario are still included in the
+  // mix and contribute to the revenue target.
+  priceOverrides: Record<string, string>
+  // dispRate = display→market conversion factor. priceOverrides are stored in
+  // display currency; levelPriceMap stores values in market currency. Divide
+  // overrides by dispRate before merging.
+  dispRate:       number
   onGenerate(qMap: Record<string, string>): void
   onReset(): void
   onClose(): void
 }
 
-function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, onGenerate, onReset, onClose }: SalesMixGenProps) {
+function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, priceOverrides, dispRate, onGenerate, onReset, onClose }: SalesMixGenProps) {
   const api = useApi()
 
   // Derive categories from current menu data
@@ -1740,16 +1748,59 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
     return { cats, totalQty }
   }, [data, currentQty, priceLevels])
 
+  // Helper: effective price for an item at a level — scenario override (display
+  // currency) takes precedence over the base menu price (market currency).
+  // Returns price in MARKET currency to keep parity with sell_price_gross.
+  const getEffectivePrice = (menuItemId: number, levelId: number, basePriceMarket: number): number => {
+    const ov = priceOverrides[`${menuItemId}_l${levelId}`]
+    if (ov !== undefined) {
+      const ovDisplay = parseFloat(ov)
+      if (!isNaN(ovDisplay) && ovDisplay > 0) {
+        return ovDisplay / (dispRate || 1)
+      }
+    }
+    return basePriceMarket
+  }
+
   const existingRevenue = useMemo(() => {
     let total = 0
     for (const item of data.items) {
       const natKey = `si_${item.sales_item_id}`
-      const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
-      const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
-      total += q * (item.sell_price_gross || 0)
+      // Per-level qty × per-level effective price
+      let perLevelTotal = 0
+      let perLevelHasQty = false
+      for (const l of priceLevels) {
+        const lQty = parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10)
+        if (lQty > 0) {
+          perLevelHasQty = true
+          const effPrice = getEffectivePrice(item.menu_item_id, l.id, item.sell_price_gross || 0)
+          perLevelTotal += lQty * effPrice
+        }
+      }
+      if (perLevelHasQty) {
+        total += perLevelTotal
+        continue
+      }
+      // Fallback to aggregate qty — use first non-zero scenario override across
+      // levels, else the menu's base price.
+      const aggQty = parseInt(currentQty[natKey] || '0', 10)
+      if (aggQty <= 0) continue
+      let effPrice = item.sell_price_gross || 0
+      for (const l of priceLevels) {
+        const ov = priceOverrides[`${item.menu_item_id}_l${l.id}`]
+        if (ov !== undefined) {
+          const ovDisplay = parseFloat(ov)
+          if (!isNaN(ovDisplay) && ovDisplay > 0) {
+            effPrice = ovDisplay / (dispRate || 1)
+            break
+          }
+        }
+      }
+      total += aggQty * effPrice
     }
     return total
-  }, [data, currentQty, priceLevels])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, currentQty, priceLevels, priceOverrides, dispRate])
 
   // ── State ────────────────────────────────────────────────────────────────
   const [targetRevenue, setTargetRevenue] = useState(() =>
@@ -1808,6 +1859,29 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         for (const item of data.items) m.set(item.menu_item_id, item.sell_price_gross)
         levelPriceMap[0] = m
         activeLevels.push({ id: 0, name: 'default', is_default: true })
+      }
+
+      // ── Overlay scenario price overrides ────────────────────────────────────
+      // Items priced only in the scenario (no menu price set in the Menu tab)
+      // would otherwise be excluded from the mix because effectivePrice resolves
+      // to 0 → pricedItems.filter(i => effectivePrice > 0) drops them. Merge any
+      // scenario overrides on top of the level→price map BEFORE computing the
+      // weighted effective price. Override values are in display currency, so
+      // divide by dispRate to land them in market currency for parity with the
+      // /cogs response.
+      const safeDisp = dispRate || 1
+      for (const level of activeLevels) {
+        if (level.id === 0) continue   // no-level placeholder bucket
+        const m = levelPriceMap[level.id] ?? new Map<number, number>()
+        for (const item of data.items) {
+          const ov = priceOverrides[`${item.menu_item_id}_l${level.id}`]
+          if (ov === undefined) continue
+          const ovDisplay = parseFloat(ov)
+          if (!isNaN(ovDisplay) && ovDisplay > 0) {
+            m.set(item.menu_item_id, ovDisplay / safeDisp)
+          }
+        }
+        levelPriceMap[level.id] = m
       }
 
       // Compute weighted effective gross price per menu item
@@ -3234,6 +3308,8 @@ ${tableHtml}
             menuId={menuId}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
             currentQty={qty}
+            priceOverrides={priceOverrides}
+            dispRate={dispRate}
             onGenerate={qMap => {
               console.log('[mix-gen] onGenerate received in parent', { keys: Object.keys(qMap).length })
               setManualQtyKeys(new Set())
