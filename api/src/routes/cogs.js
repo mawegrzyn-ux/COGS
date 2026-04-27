@@ -991,8 +991,16 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
   const bySi = {};
   const byCombo = {};
 
+  let siModRows = [];
+  let csoModRows = [];
+
+  // Pull both query result sets up front so we can collect every recipe id
+  // referenced by a modifier option before computing costs. The caller's
+  // recipeItemsMap only contains top-level + combo step option recipes —
+  // modifier-option recipes (e.g. flavour sub-recipes) are missing, which
+  // would silently make resolveOptionCost return 0 and zero out the adder.
   if (salesItemIds.length) {
-    const { rows: siModRows } = await pool.query(
+    const r = await pool.query(
       `SELECT simgj.sales_item_id, mg.id AS modifier_group_id, mg.min_select,
               mo.id AS option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
               mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
@@ -1003,6 +1011,48 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
        WHERE  simgj.sales_item_id = ANY($1::int[])`,
       [salesItemIds]
     );
+    siModRows = r.rows;
+  }
+  if (comboIds.length) {
+    const r = await pool.query(
+      `SELECT cs.combo_id, cso.combo_step_id, cso.id AS option_id,
+              mg.id AS modifier_group_id, mg.min_select,
+              mo.id AS mod_option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
+              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_combo_step_option_modifier_groups csomgj
+       JOIN   mcogs_combo_step_options cso ON cso.id = csomgj.combo_step_option_id
+       JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
+       JOIN   mcogs_modifier_groups mg ON mg.id = csomgj.modifier_group_id
+       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  cs.combo_id = ANY($1::int[])`,
+      [comboIds]
+    );
+    csoModRows = r.rows;
+  }
+
+  // Augment recipeItemsMap with any modifier-option recipes that aren't
+  // already loaded. Mutates the caller's map so subsequent calls (and the
+  // caller's own logic) see the fuller picture.
+  const missingRecipeIds = new Set();
+  for (const row of siModRows) {
+    if (row.item_type === 'recipe' && row.recipe_id && !recipeItemsMap[row.recipe_id]) {
+      missingRecipeIds.add(Number(row.recipe_id));
+    }
+  }
+  for (const row of csoModRows) {
+    if (row.item_type === 'recipe' && row.recipe_id && !recipeItemsMap[row.recipe_id]) {
+      missingRecipeIds.add(Number(row.recipe_id));
+    }
+  }
+  if (missingRecipeIds.size) {
+    const extra = await loadAllRecipeItemsDeep([...missingRecipeIds]);
+    for (const [k, v] of Object.entries(extra)) {
+      if (!recipeItemsMap[k]) recipeItemsMap[k] = v;
+    }
+  }
+
+  if (salesItemIds.length) {
     const siGroups = {};
     for (const r of siModRows) {
       const k1 = r.sales_item_id, k2 = r.modifier_group_id;
@@ -1027,20 +1077,6 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
   }
 
   if (comboIds.length) {
-    const { rows: csoModRows } = await pool.query(
-      `SELECT cs.combo_id, cso.combo_step_id, cso.id AS option_id,
-              mg.id AS modifier_group_id, mg.min_select,
-              mo.id AS mod_option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
-              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
-       FROM   mcogs_combo_step_option_modifier_groups csomgj
-       JOIN   mcogs_combo_step_options cso ON cso.id = csomgj.combo_step_option_id
-       JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
-       JOIN   mcogs_modifier_groups mg ON mg.id = csomgj.modifier_group_id
-       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
-       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
-       WHERE  cs.combo_id = ANY($1::int[])`,
-      [comboIds]
-    );
     const tree = {};
     for (const r of csoModRows) {
       const c = r.combo_id, s = r.combo_step_id, o = r.option_id, g = r.modifier_group_id;
