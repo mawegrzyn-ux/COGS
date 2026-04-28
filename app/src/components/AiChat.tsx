@@ -859,6 +859,10 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error'
+      // Log to console so the user can paste the full stack/cause when
+      // debugging PWA-only failures (silent-iframe token refresh, SW races,
+      // CSP) — "fetch error" in chat alone doesn't say WHY.
+      console.error('[pepper] chat request failed:', err)
       setMessages(prev => {
         const msgs = [...prev]
         msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${msg}` }

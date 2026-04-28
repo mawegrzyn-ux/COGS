@@ -15,8 +15,21 @@ createRoot(root).render(
       clientId={auth0Config.clientId}
       authorizationParams={{
         redirect_uri: auth0Config.redirectUri,
+        // Refresh-token rotation is a hard requirement for the standalone
+        // Pepper PWA at /pepper — installed PWAs block third-party cookies
+        // aggressively, so the default silent-iframe token refresh fails and
+        // every API call ends up with no Authorization header (visible as
+        // "fetch error" in chat). Refresh tokens use a same-origin POST and
+        // sidestep the iframe entirely.
+        scope: 'openid profile email offline_access',
         ...(auth0Config.audience ? { audience: auth0Config.audience } : {}),
       }}
+      // Use localStorage so refresh tokens survive a full app restart (matters
+      // when the PWA is re-launched from the home-screen icon hours later) and
+      // so silent-auth fallbacks don't re-trigger on every reload.
+      useRefreshTokens
+      useRefreshTokensFallback
+      cacheLocation="localstorage"
     >
       <App />
     </Auth0Provider>

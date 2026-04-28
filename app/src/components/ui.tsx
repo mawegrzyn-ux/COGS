@@ -344,7 +344,16 @@ export function Field({ label, hint, error, required, children }: FieldProps) {
 
 interface CalcInputProps {
   value: string
+  /** Live, fires on every keystroke for plain numeric input AND on blur after
+   *  expression evaluation. Use `onCommit` instead when you only want the
+   *  final value (e.g. inline-save handlers that PUT to the API and would
+   *  otherwise re-render+remount the row on every digit). */
   onChange: (value: string) => void
+  /** Optional commit-only callback. Fires once on Enter and once on blur with
+   *  the evaluated value. Designed for inline-save cells where the parent
+   *  re-renders after each save: leave `onChange` as a no-op (or omit-style
+   *  setter) and wire `onCommit` to the save call. */
+  onCommit?: (value: string) => void
   className?: string
   placeholder?: string
   step?: string
@@ -382,7 +391,7 @@ function safeEval(expr: string): number | null {
 }
 
 export function CalcInput({
-  value, onChange, className = 'input w-full', placeholder, disabled, id,
+  value, onChange, onCommit, className = 'input w-full', placeholder, disabled, id,
   autoFocus, onKeyDown, onBlur, style,
 }: CalcInputProps) {
   const [rawText, setRawText] = useState(value)
@@ -395,15 +404,19 @@ export function CalcInput({
 
   // Shared evaluator — called on blur AND on Enter. Returns true if a commit
   // happened so the caller's onKeyDown can observe the updated parent value.
+  // Fires `onCommit` after `onChange` so inline-save callers (e.g. the recipe
+  // qty cell) can opt out of the per-keystroke onChange and only react to the
+  // final committed value.
   const commit = () => {
     const trimmed = rawText.trim()
-    if (!trimmed) { onChange(''); return }
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) { onChange(trimmed); return }
+    if (!trimmed) { onChange(''); onCommit?.(''); return }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) { onChange(trimmed); onCommit?.(trimmed); return }
     const result = safeEval(trimmed)
     if (result !== null) {
       const rounded = String(Math.round(result * 100000000) / 100000000)
       setRawText(rounded)
       onChange(rounded)
+      onCommit?.(rounded)
     } else {
       setRawText(value)
     }

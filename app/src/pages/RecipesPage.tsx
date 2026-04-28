@@ -1914,17 +1914,19 @@ export default function RecipesPage() {
                               </td>
                               <td className="px-4 py-2.5 font-mono text-text-2"
                                   onClick={e => e.stopPropagation()}>
-                                {/* Inline qty edit. CalcInput's `onChange`
-                                    fires only after commit (Enter or blur) —
-                                    safe to wire directly to the save call.
-                                    saveItemQtyInline no-ops when the value
-                                    didn't actually change, so re-renders
-                                    don't trigger phantom PUTs. */}
+                                {/* Inline qty edit. CalcInput.onChange used to
+                                    fire on every keystroke for plain numeric
+                                    input — saveItemQtyInline ran per digit,
+                                    loadDetail re-keyed the row, and the input
+                                    lost focus mid-typing. Switched to
+                                    onCommit (fires once on Enter / blur) and
+                                    a no-op onChange so typing stays local. */}
                                 <span className="inline-flex items-center gap-1.5">
                                   <CalcInput
                                     className="input w-24 py-0.5 px-1.5 font-mono text-sm"
                                     value={fmtQty(item.prep_qty)}
-                                    onChange={v => saveItemQtyInline(item, v)}
+                                    onChange={() => { /* commit-only, see below */ }}
+                                    onCommit={v => saveItemQtyInline(item, v)}
                                   />
                                   <span className="text-text-3">
                                     {item.prep_unit
