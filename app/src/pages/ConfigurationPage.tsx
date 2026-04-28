@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
@@ -24,6 +25,7 @@ type Section =
   | 'import'
   | 'media'
   | 'stock-config'
+  | 'languages'
 
 interface SectionDef {
   id:      Section
@@ -44,6 +46,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
   { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'settings' },
+  { id: 'languages',          icon: '🌐', label: 'Languages',           feature: 'settings' },
 ]
 
 // ── Feature Toggles card ──────────────────────────────────────────────────────
@@ -492,6 +495,293 @@ function StockConfigSection() {
   )
 }
 
+// ── Languages section ─────────────────────────────────────────────────────────
+// Admin UI for the mcogs_languages reference table — toggle is_active per
+// language (controls what shows up in the top-bar LanguageSwitcher), set the
+// default, edit name / native_name, add new languages, delete (refusing 'en'
+// and the current default).
+//
+// Backed by /api/languages CRUD. Mutations require settings:write — the row
+// itself stays visible to anyone with settings:read so the edit form gates
+// itself, no need to hide the section.
+
+interface Lang {
+  code: string
+  name: string
+  native_name: string | null
+  is_default: boolean
+  is_rtl: boolean
+  is_active: boolean
+  sort_order: number
+}
+
+function LanguagesSection() {
+  const api = useApi()
+  const { can } = usePermissions()
+  const canEdit = can('settings', 'write')
+
+  const [rows, setRows]       = useState<Lang[]>([])
+  const [loading, setLoading] = useState(true)
+  const [savingCode, setSavingCode] = useState<string | null>(null)
+  const [toast, setToast]     = useState<{ msg: string; ok: boolean } | null>(null)
+
+  // Add-new modal state
+  const [showAdd, setShowAdd] = useState(false)
+  const [draft, setDraft]     = useState({ code: '', name: '', native_name: '', is_rtl: false })
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api.get('/languages')
+      setRows((data as Lang[]) || [])
+    } catch { /* silent */ }
+    finally { setLoading(false) }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  // Helper for partial PUTs that just toggle a single boolean per row.
+  const patch = async (code: string, patch: Partial<Lang>, optimistic?: (prev: Lang[]) => Lang[]) => {
+    setSavingCode(code)
+    if (optimistic) setRows(optimistic)
+    try {
+      await api.put(`/languages/${code}`, patch)
+      // Reload to pick up server-side side effects (clearing other defaults)
+      await load()
+    } catch (err: any) {
+      showToast(err?.message || 'Save failed', false)
+      await load()  // revert
+    } finally { setSavingCode(null) }
+  }
+
+  const onToggleActive = (l: Lang) =>
+    patch(l.code, { is_active: !l.is_active },
+      prev => prev.map(r => r.code === l.code ? { ...r, is_active: !r.is_active } : r))
+
+  const onSetDefault = (l: Lang) =>
+    patch(l.code, { is_default: true },
+      prev => prev.map(r => ({ ...r, is_default: r.code === l.code })))
+
+  const onToggleRtl = (l: Lang) =>
+    patch(l.code, { is_rtl: !l.is_rtl },
+      prev => prev.map(r => r.code === l.code ? { ...r, is_rtl: !r.is_rtl } : r))
+
+  const onDelete = async (l: Lang) => {
+    if (!window.confirm(`Delete language "${l.name}" (${l.code})? This is irreversible.`)) return
+    setSavingCode(l.code)
+    try {
+      await api.delete(`/languages/${l.code}`)
+      showToast(`Deleted ${l.code}`)
+      await load()
+    } catch (err: any) {
+      showToast(err?.message || 'Delete failed', false)
+    } finally { setSavingCode(null) }
+  }
+
+  const onAdd = async () => {
+    const code = draft.code.trim().toLowerCase()
+    const name = draft.name.trim()
+    if (!code || !name) { showToast('Code and name are required', false); return }
+    if (code.length > 5)   { showToast('Code should be a short ISO-639 tag (2–5 chars)', false); return }
+    setSavingCode('__new__')
+    try {
+      await api.post('/languages', {
+        code, name,
+        native_name: draft.native_name.trim() || null,
+        is_rtl: draft.is_rtl,
+        is_active: true,
+        sort_order: (rows[rows.length - 1]?.sort_order ?? 0) + 10,
+      })
+      setShowAdd(false)
+      setDraft({ code: '', name: '', native_name: '', is_rtl: false })
+      showToast(`Added ${code}`)
+      await load()
+    } catch (err: any) {
+      showToast(err?.message || 'Add failed', false)
+    } finally { setSavingCode(null) }
+  }
+
+  const activeCount = rows.filter(r => r.is_active).length
+
+  return (
+    <div className="p-6 max-w-5xl">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-xl font-semibold text-text-1 mb-1">🌐 Languages</h2>
+          <p className="text-sm text-text-3 leading-relaxed">
+            Activate the languages that should appear in the top-bar Language switcher. Inactive
+            languages stay in the database (their seeded translations are preserved) but are hidden
+            from end-users. Default language is the fallback when a user has no preference.
+          </p>
+        </div>
+        {canEdit && (
+          <button
+            className="btn btn-primary text-sm whitespace-nowrap"
+            onClick={() => setShowAdd(true)}
+            disabled={!!savingCode}
+          >+ Add language</button>
+        )}
+      </div>
+
+      <div className="text-xs text-text-3 mb-3">
+        {loading ? 'Loading…' : `${activeCount} of ${rows.length} languages active`}
+      </div>
+
+      {/* Table */}
+      <div className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-surface-2 text-text-3 text-xs uppercase tracking-wide">
+            <tr>
+              <th className="px-3 py-2 text-left">Code</th>
+              <th className="px-3 py-2 text-left">Name</th>
+              <th className="px-3 py-2 text-left">Native name</th>
+              <th className="px-3 py-2 text-center">Active</th>
+              <th className="px-3 py-2 text-center">Default</th>
+              <th className="px-3 py-2 text-center">RTL</th>
+              {canEdit && <th className="px-3 py-2 w-12" />}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.map(l => {
+              const busy = savingCode === l.code
+              const isEnglish = l.code === 'en'
+              return (
+                <tr key={l.code} className={busy ? 'opacity-50' : ''}>
+                  <td className="px-3 py-2 font-mono text-xs uppercase">{l.code}</td>
+                  <td className="px-3 py-2">{l.name}</td>
+                  <td className="px-3 py-2 text-text-3">{l.native_name ?? '—'}</td>
+                  <td className="px-3 py-2 text-center">
+                    {/* Cannot deactivate English — it's the universal fallback. */}
+                    <input
+                      type="checkbox"
+                      checked={l.is_active}
+                      onChange={() => onToggleActive(l)}
+                      disabled={!canEdit || busy || isEnglish || l.is_default}
+                      title={isEnglish ? 'English cannot be deactivated' : l.is_default ? 'The default language is always active' : ''}
+                      className="cursor-pointer"
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {l.is_default ? (
+                      <span className="text-xs font-semibold text-accent">★ default</span>
+                    ) : (
+                      <button
+                        className="text-xs text-text-3 hover:text-accent disabled:opacity-50"
+                        onClick={() => onSetDefault(l)}
+                        disabled={!canEdit || busy || !l.is_active}
+                        title={!l.is_active ? 'Activate the language first' : 'Make this the default'}
+                      >make default</button>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      checked={l.is_rtl}
+                      onChange={() => onToggleRtl(l)}
+                      disabled={!canEdit || busy}
+                      className="cursor-pointer"
+                    />
+                  </td>
+                  {canEdit && (
+                    <td className="px-3 py-2 text-center">
+                      {!isEnglish && !l.is_default && (
+                        <button
+                          className="text-text-3 hover:text-red-500 text-xs"
+                          onClick={() => onDelete(l)}
+                          disabled={busy}
+                          title="Delete language"
+                        >✕</button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
+            {!loading && rows.length === 0 && (
+              <tr><td colSpan={canEdit ? 7 : 6} className="px-3 py-6 text-center text-text-3">
+                No languages defined.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-text-3 mt-3 leading-relaxed">
+        Toggling <strong>Active</strong> updates the LanguageSwitcher in the top bar immediately for new sessions —
+        existing tabs may need a soft reload. Inactive languages keep their seeded translations and become available again
+        when re-activated. Per-country default language is set on the Location Structure → Markets page.
+      </p>
+
+      {/* Add modal */}
+      {showAdd && createPortal(
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl w-[420px] max-w-full p-5 space-y-3">
+            <h3 className="text-base font-semibold">Add language</h3>
+            <Field label="Code (ISO-639, e.g. fr, es-MX)">
+              <input
+                className="input w-full"
+                value={draft.code}
+                onChange={e => setDraft(d => ({ ...d, code: e.target.value }))}
+                autoFocus
+                maxLength={5}
+                placeholder="fr"
+              />
+            </Field>
+            <Field label="Name (English)">
+              <input
+                className="input w-full"
+                value={draft.name}
+                onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+                placeholder="French"
+              />
+            </Field>
+            <Field label="Native name">
+              <input
+                className="input w-full"
+                value={draft.native_name}
+                onChange={e => setDraft(d => ({ ...d, native_name: e.target.value }))}
+                placeholder="Français"
+              />
+            </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={draft.is_rtl}
+                onChange={e => setDraft(d => ({ ...d, is_rtl: e.target.checked }))}
+              />
+              Right-to-left script (Arabic / Hebrew etc.)
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                className="btn btn-outline text-sm"
+                onClick={() => setShowAdd(false)}
+                disabled={savingCode === '__new__'}
+              >Cancel</button>
+              <button
+                className="btn btn-primary text-sm"
+                onClick={onAdd}
+                disabled={savingCode === '__new__'}
+              >{savingCode === '__new__' ? 'Adding…' : 'Add'}</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {toast && (
+        <div className={`fixed bottom-6 right-6 px-3 py-2 rounded-lg shadow-lg text-sm ${
+          toast.ok ? 'bg-accent text-white' : 'bg-red-500 text-white'
+        }`}>{toast.msg}</div>
+      )}
+    </div>
+  )
+}
+
 // ── Users & Roles combined section ────────────────────────────────────────────
 
 function UsersRolesSection() {
@@ -572,6 +862,7 @@ export default function ConfigurationPage() {
         </div>
       )
       case 'stock-config':       return <StockConfigSection />
+      case 'languages':          return <LanguagesSection />
       default:                   return null
     }
   }
