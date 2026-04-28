@@ -28,6 +28,7 @@ const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage
 import SharedMenuPage       from './pages/SharedMenuPage'
 import WidgetPopoutPage     from './pages/WidgetPopoutPage'
 import PepperPage           from './pages/PepperPage'
+import KioskMockupPage      from './pages/KioskMockupPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
@@ -119,6 +120,15 @@ export default function App() {
           <Route path="/pepper" element={
             <ProtectedRoute>
               <PepperPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Self-service ordering kiosk mockup — 9:16 portrait canvas scaled
+              to viewport height. Rendered outside AppLayout so it takes the
+              full viewport. Auth-gated (admin / staff facing for now). */}
+          <Route path="/kiosk" element={
+            <ProtectedRoute>
+              <KioskMockupPage />
             </ProtectedRoute>
           } />
 
