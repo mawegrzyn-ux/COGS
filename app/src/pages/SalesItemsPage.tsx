@@ -1855,14 +1855,18 @@ export default function SalesItemsPage() {
                       <textarea className="input w-full text-sm" rows={3} value={cpComboForm.description}
                         onChange={e => setCpComboForm(f => f ? { ...f, description: e.target.value } : f)} />
                     </div>
-                    <div>
-                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Image URL</label>
-                      <input className="input w-full text-sm" placeholder="https://…" value={cpComboForm.image_url ?? ''}
-                        onChange={e => setCpComboForm(f => f ? { ...f, image_url: e.target.value || null } : f)} />
-                      {cpComboForm.image_url && (
-                        <img src={cpComboForm.image_url} alt="" className="mt-2 w-full max-h-32 object-contain rounded border border-border" onError={e => (e.currentTarget.style.display = 'none')} />
-                      )}
-                    </div>
+                    {/* Use the shared ImageUpload component (browse the
+                        media library or upload fresh) for parity with every
+                        other image field on this page — sales item form,
+                        modifier option form, and the panel detail form all
+                        use ImageUpload; only the combo form was still on a
+                        raw URL input. */}
+                    <ImageUpload
+                      label="Image"
+                      value={cpComboForm.image_url}
+                      onChange={url => setCpComboForm(f => f ? { ...f, image_url: url } : f)}
+                      formKey="combo"
+                    />
                   </>
                 )}
 
