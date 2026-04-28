@@ -1534,6 +1534,7 @@ export default function RecipesPage() {
                         {(() => {
                           const c = activeCogs.coverage
                           const cfg = {
+                            empty:            { icon: '—', label: 'No ingredients',    cls: 'text-text-3',     sub: 'Add ingredients to see quote coverage',           subCls: 'text-text-3'      },
                             fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
                             fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
                             partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },

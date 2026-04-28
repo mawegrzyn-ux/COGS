@@ -411,7 +411,10 @@ router.get('/:id', async (req, res) => {
     }
 
     function deriveCoverage({ leafCount, preferredCount, quotedCount }) {
-      if (leafCount === 0)                   return 'fully_preferred';
+      // Empty recipe — no ingredients to cover. Surfaced separately so the UI
+      // doesn't claim a 0-ingredient recipe is "fully preferred" (vacuous-truth
+      // bug — the old branch returned fully_preferred when leafCount===0).
+      if (leafCount === 0)                   return 'empty';
       if (preferredCount === leafCount)      return 'fully_preferred';
       if (quotedCount    === leafCount)      return 'fully_quoted';
       if (quotedCount    > 0)               return 'partially_quoted';
