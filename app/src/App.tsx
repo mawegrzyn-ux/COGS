@@ -27,6 +27,7 @@ const AuditReportPage     = lazy(() => import('./pages/audits/AuditReportPage'))
 const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage'))
 import SharedMenuPage       from './pages/SharedMenuPage'
 import WidgetPopoutPage     from './pages/WidgetPopoutPage'
+import PepperPage           from './pages/PepperPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
@@ -109,6 +110,15 @@ export default function App() {
           <Route path="/widget/:widgetId" element={
             <ProtectedRoute>
               <WidgetPopoutPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Standalone Pepper chat — full-viewport PWA-installable at /pepper.
+              Auth-gated like the rest of the app; rendered outside AppLayout
+              so phone + tablet users get edge-to-edge chat with no sidebar. */}
+          <Route path="/pepper" element={
+            <ProtectedRoute>
+              <PepperPage />
             </ProtectedRoute>
           } />
 

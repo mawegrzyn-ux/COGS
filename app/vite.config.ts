@@ -7,7 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg', 'icon-maskable.svg'],
+      // Static manifest at public/pepper-manifest.webmanifest is served
+      // alongside the generated one. PepperPage swaps the document's <link
+      // rel="manifest"> to it so installs from /pepper register their own
+      // scope/start_url.
+      includeAssets: ['icon.svg', 'icon-maskable.svg', 'pepper-manifest.webmanifest'],
       manifest: {
         name: 'Menu COGS',
         short_name: 'Menu COGS',
@@ -29,6 +33,17 @@ export default defineConfig({
             sizes: 'any',
             type: 'image/svg+xml',
             purpose: 'maskable',
+          },
+        ],
+        // Long-press the home-screen icon (Android) / right-click the dock icon
+        // to jump straight into the Pepper standalone chat.
+        shortcuts: [
+          {
+            name: 'Ask Pepper',
+            short_name: 'Pepper',
+            description: 'Open the Pepper AI assistant',
+            url: '/pepper',
+            icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }],
           },
         ],
       },
