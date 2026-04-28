@@ -2106,7 +2106,30 @@ const SECTIONS: SectionDef[] = [
 export default function SystemPage() {
   const { isDev, can } = usePermissions()
   const canManageSettings = can('settings', 'write')
-  const [active, setActive] = useState<Section>('ai')
+
+  // Deep-link support: /system#bugs-backlog opens the page with that section
+  // pre-selected. Used by Pepper's navigate_to_page tool ("open backlog" →
+  // /system#bugs-backlog) and any external link that points at a sub-section.
+  // The hash is normalised against the SECTIONS table — unknown hashes fall
+  // through to the default 'ai'.
+  const readHash = (): Section => {
+    if (typeof window === 'undefined') return 'ai'
+    const raw = (window.location.hash || '').replace(/^#/, '')
+    return SECTIONS.some(s => s.id === raw) ? (raw as Section) : 'ai'
+  }
+  const [active, setActive] = useState<Section>(readHash)
+
+  // Listen for hash changes after mount so navigation while the page is
+  // already open (e.g. user lands on /system, Pepper then says "open
+  // backlog") still moves the active section. SystemPage doesn't write the
+  // hash itself — clicking a sidebar item only updates local state — so the
+  // address bar stays clean for users who got here normally.
+  useEffect(() => {
+    const onHash = () => setActive(readHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Only show sections the current user is allowed to see. Database needs
   // settings:write (it can switch the live transactional DB); Test Data needs

@@ -216,14 +216,14 @@ CONFIRMATION REQUIRED before calling.`,
   // ── Bugs & Backlog ──────────────────────────────────────────────────────────
   {
     name: 'list_bugs',
-    description: 'Returns bug tickets from the bugs log, filterable by status, priority, and severity.',
+    description: `Returns bug tickets from the bugs log, filterable by status, priority, severity, and full-text search. Search matches \`key\`, \`summary\`, AND \`description\` — when the user names a specific bug by its key (e.g. "what's BUG-1027"), pass the key directly as \`search\` rather than assuming the row is missing.`,
     input_schema: {
       type: 'object',
       properties: {
         status:   { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] },
         priority: { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
         severity: { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
-        search:   { type: 'string', description: 'Search in summary/description' },
+        search:   { type: 'string', description: 'Matches key (e.g. "BUG-1027"), summary, OR description. Case-insensitive substring.' },
         limit:    { type: 'integer', description: 'Max rows (default 30)' },
       },
       required: [],
@@ -260,14 +260,16 @@ CONFIRMATION REQUIRED before calling.`,
   },
   {
     name: 'list_backlog',
-    description: 'Returns backlog items (stories, tasks, epics), filterable by status, priority, and type. Use get_backlog_stats first if you only need counts — list_backlog returns full rows and is slow over large result sets.',
+    description: `Returns backlog items (stories, tasks, epics), filterable by status, priority, type, and full-text search. Use get_backlog_stats first if you only need counts — list_backlog returns full rows and is slow over large result sets.
+
+When the user names a specific item by its key (e.g. "what's BACK-1400" or "why is back-1400 high priority"), pass the key directly as \`search\` — search matches \`key\`, \`summary\`, AND \`description\`. Do NOT assume the item is missing just because the default 50-row listing didn't include it: rows are ordered by sort_order ASC and BACK-#### numbers in the thousands fall well past the first 50. Either search by key, or bump \`limit\` to 500.`,
     input_schema: {
       type: 'object',
       properties: {
         status:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'wont_do'] },
         priority:  { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
         item_type: { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
-        search:    { type: 'string', description: 'Search in summary/description' },
+        search:    { type: 'string', description: 'Matches key (e.g. "BACK-1400"), summary, OR description. Case-insensitive substring.' },
         limit:     { type: 'integer', description: 'Max rows (default 50, max 500)' },
       },
       required: [],
@@ -1462,9 +1464,25 @@ Always call list_menus first to resolve the menu ID. No confirmation needed — 
   // ── Page navigation ──────────────────────────────────────────────────────────
   {
     name: 'navigate_to_page',
-    description: `Navigates the user to a different page in the app. Use when the user says "open / take me to / show me / go to <page>" — e.g. "open recipes", "show me the dashboard", "go to inventory".
+    description: `Navigates the user to a different page in the app. Use when the user says "open / take me to / show me / go to <page>" — e.g. "open recipes", "show me the dashboard", "go to inventory", "open backlog", "open users".
 The browser will switch to the chosen page; the user keeps their current chat and the conversation continues. Always confirm verbally first (e.g. "Opening the Recipes page now") so the user knows what's about to happen.
-Pages map roughly to sidebar items. Pick the closest match. Do NOT invent URLs — the path enum is the full set.`,
+
+Many pages have sub-sections that the user can ask for directly. Examples:
+  • "open backlog"        → page="system",        section="bugs-backlog"
+  • "open audit log"      → page="system",        section="audit-log"
+  • "open jira sync"      → page="system",        section="jira"
+  • "open ai settings"    → page="system",        section="ai"
+  • "open POS mockup"     → page="system",        section="pos-tester"
+  • "open users"          → page="configuration", section="users-roles"
+  • "open import"         → page="configuration", section="import"
+  • "open categories"     → page="configuration", section="categories"
+  • "open price levels"   → page="configuration", section="price-levels"
+  • "open media library"  → page="configuration", section="media"
+
+System sections: ai, bugs-backlog, jira, audit-log, storage, database, test-data, tests, doc-library, pos-tester, localization, architecture, api-reference, security, troubleshooting, domain-migration, claude-doc.
+Configuration sections: global-config, location-structure, categories, units, price-levels, currency, cogs-thresholds, users-roles, import, media, stock-config.
+
+Always pass section when the user names a sub-section. Pick the closest match. Do NOT invent URLs.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1473,9 +1491,13 @@ Pages map roughly to sidebar items. Pick the closest match. Do NOT invent URLs �
           enum: [
             'dashboard', 'inventory', 'recipes', 'sales-items', 'menus',
             'allergens', 'haccp', 'audits', 'stock-manager', 'media',
-            'configuration', 'system', 'help',
+            'configuration', 'system', 'help', 'pepper',
           ],
-          description: 'The destination page (sidebar key).',
+          description: 'The destination page (sidebar key, plus "pepper" for the standalone chat).',
+        },
+        section: {
+          type: 'string',
+          description: 'Optional sub-section id within the destination page. Becomes the URL hash (e.g. /system#bugs-backlog). See description for the supported list per page.',
         },
       },
       required: ['page'],
@@ -2144,7 +2166,8 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       if (status)   conditions.push(`status = $${vals.push(status)}`);
       if (priority) conditions.push(`priority = $${vals.push(priority)}`);
       if (severity) conditions.push(`severity = $${vals.push(severity)}`);
-      if (search)   conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
+      // Search across key, summary, description (parity with list_backlog).
+      if (search)   conditions.push(`(key ILIKE $${vals.push(`%${search}%`)} OR summary ILIKE $${vals.length} OR description ILIKE $${vals.length})`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
       vals.push(Math.min(parseInt(limit, 10) || 30, 100));
       const { rows } = await localPool.query(
@@ -2191,7 +2214,11 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       if (status)    conditions.push(`status = $${vals.push(status)}`);
       if (priority)  conditions.push(`priority = $${vals.push(priority)}`);
       if (item_type) conditions.push(`item_type = $${vals.push(item_type)}`);
-      if (search)    conditions.push(`(summary ILIKE $${vals.push(`%${search}%`)} OR description ILIKE $${vals.length})`);
+      // Search across key, summary, and description so Pepper can find a row
+      // by its BACK-#### identifier (the previous version only matched
+      // summary/description, so a user asking "what's back-1400?" returned
+      // nothing for items past the default 50-row LIMIT).
+      if (search)    conditions.push(`(key ILIKE $${vals.push(`%${search}%`)} OR summary ILIKE $${vals.length} OR description ILIKE $${vals.length})`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
       const cap = Math.min(parseInt(limit, 10) || 50, 500);
       // Cheap COUNT(*) so Pepper can tell whether the LIMIT is truncating the

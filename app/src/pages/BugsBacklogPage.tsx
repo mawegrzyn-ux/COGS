@@ -329,6 +329,10 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   // Tile currently being dragged in the kanban — `id` of the BacklogItem.
   const [kanbanDragId, setKanbanDragId] = useState<number | null>(null)
   const [kanbanDragOverPriority, setKanbanDragOverPriority] = useState<string | null>(null)
+  // Tile currently being dragged-over inside a column — drives the
+  // "insert above this tile" indicator and the within-column reorder.
+  // Null when the cursor is in empty column space (drop = append).
+  const [kanbanDragOverTileId, setKanbanDragOverTileId] = useState<number | null>(null)
 
   // AI-suggested priority proposals — populated by POST /backlog/suggest-priorities.
   // null = modal closed; populated array = modal showing proposals.
@@ -417,24 +421,59 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
     }
   }, [api, backlog])
 
-  // Kanban drop handler — when a tile is dropped on a priority column, PUT
-  // the new priority and update local state optimistically. Roll back on
-  // error. Author-or-dev gating happens server-side; surface 403s as a toast.
-  const onKanbanDrop = useCallback(async (id: number, newPriority: string) => {
+  // Kanban drop handler — supports BOTH cross-column priority changes
+  // (drop on column body) and within-column reorder (drop on a sibling
+  // tile). When `beforeTileId` is set the dragged tile is inserted
+  // immediately before that tile in the target column; otherwise it's
+  // appended to the end of the column. Within-column drops with the
+  // same priority become pure sort_order updates via /backlog/reorder
+  // (no priority PUT, no toast spam).
+  const onKanbanDrop = useCallback(async (id: number, newPriority: string, beforeTileId: number | null) => {
     const item = backlog.find(b => b.id === id)
-    if (!item || item.priority === newPriority) return
+    if (!item) return
     const prev = item.priority
-    setBacklog(list => list.map(b => b.id === id ? { ...b, priority: newPriority } : b))
+    const samePriority = prev === newPriority
+
+    // Compute the new order across the whole backlog list. Strategy:
+    // 1. Remove the dragged item from its current spot.
+    // 2. Stamp it with the new priority.
+    // 3. Insert it before `beforeTileId` if given, else at the end of the
+    //    target column (immediately after the last item with that priority,
+    //    keeping the source order of every other item intact).
+    const without = backlog.filter(b => b.id !== id)
+    const moved   = { ...item, priority: newPriority }
+    let insertAt: number
+    if (beforeTileId != null) {
+      insertAt = without.findIndex(b => b.id === beforeTileId)
+      if (insertAt < 0) insertAt = without.length
+    } else {
+      // Find the last item in the target priority bucket; append after it.
+      let last = -1
+      for (let i = 0; i < without.length; i++) if (without[i].priority === newPriority) last = i
+      insertAt = last < 0 ? without.length : last + 1
+    }
+    const next = [...without.slice(0, insertAt), moved, ...without.slice(insertAt)]
+    setBacklog(next)
+
     try {
-      await api.put(`/backlog/${id}`, { priority: newPriority })
-      setToast({ message: `${item.key} → ${newPriority}`, type: 'success' })
+      // Cross-column move: update priority first so server-side validations
+      // still apply (author-or-dev gate, etc.). Then push the new sort_order
+      // for every item in the list — same shape as the table-view reorder.
+      if (!samePriority) {
+        await api.put(`/backlog/${id}`, { priority: newPriority })
+      }
+      const items = next.map((b, i) => ({ id: b.id, sort_order: i + 1 }))
+      await api.put('/backlog/reorder', { items })
+      // Quiet on within-column reorders; only toast on a true priority change.
+      if (!samePriority) setToast({ message: `${item.key} → ${newPriority}`, type: 'success' })
     } catch (err: unknown) {
-      // Rollback
-      setBacklog(list => list.map(b => b.id === id ? { ...b, priority: prev } : b))
+      // Roll back to the server's truth — easier than reconstructing the
+      // pre-drop ordering from scratch.
+      loadBacklog()
       const msg = (err as { message?: string })?.message || 'Failed to update priority'
       setToast({ message: msg, type: 'error' })
     }
-  }, [api, backlog])
+  }, [api, backlog, loadBacklog])
 
   const loadEpics = useCallback(async () => {
     try {
@@ -960,9 +999,13 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                     onDragLeave={() => setKanbanDragOverPriority(p => p === prio ? null : p)}
                     onDrop={e => {
                       e.preventDefault()
+                      const beforeId = kanbanDragOverTileId
                       setKanbanDragOverPriority(null)
+                      setKanbanDragOverTileId(null)
                       if (kanbanDragId !== null) {
-                        onKanbanDrop(kanbanDragId, prio)
+                        // Drop on column body → append (beforeId === null);
+                        // drop on a tile → insert before that tile.
+                        onKanbanDrop(kanbanDragId, prio, beforeId)
                         setKanbanDragId(null)
                       }
                     }}
@@ -982,10 +1025,37 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                           key={b.id}
                           draggable={can('backlog', 'write')}
                           onDragStart={() => setKanbanDragId(b.id)}
-                          onDragEnd={() => { setKanbanDragId(null); setKanbanDragOverPriority(null) }}
+                          onDragEnd={() => {
+                            setKanbanDragId(null)
+                            setKanbanDragOverPriority(null)
+                            setKanbanDragOverTileId(null)
+                          }}
+                          // Tile-level drag-over: lets the user drop ON a tile
+                          // to insert the dragged item ABOVE it (within-column
+                          // sort or cross-column insert at a specific spot).
+                          // stopPropagation so the column's onDragOver doesn't
+                          // override our beforeTileId hint.
+                          onDragOver={e => {
+                            if (kanbanDragId === null || kanbanDragId === b.id) return
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setKanbanDragOverPriority(prio)
+                            setKanbanDragOverTileId(b.id)
+                          }}
+                          onDragLeave={e => {
+                            // Only clear if leaving for somewhere outside this
+                            // tile (avoids flicker when crossing child elements).
+                            const next = e.relatedTarget as Node | null
+                            if (!next || !(e.currentTarget as HTMLElement).contains(next)) {
+                              setKanbanDragOverTileId(id => id === b.id ? null : id)
+                            }
+                          }}
                           onClick={() => openBacklogDetail(b)}
-                          className={`bg-surface border border-border rounded-md p-2.5 shadow-sm hover:border-accent hover:shadow cursor-grab active:cursor-grabbing transition-all ${kanbanDragId === b.id ? 'opacity-40' : ''}`}
-                          title={can('backlog', 'write') ? 'Drag to change priority — click to open' : 'Click to open'}
+                          className={`bg-surface border border-border rounded-md p-2.5 shadow-sm hover:border-accent hover:shadow cursor-grab active:cursor-grabbing transition-all ${
+                            kanbanDragId === b.id ? 'opacity-40' :
+                            kanbanDragOverTileId === b.id ? 'border-t-2 border-t-accent' : ''
+                          }`}
+                          title={can('backlog', 'write') ? 'Drag to reorder or change priority — click to open' : 'Click to open'}
                         >
                           <div className="flex items-center justify-between gap-1.5 mb-1">
                             <span className="font-mono text-[10px] text-accent">{b.key}</span>

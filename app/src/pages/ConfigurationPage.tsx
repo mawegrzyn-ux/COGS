@@ -525,8 +525,26 @@ function UsersRolesSection() {
 // ── ConfigurationPage ──────────────────────────────────────────────────────────
 
 export default function ConfigurationPage() {
-  const [active, setActive] = useState<Section>('global-config')
+  // Deep-link support: /configuration#users-roles, /configuration#import etc.
+  // Used by Pepper's navigate_to_page tool with an optional `section` param
+  // and by any external link that points at a sub-section. Unknown hashes
+  // fall through to the default first section.
+  const readHash = (): Section => {
+    if (typeof window === 'undefined') return 'global-config'
+    const raw = (window.location.hash || '').replace(/^#/, '')
+    return SECTIONS.some(s => s.id === raw) ? (raw as Section) : 'global-config'
+  }
+  const [active, setActive] = useState<Section>(readHash)
   const { can } = usePermissions()
+
+  // Listen for in-app hash changes so Pepper-driven navigation works even
+  // when the user is already on /configuration.
+  useEffect(() => {
+    const onHash = () => setActive(readHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const visibleSections = SECTIONS.filter(s =>
     !s.feature || can(s.feature as any, 'read')
