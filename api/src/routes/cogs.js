@@ -1143,6 +1143,8 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
              si.recipe_id,
              si.ingredient_id,
              si.manual_cost,
+             si.image_url,
+             si.description,
              r.yield_qty,
              r.name        AS recipe_name,
              ing.name      AS ingredient_name,
