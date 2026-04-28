@@ -2426,6 +2426,21 @@ When the user initiates end of session (e.g. "wrap up", "end session", "that's a
 - Update status of resolved bugs/backlog items if applicable
 - Use `ON CONFLICT (key) DO NOTHING` pattern for idempotent seeding
 
+**2b. Audit live backlog vs codebase reality:**
+- Fetch the live non-terminal backlog from production:
+  `Invoke-RestMethod "https://cogs.macaroonie.com/api/internal/backlog?status=<backlog|todo|in_progress|in_review>&key=<CLAUDE_CODE_API_KEY>&limit=500"`
+  (cycle through each status; production-truth, not the seed file). Repeat for `mcogs_bugs` if scope of session touched bug-tracked behaviour.
+- For each non-terminal item, cross-check against the actual codebase: grep for the relevant routes, components, helpers, schema. Look for evidence of completion that wasn't recorded as a status update — common causes: a feature was rebuilt under a different key, a duplicate row exists, the implementation took a different shape from the original spec but the user-visible feature shipped (e.g. JSONB columns instead of separate translation tables), or a child story shipped without its parent epic being updated.
+- Categorise findings:
+  - **Done in code, status is non-terminal** → flip to `done`. Note the actual implementation form in the resolution comment (especially if the shape diverged from the original spec).
+  - **Duplicate of an already-shipped key** → flip to `done` with `resolution = "duplicate of BACK-XXXX"`.
+  - **Partially shipped** → set to `in_review` (not `done`) with a resolution note describing what landed and what didn't, so the rest can be filed as a follow-up if needed.
+  - **No code evidence** → leave alone.
+- Apply the updates two ways for full audit coverage:
+  1. **Direct via internal API** (immediate effect on production): `Invoke-RestMethod -Method Put -Uri "https://cogs.macaroonie.com/api/internal/backlog/<id>?key=..." -Body @{status='done'; resolution='...'} -ContentType 'application/json'`. Idempotent — second call is a no-op when the status already matches. Production state is current the moment the user reads the report.
+  2. **Add a new migration step** with `UPDATE mcogs_backlog SET status='done', updated_at=NOW() WHERE key IN ('BACK-...', ...) AND status <> 'done'` so a fresh deploy from a clean DB lands in the same state. The `status <> 'done'` guard makes it idempotent across reruns.
+- Surface the audit in the EOS report (step 4): list each item that was reclassified, the evidence it was built (file paths / route names), and the new status. The user should be able to skim it without opening the codebase themselves.
+
 **3. Impact analysis (retro):**
 - List all files modified and created during the session
 - Identify which existing features may be affected by the changes

@@ -3823,6 +3823,24 @@ const migrations = [
      'story', 'high', 'done', '["pepper","pwa","mobile","tablet"]'::jsonb, 1967)
    ON CONFLICT (key) DO NOTHING`,
 
+  // ── Step 160a: Backlog audit — flip stale rows to done ─────────────────────
+  // Reviewed live backlog vs codebase reality. 8 items were marked
+  // backlog/todo despite the underlying feature having shipped (often under a
+  // different key, or via a different shape than the original spec). Flipping
+  // them here keeps a fresh DB build in step with production.
+  // Idempotent — no-op when status is already 'done'.
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE status <> 'done' AND key IN (
+     'BACK-1005',  -- Voice Tier 1 — useVoiceInput / useVoiceOutput shipped
+     'BACK-1351',  -- mcogs_languages + /api/languages + Settings → Localisation
+     'BACK-1352',  -- delivered as JSONB columns on 11 entities (vs separate tables)
+     'BACK-1353',  -- resolveLanguage middleware + tCol/getLangContext on 9 routes
+     'BACK-1354',  -- useApi X-Language header + TranslationEditor in 6 forms
+     'BACK-1355',  -- i18next + 9 locales + LanguageSwitcher (RTL still in BACK-1427)
+     'BACK-1940',  -- duplicate of BACK-1942 (Sales Items Excel grid)
+     'BACK-1941'   -- duplicate of BACK-1942 (Sales Items Excel grid)
+   )`,
+
   // ── Step 160: Changelog — modifier costs in COGS + standalone Pepper PWA ──
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-04-28', 'Modifier costs in COGS + standalone Pepper PWA + inline-edit focus fixes', '[
