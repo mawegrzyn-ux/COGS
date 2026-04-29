@@ -30,6 +30,12 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   'country-region-map': { id: 'country-region-map', label: 'Country Region Map', description: 'Zoomed-in map of the selected market\'s country, highlighting every region claimed by any market. City pins appear for locations with captured lat/lng.', defaultSize: 'xl', allowedSizes: ['lg', 'xl'], marketScoped: true, defaultRowSpan: 3, allowedRowSpans: [2, 3] },
 
   'recipe-unquoted-ingredients': { id: 'recipe-unquoted-ingredients', label: 'Unquoted Ingredients in Recipes', description: 'Ingredients that appear in at least one recipe but have no active price quote. Optional menu filter narrows the list to recipes used by a specific menu.', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
+
+  // Integration health — pings Anthropic / Voyage / Brave / GitHub / Jira /
+  // Mapbox / OpenAI every minute (server-side cached) and shows a green/red
+  // dot per integration. Fully flexible: 1 / 2 / 3 / 4 columns × 1 / 2 / 3
+  // rows. Internally adapts the grid breakpoints to the widget width.
+  'integration-status': { id: 'integration-status', label: 'Integration Status', description: 'Live health for every external integration — green/red dot per service with latency. Auto-refreshes every minute.', defaultSize: 'md', allowedSizes: ['sm', 'md', 'lg', 'xl'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────────

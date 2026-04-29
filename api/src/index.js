@@ -111,6 +111,30 @@ app.use((_req, res, next) => {
           console.warn('[cron] Translation pre-warm disabled:', err.message);
         }
 
+        // ── Nightly derived-directives — 02:30 UTC daily ───────────────────
+        // Runs after memory consolidation (02:07) + translation pre-warm
+        // (02:15) so the corpus + memory state are fresh. No-op when
+        // ANTHROPIC_API_KEY isn't configured.
+        try {
+          const { runDerivation } = require('./jobs/deriveDirectives');
+          cron.schedule('30 2 * * *', async () => {
+            console.log('[cron] Starting derived-directives job...');
+            try {
+              const result = await runDerivation();
+              console.log('[cron] Derived-directives complete:', JSON.stringify({
+                skipped: result?.skipped || false,
+                kept: result?.stats?.candidates_kept,
+                proposed: result?.stats?.candidates_proposed,
+              }));
+            } catch (err) {
+              console.error('[cron] Derived-directives failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Derived-directives scheduled at 02:30 UTC daily');
+        } catch (err) {
+          console.warn('[cron] Derived-directives disabled:', err.message);
+        }
+
         // ── Jira pull-sync — every 15 minutes ───────────────────────────────
         // Fetches status/priority/summary/description/labels for every linked
         // bug + backlog row. No-op when Jira isn't configured. Logs only on

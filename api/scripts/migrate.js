@@ -431,16 +431,30 @@ const migrations = [
   `ALTER TABLE mcogs_countries ADD COLUMN IF NOT EXISTS brand_partner_id INTEGER`,
 
   // Migrate brand_partner_id FK from mcogs_vendors → mcogs_brand_partners (idempotent)
+  // PREVIOUS BUG: the "drop old FK" check used information_schema.table_constraints
+  // which matches by NAME only — it would match the *new* FK (pointing at
+  // mcogs_brand_partners) just as easily as the legacy one (pointing at
+  // mcogs_vendors). On every deploy after the initial migration, this branch
+  // fired, dropped the (correct) FK, and the UPDATE cleared every operator's
+  // brand-partner-to-market allocation. Replaced with a pg_constraint join
+  // that filters on `ref.relname = 'mcogs_vendors'` so it only ever fires
+  // once — when the legacy FK is still in place. Subsequent deploys see the
+  // FK pointing at mcogs_brand_partners → IF returns false → no data loss.
   `DO $$
   BEGIN
-    -- Drop old FK to mcogs_vendors if it exists
+    -- Drop old FK ONLY if it currently points at the legacy mcogs_vendors table
     IF EXISTS (
-      SELECT 1 FROM information_schema.table_constraints
-      WHERE constraint_name = 'mcogs_countries_brand_partner_id_fkey'
-        AND table_name = 'mcogs_countries'
+      SELECT 1 FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_class ref ON ref.oid = con.confrelid
+      WHERE con.contype = 'f'
+        AND rel.relname = 'mcogs_countries'
+        AND ref.relname = 'mcogs_vendors'
+        AND con.conname = 'mcogs_countries_brand_partner_id_fkey'
     ) THEN
       ALTER TABLE mcogs_countries DROP CONSTRAINT mcogs_countries_brand_partner_id_fkey;
-      -- Clear stale vendor IDs — they no longer map to brand partners
+      -- Clear stale vendor IDs — they no longer map to brand partners.
+      -- This only runs on the FIRST deploy after the FK was repointed, never again.
       UPDATE mcogs_countries SET brand_partner_id = NULL WHERE brand_partner_id IS NOT NULL;
     END IF;
 
@@ -4006,6 +4020,29 @@ const migrations = [
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-29' AND title = 'Modifier multiplier feature + README rewrite'
+   )`,
+
+  // ── Step 167: Backlog — derived directives done this session ──────────────
+  `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, story_points)
+   VALUES (
+     'BACK-2427',
+     'Auto-derived directives — nightly Pepper memory audit',
+     'Nightly cron at 02:30 UTC scans all users chat history (last 7 days, 800-row cap) and pinned memory notes (500-row cap). Sends an anonymised corpus to Claude Haiku 4.5 with strict safety prompt: REJECT directives that bypass RBAC scope, reveal credentials/identities, codify single-user preferences (must observe pattern across 2+ distinct users), or contradict safety defaults (accuracy, write-confirmation, audit logging). Belt-and-braces server-side regex filter catches anything Claude misses. Persists kept directives to mcogs_settings.data.pepper_derived_directives. buildSystemPrompt now injects manual + derived directives in two sub-sections so they are distinguishable. Settings → AI gains a read-only panel under the manual textarea showing each derived directive with confidence badge + evidence count + last-derived timestamp + corpus stats. Run-now button triggers an on-demand derivation; Clear button wipes the blob (manual directives untouched).',
+     'story', 'Medium', 'done', 5
+   )
+   ON CONFLICT (key) DO UPDATE SET status = 'done', updated_at = NOW()`,
+
+  // ── Step 168: Changelog — Apr 30 — derived directives shipped ─────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-30', 'Pepper auto-derived directives', '[
+     {"type":"added","description":"Nightly derived-directives job (BACK-2427) — api/src/jobs/deriveDirectives.js runs at 02:30 UTC daily, pulls last 7 days of chat + up to 500 pinned memory notes across all users, anonymises user identifiers (u1/u2/...), asks Claude Haiku to extract globally-applicable directives. Rejects RBAC-bypass / single-user / credential-revealing / safety-loosening candidates via dual defence — strict prompt rules + server-side regex filter (RBAC_BYPASS_PATTERNS). Caps at 12 directives sorted by confidence. Output persisted to mcogs_settings.data.pepper_derived_directives as { directives: [{text, evidence_count, confidence}], derived_at, stats }. No-op when ANTHROPIC_API_KEY is not configured."},
+     {"type":"changed","description":"buildSystemPrompt() in api/src/routes/ai-chat.js now reads both pepper_directives (manual) and pepper_derived_directives (auto) from mcogs_settings.data and renders them as two sub-sections under a single Operator Directives header — “Set by administrator” and “Auto-derived from usage patterns”. Manual directives take precedence in conflicts."},
+     {"type":"added","description":"GET/POST/DELETE /api/ai-config/derived-directives endpoints. GET returns the current blob; POST /run triggers on-demand derivation (admin convenience when corpus has just changed); DELETE clears the blob. All gated by settings:read / settings:write."},
+     {"type":"added","description":"Settings → AI tab gains an Auto-derived directives panel below the manual directives textarea. Lists each derived directive with a coloured confidence badge (low/medium/high), evidence count, full text. Run now button triggers immediate derivation; Clear button (with ConfirmDialog) wipes the blob. Footer shows last-derived relative time + corpus stats (chats / notes / kept-vs-proposed)."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-30' AND title = 'Pepper auto-derived directives'
    )`,
 ];
 

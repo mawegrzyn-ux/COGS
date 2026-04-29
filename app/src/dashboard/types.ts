@@ -25,6 +25,7 @@ export type WidgetId =
   | 'new-price-quote'   // Quick-add a price quote for an existing ingredient
   | 'country-region-map' // Zoomed-in map of one country's regions (follows the selected market)
   | 'recipe-unquoted-ingredients' // Ingredients used in recipes that have no active price quote (optional menu filter)
+  | 'integration-status'        // Live health status for every external integration (Anthropic, Voyage, Brave, GitHub, Jira, Mapbox, OpenAI). Configurable 1–4 columns × 1–3 rows.
 
 // Widget size — maps to CSS grid col-span (out of 12)
 export type WidgetSize = 'sm' | 'md' | 'lg' | 'xl'

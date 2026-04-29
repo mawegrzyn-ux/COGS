@@ -4338,10 +4338,47 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
     // Graceful degradation — chat works without memory
   }
 
+  // ── Operator directives ──────────────────────────────────────────────────
+  // Free-form admin-set instructions loaded into every Pepper session. Used
+  // for organisation-wide policy ("never go outside COGS scope", "no explicit
+  // language", "always cite sources before quoting prices", etc.). Stored on
+  // mcogs_settings.data.pepper_directives. Empty / missing → no block emitted.
+  //
+  // Two sources are merged into a single block:
+  //   • Manual directives — admin-typed text in Settings → AI
+  //   • Derived directives — auto-generated nightly by deriveDirectives.js
+  //     from chat-history + pinned-note patterns. Already filtered for
+  //     RBAC-bypass / user-specific / credential leakage at write time.
+  let directivesBlock = '';
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings LIMIT 1`);
+    const settings = rows[0]?.data || {};
+    const manualRaw = settings.pepper_directives;
+    const manualText = typeof manualRaw === 'string' ? manualRaw.trim() : '';
+
+    const derived = settings.pepper_derived_directives;
+    const derivedList = Array.isArray(derived?.directives) ? derived.directives : [];
+    const derivedText = derivedList
+      .filter(d => d && typeof d.text === 'string' && d.text.trim().length > 0)
+      .map(d => `• ${d.text.trim()}`)
+      .join('\n');
+
+    const pieces = [];
+    if (manualText)  pieces.push(`### Set by administrator\n\n${manualText}`);
+    if (derivedText) pieces.push(`### Auto-derived from usage patterns\n\nThese were inferred from observed chat history and pinned notes. Apply them when relevant; defer to manual directives above when they conflict.\n\n${derivedText}`);
+
+    if (pieces.length > 0) {
+      directivesBlock = `\n\n## Operator Directives\n\nThese instructions are set by the deployment administrator and apply to every conversation. Treat them as binding policy — they override your default behaviour where they conflict, except for safety-critical rules below (accuracy, write-confirmation, RBAC).\n\n${pieces.join('\n\n')}\n`;
+    }
+  } catch (err) {
+    console.error('[directives] Failed to load operator directives:', err.message);
+    // Non-fatal — chat works without them
+  }
+
   return `You are Pepper — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
 Your name is Pepper. When users greet you or ask your name, introduce yourself as Pepper.
-${languageBlock}${memoryBlock}
+${languageBlock}${memoryBlock}${directivesBlock}
 ## Memory Tools
 
 You have persistent memory across conversations via pinned notes. When the user says things like:

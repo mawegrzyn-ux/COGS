@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, DateConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
+import IntegrationStatusList from '../components/IntegrationStatusList'
 import ImportPage from './ImportPage'
 import { usePermissions } from '../hooks/usePermissions'
 import type { Feature, AccessLevel } from '../hooks/usePermissions'
@@ -2346,6 +2347,23 @@ function AiTab() {
   const [mapboxToken,  setMapboxToken]  = useState('')
   const [openaiKey,    setOpenaiKey]    = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
+  // Operator directives — free-form admin instructions loaded into Pepper's
+  // system prompt on every session ("never give explicit advice", "stay in
+  // COGS scope", etc.). Stored on mcogs_settings.data.pepper_directives.
+  const [directives,        setDirectives]        = useState('')
+  const [directivesSaved,   setDirectivesSaved]   = useState('')   // last persisted value, for dirty check
+  const [savingDirectives,  setSavingDirectives]  = useState(false)
+  // Auto-derived directives — generated nightly by the deriveDirectives.js
+  // cron job from chat history + pinned notes patterns. Read-only here; admin
+  // can re-run on demand or clear them entirely.
+  const [derivedDirectives, setDerivedDirectives] = useState<{
+    directives: { text: string; evidence_count: number; confidence: 'low' | 'medium' | 'high' }[];
+    derived_at: string | null;
+    stats: { conversations_scanned?: number; notes_scanned?: number; candidates_proposed?: number; candidates_kept?: number; distinct_users_chat?: number; distinct_users_notes?: number } | null;
+  }>({ directives: [], derived_at: null, stats: null })
+  const [runningDerivation, setRunningDerivation] = useState(false)
+  const [clearingDerived,   setClearingDerived]   = useState(false)
+  const [confirmClearDerived, setConfirmClearDerived] = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
   const [savingLimit,        setSavingLimit]        = useState(false)
@@ -2362,12 +2380,21 @@ function AiTab() {
       api.get('/ai-config'),
       api.get('/settings'),
       api.get('/ai-config/claude-code-key'),
+      api.get('/ai-config/derived-directives').catch(() => ({ directives: [], derived_at: null, stats: null })),
     ])
-      .then(([s, settings, keyData]) => {
+      .then(([s, settings, keyData, derived]) => {
         setStatus(s)
         setConciseMode(settings?.ai_concise_mode === true)
         setMonthlyTokenLimit(String(settings?.ai_monthly_token_limit ?? '0'))
+        const dir = typeof (settings as any)?.pepper_directives === 'string' ? (settings as any).pepper_directives : ''
+        setDirectives(dir)
+        setDirectivesSaved(dir)
         setClaudeCodeKey(keyData?.key ?? null)
+        setDerivedDirectives({
+          directives: Array.isArray(derived?.directives) ? derived.directives : [],
+          derived_at: derived?.derived_at || null,
+          stats: derived?.stats || null,
+        })
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -2407,6 +2434,73 @@ function AiTab() {
     } finally {
       setSavingLimit(false)
     }
+  }
+
+  async function handleSaveDirectives() {
+    setSavingDirectives(true)
+    try {
+      await api.patch('/settings', { pepper_directives: directives })
+      setDirectivesSaved(directives)
+      setToast({ message: directives.trim() ? 'Directives saved — applies to next chat session' : 'Directives cleared', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingDirectives(false)
+    }
+  }
+
+  async function handleRunDerivation() {
+    setRunningDerivation(true)
+    try {
+      const result = await api.post('/ai-config/derived-directives/run', {})
+      if (result?.skipped) {
+        const reason = result.reason === 'no_api_key'   ? 'Anthropic API key not configured.'
+                     : result.reason === 'empty_corpus' ? 'No chat history or pinned notes to analyse yet.'
+                     : result.reason === 'parse_error'  ? 'AI response could not be parsed — try again.'
+                     : `Skipped: ${result.reason || 'unknown reason'}`
+        setToast({ message: reason, type: 'error' })
+      } else {
+        setDerivedDirectives({
+          directives: Array.isArray(result?.directives) ? result.directives : [],
+          derived_at: result?.derived_at || null,
+          stats: result?.stats || null,
+        })
+        setToast({ message: `Derived ${result?.stats?.candidates_kept ?? 0} directive(s) from ${result?.stats?.conversations_scanned ?? 0} conversations`, type: 'success' })
+      }
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to run derivation', type: 'error' })
+    } finally {
+      setRunningDerivation(false)
+    }
+  }
+
+  async function handleClearDerived() {
+    setConfirmClearDerived(false)
+    setClearingDerived(true)
+    try {
+      await api.delete('/ai-config/derived-directives')
+      setDerivedDirectives({ directives: [], derived_at: null, stats: null })
+      setToast({ message: 'Derived directives cleared', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to clear', type: 'error' })
+    } finally {
+      setClearingDerived(false)
+    }
+  }
+
+  function formatRelativeTime(iso: string | null): string {
+    if (!iso) return 'never'
+    const then = new Date(iso).getTime()
+    const now  = Date.now()
+    const diff = Math.max(0, now - then)
+    const min  = Math.floor(diff / 60000)
+    if (min < 1)    return 'just now'
+    if (min < 60)   return `${min}m ago`
+    const h = Math.floor(min / 60)
+    if (h < 24)     return `${h}h ago`
+    const d = Math.floor(h / 24)
+    if (d < 30)     return `${d}d ago`
+    return new Date(iso).toLocaleDateString()
   }
 
   useEffect(() => { load() }, [load])
@@ -2485,7 +2579,16 @@ function AiTab() {
         </p>
       </div>
 
-      {/* Status cards */}
+      {/* ── Live integration health ──────────────────────────────────────────
+          Pings each configured integration with a cheap call (cached 60 s)
+          and reports reachability + latency. Same component is used by the
+          dashboard widget. */}
+      <div className="mb-6">
+        <h3 className="text-sm font-bold text-text-1 mb-2">Live status</h3>
+        <IntegrationStatusList cols={2} compact pollMs={60_000} />
+      </div>
+
+      {/* Static configured/not-configured cards (legacy summary) */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { label: 'Anthropic (Claude)', set: status.anthropic_key_set, key: 'ANTHROPIC_API_KEY'    as const },
@@ -2780,6 +2883,129 @@ function AiTab() {
           </button>
         </div>
       </div>
+
+      {/* ── Operator directives ──────────────────────────────────────────────
+          Free-form admin instructions that get loaded into Pepper's system
+          prompt on every session. Useful for organisation-wide policy:
+          scope limiting, content policies, response style guardrails, etc.
+          The text lives on mcogs_settings.data.pepper_directives. */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">Pepper Directives</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Free-text instructions loaded into <strong>every</strong> Pepper session. Use this for organisation-wide
+          policy — scope limits, response style, content rules. Operator-set directives override Pepper's defaults
+          where they conflict, except for safety-critical rules (accuracy, write-confirmation, RBAC) which always apply.
+        </p>
+
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4 space-y-3">
+          <textarea
+            className="input w-full text-sm font-mono leading-relaxed"
+            rows={8}
+            placeholder={`Examples — enter one rule per line:\n\n- Never provide information outside the scope of COGS Manager.\n- Under no circumstances produce explicit or off-colour responses.\n- Always cite the source recipe / menu when quoting a price.\n- When asked to delete data, refuse and direct the user to a developer.`}
+            value={directives}
+            onChange={e => setDirectives(e.target.value)}
+            spellCheck
+          />
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-text-3">
+              {directives.length === 0
+                ? <>No directives set — Pepper uses its built-in defaults.</>
+                : <>{directives.length.toLocaleString()} characters · loaded into the system prompt on next session.</>}
+              {directives !== directivesSaved && (
+                <span className="ml-2 inline-flex items-center text-amber-600 font-medium">● unsaved changes</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {directives !== directivesSaved && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-sm"
+                  onClick={() => setDirectives(directivesSaved)}
+                  disabled={savingDirectives}
+                >Discard</button>
+              )}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm"
+                onClick={handleSaveDirectives}
+                disabled={savingDirectives || directives === directivesSaved}
+              >{savingDirectives ? 'Saving…' : 'Save directives'}</button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Auto-derived directives ──────────────────────────────────────
+            Read-only view of directives the nightly job has inferred from
+            chat history + pinned notes. Admin can re-run on demand or clear
+            the set entirely. RBAC-bypass / user-specific patterns are
+            filtered server-side at write time. */}
+        <div className="mt-6 rounded-xl border border-border bg-surface-2/30 px-4 py-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-1">Auto-derived directives</h3>
+              <p className="text-xs text-text-3 mt-0.5">
+                Inferred nightly from chat history + pinned notes. Loaded into the system prompt alongside your manual directives.
+                User-specific or RBAC-bypass patterns are filtered out automatically.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                className="btn-ghost px-3 py-1.5 text-xs"
+                onClick={handleRunDerivation}
+                disabled={runningDerivation || clearingDerived}
+                title="Re-run the derivation now instead of waiting for the nightly cron"
+              >{runningDerivation ? 'Running…' : 'Run now'}</button>
+              {derivedDirectives.directives.length > 0 && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50"
+                  onClick={() => setConfirmClearDerived(true)}
+                  disabled={clearingDerived || runningDerivation}
+                >{clearingDerived ? 'Clearing…' : 'Clear'}</button>
+              )}
+            </div>
+          </div>
+
+          {derivedDirectives.directives.length === 0 ? (
+            <div className="text-xs text-text-3 italic py-2">
+              {derivedDirectives.derived_at
+                ? <>No directives derived on the last run ({formatRelativeTime(derivedDirectives.derived_at)}). Corpus may be too thin or all candidates failed safety filtering.</>
+                : <>Has not run yet. Click <strong>Run now</strong> or wait for the 02:30 UTC nightly job.</>}
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {derivedDirectives.directives.map((d, idx) => (
+                <li key={idx} className="flex items-start gap-2 text-sm text-text-1 bg-surface rounded-lg border border-border px-3 py-2">
+                  <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+                    d.confidence === 'high'   ? 'bg-emerald-100 text-emerald-700' :
+                    d.confidence === 'medium' ? 'bg-amber-100  text-amber-700'  :
+                                                'bg-slate-100  text-slate-600'
+                  }`}>{d.confidence}</span>
+                  <span className="flex-1">{d.text}</span>
+                  <span className="shrink-0 text-[11px] text-text-3 font-mono">{d.evidence_count}× users</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {derivedDirectives.derived_at && (
+            <div className="mt-3 pt-3 border-t border-border text-[11px] text-text-3 flex items-center justify-between">
+              <span>Last derived <strong>{formatRelativeTime(derivedDirectives.derived_at)}</strong></span>
+              {derivedDirectives.stats && (
+                <span className="font-mono">
+                  {derivedDirectives.stats.conversations_scanned ?? 0} chats · {derivedDirectives.stats.notes_scanned ?? 0} notes · {derivedDirectives.stats.candidates_kept ?? 0}/{derivedDirectives.stats.candidates_proposed ?? 0} kept
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {confirmClearDerived && (
+        <ConfirmDialog
+          message="Clear auto-derived directives? They will regenerate on the next nightly run (or when you click Run now). Your manually-set directives are unaffected."
+          onConfirm={handleClearDerived}
+          onCancel={() => setConfirmClearDerived(false)}
+          danger
+        />
+      )}
 
       {/* ── Monthly Token Allowance ── */}
       <div className="mt-8 pt-6 border-t border-border">

@@ -3,6 +3,7 @@ import { useAddQuote } from '../contexts/AddQuoteContext'
 import { useDashboardData } from './DashboardData'
 import { useMarket } from '../contexts/MarketContext'
 import { useApi } from '../hooks/useApi'
+import IntegrationStatusList from '../components/IntegrationStatusList'
 import { Modal, Field, Toast } from '../components/ui'
 import { WidgetId } from './types'
 import { usePermissions, Feature } from '../hooks/usePermissions'
@@ -1619,6 +1620,50 @@ function RecipeUnquotedIngredients() {
   )
 }
 
+// ── Integration Status widget ────────────────────────────────────────────────
+// Wraps IntegrationStatusList with a card chrome + width-based column pick.
+// The widget can sit at any size (sm / md / lg / xl) and any row-span (1 / 2 /
+// 3) — internally we measure the rendered width and pick 1–4 columns to match.
+// Tailwind responsive breakpoints (sm:, lg:) wouldn't help here because they
+// react to the VIEWPORT, not the widget's container — so a sm widget on a
+// large screen would still render 3 columns and look squashed. ResizeObserver
+// gives us per-container responsiveness without container-query polyfills.
+function IntegrationStatusWidget() {
+  const label = useWidgetLabel('Integration Status')
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [cols, setCols] = useState<1 | 2 | 3 | 4>(2)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const apply = (w: number) => {
+      // Card padding ≈ 40px; inner content roughly w - 40. Each integration
+      // card needs ~190px to render the label + status pill on one line.
+      if (w < 280)      setCols(1)
+      else if (w < 480) setCols(2)
+      else if (w < 740) setCols(3)
+      else              setCols(4)
+    }
+    apply(el.getBoundingClientRect().width)
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) apply(entry.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref} className="card p-5 h-full flex flex-col">
+      <div className="flex items-baseline justify-between mb-3 gap-3">
+        <h2 className="text-lg font-bold text-text-1 truncate">{label}</h2>
+      </div>
+      <div className="flex-1 overflow-y-auto -mr-2 pr-2">
+        <IntegrationStatusList cols={cols} pollMs={60_000} />
+      </div>
+    </div>
+  )
+}
+
 export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'kpi-ingredients':   KpiIngredients,
   'kpi-recipes':       KpiRecipes,
@@ -1645,4 +1690,5 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'new-price-quote':   NewPriceQuoteWidget,
   'country-region-map': CountryRegionMapWidget,
   'recipe-unquoted-ingredients': RecipeUnquotedIngredients,
+  'integration-status':         IntegrationStatusWidget,
 }
