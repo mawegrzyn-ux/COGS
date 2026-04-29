@@ -818,11 +818,14 @@ export default function RecipesPage() {
   }
 
   // Multiplier UI is only visible / interactive when the user is looking at
-  // the GLOBAL recipe (no specific market or PL variation). Variations
-  // inherit the global flag value but cannot set their own (v1 simplification).
-  // selectedCountryId is 'GLOBAL' | '' | number; both string forms mean
-  // unscoped. PL must also be unset.
-  const isGlobalView = (selectedCountryId === 'GLOBAL' || selectedCountryId === '') && !selectedPriceLevelId
+  // the GLOBAL recipe ingredients. The user can have a Market or PL selected
+  // and STILL be viewing the global list (because no variation exists for
+  // that combo) — the "🌍 Global recipe" badge is the truth signal. Mirror
+  // its logic exactly: not in a market-pl / price-level / market variation.
+  const isGlobalView =
+    !(variantMode === 'market-pl'   && !!activeMarketPlVariation) &&
+    !(variantMode === 'price-level' && !!activePlVariation) &&
+    !activeCogs?.has_variation
 
   // ── Column sort toggle ────────────────────────────────────────────────────
   function cycleItemSort(field: ItemSortField) {
