@@ -1451,9 +1451,15 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                       const cmgExpanded = expandedSubSections.has(cmgKey)
                       return (
                       <Fragment key={cmgKey}>
+                        {/* Modifier group nested under a combo option — bumped
+                            indent so the visual hierarchy reads "step →
+                            option → modifier" cleanly. Was paddingLeft 3rem +
+                            marginLeft 1.5rem (effective 4.5rem); now
+                            paddingLeft 5rem + marginLeft 2.5rem (effective
+                            7.5rem) to land clearly past the option row. */}
                         <tr className="bg-accent-dim/10 border-b border-border">
-                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3rem' }}>
-                            <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '1.5rem' }}>
+                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '5rem' }}>
+                            <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '2.5rem' }}>
                               <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(cmgKey)}>{cmgExpanded ? '▼' : '▶'}</button>
                               <span className="text-purple-600 text-xs font-medium">Modifier:</span>
                               <span className="text-xs text-text-2 ml-1">{mg.display_name || mg.name}</span>
@@ -1462,7 +1468,10 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
                           </td>
                         </tr>
                         {cmgExpanded && mg.options.map(mopt => (
-                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={16} borderClass="border-l-2 border-purple-100" marginLeft="3rem" onSave={saveSubOptionPrice} />
+                          // Modifier option indent — was 3rem, now 5rem so it
+                          // sits beneath its group header without looking
+                          // like a sibling of the combo option.
+                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={16} borderClass="border-l-2 border-purple-100" marginLeft="5rem" onSave={saveSubOptionPrice} />
                         ))}
                       </Fragment>
                     )})}

@@ -152,9 +152,12 @@ function newId() {
 interface Walker {
   item:           CogsItem
   subPrices:      SubPriceData
-  // Phase progression: combo steps first (one per screen), then any modifier
-  // groups attached at the SI level (one per screen), then DONE → add to cart.
-  phase:          'combo-step' | 'modifier' | 'done'
+  // Phase progression. Combo items walk steps first, queueing any option-level
+  // modifier groups attached to the picked options; those play out as
+  // 'option-modifier' screens between steps. Once all combo steps + their
+  // option modifiers are done, any modifier groups attached at the SI level
+  // play as 'modifier' screens. Then 'done' → commit to cart.
+  phase:          'combo-step' | 'option-modifier' | 'modifier' | 'done'
   stepIdx:        number     // index into subPrices.combo_steps
   modGroupIdx:    number     // index into subPrices.modifier_groups (SI-level)
   // Per-step option selections (for combo).
@@ -162,9 +165,10 @@ interface Walker {
   // Modifier selections — keyed either by mgId (SI-level) or `${stepId}_${mgId}` (option-level).
   modSelections:  Record<string, number[]>          // key → optionIds[]
   modQty:         Record<string, Record<number, number>>
-  // Tracking for option-level modifiers attached to combo step options.
-  // After a combo step completes, we queue any auto_show modifier groups on
-  // the chosen option(s) — they're walked between steps before moving on.
+  // Queued option-level modifier groups for the current combo step. Refilled
+  // each time the user advances past a step using the picked options'
+  // modifier_groups list. The head element is the screen currently shown
+  // when phase === 'option-modifier'.
   pendingOptModGroups: { stepId: number; option: ComboOption; group: ModGroup }[]
   // If we're editing an existing cart line, the original ID so we can replace
   // it on commit instead of appending a duplicate.
@@ -580,6 +584,8 @@ export default function KioskMockupPage() {
           sym={currencySymbol}
           onCommit={commitWalker}
           onCancel={() => { setWalker(null); setPhase('browse') }}
+          accessibilityMode={accessibilityMode}
+          onAccessibility={() => setAccessibilityMode(v => !v)}
         />
       )}
 
@@ -601,8 +607,10 @@ export default function KioskMockupPage() {
         />
       )}
 
-      {/* Bottom bar — visible on browse + customise (NOT during payment/receipt) */}
-      {(phase === 'browse' || phase === 'customise') && (
+      {/* Bottom bar — only on the browse phase. The customise screen renders
+          its own footer (Cancel + Back + Next + Accessibility) so the two
+          don't overlap and the progress button stays clearly visible. */}
+      {phase === 'browse' && (
         <BottomBar
           cartCount={cartCount}
           cartTotal={cartTotal}
@@ -690,18 +698,22 @@ function SetupScreen({ menus, selectedMenuId, onSelect, onLaunch }: {
    ════════════════════════════════════════════════════════════════════════════ */
 
 function KioskFrame({ children, accessibility }: { children: React.ReactNode; accessibility: boolean }) {
-  // Accessibility mode squashes the canvas to ~half height (anchored to the
-  // bottom of the viewport) so a wheelchair user can reach the controls.
-  // Aspect ratio stays 9:16 — width shrinks proportionally.
+  // Full-mode width is derived from the 9:16 ratio at full viewport height
+  // (100vh × 9/16 ≈ 56.25vh). In accessibility mode we KEEP that width and
+  // only shrink the height to ~50vh — the screen literally lowers so a
+  // seated user can reach all controls without the canvas going narrow.
+  // Aspect ratio is therefore intentionally NOT applied; we set both
+  // dimensions directly. Anchored to the bottom of the viewport so the
+  // shrink animates downward from the top.
+  const fullWidth = 'min(100vw, calc(100vh * 9 / 16))'
   return (
     <div className="fixed inset-0 bg-black flex justify-center items-end overflow-hidden">
       <div
         className="relative bg-white shadow-2xl overflow-hidden"
         style={{
-          aspectRatio: '9 / 16',
-          height:      accessibility ? '50vh' : '100vh',
-          maxWidth:    '100vw',
-          transition:  'height 250ms ease-out',
+          width:      fullWidth,
+          height:     accessibility ? '50vh' : '100vh',
+          transition: 'height 250ms ease-out',
         }}
       >
         {children}
@@ -839,22 +851,22 @@ function ProductTile({ item, hasAllergens, sym, onTap }: {
    Customise screen — combo step / modifier walker
    ════════════════════════════════════════════════════════════════════════════ */
 
-function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCancel }: {
-  walker:       Walker
-  setWalker:    (w: Walker | null | ((prev: Walker | null) => Walker | null)) => void
-  priceLevelId: number | null
-  sym:          string
-  onCommit:     (w: Walker) => void
-  onCancel:     () => void
+function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCancel, accessibilityMode, onAccessibility }: {
+  walker:             Walker
+  setWalker:          (w: Walker | null | ((prev: Walker | null) => Walker | null)) => void
+  priceLevelId:       number | null
+  sym:                string
+  onCommit:           (w: Walker) => void
+  onCancel:           () => void
+  accessibilityMode:  boolean
+  onAccessibility:    () => void
 }) {
-  const { item, subPrices, phase, stepIdx, modGroupIdx } = walker
+  const { item, subPrices, phase, stepIdx, modGroupIdx, pendingOptModGroups } = walker
 
   // Resolve current step / modifier group based on the walker's phase + index.
-  const currentStep   = phase === 'combo-step'  ? subPrices.combo_steps[stepIdx]                : null
-  const currentModGrp = phase === 'modifier'    ? subPrices.modifier_groups[modGroupIdx]        : null
-
-  const isLastCombo = stepIdx === subPrices.combo_steps.length - 1
-  const isLastMod   = modGroupIdx === subPrices.modifier_groups.length - 1
+  const currentStep   = phase === 'combo-step'      ? subPrices.combo_steps[stepIdx]            : null
+  const currentModGrp = phase === 'modifier'        ? subPrices.modifier_groups[modGroupIdx]    : null
+  const currentOptMg  = phase === 'option-modifier' ? pendingOptModGroups[0]                    : null
 
   /* selection helpers */
   function toggleStepOpt(stepId: number, optId: number, maxSel: number) {
@@ -883,21 +895,65 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
     })
   }
 
+  // Build the option-modifier queue for a step that just finished. Pulls every
+  // modifier_groups list off the picked options in selection order, flattens
+  // and de-dupes (same group attached to two picked options shows once).
+  function buildOptModQueue(step: ComboStep, pickedOptIds: number[]): Walker['pendingOptModGroups'] {
+    const queue: Walker['pendingOptModGroups'] = []
+    const seen = new Set<string>()
+    for (const optId of pickedOptIds) {
+      const opt = step.options.find(o => o.id === optId)
+      if (!opt?.modifier_groups) continue
+      for (const g of opt.modifier_groups) {
+        const key = `${step.id}_${opt.id}_${g.modifier_group_id}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        queue.push({ stepId: step.id, option: opt, group: g })
+      }
+    }
+    return queue
+  }
+
   function advance() {
     setWalker(prev => {
       if (!prev) return prev
-      // Combo steps in progress
+
+      // Coming off a combo step → queue option modifiers attached to the
+      // picked options. Walk those before moving to the next step.
       if (prev.phase === 'combo-step') {
+        const step = prev.subPrices.combo_steps[prev.stepIdx]
+        const picked = step ? (prev.stepSelections[step.id] || []) : []
+        const queue = step ? buildOptModQueue(step, picked) : []
+        if (queue.length > 0) {
+          return { ...prev, phase: 'option-modifier', pendingOptModGroups: queue }
+        }
+        // No option-modifiers — go to next combo step or roll into SI mods.
         if (prev.stepIdx < prev.subPrices.combo_steps.length - 1) {
           return { ...prev, stepIdx: prev.stepIdx + 1 }
         }
-        // combo done → switch to modifier groups
         if (prev.subPrices.modifier_groups.length > 0) {
           return { ...prev, phase: 'modifier', modGroupIdx: 0 }
         }
-        // no SI-level mods either → done
         return { ...prev, phase: 'done' }
       }
+
+      // Coming off an option-modifier screen → drop the head, show the next
+      // queued one, or move on to the next combo step / SI modifiers / done.
+      if (prev.phase === 'option-modifier') {
+        const remaining = prev.pendingOptModGroups.slice(1)
+        if (remaining.length > 0) {
+          return { ...prev, pendingOptModGroups: remaining }
+        }
+        if (prev.stepIdx < prev.subPrices.combo_steps.length - 1) {
+          return { ...prev, phase: 'combo-step', stepIdx: prev.stepIdx + 1, pendingOptModGroups: [] }
+        }
+        if (prev.subPrices.modifier_groups.length > 0) {
+          return { ...prev, phase: 'modifier', modGroupIdx: 0, pendingOptModGroups: [] }
+        }
+        return { ...prev, phase: 'done', pendingOptModGroups: [] }
+      }
+
+      // SI-level modifier screen
       if (prev.phase === 'modifier') {
         if (prev.modGroupIdx < prev.subPrices.modifier_groups.length - 1) {
           return { ...prev, modGroupIdx: prev.modGroupIdx + 1 }
@@ -913,9 +969,23 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
       if (!prev) return prev
       if (prev.phase === 'modifier') {
         if (prev.modGroupIdx > 0) return { ...prev, modGroupIdx: prev.modGroupIdx - 1 }
-        if (prev.subPrices.combo_steps.length > 0) {
+        // Pop back to last combo step's last option-modifier (if any) or the
+        // step itself.
+        const lastStep = prev.subPrices.combo_steps[prev.subPrices.combo_steps.length - 1]
+        if (lastStep) {
+          const picked = prev.stepSelections[lastStep.id] || []
+          const q = buildOptModQueue(lastStep, picked)
+          if (q.length > 0) {
+            return { ...prev, phase: 'option-modifier', pendingOptModGroups: [q[q.length - 1]] }
+          }
           return { ...prev, phase: 'combo-step', stepIdx: prev.subPrices.combo_steps.length - 1 }
         }
+      }
+      if (prev.phase === 'option-modifier') {
+        // Going back from an option-modifier screen lands on the parent step.
+        // We re-queue the modifier groups so a forward swing doesn't lose the
+        // user's choice on this group (their selection state is untouched).
+        return { ...prev, phase: 'combo-step', pendingOptModGroups: [] }
       }
       if (prev.phase === 'combo-step' && prev.stepIdx > 0) {
         return { ...prev, stepIdx: prev.stepIdx - 1 }
@@ -954,27 +1024,44 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Total + current step counter for the header. Counts SI-level modifiers
+  // and combo steps, but NOT option-modifiers (those are conditional on
+  // selections — counter would jump unpredictably).
   const stepN = subPrices.combo_steps.length + subPrices.modifier_groups.length
-  const stepI = phase === 'combo-step' ? stepIdx + 1 : subPrices.combo_steps.length + modGroupIdx + 1
+  const stepI = phase === 'combo-step'
+    ? stepIdx + 1
+    : phase === 'modifier'
+      ? subPrices.combo_steps.length + modGroupIdx + 1
+      : stepIdx + 1   // option-modifier screens count under the parent combo step
+
+  // Whether the next tap should commit (rather than advance to another screen).
+  // True when this is the last screen in the entire walker journey.
+  const isLastScreen =
+    (phase === 'combo-step'      && stepIdx === subPrices.combo_steps.length - 1
+                                  && subPrices.modifier_groups.length === 0
+                                  && buildOptModForCurrentStep(walker).length === 0)
+    || (phase === 'option-modifier' && pendingOptModGroups.length <= 1
+                                     && stepIdx === subPrices.combo_steps.length - 1
+                                     && subPrices.modifier_groups.length === 0)
+    || (phase === 'modifier'        && modGroupIdx === subPrices.modifier_groups.length - 1)
 
   return (
-    <div className="absolute inset-0 flex flex-col bg-white">
-      {/* Header — item name + step counter */}
-      <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
-        <div>
-          <button onClick={goBack} className="text-gray-400 hover:text-gray-600 mb-1">
-            <BackChevron />
-          </button>
-          <h2 className="text-2xl font-bold text-gray-900">{item.display_name}</h2>
-          {stepN > 0 && (
-            <div className="text-sm text-gray-500 mt-1">Step {stepI} of {stepN}</div>
-          )}
-        </div>
-        <button onClick={onCancel} className="text-sm text-gray-400 hover:text-gray-600">Cancel</button>
+    <div className="absolute inset-0 flex flex-col bg-white pb-24">
+      {/* Header — item name + step counter (no buttons; nav lives in footer) */}
+      <div className="px-6 py-4 border-b border-gray-100">
+        <h2 className="text-2xl font-bold text-gray-900">{item.display_name}</h2>
+        {stepN > 0 && (
+          <div className="text-sm text-gray-500 mt-1">
+            Step {stepI} of {stepN}
+            {phase === 'option-modifier' && (
+              <span className="text-emerald-600 ml-2">· {currentOptMg?.option.display_name || currentOptMg?.option.name} extras</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 pb-32">
+      <div className="flex-1 overflow-y-auto p-4">
         {currentStep && (
           <>
             <h3 className="text-xl font-bold text-gray-900 mb-1">{currentStep.display_name || currentStep.name}</h3>
@@ -995,6 +1082,39 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
                     sym={sym}
                     selected={selected}
                     onTap={() => toggleStepOpt(currentStep.id, opt.id, currentStep.max_select)}
+                  />
+                )
+              })}
+            </div>
+          </>
+        )}
+
+        {currentOptMg && (
+          <>
+            <h3 className="text-xl font-bold text-gray-900 mb-1">{currentOptMg.group.display_name || currentOptMg.group.name}</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              For your <strong>{currentOptMg.option.display_name || currentOptMg.option.name}</strong>
+              {' · '}
+              {currentOptMg.group.min_select === 0
+                ? `optional · up to ${currentOptMg.group.max_select}`
+                : `choose ${currentOptMg.group.min_select === currentOptMg.group.max_select
+                    ? currentOptMg.group.min_select
+                    : `${currentOptMg.group.min_select}–${currentOptMg.group.max_select}`}`}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {currentOptMg.group.options.map(mo => {
+                // Option-modifier key matches commitWalker: `${stepId}_${mgId}`
+                const key      = `${currentOptMg.stepId}_${currentOptMg.group.modifier_group_id}`
+                const selected = (walker.modSelections[key] || []).includes(mo.id)
+                const addon    = priceLevelId ? (mo.prices[priceLevelId] || 0) : 0
+                return (
+                  <OptionTile
+                    key={mo.id}
+                    name={mo.display_name || mo.name}
+                    addon={addon}
+                    sym={sym}
+                    selected={selected}
+                    onTap={() => toggleModOpt(key, mo.id, currentOptMg.group.max_select)}
                   />
                 )
               })}
@@ -1033,18 +1153,59 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
         )}
       </div>
 
-      {/* Footer — Next / Done */}
-      <div className="absolute left-0 right-0 bottom-0 p-4 border-t border-gray-100 bg-white">
+      {/* Footer — full-width single bar that replaces the browse-mode bottom
+          bar during customise. Layout: [Accessibility] [Cancel] · spacer ·
+          [Back] [Next/Add]. Sits flush with the bottom edge of the canvas
+          (no overlap with anything else — the customise screen does not
+          render the basket/pay bar). */}
+      <div className="absolute left-0 right-0 bottom-0 p-3 border-t border-gray-100 bg-white flex items-center gap-2 z-30">
+        <button
+          onClick={onAccessibility}
+          title={accessibilityMode ? 'Restore full height' : 'Lower the screen for easier reach'}
+          className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 ${
+            accessibilityMode ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        ><AccessibilityIcon /></button>
+        <button
+          onClick={onCancel}
+          className="h-14 px-5 rounded-full bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200"
+        >Cancel</button>
+        <div className="flex-1" />
+        <button
+          onClick={goBack}
+          className="h-14 px-5 rounded-full bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200 flex items-center gap-1"
+        ><BackChevron size={18} /> Back</button>
         <button
           onClick={advance}
           disabled={!canAdvance(walker)}
-          className="w-full py-5 rounded-2xl bg-accent text-white text-xl font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-        >{phase === 'modifier' && isLastMod ? 'Add to basket' :
-            phase === 'combo-step' && isLastCombo && subPrices.modifier_groups.length === 0 ? 'Add to basket' :
-            'Next →'}</button>
+          className="h-14 px-7 rounded-full bg-accent text-white text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+        >{isLastScreen ? 'Add to basket' : 'Next →'}</button>
       </div>
     </div>
   )
+}
+
+/* Standalone helper — used only by isLastScreen. Mirrors the queueing logic
+   in advance() so the footer button label flips to "Add to basket" on the
+   true final screen. Doesn't mutate state. */
+function buildOptModForCurrentStep(w: Walker): { stepId: number; option: ComboOption; group: ModGroup }[] {
+  if (w.phase !== 'combo-step') return []
+  const step = w.subPrices.combo_steps[w.stepIdx]
+  if (!step) return []
+  const picked = w.stepSelections[step.id] || []
+  const out: { stepId: number; option: ComboOption; group: ModGroup }[] = []
+  const seen = new Set<string>()
+  for (const optId of picked) {
+    const opt = step.options.find(o => o.id === optId)
+    if (!opt?.modifier_groups) continue
+    for (const g of opt.modifier_groups) {
+      const key = `${step.id}_${opt.id}_${g.modifier_group_id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ stepId: step.id, option: opt, group: g })
+    }
+  }
+  return out
 }
 
 function canAdvance(w: Walker): boolean {
@@ -1059,6 +1220,13 @@ function canAdvance(w: Walker): boolean {
     if (!mg) return true
     const picked = (w.modSelections[String(mg.modifier_group_id)] || []).length
     return picked >= mg.min_select
+  }
+  if (w.phase === 'option-modifier') {
+    const head = w.pendingOptModGroups[0]
+    if (!head) return true
+    const key = `${head.stepId}_${head.group.modifier_group_id}`
+    const picked = (w.modSelections[key] || []).length
+    return picked >= head.group.min_select
   }
   return true
 }
