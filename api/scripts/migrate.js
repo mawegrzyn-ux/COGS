@@ -4028,7 +4028,7 @@ const migrations = [
      'BACK-2427',
      'Auto-derived directives — nightly Pepper memory audit',
      'Nightly cron at 02:30 UTC scans all users chat history (last 7 days, 800-row cap) and pinned memory notes (500-row cap). Sends an anonymised corpus to Claude Haiku 4.5 with strict safety prompt: REJECT directives that bypass RBAC scope, reveal credentials/identities, codify single-user preferences (must observe pattern across 2+ distinct users), or contradict safety defaults (accuracy, write-confirmation, audit logging). Belt-and-braces server-side regex filter catches anything Claude misses. Persists kept directives to mcogs_settings.data.pepper_derived_directives. buildSystemPrompt now injects manual + derived directives in two sub-sections so they are distinguishable. Settings → AI gains a read-only panel under the manual textarea showing each derived directive with confidence badge + evidence count + last-derived timestamp + corpus stats. Run-now button triggers an on-demand derivation; Clear button wipes the blob (manual directives untouched).',
-     'story', 'Medium', 'done', 5
+     'story', 'medium', 'done', 5
    )
    ON CONFLICT (key) DO UPDATE SET status = 'done', updated_at = NOW()`,
 
