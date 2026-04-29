@@ -55,7 +55,7 @@ const LAYER_PREFIXES_TO_HIDE = [
 export default function MapboxMap() {
   const api = useApi()
   const { countries, countryId, setCountryId } = useMarket()
-  const { menuTiles } = useDashboardData()
+  const { menuTiles, menus, vendors } = useDashboardData()
   const { token, loading: tokenLoading } = useMapboxToken()
   const label = useWidgetLabel('Mapbox World Map')
   const isPopout = useIsWidgetPopout()
@@ -133,6 +133,20 @@ export default function MapboxMap() {
     for (const k of Object.keys(sum)) out[Number(k)] = sum[Number(k)] / count[Number(k)]
     return out
   }, [menuTiles])
+
+  // ── Per-market rollup counts (BACK-1413 — popup enrichment) ────────────────
+  // Menu count comes from `/menus` (every menu, even unpriced ones); vendor
+  // count from `/vendors`; item-count rolled up = sum of menuTiles.item_count
+  // per country. menuTiles only loads for markets the user has access to, so
+  // an admin sees every count and a scoped operator sees only theirs.
+  const countsByMarket = useMemo(() => {
+    const out: Record<number, { menus: number; vendors: number; items: number }> = {}
+    const ensure = (id: number) => (out[id] ??= { menus: 0, vendors: 0, items: 0 })
+    for (const m of menus)     ensure(m.country_id).menus  += 1
+    for (const v of vendors)   ensure(v.country_id).vendors += 1
+    for (const t of menuTiles) ensure(t.country_id).items   += t.item_count || 0
+    return out
+  }, [menus, vendors, menuTiles])
 
   // region_id → ISO 3166-2 code
   const regionIdToIso = useMemo(() => {
@@ -467,7 +481,7 @@ export default function MapboxMap() {
         }
       }
       if (!entry) { popupRef.current?.remove(); popupRef.current = null; return }
-      showCountryPopup(map, e.lngLat, f.properties, entry, avgCogsByMarket, popupRef)
+      showCountryPopup(map, e.lngLat, f.properties, entry, avgCogsByMarket, countsByMarket, popupRef)
     }
 
     const onMoveRegions = (e: mapboxgl.MapMouseEvent) => {
@@ -485,7 +499,7 @@ export default function MapboxMap() {
             try { map.setFeatureState({ source: REGION_SRC_ID, id: iso2 }, { hover: true }) } catch { /* ignore */ }
             hoverIsoRef.current = iso2
           }
-          showRegionPopup(map, e.lngLat, f.properties, entry, avgCogsByMarket, popupRef)
+          showRegionPopup(map, e.lngLat, f.properties, entry, avgCogsByMarket, countsByMarket, popupRef)
           return
         }
       }
@@ -533,7 +547,7 @@ export default function MapboxMap() {
       map.off('mouseout', onLeave)
       map.off('click', onClickCountry)
     }
-  }, [styleReady, countryFillData, regionFillData, avgCogsByMarket, countryId, setCountryId, view])
+  }, [styleReady, countryFillData, regionFillData, avgCogsByMarket, countsByMarket, countryId, setCountryId, view])
 
   // Resize when fullscreen toggles.
   useEffect(() => {
@@ -649,12 +663,38 @@ export default function MapboxMap() {
 }
 
 // ── Popup helpers ────────────────────────────────────────────────────────────
+// Build a count chip block for the bottom of a popup. Shows menus/vendors/items
+// summed across every market in `entry.markets`. Hidden entirely when all
+// three counts are zero (e.g. country has no menus/vendors loaded).
+function countChips(
+  markets: Array<{ market: { id: number } }>,
+  countsByMarket: Record<number, { menus: number; vendors: number; items: number }>,
+): string {
+  let m = 0, v = 0, i = 0
+  for (const mc of markets) {
+    const c = countsByMarket[mc.market.id]
+    if (c) { m += c.menus; v += c.vendors; i += c.items }
+  }
+  if (m + v + i === 0) return ''
+  const chip = (n: number, label: string) =>
+    n > 0
+      ? `<span style="display:inline-flex;align-items:baseline;gap:3px"><strong style="color:var(--text-1);font-variant-numeric:tabular-nums">${n}</strong><span style="color:var(--text-3)">${label}</span></span>`
+      : ''
+  return `
+    <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:11px;color:var(--text-2);display:flex;gap:10px;flex-wrap:wrap">
+      ${chip(m, m === 1 ? 'menu'   : 'menus')}
+      ${chip(v, v === 1 ? 'vendor' : 'vendors')}
+      ${chip(i, i === 1 ? 'item'   : 'items')}
+    </div>`
+}
+
 function showCountryPopup(
   map: MbMap,
   lngLat: mapboxgl.LngLat,
   props: any,
   entry: { markets: Array<{ market: { id: number; name: string } }> },
   avgCogsByMarket: Record<number, number>,
+  countsByMarket: Record<number, { menus: number; vendors: number; items: number }>,
   popupRef: React.MutableRefObject<Popup | null>,
 ) {
   const name = String(props?.name_en || props?.name || '')
@@ -667,6 +707,7 @@ function showCountryPopup(
     <div>
       <div style="font-size:12px;font-weight:600;color:var(--text-1);margin-bottom:4px">${escapeHtml(name)}</div>
       ${lines}
+      ${countChips(entry.markets, countsByMarket)}
     </div>`
   if (!popupRef.current) popupRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 8 })
   popupRef.current.setLngLat(lngLat).setHTML(html).addTo(map)
@@ -678,6 +719,7 @@ function showRegionPopup(
   props: any,
   entry: { markets: Array<{ market: { id: number; name: string } }> },
   avgCogsByMarket: Record<number, number>,
+  countsByMarket: Record<number, { menus: number; vendors: number; items: number }>,
   popupRef: React.MutableRefObject<Popup | null>,
 ) {
   const regionName = String(props?.name || props?.name_en || props?.iso_3166_2 || '')
@@ -692,6 +734,7 @@ function showRegionPopup(
       <div style="font-size:12px;font-weight:600;color:var(--text-1);margin-bottom:2px">${escapeHtml(regionName)}</div>
       ${admin ? `<div style="font-size:10px;color:var(--text-3);margin-bottom:4px">${escapeHtml(admin)}</div>` : ''}
       ${lines}
+      ${countChips(entry.markets, countsByMarket)}
     </div>`
   if (!popupRef.current) popupRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 8 })
   popupRef.current.setLngLat(lngLat).setHTML(html).addTo(map)

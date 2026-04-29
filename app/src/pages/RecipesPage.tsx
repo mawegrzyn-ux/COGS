@@ -22,6 +22,12 @@ interface RecipeItem {
   prep_qty:               number
   prep_unit:              string | null
   prep_to_base_conversion:number
+  // When true, this item's prep_qty becomes the multiplier applied to every
+  // modifier-option cost on sales items / combo step options that use this
+  // recipe (e.g. Bone-In 6 with Bone-In Wing flagged at 6 → 6× sauce per
+  // portion). Single-flag-per-recipe enforced server-side. Honoured only
+  // when the global modifier_multiplier_enabled setting is on.
+  is_modifier_multiplier?: boolean
   ingredient_name?:       string
   base_unit_abbr?:        string
   sub_recipe_name?:       string
@@ -789,6 +795,34 @@ export default function RecipesPage() {
       showToast(err.message || 'Save failed', 'error')
     }
   }
+
+  // Toggle the modifier-multiplier flag on a recipe item. Only meaningful
+  // for ingredient-typed items on the GLOBAL recipe (not variations) — server
+  // enforces single-flag-per-recipe inside a transaction, clearing the flag
+  // on every other row before setting it on the target. Optimistic UI swap
+  // followed by loadDetail to pick up the cleared flags on other rows.
+  const toggleMultiplierFlag = async (item: RecipeItem) => {
+    if (!selected) return
+    const next = !(item.is_modifier_multiplier ?? false)
+    try {
+      await api.put(`/recipes/${selected.id}/items/${item.id}`, {
+        prep_qty:                Number(item.prep_qty),
+        prep_unit:               item.prep_unit ?? null,
+        prep_to_base_conversion: Number(item.prep_to_base_conversion) || 1,
+        is_modifier_multiplier:  next,
+      })
+      loadDetail(selected.id)
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update multiplier flag', 'error')
+    }
+  }
+
+  // Multiplier UI is only visible / interactive when the user is looking at
+  // the GLOBAL recipe (no specific market or PL variation). Variations
+  // inherit the global flag value but cannot set their own (v1 simplification).
+  // selectedCountryId is 'GLOBAL' | '' | number; both string forms mean
+  // unscoped. PL must also be unset.
+  const isGlobalView = (selectedCountryId === 'GLOBAL' || selectedCountryId === '') && !selectedPriceLevelId
 
   // ── Column sort toggle ────────────────────────────────────────────────────
   function cycleItemSort(field: ItemSortField) {
@@ -1862,6 +1896,14 @@ export default function RecipesPage() {
                           {itemSortField === 'custom' && <th className="w-6" />}
                           <SortTh label="Ingredient" field="name" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
                           <SortTh label="Qty"        field="qty"  sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
+                          {/* × mod — modifier multiplier flag. Only one item per
+                              recipe can carry it; the flagged item's prep_qty
+                              becomes the multiplier on attached modifier costs.
+                              Hidden when looking at a market/PL variation
+                              (variations inherit the global flag, can't override). */}
+                          {isGlobalView && (
+                            <th className="px-2 py-2.5 text-center text-xs font-semibold text-text-3" title="Modifier multiplier — flag the item whose qty multiplies modifier costs (e.g. Bone-In Wing × 6 → sauce × 6 per portion).">× mod</th>
+                          )}
                           {activeCogs && <SortTh label={`Cost (${displayCurrency.code})`} field="cost" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="right" className="px-4 py-2.5" />}
                           <th className="w-16" />
                         </tr>
@@ -1935,6 +1977,28 @@ export default function RecipesPage() {
                                   </span>
                                 </span>
                               </td>
+                              {/* × mod cell — checkbox toggling the
+                                  is_modifier_multiplier flag. Single-flag-per
+                                  recipe enforced server-side. Disabled for
+                                  recipe-typed items (sub-recipes can't
+                                  themselves carry the flag — flag the leaf
+                                  ingredient instead) and on variations. */}
+                              {isGlobalView && (
+                                <td className="px-2 py-2.5 text-center" onClick={e => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!item.is_modifier_multiplier}
+                                    disabled={item.item_type !== 'ingredient'}
+                                    onChange={() => toggleMultiplierFlag(item)}
+                                    className="cursor-pointer"
+                                    title={item.item_type !== 'ingredient'
+                                      ? 'Only ingredient lines can be flagged as the multiplier'
+                                      : (item.is_modifier_multiplier
+                                          ? `Flagged — modifier costs scale by ${fmtQty(item.prep_qty)}× (this item''s qty)`
+                                          : `Click to flag this item as the multiplier (sets modifier scale to ${fmtQty(item.prep_qty)}×)`)}
+                                  />
+                                </td>
+                              )}
                               {activeCogs && (
                                 <td className="px-4 py-2.5 text-right font-mono">
                                   {localCost != null

@@ -933,7 +933,7 @@ function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variatio
  * Each option can have modifier groups; their options also avg.
  * Returns cost in USD base (per portion, before exchange_rate).
  */
-function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
+function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId, multiplierEnabled = false) {
   let total = 0;
   for (const step of steps) {
     const opts = step.options || [];
@@ -943,7 +943,15 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
     for (const opt of opts) {
       let optCost = resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
 
-      // Add avg modifier group cost for this option
+      // Modifier multiplier — when the global setting is enabled and this
+      // step option points at a recipe with a flagged ingredient, every
+      // attached modifier group's avg cost is scaled by the multiplier.
+      // Different options in the same step can have different multipliers.
+      const optM = (multiplierEnabled && opt.item_type === 'recipe' && opt.recipe_id)
+        ? resolveRecipeMultiplier(opt.recipe_id, recipeItemsMap, true)
+        : 1;
+
+      // Add avg modifier group cost for this option (× multiplier).
       if (opt.mod_options && opt.mod_options.length) {
         // Group by modifier_group_id to avg per group
         const groupMap = {};
@@ -954,7 +962,7 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
         for (const groupOpts of Object.values(groupMap)) {
           const costs = groupOpts.map(mo => resolveOptionCost(mo, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId));
           const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
-          optCost += avg;
+          optCost += avg * optM;
         }
       }
 
@@ -986,8 +994,41 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
  *   options within a step (matching calcComboCost's avg-per-step semantics),
  *   summed across steps.
  */
+/**
+ * Resolves the modifier multiplier for a recipe (M). The multiplier is the
+ * prep_qty of the recipe's flagged item (`is_modifier_multiplier = TRUE` on
+ * the global recipe items only — not variations). Used to scale modifier
+ * option qty/cost so a Bone-In 6 recipe with 6× wings flagged makes attached
+ * Flavour-Choice modifiers consume 6× sauce per portion.
+ *
+ * Returns 1 when:
+ *   - the global toggle is off (caller passes multiplierEnabled = false), OR
+ *   - the recipe has no flagged item, OR
+ *   - the recipe id is null/missing (e.g. ingredient or manual sales item)
+ */
+function resolveRecipeMultiplier(recipeId, recipeItemsMap, multiplierEnabled) {
+  if (!multiplierEnabled || !recipeId) return 1;
+  const items = recipeItemsMap[recipeId] || [];
+  const flagged = items.find(i =>
+    i.is_modifier_multiplier === true &&
+    i.variation_id == null &&
+    i.pl_variation_id == null &&
+    i.market_pl_variation_id == null
+  );
+  if (!flagged) return 1;
+  const m = Number(flagged.prep_qty);
+  return isFinite(m) && m > 0 ? m : 1;
+}
+
 async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
-  const { countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId } = ctx;
+  const {
+    countryId, quoteLookup, recipeItemsMap,
+    variationMap, plVariationMap, marketPlVariationMap, priceLevelId,
+    // multiplierForSi(salesItemId) → number; multiplierForOption(comboStepOptionId) → number.
+    // When omitted (older callers) both default to ()=>1 — toggle-off behaviour.
+    multiplierForSi      = () => 1,
+    multiplierForOption  = () => 1,
+  } = ctx;
   const bySi = {};
   const byCombo = {};
 
@@ -1062,6 +1103,9 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
     }
     for (const siId of salesItemIds) {
       const groups = siGroups[siId] || {};
+      // Multiplier resolved once per SI — every modifier group attached to
+      // this SI shares the same multiplier (the SI's recipe is the source).
+      const M = multiplierForSi(Number(siId)) || 1;
       let adder = 0;
       for (const g of Object.values(groups)) {
         if (!g.options.length || !g.min_select) continue;
@@ -1070,7 +1114,7 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
           return unit * Number(o.qty || 1);
         });
         const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
-        adder += avg * g.min_select;
+        adder += avg * g.min_select * M;
       }
       bySi[siId] = adder;
     }
@@ -1091,7 +1135,11 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
       let comboDelta = 0;
       for (const stepId of Object.keys(steps)) {
         const optionsTree = steps[stepId];
-        const optionDeltas = Object.values(optionsTree).map(groupsByGroupId => {
+        // Iterate with [optId, groupsByGroupId] so we can resolve each combo
+        // step option's own multiplier (its recipe_id flagged item) — different
+        // options in the same step can carry different multipliers.
+        const optionDeltas = Object.entries(optionsTree).map(([optId, groupsByGroupId]) => {
+          const M = multiplierForOption(Number(optId)) || 1;
           let optDelta = 0;
           for (const g of Object.values(groupsByGroupId)) {
             if (!g.options.length) continue;
@@ -1100,7 +1148,11 @@ async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
               return unit * Number(o.qty || 1);
             });
             const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
-            optDelta += avg * (Number(g.min_select) - 1);
+            // Total required modifier cost when the toggle is on = avg × min × M.
+            // calcComboCost has already embedded avg × M (see its multiplier
+            // logic below) when the global setting is enabled, so the delta
+            // we add here covers the remaining (min − 1) selections × M.
+            optDelta += avg * M * (Number(g.min_select) - 1);
           }
           return optDelta;
         });
@@ -1242,14 +1294,46 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
     let totalCost = 0, totalSellNet = 0, totalSellGross = 0;
     const exchRate = Number(menu.exchange_rate) || 1;
 
+    // ── Modifier multiplier setting ────────────────────────────────────────
+    // Read once per request. When ON, modifier-option costs are scaled by
+    // the recipe's flagged item qty (resolveRecipeMultiplier). Default OFF
+    // so existing menus don't change cost silently.
+    const settingsRow = await pool.query(`SELECT data FROM mcogs_settings LIMIT 1`).catch(() => ({ rows: [] }));
+    const multiplierEnabled = settingsRow.rows[0]?.data?.modifier_multiplier_enabled === true;
+
     // ── Modifier-cost adders (USD base) per item ───────────────────────────
     // Used by the "Include modifier cost" toggle in Menu Engineer / Shared.
-    // See loadModifierCostAdders() above for the math (full × min_select for
-    // SI groups, delta-over-avg×1 for combo step option groups).
+    // See loadModifierCostAdders() above for the math (full × min_select × M
+    // for SI groups, delta-over-avg×M for combo step option groups).
     const _siIds = [...new Set(items.map(i => Number(i.sales_item_id)))];
+
+    // Per-SI multiplier resolver — looks up the SI's recipe (if any) and
+    // returns its flagged item's prep_qty. Closes over `items` + recipeItemsMap.
+    const multiplierForSi = (siId) => {
+      if (!multiplierEnabled) return 1;
+      const it = items.find(i => Number(i.sales_item_id) === siId);
+      if (!it || it.item_type !== 'recipe' || !it.recipe_id) return 1;
+      return resolveRecipeMultiplier(it.recipe_id, recipeItemsMap, true);
+    };
+    // Per-combo-step-option multiplier — finds the option in comboData and
+    // resolves from its recipe_id.
+    const multiplierForOption = (optId) => {
+      if (!multiplierEnabled) return 1;
+      for (const steps of Object.values(comboData)) {
+        for (const step of steps) {
+          const opt = (step.options || []).find(o => Number(o.id) === optId);
+          if (!opt) continue;
+          if (opt.item_type !== 'recipe' || !opt.recipe_id) return 1;
+          return resolveRecipeMultiplier(opt.recipe_id, recipeItemsMap, true);
+        }
+      }
+      return 1;
+    };
+
     const { bySi: modifierCostAdderBySi, byCombo: modifierCostAdderByComboId } =
       await loadModifierCostAdders(_siIds, comboIds, {
         countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId,
+        multiplierForSi, multiplierForOption,
       });
 
     for (const item of items) {
@@ -1272,7 +1356,7 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         cppUsd = cost * qty;
       } else if (itemType === 'combo') {
         const steps = comboData[Number(item.combo_id)] || [];
-        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) * qty;
+        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId, multiplierEnabled) * qty;
       }
       const cpp = Math.round(cppUsd * exchRate * 10000) / 10000;
 
@@ -1364,4 +1448,4 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
   }
 });
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax, loadModifierCostAdders };
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax, loadModifierCostAdders, resolveRecipeMultiplier };

@@ -316,14 +316,24 @@ async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
     }
   }
 
+  // Modifier multiplier (M) — when the global setting is on AND the parent SI
+  // is a recipe with a flagged ingredient, every modifier option's cost is
+  // scaled by the flagged item's prep_qty. Resolves to 1 otherwise.
+  const { resolveRecipeMultiplier } = require('./cogs');
+  const M = (costCtx?.multiplierEnabled && costCtx?.salesItemRecipeId)
+    ? resolveRecipeMultiplier(costCtx.salesItemRecipeId, costCtx.recipeItemsMap, true)
+    : 1;
+
   // Compute per-option cost (USD base × exchange_rate = market currency).
   // qty multiplier is applied here so the figure reflects the actual amount
-  // consumed per selection (e.g. 50 g sauce vs 100 g).
+  // consumed per selection (e.g. 50 g sauce vs 100 g). M scales by the
+  // SI's recipe multiplier — same reasoning, applied at a higher level
+  // (e.g. 6 wings × 50 g sauce = 300 g per Bone-In 6 portion).
   const computeCost = (o) => {
     if (!costCtx) return 0;
     const unit = _optionUnitCost(o, costCtx.countryId, costCtx.quoteLookup, costCtx.recipeItemsMap, costCtx.variationMap, costCtx.plVariationMap, costCtx.marketPlVariationMap, costCtx.priceLevelId);
     const qty = Number(o.qty || 1);
-    return unit * qty * (costCtx.exchangeRate || 1);
+    return unit * qty * M * (costCtx.exchangeRate || 1);
   };
 
   const optByMg = {};
@@ -429,25 +439,41 @@ async function loadComboStructure(comboId, msiId, costCtx) {
           modPriceMap[p.modifier_option_id][p.price_level_id] = Number(p.sell_price);
         }
       }
-      const computeModCost = (o) => {
+      // Modifier-option cost depends on the parent combo step option's
+      // multiplier (its recipe's flagged item). Different step options can
+      // have different multipliers, so we compute cost PER (parent option,
+      // modifier option) pair rather than once per modifier option. The
+      // shared modOptRows list is reused but each optModMap entry gets its
+      // own copy of the options with the correct cost stamped in.
+      const { resolveRecipeMultiplier } = require('./cogs');
+      const multiplierForOpt = (csOptId) => {
+        if (!costCtx?.multiplierEnabled) return 1;
+        const parent = opts.find(o => o.id === csOptId);
+        if (!parent || parent.item_type !== 'recipe' || !parent.recipe_id) return 1;
+        return resolveRecipeMultiplier(parent.recipe_id, costCtx.recipeItemsMap, true);
+      };
+      const computeModCost = (o, M) => {
         if (!costCtx) return 0;
         const unit = _optionUnitCost(o, costCtx.countryId, costCtx.quoteLookup, costCtx.recipeItemsMap, costCtx.variationMap, costCtx.plVariationMap, costCtx.marketPlVariationMap, costCtx.priceLevelId);
         const qty = Number(o.qty || 1);
-        return unit * qty * (costCtx.exchangeRate || 1);
+        return unit * qty * M * (costCtx.exchangeRate || 1);
       };
-      const modOptByMg = {};
+      // Pre-bucket modifier options by group_id (raw rows; cost applied later).
+      const modOptsByMg = {};
       for (const o of modOptRows) {
-        if (!modOptByMg[o.modifier_group_id]) modOptByMg[o.modifier_group_id] = [];
-        modOptByMg[o.modifier_group_id].push({
-          id: o.id, name: o.name, display_name: o.display_name || null,
-          item_type: o.item_type, qty: Number(o.qty || 1),
-          cost: computeModCost(o),
-          prices: modPriceMap[o.id] || {},
-        });
+        if (!modOptsByMg[o.modifier_group_id]) modOptsByMg[o.modifier_group_id] = [];
+        modOptsByMg[o.modifier_group_id].push(o);
       }
       for (const r of csomgRows) {
         if (!optModMap[r.combo_step_option_id]) optModMap[r.combo_step_option_id] = [];
-        const groupOpts = modOptByMg[r.modifier_group_id] || [];
+        const M = multiplierForOpt(r.combo_step_option_id);
+        const rawOpts = modOptsByMg[r.modifier_group_id] || [];
+        const groupOpts = rawOpts.map(o => ({
+          id: o.id, name: o.name, display_name: o.display_name || null,
+          item_type: o.item_type, qty: Number(o.qty || 1),
+          cost: computeModCost(o, M),
+          prices: modPriceMap[o.id] || {},
+        }));
         const costs = groupOpts.map(o => o.cost || 0);
         const avg_cost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
         const min_cost = costs.length ? Math.min(...costs) : 0;
@@ -500,7 +526,7 @@ router.get('/:id/sub-prices', async (req, res, next) => {
     const priceLevelId = req.query.price_level_id ? Number(req.query.price_level_id) : null;
     const { rows: msiRows } = await pool.query(
       `SELECT msi.id, msi.sales_item_id, msi.menu_id,
-              si.item_type, si.combo_id,
+              si.item_type, si.combo_id, si.recipe_id AS si_recipe_id,
               m.country_id, c.exchange_rate,
               (SELECT COUNT(*) FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
        FROM   mcogs_menu_sales_items msi
@@ -558,6 +584,21 @@ router.get('/:id/sub-prices', async (req, res, next) => {
         loadPlVariationItemsMap(recipeIds),
         loadMarketPlVariationItemsMap(recipeIds),
       ]);
+      // Read the modifier-multiplier global setting once. When OFF (default)
+      // multiplier resolves to 1 everywhere — sub-price output is identical
+      // to the pre-feature behaviour.
+      const settingsRow = await pool.query(`SELECT data FROM mcogs_settings LIMIT 1`).catch(() => ({ rows: [] }));
+      const multiplierEnabled = settingsRow.rows[0]?.data?.modifier_multiplier_enabled === true;
+
+      // If the SI itself is recipe-typed and the multiplier is enabled, pull
+      // its recipe items into the map so resolveRecipeMultiplier can find
+      // the flagged item. Existing query above only fetches modifier-option
+      // recipes; the SI's own recipe wasn't needed previously.
+      if (multiplierEnabled && msi.si_recipe_id && !recipeItemsMap[msi.si_recipe_id]) {
+        const extra = await loadAllRecipeItemsDeep([Number(msi.si_recipe_id)]);
+        for (const [k, v] of Object.entries(extra)) recipeItemsMap[k] = v;
+      }
+
       costCtx = {
         countryId:    msi.country_id,
         exchangeRate: Number(msi.exchange_rate || 1),
@@ -567,6 +608,11 @@ router.get('/:id/sub-prices', async (req, res, next) => {
         variationMap,
         plVariationMap,
         marketPlVariationMap,
+        // Multiplier plumbing — read by loadModifierGroupsForItem (uses the
+        // SI's recipe) and loadComboStructure (uses each combo step option's
+        // own recipe). Off when multiplierEnabled is false → M = 1 always.
+        multiplierEnabled,
+        salesItemRecipeId: msi.si_recipe_id ?? null,
       };
     } catch (err) {
       console.warn('[sub-prices] cost context load failed:', err.message);

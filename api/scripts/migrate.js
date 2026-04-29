@@ -3861,6 +3861,124 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-28' AND title = 'Modifier costs in COGS + standalone Pepper PWA + inline-edit focus fixes'
    )`,
+
+  // ── Step 161: Bugs (resolved this session) ────────────────────────────────
+  `INSERT INTO mcogs_bugs (key, summary, description, priority, severity, status, labels, page, resolution) VALUES
+    ('BUG-1034', 'Pepper missed BACK-#### / BUG-#### lookups when search past first 50 rows',
+     'list_backlog and list_bugs default to LIMIT 50 ordered by sort_order ASC. Items with high sort_order (BACK-1400, BACK-1928, etc.) sit past the cutoff and the existing search filter only matched summary + description — not key — so passing "BACK-1400" as search returned nothing. Pepper concluded the row didn''t exist instead of recognising it had been truncated.',
+     'high', 'major', 'resolved', '["pepper","search"]'::jsonb, 'AI Chat',
+     'Search filter on both list_backlog and list_bugs now matches key ILIKE alongside summary + description. Tool descriptions updated so Pepper knows to pass the key as the search term when the user names a specific item.'),
+
+    ('BUG-1035', 'Migration step 160 changelog rejected — Token "avg" is invalid',
+     'Step 160 INSERT into mcogs_changelog used \\"avg ₹X.XX\\" inside a JS template literal that holds the raw SQL. JS evaluates \\" to a literal " character so the SQL Postgres received had unescaped quotes inside the JSONB string ("group/step headers show "avg ₹X.XX (₹min–₹max)" — …"), breaking JSON parse at column 155. Deploy aborted; migration rolled back.',
+     'highest', 'critical', 'resolved', '["migrations","jsonb"]'::jsonb, 'API',
+     'Replaced every \\"…\\" inside JSONB string contents with typographic curly quotes (U+201C / U+201D). Same fix pattern as a prior session''s changelog escape bug. JSONB parses cleanly now; node-eval JSON.parse validation added to the EOS workflow before commit.'),
+
+    ('BUG-1036', 'Languages admin UI missing — BACK-1351 marked done prematurely',
+     'BACK-1351 (Foundation — mcogs_languages table + /api/languages CRUD + Settings → Localisation tab) was flipped to done during yesterday''s EOS audit. Table + API + LanguageSwitcher + LanguageContext all exist, but there''s no admin UI to flip is_active per language — the Configuration / System pages have a "Localization" doc page marked PLANNED, not a working CRUD form. Operator complaint: only English appears in the top-bar dropdown despite 10 languages being seeded.',
+     'high', 'major', 'resolved', '["languages","admin-ui"]'::jsonb, 'Configuration',
+     'New Configuration → Languages section (🌐 icon, gated by settings:write). Lists every row from /api/languages with toggles for is_active, is_rtl, "make default" link, edit + delete (refuses English and the current default at both client and server). Add-language modal posts to /api/languages. LanguageProvider already filters by is_active so toggling rebuilds the top-bar dropdown on next session.'),
+
+    ('BUG-1037', 'Combo edit form used raw URL input instead of ImageUpload',
+     'Edit Combo modal''s Image URL field was a plain <input> with placeholder https://… while every other image field on the same Sales Items page (sales item form, modifier option form, panel detail form) used the shared ImageUpload component (browse media library + drag-drop upload + preview). Inconsistent UX and forced operators to paste image URLs manually.',
+     'medium', 'minor', 'resolved', '["sales-items","ui"]'::jsonb, 'Sales Items',
+     'Swapped the bare URL input for <ImageUpload formKey="combo" /> matching the surrounding pattern. Removed the manual <img> tag with onError fallback — ImageUpload renders preview itself.'),
+
+    ('BUG-1038', 'Modifier rows in Menu Builder list-view not visibly indented',
+     'In the Menu Builder''s combo expand view, modifier group + modifier option rows nested under a combo step option appeared at almost the same horizontal position as their parent option, making the hierarchy step → option → modifier illegible at a glance.',
+     'medium', 'minor', 'resolved', '["menus","ui"]'::jsonb, 'Menus',
+     'Modifier group row paddingLeft 3rem→5rem and inner marginLeft 1.5rem→2.5rem (effective indent 4.5rem→7.5rem). Modifier option SubPriceRow marginLeft 3rem→5rem. Visual cascade now reads cleanly.'),
+
+    ('BUG-1039', 'Kiosk customise screen progress button hidden behind browse bottom bar',
+     'The kiosk page rendered the browse-mode bottom bar (basket count + total + red PAY button) on both browse and customise phases. During customise, the customise screen''s own "Next →" button sat at the same position as the BottomBar — the Next button was almost invisible behind it.',
+     'high', 'major', 'resolved', '["kiosk","ui"]'::jsonb, 'Kiosk Mockup',
+     'Page-level BottomBar now only renders on phase === "browse". CustomiseScreen renders its own footer flush with the bottom edge (single bar with [Accessibility][Cancel] · spacer · [← Back][Next/Add]) so there is no overlap and the progress button is always clearly visible.'),
+
+    ('BUG-1040', 'Kiosk combo flow never walked option-level modifier groups',
+     'Combos with modifier groups attached to a step option (e.g. "Sides Seasoning" attached to the Fries combo option) didn''t prompt the customer for those modifiers. The Walker had a pendingOptModGroups field but it was never populated — the customer skipped straight to the next combo step or SI-level modifiers.',
+     'highest', 'major', 'resolved', '["kiosk","combos","modifiers"]'::jsonb, 'Kiosk Mockup',
+     'New "option-modifier" walker phase. After a combo step''s options are picked and the customer taps Next, advance() builds a queue of every modifier_groups attached to the picked options (de-duped) and walks them as separate screens between combo steps. Header reads "Step N of M · Fries extras" so the customer knows which option the modifier belongs to. Selection key (stepId_modifierGroupId) matches what commitWalker already expected, so totals flow through.'),
+
+    ('BUG-1041', 'Kiosk accessibility mode shrank width as well as height',
+     'KioskFrame used CSS aspect-ratio 9/16 with height: 50vh in accessibility mode. Aspect-ratio forces width to follow → the canvas became 50vh × 28vh (a tall narrow strip) instead of "lower the screen for a seated user".',
+     'medium', 'minor', 'resolved', '["kiosk","accessibility"]'::jsonb, 'Kiosk Mockup',
+     'Dropped aspect-ratio. Width now fixed at min(100vw, calc(100vh × 9 / 16)) in both modes; only height toggles between 100vh and 50vh. Canvas literally lowers from above; nothing reflows horizontally.')
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 162: Backlog (done this session) ─────────────────────────────────
+  `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, labels, sort_order) VALUES
+    ('BACK-1968', 'Languages admin UI (Configuration → Languages section)',
+     'Configuration page gains a new 🌐 Languages section gated by settings:write. Lists every row from /api/languages with: Active checkbox (cannot deactivate English or the current default), "make default" link (disabled until active), RTL flag toggle, edit/delete (delete refuses English and the default at both client and server). Add-language modal collects code + English name + native name + RTL flag, posts to /api/languages. Optimistic updates with auto-revert on failure. Toast notifications.',
+     'story', 'high', 'done', '["languages","admin","configuration"]'::jsonb, 1968),
+
+    ('BACK-1969', 'Hash-based section deep-linking for /system and /configuration',
+     'Both pages now read window.location.hash on mount (and on hashchange) to set their initial active section — e.g. /system#bugs-backlog opens the Bugs & Backlog section directly. Unknown / missing hashes fall through to the default section. Existing internal sidebar clicks do NOT write the hash (the address bar stays clean for users who got there normally). Pairs with the navigate_to_page Pepper tool extension below.',
+     'task', 'medium', 'done', '["routing","navigation"]'::jsonb, 1969),
+
+    ('BACK-1970', 'Pepper navigate_to_page tool gains optional section param + pepper page',
+     'navigate_to_page now accepts an optional section parameter that becomes the URL hash. Tool description teaches Pepper the supported sections per page (system: ai/bugs-backlog/jira/audit-log/storage/database/test-data/tests/doc-library/pos-tester/localization/architecture/api-reference/security/troubleshooting/domain-migration/claude-doc; configuration: global-config/location-structure/categories/units/price-levels/currency/cogs-thresholds/users-roles/import/media/stock-config/languages). Page enum also gained "pepper" so "open pepper" routes to the standalone PWA. "Open backlog" now actually lands on the Bugs & Backlog section instead of the AI default.',
+     'task', 'high', 'done', '["pepper","navigation"]'::jsonb, 1970),
+
+    ('BACK-1971', 'Backlog kanban: vertical sort within a priority column',
+     'Tiles in the kanban view can now be reordered within their priority column by drag-drop. New kanbanDragOverTileId state tracks the hover-target tile and renders an accent-coloured top border as a "drop above" indicator. onKanbanDrop(id, newPriority, beforeTileId) rebuilds the full backlog ordering — removes dragged item, stamps the new priority, inserts before beforeTileId (or appends to the column if dropped on empty space), then PUTs priority (only when changed) followed by /backlog/reorder with the new sort_order list. Same-priority drops are silent (no toast spam); cross-column drops still toast.',
+     'story', 'medium', 'done', '["backlog","kanban","ui"]'::jsonb, 1971),
+
+    ('BACK-1972', 'Self-service ordering kiosk mockup at /kiosk',
+     'New full-screen kiosk page rendering a 9:16 portrait canvas scaled to viewport height (the way a real 32-inch wall-mount kiosk sits). Setup: admin picks a menu, taps Launch. Customer flow: order-type tile picker (price levels) → browse with categories left + product tiles right (image fallback to initials, allergen ⚠ badge from /api/allergens/menu/:id) → customise screen with combo step walker / modifier prompts (large tap targets, step counter) → bottom-sheet basket modal (qty stepper + remove + tap-line-to-edit) → pay-method picker (💳 Card simulated 1.8s, 💵 Cash 1.2s with QR for till settlement) → receipt with deterministic dummy QR for cash orders. Backend touch: cogs.js /menu-sales SELECT augmented with si.image_url and si.description. Auth-gated; rendered outside AppLayout for full bleed.',
+     'epic', 'high', 'done', '["kiosk","mockup","ui"]'::jsonb, 1972),
+
+    ('BACK-1973', 'Kiosk improvements — option modifiers + footer redesign + accessibility width',
+     'Five hits on the same review. (1) Combo flow now walks option-level modifier groups — new "option-modifier" walker phase queues the groups attached to picked combo options and shows them between steps. (2) Customise screen no longer overlaps the browse-mode bottom bar (page-level BottomBar suppressed during customise; CustomiseScreen renders its own footer). (3) Footer redesign: [Accessibility][Cancel] · spacer · [← Back][Next/Add]. (4) Cancel moved from the customise header into the new footer next to accessibility. (5) Accessibility mode now keeps width — KioskFrame uses min(100vw, 100vh × 9/16) for width in both modes; only height toggles between 100vh and 50vh.',
+     'story', 'high', 'done', '["kiosk","modifiers","accessibility"]'::jsonb, 1973)
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 162a: BACK-1413 done — map tooltip enhancements ───────────────────
+  // Already flipped on production via the internal API; this UPDATE keeps a
+  // fresh DB rebuild in step. Idempotent.
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-1413' AND status <> 'done'`,
+
+  // ── Step 162b: Modifier multiplier flag ───────────────────────────────────
+  // Adds is_modifier_multiplier to mcogs_recipe_items. When set on a global
+  // recipe item (variation_id IS NULL), the item''s prep_qty becomes the
+  // multiplier applied to every modifier-option cost on sales items / combo
+  // step options that use this recipe — so a Bone-In 6 with its Bone-In Wing
+  // line flagged (qty=6) makes attached Flavour-Choice modifiers consume 6×
+  // sauce per portion. Only one item per recipe can carry the flag (partial
+  // unique index). Behaviour gated by mcogs_settings.data.modifier_multiplier_enabled
+  // (default off — existing menus don''t change cost silently).
+  `ALTER TABLE mcogs_recipe_items ADD COLUMN IF NOT EXISTS is_modifier_multiplier BOOLEAN NOT NULL DEFAULT FALSE`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_recipe_items_modifier_multiplier_global
+     ON mcogs_recipe_items(recipe_id)
+     WHERE is_modifier_multiplier = TRUE
+       AND variation_id IS NULL
+       AND pl_variation_id IS NULL
+       AND market_pl_variation_id IS NULL`,
+
+  // ── Step 163: Changelog — Apr 29 — kiosk + map tooltips + languages admin ─
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-29', 'Kiosk mockup + map tooltip counts + Languages admin UI + kanban vertical sort', '[
+     {"type":"added","description":"Self-service ordering kiosk mockup at /kiosk (BACK-1972). Full-screen 9:16 portrait canvas scaled to viewport height. Customer flow: order-type → browse → customise (combo step walker + modifier prompts) → basket → pay → receipt. Accessibility mode squashes height to 50vh keeping width. Auth-gated; rendered outside AppLayout. Backend: cogs.js /menu-sales SELECT now returns si.image_url + si.description."},
+     {"type":"added","description":"Map tooltip enhancements (BACK-1413). Both world-map widgets now show menu count + vendor count + rolled-up item count chips below the per-market COGS list. MapboxMap country and region popups + MarketMap (react-simple-maps) tooltip both updated. Counts derive from existing useDashboardData collections (no extra API)."},
+     {"type":"added","description":"Configuration → Languages admin UI (BACK-1968). Toggle is_active per language (controls top-bar LanguageSwitcher), set default, edit name / native name, RTL flag, add/delete with system-language guards. Backed by /api/languages CRUD. Operators can now activate French / Hindi / Czech / etc. without touching SQL."},
+     {"type":"added","description":"Backlog kanban vertical reorder (BACK-1971). Drag a tile onto a sibling tile to insert above; cross-column moves still work via column drop. Persists via /backlog/reorder. Same-priority drops are silent."},
+     {"type":"added","description":"Hash-based section deep-linking on /system + /configuration (BACK-1969). External links and Pepper''s navigate_to_page can drop the user onto a specific section (e.g. /system#bugs-backlog opens Bugs & Backlog directly)."},
+     {"type":"changed","description":"Pepper navigate_to_page tool extended (BACK-1970). New optional section parameter; tool description teaches every supported section per page. Page enum gained pepper so the standalone PWA is reachable. Fixes “open backlog” landing on the AI default section."},
+     {"type":"changed","description":"Combo edit form on Sales Items now uses the shared <ImageUpload> component (browse media library + drag-drop upload + preview) for parity with every other image field on the page. Was a raw URL input."},
+     {"type":"changed","description":"Modifier rows in Menu Builder list-view bumped indent — paddingLeft 3rem→5rem, marginLeft 1.5rem→2.5rem on the group header; option marginLeft 3rem→5rem. Visual cascade step → option → modifier now reads at a glance."},
+     {"type":"fixed","description":"BUG-1034: Pepper missed BACK-#### / BUG-#### items past the default 50-row LIMIT. list_backlog + list_bugs search now matches key ILIKE alongside summary + description; tool descriptions updated so Pepper passes the key as the search term instead of assuming the row is missing."},
+     {"type":"fixed","description":"BUG-1035: migration step 160 changelog INSERT was rejected (Token “avg” is invalid). Escaped \\\" inside the JS template literal evaluated to a literal “ inside the JSONB string, breaking parse. Replaced with curly quotes throughout."},
+     {"type":"fixed","description":"BUG-1036: Languages admin UI was missing despite BACK-1351 being marked done. Now built (see BACK-1968) — the dropdown will show every language whose Active toggle is on."},
+     {"type":"fixed","description":"BUG-1037: combo edit form used raw URL input instead of ImageUpload (see “Changed” entry above)."},
+     {"type":"fixed","description":"BUG-1038: modifier rows not visibly indented in Menu Builder list-view (see “Changed” entry above)."},
+     {"type":"fixed","description":"BUG-1039: kiosk customise progress button hidden behind the browse-mode bottom bar. Page-level BottomBar now only renders on the browse phase; customise screen owns its own footer."},
+     {"type":"fixed","description":"BUG-1040: kiosk combo flow never walked option-level modifier groups. Added a new “option-modifier” walker phase that queues every modifier_groups attached to picked combo options and shows them as separate screens between steps. Header indicates which option the modifier belongs to."},
+     {"type":"fixed","description":"BUG-1041: kiosk accessibility mode shrank width as well as height. Dropped aspect-ratio; KioskFrame width is now fixed at min(100vw, 100vh × 9/16) in both modes; only height toggles."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-29' AND title = 'Kiosk mockup + map tooltip counts + Languages admin UI + kanban vertical sort'
+   )`,
 ];
 
 async function runMigrations(pool) {

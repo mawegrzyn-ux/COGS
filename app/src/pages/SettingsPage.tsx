@@ -871,6 +871,10 @@ function ThresholdsTab() {
   const [acceptable, setAcceptable] = useState(35)
   const [targetCogs, setTargetCogs] = useState('')
   const [costingMethod, setCostingMethod] = useState<CostingMethod>('best')
+  // Modifier multiplier — when on, modifier-option costs in Menu Engineer
+  // / Shared view scale by the qty of an ingredient flagged as "× mod" on
+  // the underlying recipe. Default off so existing menus don't shift.
+  const [multiplierEnabled, setMultiplierEnabled] = useState(false)
 
   useEffect(() => {
     api.get('/settings')
@@ -882,6 +886,9 @@ function ThresholdsTab() {
         if (s?.target_cogs != null) setTargetCogs(String(s.target_cogs))
         if (s?.costing_method === 'average' || s?.costing_method === 'best') {
           setCostingMethod(s.costing_method)
+        }
+        if (typeof (s as any)?.modifier_multiplier_enabled === 'boolean') {
+          setMultiplierEnabled((s as any).modifier_multiplier_enabled)
         }
       })
       .catch(() => {})
@@ -899,6 +906,7 @@ function ThresholdsTab() {
         cogs_thresholds: { excellent, acceptable },
         target_cogs: targetCogs ? Number(targetCogs) : null,
         costing_method: costingMethod,
+        modifier_multiplier_enabled: multiplierEnabled,
       })
       setToast({ message: 'Saved', type: 'success' })
     } catch (err: any) {
@@ -1017,6 +1025,42 @@ function ThresholdsTab() {
               Use the arithmetic mean of all active quotes in the market. Blended view —
               useful when ingredients are sourced from multiple vendors and no single
               vendor is clearly preferred.
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* ── Modifier Multiplier ──────────────────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Modifier Multiplier</h2>
+        <p className="text-sm text-text-3">
+          When on, modifier costs in Menu Engineer / Shared view scale by the qty of an ingredient flagged as
+          <strong className="font-semibold"> × mod</strong> on the underlying recipe. Example: a Bone-In 6 recipe
+          with the Bone-In Wing line flagged (qty 6) → attached Flavour Choice modifier costs are multiplied by 6
+          to reflect 6× sauce per portion.
+        </p>
+        <p className="text-xs text-text-3 mt-2">
+          Affects displayed COGS% in Menu Engineer / Shared view, kiosk, and combo cost embedding. Does <em>not</em> change
+          stored prices, stock movements, or anything else. Default off — menus that haven't flagged any ingredient
+          see no change either way.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${multiplierEnabled ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="checkbox"
+            checked={multiplierEnabled}
+            onChange={e => setMultiplierEnabled(e.target.checked)}
+            className="mt-1 accent-[#146A34] cursor-pointer"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">
+              Apply modifier multiplier when computing modifier costs
+            </span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Set the flag on individual recipe ingredient rows under <strong>Recipes → ingredient table → × mod</strong>.
+              One flag per recipe. Items can also be marked while this toggle is off — they only take effect once it's on.
             </p>
           </div>
         </label>

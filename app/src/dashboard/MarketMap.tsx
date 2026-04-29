@@ -105,7 +105,7 @@ type MapView = 'country' | 'region'
 export default function MarketMap() {
   const api = useApi()
   const { countries, countryId, setCountryId } = useMarket()
-  const { menuTiles } = useDashboardData()
+  const { menuTiles, menus, vendors } = useDashboardData()
 
   // Region view has been disabled — the map is country-level only. The
   // region-view toggle was removed; see Mapbox widget for an alternative.
@@ -170,6 +170,17 @@ export default function MarketMap() {
     }
     return out
   }, [menuTiles])
+
+  // Per-market rollup counts for the tooltip (BACK-1413). Same shape as the
+  // Mapbox map widget: menus, vendors, and rolled-up item count per country.
+  const countsByMarket = useMemo(() => {
+    const out: Record<number, { menus: number; vendors: number; items: number }> = {}
+    const ensure = (id: number) => (out[id] ??= { menus: 0, vendors: 0, items: 0 })
+    for (const m of menus)     ensure(m.country_id).menus  += 1
+    for (const v of vendors)   ensure(v.country_id).vendors += 1
+    for (const t of menuTiles) ensure(t.country_id).items   += t.item_count || 0
+    return out
+  }, [menus, vendors, menuTiles])
 
   // region_id → ISO 3166-2 upper-case code
   const regionIdToIso = useMemo(() => {
@@ -367,7 +378,7 @@ export default function MarketMap() {
             </ZoomableGroup>
           </ComposableMap>
 
-          {hovered && <MapTooltip hovered={hovered} avgCogsByMarket={avgCogsByMarket} />}
+          {hovered && <MapTooltip hovered={hovered} avgCogsByMarket={avgCogsByMarket} countsByMarket={countsByMarket} />}
 
           {/* Legend */}
           <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[10px] text-text-3 mt-3">
@@ -485,13 +496,23 @@ function renderRegionFeature(
 }
 
 function MapTooltip({
-  hovered, avgCogsByMarket,
+  hovered, avgCogsByMarket, countsByMarket,
 }: {
   hovered: HoverState
   avgCogsByMarket: Record<number, number>
+  countsByMarket: Record<number, { menus: number; vendors: number; items: number }>
 }) {
+  // Sum menu / vendor / item counts across every visible market in the
+  // hovered country (BACK-1413). Hidden when there's no data to show.
+  let mTot = 0, vTot = 0, iTot = 0
+  for (const mc of hovered.matches) {
+    const c = countsByMarket[(mc as any).market.id]
+    if (c) { mTot += c.menus; vTot += c.vendors; iTot += c.items }
+  }
+  const hasCounts = mTot + vTot + iTot > 0
+
   return (
-    <div className="absolute top-2 left-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm pointer-events-none text-xs max-w-[260px]">
+    <div className="absolute top-2 left-2 bg-surface border border-border rounded-lg px-3 py-2 shadow-sm pointer-events-none text-xs max-w-[280px]">
       <div className="font-semibold text-text-1">{hovered.label}</div>
       {hovered.subtitle && <div className="text-[10px] font-mono text-text-3 mt-0.5">{hovered.subtitle}</div>}
       {hovered.matches.length === 0 ? (
@@ -513,6 +534,13 @@ function MapTooltip({
           {hovered.matches.length > 4 && (
             <div className="text-[10px] text-text-3 italic">+ {hovered.matches.length - 4} more</div>
           )}
+        </div>
+      )}
+      {hasCounts && (
+        <div className="mt-1.5 pt-1.5 border-t border-border flex flex-wrap gap-2 text-[11px]">
+          {mTot > 0 && <span className="text-text-2"><strong className="text-text-1 tabular-nums">{mTot}</strong> {mTot === 1 ? 'menu' : 'menus'}</span>}
+          {vTot > 0 && <span className="text-text-2"><strong className="text-text-1 tabular-nums">{vTot}</strong> {vTot === 1 ? 'vendor' : 'vendors'}</span>}
+          {iTot > 0 && <span className="text-text-2"><strong className="text-text-1 tabular-nums">{iTot}</strong> {iTot === 1 ? 'item' : 'items'}</span>}
         </div>
       )}
     </div>

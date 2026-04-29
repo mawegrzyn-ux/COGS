@@ -737,19 +737,60 @@ router.post('/:id/items', async (req, res) => {
 
 // ── PUT /recipes/:id/items/:itemId ────────────────────────────────────────────
 router.put('/:id/items/:itemId', async (req, res) => {
-  const { prep_qty, prep_unit, prep_to_base_conversion } = req.body;
+  const { prep_qty, prep_unit, prep_to_base_conversion, is_modifier_multiplier } = req.body;
+  // The multiplier flag is enforced single-per-recipe by a partial unique
+  // index. If the caller is setting it to TRUE, clear it from every other
+  // global item in the same recipe inside a transaction so the index
+  // constraint never trips. Undefined → leave existing value unchanged.
+  const setFlag = is_modifier_multiplier === true;
+  const clearFlag = is_modifier_multiplier === false;
+  const flagProvided = setFlag || clearFlag;
+
+  const client = flagProvided ? await pool.connect() : null;
   try {
-    const { rows: [oldItem] } = await pool.query(
+    if (client) await client.query('BEGIN');
+    const db = client || pool;
+
+    const { rows: [oldItem] } = await db.query(
       'SELECT * FROM mcogs_recipe_items WHERE id=$1 AND recipe_id=$2', [req.params.itemId, req.params.id]);
 
-    const { rows: [item] } = await pool.query(`
-      UPDATE mcogs_recipe_items SET prep_qty=$1, prep_unit=$2, prep_to_base_conversion=$3, updated_at=NOW()
-      WHERE id=$4 AND recipe_id=$5 AND variation_id IS NULL AND pl_variation_id IS NULL AND market_pl_variation_id IS NULL RETURNING *
-    `, [prep_qty, prep_unit?.trim()||null, prep_to_base_conversion||1, req.params.itemId, req.params.id]);
-    if (!item) return res.status(404).json({ error: { message: 'Item not found' } });
+    if (setFlag) {
+      // Clear the flag from every OTHER global item in this recipe before
+      // setting it on the target. Operates only on global items (the
+      // partial unique index excludes variation rows).
+      await db.query(
+        `UPDATE mcogs_recipe_items SET is_modifier_multiplier = FALSE, updated_at = NOW()
+         WHERE recipe_id = $1 AND id <> $2
+           AND variation_id IS NULL AND pl_variation_id IS NULL AND market_pl_variation_id IS NULL
+           AND is_modifier_multiplier = TRUE`,
+        [req.params.id, req.params.itemId]
+      );
+    }
+
+    const { rows: [item] } = await db.query(`
+      UPDATE mcogs_recipe_items
+         SET prep_qty                = $1,
+             prep_unit                = $2,
+             prep_to_base_conversion  = $3,
+             is_modifier_multiplier   = COALESCE($6, is_modifier_multiplier),
+             updated_at               = NOW()
+       WHERE id = $4 AND recipe_id = $5
+         AND variation_id IS NULL AND pl_variation_id IS NULL AND market_pl_variation_id IS NULL
+       RETURNING *
+    `, [
+      prep_qty, prep_unit?.trim() || null, prep_to_base_conversion || 1,
+      req.params.itemId, req.params.id,
+      flagProvided ? setFlag : null,
+    ]);
+    if (!item) {
+      if (client) await client.query('ROLLBACK');
+      return res.status(404).json({ error: { message: 'Item not found' } });
+    }
+
+    if (client) await client.query('COMMIT');
 
     if (oldItem) {
-      const changes = diffFields(oldItem, item, ['prep_qty', 'prep_unit', 'prep_to_base_conversion']);
+      const changes = diffFields(oldItem, item, ['prep_qty', 'prep_unit', 'prep_to_base_conversion', 'is_modifier_multiplier']);
       if (changes) {
         await logAudit(pool, req, {
           action: 'update', entity_type: 'recipe_item', entity_id: item.id,
@@ -763,8 +804,13 @@ router.put('/:id/items/:itemId', async (req, res) => {
 
     res.json(item);
   } catch (err) {
+    if (client) {
+      try { await client.query('ROLLBACK') } catch { /* ignore */ }
+    }
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to update item' } });
+  } finally {
+    if (client) client.release();
   }
 });
 
