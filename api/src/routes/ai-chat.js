@@ -3940,7 +3940,22 @@ async function executeTool(name, input, send = null, userCtx = {}) {
           'INSERT INTO mcogs_user_notes (user_sub, note) VALUES ($1, $2) RETURNING id, note, created_at',
           [sub, note.trim()]
         );
-        return `Saved note #${created.id}: "${created.note}"`;
+        // Verify the row is queryable from the same pool (defence against any
+        // pooler-level surprise). The INSERT...RETURNING already guarantees
+        // commit, but a follow-up SELECT confirms the row is visible to
+        // subsequent reads on the same pool.
+        const { rows: verify } = await pool.query(
+          'SELECT id FROM mcogs_user_notes WHERE id = $1 AND user_sub = $2',
+          [created.id, sub]
+        );
+        if (!verify.length) {
+          return `Error: note appeared to save (id ${created.id}) but is not visible on read-back. Try again.`;
+        }
+        // Explicitly remind Claude that the snapshot in the system prompt is
+        // now stale — without this, Claude tends to answer follow-up "list my
+        // notes" questions from the stale snapshot rather than calling
+        // list_memory_notes (BUG-1148).
+        return `Saved note #${created.id}: "${created.note}". The Memory section in your system prompt is now stale — call list_memory_notes to see the updated list before reporting it to the user.`;
       } catch (err) {
         return `Error saving note: ${err.message}`;
       }
@@ -3968,7 +3983,8 @@ async function executeTool(name, input, send = null, userCtx = {}) {
           'DELETE FROM mcogs_user_notes WHERE id = $1 AND user_sub = $2',
           [note_id, sub]
         );
-        return rowCount ? `Deleted note #${note_id}` : `Note #${note_id} not found`;
+        if (!rowCount) return `Note #${note_id} not found`;
+        return `Deleted note #${note_id}. The Memory section in your system prompt is now stale — call list_memory_notes if the user wants to see the remaining notes.`;
       } catch (err) {
         return `Error deleting note: ${err.message}`;
       }
@@ -4300,7 +4316,7 @@ async function buildSystemPrompt(context, helpContext, conciseMode = false, is_d
         }
 
         if (notes.length) {
-          memoryBlock += '\nPinned notes (the user asked Pepper to remember these):\n';
+          memoryBlock += `\nPinned notes (snapshot from session start — call list_memory_notes after any save_memory_note / delete_memory_note for the live list):\n`;
           for (const n of notes) {
             memoryBlock += `- ${n.note}\n`;
           }
@@ -4388,10 +4404,13 @@ You have persistent memory across conversations via pinned notes. When the user 
 
 Call the save_memory_note tool to save this as a pinned note. These notes are loaded into every future conversation.
 
-When the user asks "what do you remember?" or "show my notes", call list_memory_notes.
+When the user asks "what do you remember?" or "show my notes", you MUST call list_memory_notes. Do NOT answer from the snapshot in the Memory section — that snapshot is captured at session start and goes stale after any save_memory_note or delete_memory_note in this session.
+
 When the user asks to forget something, call delete_memory_note.
 
-Your pinned notes (if any) are shown in the Memory section above. Use them to personalize your responses.
+After save_memory_note or delete_memory_note returns, the Memory section above is stale. If the user then asks anything that depends on the current pinned-notes list, call list_memory_notes for fresh data.
+
+Your pinned notes (if any) are shown in the Memory section above. Use them as background context for personalization, but always call list_memory_notes when the user explicitly asks to see or verify their notes.
 
 ## CRITICAL: ACCURACY RULES
 - NEVER invent page names, tab names, feature names, or field names that are not explicitly documented in your context or the sections below.

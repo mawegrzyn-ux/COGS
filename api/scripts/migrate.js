@@ -4022,6 +4022,10 @@ const migrations = [
      WHERE version = '2026-04-29' AND title = 'Modifier multiplier feature + README rewrite'
    )`,
 
+  // ── Step 166b: Flip BACK-2353/2429/2430/2431 to done ───────────────────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key IN ('BACK-2353','BACK-2429','BACK-2430','BACK-2431') AND status <> 'done'`,
+
   // ── Step 167: Backlog — derived directives done this session ──────────────
   `INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, status, story_points)
    VALUES (
@@ -4032,13 +4036,70 @@ const migrations = [
    )
    ON CONFLICT (key) DO UPDATE SET status = 'done', updated_at = NOW()`,
 
+  // ── Step 166a: BACK-2429 — due_date on backlog + priority-based estimate seed ─
+  // New nullable due_date column. Existing non-terminal items (status not in
+  // done / wont_do) are auto-populated from priority + story_points using a
+  // single AI-assisted developer cadence:
+  //
+  //   base offset by priority:  highest=2d  high=7d  medium=21d  low=60d  lowest=120d
+  //   per-story-point bump:     +0.7d × story_points  (capped at +21d)
+  //
+  // Idempotent: only fills NULL rows on non-terminal status, so re-running
+  // doesn't reshuffle dates the user has already adjusted.
+  `ALTER TABLE mcogs_backlog ADD COLUMN IF NOT EXISTS due_date DATE`,
+
+  `UPDATE mcogs_backlog SET due_date = (
+     CURRENT_DATE
+     + (CASE priority
+          WHEN 'highest' THEN 2
+          WHEN 'high'    THEN 7
+          WHEN 'medium'  THEN 21
+          WHEN 'low'     THEN 60
+          WHEN 'lowest'  THEN 120
+          ELSE 21
+        END)::int
+     + LEAST(21, GREATEST(0, FLOOR(COALESCE(story_points, 0) * 0.7)))::int
+   )
+   WHERE due_date IS NULL
+     AND status NOT IN ('done', 'wont_do')`,
+
+  `CREATE INDEX IF NOT EXISTS idx_backlog_due_date ON mcogs_backlog(due_date) WHERE due_date IS NOT NULL`,
+
+  // ── Step 167a: BUG-1093 + BUG-1124 resolved ───────────────────────────────
+  `UPDATE mcogs_bugs
+   SET status = 'resolved',
+       resolution = 'Inventory → Ingredient edit panel hardcoded the tab list as [details, allergens, nutrition, translations] regardless of feature flags. Added a new nutrition feature flag alongside the existing allergens flag, surfaced both in Configuration → Feature Flags. The Ingredient edit panel now derives visibleIngTabs from the flags (details + translations always; allergens / nutrition gated by their respective flags) and snaps back to details if the active tab gets hidden by a flag flip. Defence in depth: the tab body renders are also gated on the same flags, so a stale ingModalTab cannot render an allergens/nutrition tab body when the flag is off.',
+       updated_at = NOW()
+   WHERE key = 'BUG-1093' AND status <> 'resolved'`,
+
+  `UPDATE mcogs_bugs
+   SET status = 'resolved',
+       resolution = 'Tracking note, not a bug. The localization implementation completed (CLAUDE.md §11, README) — closed.',
+       updated_at = NOW()
+   WHERE key = 'BUG-1124' AND status <> 'resolved'`,
+
+  // ── Step 167b: BUG-1148 resolved — pinned-notes staleness ─────────────────
+  `UPDATE mcogs_bugs
+   SET status = 'resolved',
+       resolution = 'Pinned notes are baked into the system prompt at session start. After a save_memory_note / delete_memory_note tool call, the snapshot in the Memory section was stale, but the system prompt still said "use the Memory section to answer". Claude often answered "list my notes" from the stale snapshot rather than calling list_memory_notes — so the just-saved note appeared missing. Third attempt would eventually trigger a real list_memory_notes call. Fix: (1) reword the Memory section to flag it as a session-start snapshot, (2) make the Memory Tools system-prompt section explicitly require a list_memory_notes call when the user asks to see/verify notes, (3) save_memory_note + delete_memory_note return strings now end with a reminder that the snapshot is stale, (4) save_memory_note now does an INSERT...RETURNING + verify SELECT round-trip on the same pool to catch any pooler-level surprises.',
+       updated_at = NOW()
+   WHERE key = 'BUG-1148' AND status <> 'resolved'`,
+
   // ── Step 168: Changelog — Apr 30 — derived directives shipped ─────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-04-30', 'Pepper auto-derived directives', '[
      {"type":"added","description":"Nightly derived-directives job (BACK-2427) — api/src/jobs/deriveDirectives.js runs at 02:30 UTC daily, pulls last 7 days of chat + up to 500 pinned memory notes across all users, anonymises user identifiers (u1/u2/...), asks Claude Haiku to extract globally-applicable directives. Rejects RBAC-bypass / single-user / credential-revealing / safety-loosening candidates via dual defence — strict prompt rules + server-side regex filter (RBAC_BYPASS_PATTERNS). Caps at 12 directives sorted by confidence. Output persisted to mcogs_settings.data.pepper_derived_directives as { directives: [{text, evidence_count, confidence}], derived_at, stats }. No-op when ANTHROPIC_API_KEY is not configured."},
      {"type":"changed","description":"buildSystemPrompt() in api/src/routes/ai-chat.js now reads both pepper_directives (manual) and pepper_derived_directives (auto) from mcogs_settings.data and renders them as two sub-sections under a single Operator Directives header — “Set by administrator” and “Auto-derived from usage patterns”. Manual directives take precedence in conflicts."},
      {"type":"added","description":"GET/POST/DELETE /api/ai-config/derived-directives endpoints. GET returns the current blob; POST /run triggers on-demand derivation (admin convenience when corpus has just changed); DELETE clears the blob. All gated by settings:read / settings:write."},
-     {"type":"added","description":"Settings → AI tab gains an Auto-derived directives panel below the manual directives textarea. Lists each derived directive with a coloured confidence badge (low/medium/high), evidence count, full text. Run now button triggers immediate derivation; Clear button (with ConfirmDialog) wipes the blob. Footer shows last-derived relative time + corpus stats (chats / notes / kept-vs-proposed)."}
+     {"type":"added","description":"Settings → AI tab gains an Auto-derived directives panel below the manual directives textarea. Lists each derived directive with a coloured confidence badge (low/medium/high), evidence count, full text. Run now button triggers immediate derivation; Clear button (with ConfirmDialog) wipes the blob. Footer shows last-derived relative time + corpus stats (chats / notes / kept-vs-proposed)."},
+     {"type":"fixed","description":"BUG-1148: save_memory_note appeared to silently fail intermittently — note seemed missing on follow-up list_memory_notes for two attempts before showing up on the third. Root cause: pinned notes are baked into the system prompt as a session-start snapshot. The system prompt told Claude to use that snapshot for personalization, so when the user said “list my notes” after a save, Claude often answered from the stale snapshot rather than calling the live list_memory_notes tool. Fix: (1) Memory section now flags itself as a session-start snapshot, (2) Memory Tools instructions now require a list_memory_notes call whenever the user asks to see/verify their notes, (3) save_memory_note + delete_memory_note return strings end with an explicit “snapshot now stale — call list_memory_notes” reminder, (4) save_memory_note now performs INSERT...RETURNING + a verify SELECT on the same pool to catch any pooler surprises before reporting success."},
+     {"type":"added","description":"New nutrition feature flag (paired with existing allergens flag in Configuration → Feature Flags). When disabled, the Nutrition tab on the Inventory → Ingredient edit panel is hidden. Mirrors the existing allergens flag pattern."},
+     {"type":"fixed","description":"BUG-1093: global allergens / nutrition feature flags didn’t hide the matching tabs on the Inventory → Ingredient edit panel. The tab list was hardcoded. Now the panel derives visibleIngTabs from feature flags (details + translations always shown; allergens and nutrition gated). Active tab snaps back to details if the user disables the current flag mid-session. Tab body renders are also gated for defence in depth."},
+     {"type":"removed","description":"BUG-1124: closed as not-a-bug. It was a tracking note that the localization feature was complete (already documented in CLAUDE.md §11 and README)."},
+     {"type":"added","description":"BACK-2429: due_date column on mcogs_backlog (nullable DATE). Auto-populated for existing non-terminal rows from priority + story_points (highest=2d, high=7d, medium=21d, low=60d, lowest=120d, plus 0.7d × story_points capped at +21d). New idx_backlog_due_date partial index. Backlog API accepts due_date on POST and PUT (empty / null clears, value sets, omitted keeps). Sort selector includes Due date (NULLS LAST). Backlog list table gains a Due column with red/amber colour-coding for overdue or soon-due (≤3d) items; kanban tiles show 📅 due-date chip with the same colour rules."},
+     {"type":"added","description":"BACK-2430: time-window filter dropdown on the Backlog (Last 24h / 3 days / 7 days / Any age). Applied client-side over created_at, persists to localStorage('backlog-time-window') so the user lands back on their last selection. Default is Any age."},
+     {"type":"changed","description":"BACK-2431: Doc Library section moved from the functional sections to the Documentation block in System page (alongside Localization, Architecture, API Reference, Security, Troubleshooting, Domain Migration, CLAUDE.md). Hash-based deep-link /system#doc-library still resolves correctly."},
+     {"type":"added","description":"BACK-2353: Recipe list grouped by category with expand/collapse. Each group header shows ▼/▶ glyph + uppercase category name + recipe count, sticky at the top of its block. Recipes without a category bucket under “Uncategorised” pinned to the top. Collapsed-state set persists to localStorage (recipes-collapsed-groups). Active search auto-expands every group so matches are never hidden. New ▼ All / ▶ All toolbar toggle collapses or expands every group at once. Item rows no longer show their category inline — the group header carries that information."}
    ]'::jsonb
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog

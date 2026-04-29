@@ -31,6 +31,7 @@ router.get('/', async (req, res) => {
     priority:   `CASE b.priority WHEN 'highest' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 WHEN 'lowest' THEN 5 END ASC, b.created_at DESC`,
     created_at: 'b.created_at DESC',
     updated_at: 'b.updated_at DESC',
+    due_date:   'b.due_date ASC NULLS LAST, b.sort_order ASC',
   };
   const orderBy = sortMap[sort] || sortMap.sort_order;
 
@@ -163,7 +164,7 @@ router.get('/:id', async (req, res) => {
 
 // ── POST / — create backlog item (requires backlog:write) ───────────────────
 router.post('/', async (req, res) => {
-  const { summary, description, item_type, priority, labels, acceptance_criteria, story_points, sprint, assigned_to, epic_id } = req.body;
+  const { summary, description, item_type, priority, labels, acceptance_criteria, story_points, sprint, assigned_to, epic_id, due_date } = req.body;
   if (!summary?.trim()) return res.status(400).json({ error: { message: 'summary is required' } });
   // Validate epic_id if provided — must reference an existing epic
   if (epic_id) {
@@ -176,8 +177,8 @@ router.post('/', async (req, res) => {
     // Get max sort_order
     const maxSort = await pool.query(`SELECT COALESCE(MAX(sort_order), 0)::int + 1 AS next FROM mcogs_backlog`);
     const { rows } = await pool.query(`
-      INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order, epic_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *
+      INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, assigned_to, labels, acceptance_criteria, story_points, sprint, sort_order, epic_id, due_date)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *
     `, [
       key,
       summary.trim(),
@@ -193,6 +194,7 @@ router.post('/', async (req, res) => {
       sprint?.trim() || null,
       maxSort.rows[0].next,
       epic_id || null,
+      due_date || null,
     ]);
     await logAudit(pool, req, { action: 'create', entity_type: 'backlog', entity_id: rows[0].id, entity_label: key, context: { source: 'manual' } });
     res.status(201).json(rows[0]);
@@ -204,7 +206,7 @@ router.post('/', async (req, res) => {
 
 // ── PUT /:id — update backlog item (status changes require is_dev) ──────────
 router.put('/:id', async (req, res) => {
-  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint, epic_id } = req.body;
+  const { summary, description, item_type, priority, status, assigned_to, labels, acceptance_criteria, story_points, sprint, epic_id, due_date } = req.body;
 
   try {
     const old = await pool.query(`SELECT * FROM mcogs_backlog WHERE id = $1`, [req.params.id]);
@@ -231,6 +233,36 @@ router.put('/:id', async (req, res) => {
     // Handle explicit null for epic_id (unlink from epic) — use sentinel 0 to mean "clear"
     const epicVal = epic_id === null || epic_id === 0 ? null : (epic_id || undefined);
 
+    // due_date: undefined → keep, '' or null → clear, '2026-05-15' → set
+    const dueProvided = Object.prototype.hasOwnProperty.call(req.body, 'due_date');
+    const dueVal = !dueProvided ? undefined
+                 : (due_date === null || due_date === '') ? null
+                 : due_date;
+
+    const params = [
+      summary?.trim() || null,
+      description?.trim() || null,
+      item_type || null,
+      priority || null,
+      status || null,
+      assigned_to || null,
+      labels ? JSON.stringify(labels) : null,
+      acceptance_criteria?.trim() || null,
+      story_points || null,
+      sprint?.trim() || null,
+      req.params.id,
+    ];
+    let epicClause = 'epic_id = epic_id';
+    if (epic_id !== undefined) {
+      params.push(epicVal);
+      epicClause = `epic_id = $${params.length}`;
+    }
+    let dueClause = 'due_date = due_date';
+    if (dueVal !== undefined) {
+      params.push(dueVal);
+      dueClause = `due_date = $${params.length}`;
+    }
+
     const { rows } = await pool.query(`
       UPDATE mcogs_backlog SET
         summary = COALESCE($1, summary),
@@ -243,37 +275,13 @@ router.put('/:id', async (req, res) => {
         acceptance_criteria = COALESCE($8, acceptance_criteria),
         story_points = COALESCE($9, story_points),
         sprint = COALESCE($10, sprint),
-        epic_id = ${epic_id !== undefined ? '$12' : 'epic_id'},
+        ${epicClause},
+        ${dueClause},
         updated_at = NOW()
       WHERE id = $11 RETURNING *
-    `, epic_id !== undefined ? [
-      summary?.trim() || null,
-      description?.trim() || null,
-      item_type || null,
-      priority || null,
-      status || null,
-      assigned_to || null,
-      labels ? JSON.stringify(labels) : null,
-      acceptance_criteria?.trim() || null,
-      story_points || null,
-      sprint?.trim() || null,
-      req.params.id,
-      epicVal,
-    ] : [
-      summary?.trim() || null,
-      description?.trim() || null,
-      item_type || null,
-      priority || null,
-      status || null,
-      assigned_to || null,
-      labels ? JSON.stringify(labels) : null,
-      acceptance_criteria?.trim() || null,
-      story_points || null,
-      sprint?.trim() || null,
-      req.params.id,
-    ]);
+    `, params);
 
-    const changes = diffFields(old.rows[0], rows[0], ['summary', 'item_type', 'priority', 'status', 'assigned_to', 'story_points', 'sprint', 'epic_id']);
+    const changes = diffFields(old.rows[0], rows[0], ['summary', 'item_type', 'priority', 'status', 'assigned_to', 'story_points', 'sprint', 'epic_id', 'due_date']);
     if (changes) await logAudit(pool, req, { action: 'update', entity_type: 'backlog', entity_id: rows[0].id, entity_label: rows[0].key, field_changes: changes, context: { source: 'manual' } });
     res.json(rows[0]);
   } catch (err) {

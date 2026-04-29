@@ -401,6 +401,52 @@ export default function RecipesPage() {
     return r
   }, [recipes, search, filterCat, sortField, sortDir])
 
+  // BACK-2353 — Group recipes by category. Each entry is { name, recipes[] }
+  // sorted alphabetically by category name; "Uncategorised" pinned to the top.
+  // Active search auto-expands all groups so matches aren't hidden.
+  const groupedFiltered = useMemo(() => {
+    const buckets = new Map<string, typeof filtered>()
+    for (const r of filtered) {
+      const key = r.category_name?.trim() || 'Uncategorised'
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key)!.push(r)
+    }
+    const entries = Array.from(buckets.entries())
+      .sort(([a], [b]) => {
+        if (a === 'Uncategorised') return -1
+        if (b === 'Uncategorised') return 1
+        return a.localeCompare(b, undefined, { sensitivity: 'base' })
+      })
+    return entries.map(([name, recipes]) => ({ name, recipes }))
+  }, [filtered])
+
+  // Persist collapsed group state across reloads. localStorage key holds an
+  // array of category names that are currently collapsed.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('recipes-collapsed-groups')
+      const arr = raw ? JSON.parse(raw) : []
+      return new Set(Array.isArray(arr) ? arr : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('recipes-collapsed-groups', JSON.stringify([...collapsedGroups]))
+    } catch { /* ignore quota errors */ }
+  }, [collapsedGroups])
+  const toggleGroup = useCallback((name: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name); else next.add(name)
+      return next
+    })
+  }, [])
+  // Active search overrides collapsed state — show every match immediately.
+  const isGroupCollapsed = useCallback((name: string) => {
+    if (search) return false
+    return collapsedGroups.has(name)
+  }, [collapsedGroups, search])
+
   const activeCogs = useMemo(() => {
     if (selectedCountryId === 'GLOBAL') return null
     const base = selected?.cogs_by_country.find(c => c.country_id === selectedCountryId)
@@ -1231,10 +1277,22 @@ export default function RecipesPage() {
                 className="btn-outline px-2 text-xs"
                 title="Toggle sort direction"
               >{sortDir === 'asc' ? '↑' : '↓'}</button>
+              {/* BACK-2353: collapse / expand all category groups in one click */}
+              {groupedFiltered.length > 1 && (
+                <button
+                  onClick={() => {
+                    const allCollapsed = groupedFiltered.every(g => collapsedGroups.has(g.name))
+                    if (allCollapsed) setCollapsedGroups(new Set())
+                    else setCollapsedGroups(new Set(groupedFiltered.map(g => g.name)))
+                  }}
+                  className="btn-outline px-2 text-xs"
+                  title={groupedFiltered.every(g => collapsedGroups.has(g.name)) ? 'Expand all categories' : 'Collapse all categories'}
+                >{groupedFiltered.every(g => collapsedGroups.has(g.name)) ? '▶ All' : '▼ All'}</button>
+              )}
             </div>
           </div>
 
-          {/* Recipe list */}
+          {/* Recipe list — grouped by category with collapse/expand (BACK-2353) */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <div className="flex justify-center p-8"><Spinner /></div>
@@ -1243,27 +1301,43 @@ export default function RecipesPage() {
                 {search || filterCat ? 'No recipes match.' : 'No recipes yet.'}
               </div>
             ) : (
-              filtered.map(r => (
-                <button
-                  key={r.id}
-                  onClick={() => loadDetail(r.id)}
-                  className={[
-                    'w-full text-left px-4 py-3 border-b border-border transition-colors',
-                    selected?.id === r.id
-                      ? 'bg-accent-dim border-l-2 border-l-accent'
-                      : 'hover:bg-surface-2',
-                  ].join(' ')}
-                >
-                  <div className="font-semibold text-sm text-text-1 truncate">{r.name}</div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    {r.category_name && <span className="text-xs text-text-3 truncate">{r.category_name}</span>}
-                    <span className="text-xs text-text-3 ml-auto shrink-0">
-                      {r.item_count} item{r.item_count !== 1 ? 's' : ''}
-                      {r.yield_qty !== 1 && ` · ${r.yield_qty}${r.yield_unit_abbr ? ' ' + r.yield_unit_abbr : ''}`}
-                    </span>
+              groupedFiltered.map(group => {
+                const collapsed = isGroupCollapsed(group.name)
+                return (
+                  <div key={group.name}>
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(group.name)}
+                      className="w-full flex items-center gap-2 px-3 py-2 bg-surface-2/70 hover:bg-surface-2 border-b border-border text-left sticky top-0 z-[1]"
+                      title={collapsed ? 'Expand' : 'Collapse'}
+                    >
+                      <span className="text-text-3 text-xs w-3 shrink-0">{collapsed ? '▶' : '▼'}</span>
+                      <span className="text-xs font-semibold text-text-2 uppercase tracking-wide truncate flex-1">{group.name}</span>
+                      <span className="text-[10px] text-text-3 font-mono shrink-0">{group.recipes.length}</span>
+                    </button>
+                    {!collapsed && group.recipes.map(r => (
+                      <button
+                        key={r.id}
+                        onClick={() => loadDetail(r.id)}
+                        className={[
+                          'w-full text-left px-4 py-3 border-b border-border transition-colors',
+                          selected?.id === r.id
+                            ? 'bg-accent-dim border-l-2 border-l-accent'
+                            : 'hover:bg-surface-2',
+                        ].join(' ')}
+                      >
+                        <div className="font-semibold text-sm text-text-1 truncate">{r.name}</div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs text-text-3 ml-auto shrink-0">
+                            {r.item_count} item{r.item_count !== 1 ? 's' : ''}
+                            {r.yield_qty !== 1 && ` · ${r.yield_qty}${r.yield_unit_abbr ? ' ' + r.yield_unit_abbr : ''}`}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                </button>
-              ))
+                )
+              })
             )}
           </div>
         </div>

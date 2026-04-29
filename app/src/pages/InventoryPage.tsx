@@ -8,6 +8,7 @@ import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
 import type { GridColumn, GridOption } from '../components/DataGrid'
 import ImageUpload from '../components/ImageUpload'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -643,6 +644,19 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
   // Phase 4 — allergen & nutrition state
   type IngModalTab = 'details' | 'allergens' | 'nutrition' | 'translations'
   const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
+  // Feature flags — hide allergens / nutrition tabs when their global flag is off (BUG-1093).
+  const { flags: featureFlags } = useFeatureFlags()
+  const visibleIngTabs = useMemo(() => {
+    const tabs: IngModalTab[] = ['details']
+    if (featureFlags.allergens) tabs.push('allergens')
+    if (featureFlags.nutrition) tabs.push('nutrition')
+    tabs.push('translations')
+    return tabs
+  }, [featureFlags.allergens, featureFlags.nutrition])
+  // If the active tab gets hidden by a flag flip, snap back to details.
+  useEffect(() => {
+    if (!visibleIngTabs.includes(ingModalTab)) setIngModalTab('details')
+  }, [visibleIngTabs, ingModalTab])
   const [allAllergens,   setAllAllergens]   = useState<Allergen[]>([])
   const [ingAllergens,   setIngAllergens]   = useState<IngAllergen[]>([])
   const [savingAllergens,setSavingAllergens]= useState(false)
@@ -1238,9 +1252,9 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
                       </svg>
                     </button>
                   </div>
-                  {/* Panel tabs */}
+                  {/* Panel tabs — allergens / nutrition hidden when their feature flag is off (BUG-1093) */}
                   <div className="flex gap-0 border-b border-border px-3 pt-1 shrink-0">
-                    {(['details', 'allergens', 'nutrition', 'translations'] as const).map(t => (
+                    {visibleIngTabs.map(t => (
                       <button
                         key={t}
                         onClick={() => setIngModalTab(t)}
@@ -1324,7 +1338,7 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
                         />
                       </>
                     )}
-                    {ingModalTab === 'allergens' && (
+                    {ingModalTab === 'allergens' && featureFlags.allergens && (
                       <AllergenTabContent
                         allAllergens={allAllergens}
                         ingAllergens={ingAllergens}
@@ -1334,7 +1348,7 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
                         onClose={() => { setSelectedIngId(null); setModal(null) }}
                       />
                     )}
-                    {ingModalTab === 'nutrition' && (
+                    {ingModalTab === 'nutrition' && featureFlags.nutrition && (
                       <NutritionTabContent
                         nutForm={nutForm}
                         setNutForm={setNutForm}

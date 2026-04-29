@@ -96,6 +96,7 @@ interface BacklogItem {
   acceptance_criteria: string | null; story_points: number | null
   sprint: string | null; sort_order: number
   epic_id: number | null; epic_key: string | null; epic_summary: string | null
+  due_date: string | null
   child_count?: number; child_done?: number
   jira_key: string | null; jira_url: string | null; jira_synced_at: string | null
   created_at: string; updated_at: string
@@ -313,10 +314,26 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
   const [backlog, setBacklog] = useState<BacklogItem[]>([])
   const [backlogTotal, setBacklogTotal] = useState(0)
   const [backlogLoading, setBacklogLoading] = useState(true)
-  const [backlogFilter, setBacklogFilter] = useState({ status: 'backlog,todo,in_progress,in_review', priority: '', item_type: '', search: '', epic_id: '' })
+  // Backlog filters. `time_window` is client-side (24h / 3d / 7d / '') and
+  // persists to localStorage so the user lands back where they left off.
+  // BACK-2430.
+  const [backlogFilter, setBacklogFilter] = useState({
+    status: 'backlog,todo,in_progress,in_review',
+    priority: '',
+    item_type: '',
+    search: '',
+    epic_id: '',
+    time_window: (typeof window !== 'undefined' ? window.localStorage.getItem('backlog-time-window') : '') || '',
+  })
+  // Persist time_window selection across sessions
+  useEffect(() => {
+    try { window.localStorage.setItem('backlog-time-window', backlogFilter.time_window) } catch { /* ignore */ }
+  }, [backlogFilter.time_window])
+  // Sort selector — defaults to sort_order so manual drag-drop still wins by default.
+  const [backlogSort, setBacklogSort] = useState<'sort_order' | 'priority' | 'due_date' | 'created_at'>('sort_order')
   const [showBacklogModal, setShowBacklogModal] = useState(false)
   const [backlogDetail, setBacklogDetail] = useState<BacklogItem | null>(null)
-  const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
+  const [backlogForm, setBacklogForm] = useState({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '', due_date: '' })
   const [deleteBacklog, setDeleteBacklog] = useState<BacklogItem | null>(null)
   const [epics, setEpics] = useState<EpicSummary[]>([])
   // View mode for the backlog tab — list (table) or kanban (priority columns).
@@ -396,12 +413,26 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       if (backlogFilter.item_type) params.set('item_type', backlogFilter.item_type)
       if (backlogFilter.search) params.set('search', backlogFilter.search)
       if (backlogFilter.epic_id) params.set('epic_id', backlogFilter.epic_id)
+      if (backlogSort && backlogSort !== 'sort_order') params.set('sort', backlogSort)
+      params.set('limit', '500')
       const qs = params.toString()
       const data = await api.get(`/backlog${qs ? `?${qs}` : ''}`)
-      setBacklog(data?.rows || [])
+      let rows: BacklogItem[] = data?.rows || []
+      // BACK-2430: client-side time-window filter on created_at
+      if (backlogFilter.time_window) {
+        const hours = backlogFilter.time_window === '24h' ? 24
+                    : backlogFilter.time_window === '3d'  ? 72
+                    : backlogFilter.time_window === '7d'  ? 168
+                    : 0
+        if (hours > 0) {
+          const cutoff = Date.now() - hours * 3600 * 1000
+          rows = rows.filter(r => new Date(r.created_at).getTime() >= cutoff)
+        }
+      }
+      setBacklog(rows)
       setBacklogTotal(data?.total || 0)
     } finally { setBacklogLoading(false) }
-  }, [api, backlogFilter])
+  }, [api, backlogFilter, backlogSort])
 
   // Kanban: change status from a tile's inline dropdown. Only dev users can
   // change status server-side; we only render the select for them. Same
@@ -604,10 +635,11 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       ...backlogForm,
       story_points: backlogForm.story_points ? parseInt(backlogForm.story_points) : null,
       epic_id: backlogForm.epic_id ? parseInt(backlogForm.epic_id) : null,
+      due_date: backlogForm.due_date || null,
     }
     await api.post('/backlog', payload)
     setShowBacklogModal(false)
-    setBacklogForm({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '' })
+    setBacklogForm({ summary: '', description: '', item_type: 'story', priority: 'medium', acceptance_criteria: '', story_points: '', epic_id: '', due_date: '' })
     setToast({ message: 'Backlog item created', type: 'success' })
     loadBacklog()
     loadEpics()
@@ -731,7 +763,7 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
       if (full) {
         setBacklogDetail(full)
         setCanEditBacklog(!!full.can_edit)
-        setBacklogEditForm({ summary: full.summary, description: full.description || '', item_type: full.item_type, priority: full.priority, acceptance_criteria: full.acceptance_criteria || '', story_points: full.story_points ? String(full.story_points) : '', epic_id: full.epic_id ? String(full.epic_id) : '' })
+        setBacklogEditForm({ summary: full.summary, description: full.description || '', item_type: full.item_type, priority: full.priority, acceptance_criteria: full.acceptance_criteria || '', story_points: full.story_points ? String(full.story_points) : '', epic_id: full.epic_id ? String(full.epic_id) : '', due_date: full.due_date || '' })
       }
     } catch {}
     loadComments('backlog', item.id)
@@ -923,6 +955,30 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
               <option value="">All epics</option>
               {epics.map(ep => <option key={ep.id} value={ep.id}>{ep.key} — {ep.summary.length > 30 ? ep.summary.slice(0, 30) + '…' : ep.summary}</option>)}
             </select>
+            {/* BACK-2430: time-window filter (24h / 3d / 7d) */}
+            <select
+              className="input w-32"
+              value={backlogFilter.time_window}
+              onChange={e => setBacklogFilter(f => ({ ...f, time_window: e.target.value }))}
+              title="Show only items created within this window"
+            >
+              <option value="">Any age</option>
+              <option value="24h">Last 24h</option>
+              <option value="3d">Last 3 days</option>
+              <option value="7d">Last 7 days</option>
+            </select>
+            {/* Sort selector — drag-drop still wins by default */}
+            <select
+              className="input w-36"
+              value={backlogSort}
+              onChange={e => setBacklogSort(e.target.value as typeof backlogSort)}
+              title="Sort backlog"
+            >
+              <option value="sort_order">Manual order</option>
+              <option value="priority">Priority</option>
+              <option value="due_date">Due date</option>
+              <option value="created_at">Newest first</option>
+            </select>
             <div className="flex-1" />
             {/* AI Suggest priorities — only when in kanban view + dev */}
             {backlogView === 'kanban' && isDev && (
@@ -1093,6 +1149,16 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                                 <span className="text-[10px] text-text-3 capitalize">{b.status.replace(/_/g, ' ')}</span>
                               )}
                               {b.story_points != null && <span className="text-[10px] text-text-3">{b.story_points} pts</span>}
+                              {b.due_date && (() => {
+                                const d = new Date(b.due_date + 'T00:00:00Z')
+                                const days = Math.ceil((d.getTime() - Date.now()) / 86400000)
+                                const overdue = days < 0 && !['done','wont_do'].includes(b.status)
+                                const soon = days >= 0 && days <= 3 && !['done','wont_do'].includes(b.status)
+                                const cls = overdue ? 'text-red-600 font-semibold'
+                                           : soon    ? 'text-amber-600 font-medium'
+                                           : 'text-text-3'
+                                return <span className={`text-[10px] ${cls}`} title={overdue ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today' : `Due in ${days}d`}>📅 {fmtDate(b.due_date)}</span>
+                              })()}
                             </div>
                           )}
                         </div>
@@ -1115,7 +1181,8 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                     <th className="px-3 py-2 w-24">Priority</th>
                     <th className="px-3 py-2 w-28">Status</th>
                     <th className="px-3 py-2 w-16">Points</th>
-                    <th className="px-3 py-2 w-28">Date</th>
+                    <th className="px-3 py-2 w-28">Due</th>
+                    <th className="px-3 py-2 w-28">Created</th>
                     {isDev && <th className="px-3 py-2 w-16" />}
                   </tr>
                 </thead>
@@ -1173,6 +1240,20 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                         ) : <StatusBadge status={b.status} />}
                       </td>
                       <td className="px-3 py-2 text-center text-xs font-mono">{b.story_points ?? '—'}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {b.due_date ? (
+                          (() => {
+                            const d = new Date(b.due_date + 'T00:00:00Z')
+                            const days = Math.ceil((d.getTime() - Date.now()) / 86400000)
+                            const overdue = days < 0 && !['done','wont_do'].includes(b.status)
+                            const soon = days >= 0 && days <= 3 && !['done','wont_do'].includes(b.status)
+                            const cls = overdue ? 'text-red-600 font-semibold'
+                                       : soon    ? 'text-amber-600 font-medium'
+                                       : 'text-text-3'
+                            return <span className={cls} title={overdue ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today' : `Due in ${days}d`}>{fmtDate(b.due_date)}</span>
+                          })()
+                        ) : <span className="text-text-3">—</span>}
+                      </td>
                       <td className="px-3 py-2 text-xs text-text-3">{fmtDate(b.created_at)}</td>
                       {isDev && (
                         <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
@@ -1390,6 +1471,10 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                   onChange={e => setBacklogForm(f => ({ ...f, story_points: e.target.value }))} />
               </Field>
             </div>
+            <Field label="Due Date">
+              <input className="input w-full" type="date" value={backlogForm.due_date}
+                onChange={e => setBacklogForm(f => ({ ...f, due_date: e.target.value }))} />
+            </Field>
             {backlogForm.item_type !== 'epic' && epics.length > 0 && (
               <Field label="Epic">
                 <select className="input w-full" value={backlogForm.epic_id}
@@ -1444,6 +1529,10 @@ export default function BugsBacklogPage({ embedded }: { embedded?: boolean } = {
                       onChange={e => setBacklogEditForm((f: any) => ({ ...f, story_points: e.target.value }))} />
                   </Field>
                 </div>
+                <Field label="Due Date">
+                  <input className="input w-full" type="date" value={backlogEditForm.due_date || ''}
+                    onChange={e => setBacklogEditForm((f: any) => ({ ...f, due_date: e.target.value }))} />
+                </Field>
                 {backlogEditForm.item_type !== 'epic' && epics.length > 0 && (
                   <Field label="Epic">
                     <select className="input w-full" value={backlogEditForm.epic_id || ''}

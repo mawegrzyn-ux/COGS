@@ -10,6 +10,7 @@ export interface FeatureFlags {
   stock_manager: boolean
   haccp:         boolean
   allergens:     boolean
+  nutrition:     boolean
   variations:    boolean
   audits:        boolean
 }
@@ -18,6 +19,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   stock_manager: true,
   haccp:         true,
   allergens:     true,
+  nutrition:     true,
   variations:    true,
   audits:        true,
 }
