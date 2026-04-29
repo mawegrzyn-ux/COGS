@@ -3979,6 +3979,34 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-29' AND title = 'Kiosk mockup + map tooltip counts + Languages admin UI + kanban vertical sort'
    )`,
+
+  // ── Step 164: Bugs (resolved this session) ────────────────────────────────
+  `INSERT INTO mcogs_bugs (key, summary, description, priority, severity, status, labels, page, resolution) VALUES
+    ('BUG-1042', 'Modifier multiplier × mod column hidden when Market or Price Level dropdown was set',
+     'isGlobalView heuristic checked the dropdowns directly: (selectedCountryId === GLOBAL/empty) AND no PL. But operators routinely have a Market and PL selected while still viewing the global recipe (because no variation exists for that combo) — the "🌍 Global recipe" badge confirms that state. The × mod column was hidden whenever a dropdown was set, even though the view was still global.',
+     'medium', 'minor', 'resolved', '["recipes","ui","multiplier"]'::jsonb, 'Recipes',
+     'isGlobalView now mirrors the exact logic that drives the "Global recipe" badge: not in a market+PL variation, not in a PL variation, and activeCogs.has_variation is false. Badge visibility and × mod column visibility are now in lockstep.')
+   ON CONFLICT (key) DO NOTHING`,
+
+  // ── Step 165: Backlog (done this session) ─────────────────────────────────
+  // BACK-2426 (Modifier multiplier) was filed externally before this session;
+  // already flipped to done on production via the internal API. UPDATE keeps
+  // a fresh DB rebuild in step. Idempotent.
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2426' AND status <> 'done'`,
+
+  // ── Step 166: Changelog — Apr 29 (evening) — Modifier multiplier shipped ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-29', 'Modifier multiplier feature + README rewrite', '[
+     {"type":"added","description":"Modifier multiplier (BACK-2426). Flag a recipe ingredient as the qty driver and modifier costs scale by that qty. Bone-In 6 with Bone-In Wing × 6 flagged → attached Flavour Choice modifiers consume 6× sauce per portion. New mcogs_recipe_items.is_modifier_multiplier column (BOOLEAN, default false) + partial unique index so one item per recipe can carry the flag. Server-side enforcement in the recipe-items PUT endpoint (transaction clears the flag on every other global row before stamping it on the target). New resolveRecipeMultiplier helper exported from cogs.js. Threaded through loadModifierCostAdders (multiplierForSi + multiplierForOption resolvers — different combo step options can carry different multipliers), calcComboCost (modifier blend × per-option recipe multiplier), and the menu-sales-items /sub-prices endpoint (per-option cost + per-group avg/min/max all scale)."},
+     {"type":"added","description":"Modifier multiplier UI. Configuration → COGS Thresholds gains a new Modifier Multiplier section with a single Apply checkbox + helper copy. Recipes page ingredient table gains a × mod column on the global view; tickbox per ingredient row, disabled for sub-recipe rows, single-flag-per-recipe enforced server-side. Tooltip per cell explains the multiplier value (e.g. “Click to flag this item as the multiplier (sets modifier scale to 6×)”). Default off — existing menus see no change until both the global toggle and a per-recipe flag are set."},
+     {"type":"changed","description":"README.md rewritten. Was three lines of throwaway notes (“COGS2.1”, “minor change to domain”, “08/04/2026 - triggering deploy manually”). Now a proper repo landing page covering what the app does, the Pepper-centric AI workflow, operator + developer toolkits, feedback channels, architecture, getting-started commands, and pointers to CLAUDE.md / docs/."},
+     {"type":"fixed","description":"BUG-1042: × mod column hidden when Market or Price Level dropdown was set even though the view was still global. isGlobalView heuristic now mirrors the exact logic behind the “🌍 Global recipe” badge — column visibility and badge visibility are in lockstep."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-29' AND title = 'Modifier multiplier feature + README rewrite'
+   )`,
 ];
 
 async function runMigrations(pool) {
