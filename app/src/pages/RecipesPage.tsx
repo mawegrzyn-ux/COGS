@@ -785,14 +785,47 @@ export default function RecipesPage() {
     if (!selected || !selectedItemId) return
     setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/items/${selectedItemId}`, {
+      // Only send is_modifier_multiplier when we're on the global view + an
+      // ingredient row — server enforces single-flag-per-recipe so we also
+      // optimistically clear the flag on every other item locally on a true.
+      const flagInPlay = isGlobalView && form.item_type === 'ingredient' && form.is_modifier_multiplier !== undefined
+      const body: Record<string, unknown> = {
         prep_qty:               Number(form.prep_qty),
         prep_unit:              form.prep_unit.trim() || null,
         prep_to_base_conversion:Number(form.prep_to_base_conversion) || 1,
+      }
+      if (flagInPlay) body.is_modifier_multiplier = !!form.is_modifier_multiplier
+      await api.put(`/recipes/${selected.id}/items/${selectedItemId}`, body)
+      // Optimistic local patch — avoids a full loadDetail / re-render of the
+      // whole detail panel and the COGS recompute on every save.
+      setSelected(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          items: prev.items.map(it => {
+            if (it.id === selectedItemId) {
+              return {
+                ...it,
+                prep_qty:                Number(form.prep_qty),
+                prep_unit:               form.prep_unit.trim() || null,
+                prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+                ...(flagInPlay ? { is_modifier_multiplier: !!form.is_modifier_multiplier } : {}),
+              }
+            }
+            // When we set the flag on the target row, every other row in the
+            // same recipe loses it (server-side single-flag-per-recipe rule).
+            if (flagInPlay && form.is_modifier_multiplier && it.is_modifier_multiplier) {
+              return { ...it, is_modifier_multiplier: false }
+            }
+            return it
+          }),
+        }
       })
       showToast('Item updated')
       setSelectedItemId(null)
       setItemPanelForm(null)
+      // Background refresh to pick up server-recalculated COGS — non-blocking
+      // so the panel close + toast feel instant.
       loadDetail(selected.id)
     } catch (err: any) {
       showToast(err.message || 'Update failed', 'error')
@@ -834,22 +867,64 @@ export default function RecipesPage() {
       path = `/recipes/${selected.id}/variations/${activeVariation.id}/items/${item.id}`
     }
 
+    // Optimistic local patch — touches the active variant's items array (or
+    // selected.items for the global view). loadDetail still fires in the
+    // background so server-recalculated COGS replaces the stale cost figure
+    // without holding up the UI.
+    const patchItems = (items: RecipeItem[]) => items.map(it =>
+      it.id === item.id ? { ...it, prep_qty: qty } : it
+    )
+    setSelected(prev => {
+      if (!prev) return prev
+      if (variantMode === 'market-pl' && activeMarketPlVariation) {
+        return { ...prev, market_pl_variations: prev.market_pl_variations?.map(v =>
+          v.id === activeMarketPlVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      if (variantMode === 'price-level' && activePlVariation) {
+        return { ...prev, pl_variations: prev.pl_variations?.map(v =>
+          v.id === activePlVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      if (variantMode === 'market' && activeVariation) {
+        return { ...prev, variations: prev.variations.map(v =>
+          v.id === activeVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      return { ...prev, items: patchItems(prev.items) }
+    })
+
     try {
       await api.put(path, body)
+      // Background refresh for cost recompute — fire-and-forget so the qty
+      // edit feels instant. Errors still surface via the catch on loadDetail's
+      // own promise chain in the route.
       loadDetail(selected.id)
     } catch (err: any) {
       showToast(err.message || 'Save failed', 'error')
+      // Roll back by re-fetching the truth.
+      loadDetail(selected.id)
     }
   }
 
   // Toggle the modifier-multiplier flag on a recipe item. Only meaningful
   // for ingredient-typed items on the GLOBAL recipe (not variations) — server
   // enforces single-flag-per-recipe inside a transaction, clearing the flag
-  // on every other row before setting it on the target. Optimistic UI swap
-  // followed by loadDetail to pick up the cleared flags on other rows.
+  // on every other row before setting it on the target. Fully optimistic —
+  // patch the local state immediately, no full reload.
   const toggleMultiplierFlag = async (item: RecipeItem) => {
     if (!selected) return
     const next = !(item.is_modifier_multiplier ?? false)
+    // Optimistic flip locally — set on target, clear on every other ingredient
+    // row of the same recipe to mirror the server-side single-flag rule.
+    setSelected(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        items: prev.items.map(it => {
+          if (it.id === item.id) return { ...it, is_modifier_multiplier: next }
+          if (next && it.is_modifier_multiplier) return { ...it, is_modifier_multiplier: false }
+          return it
+        }),
+      }
+    })
     try {
       await api.put(`/recipes/${selected.id}/items/${item.id}`, {
         prep_qty:                Number(item.prep_qty),
@@ -857,9 +932,12 @@ export default function RecipesPage() {
         prep_to_base_conversion: Number(item.prep_to_base_conversion) || 1,
         is_modifier_multiplier:  next,
       })
+      // Background refresh so any cascading cost recomputes show up — but the
+      // checkbox flip already happened on screen.
       loadDetail(selected.id)
     } catch (err: any) {
       showToast(err.message || 'Failed to update multiplier flag', 'error')
+      loadDetail(selected.id)
     }
   }
 
@@ -2012,6 +2090,7 @@ export default function RecipesPage() {
                                   prep_qty:                String(item.prep_qty),
                                   prep_unit:               item.prep_unit ?? '',
                                   prep_to_base_conversion: String(item.prep_to_base_conversion),
+                                  is_modifier_multiplier:  !!item.is_modifier_multiplier,
                                 })
                               }}
                             >
@@ -2367,6 +2446,27 @@ export default function RecipesPage() {
                             <span className="text-text-3 ml-2">(+{item.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + item.waste_pct / 100), 3)} {baseUnit}</span>)</span>
                           )}
                         </div>
+                      )}
+
+                      {/* Modifier multiplier — global view + ingredient items only.
+                          Mirrors the × mod column on the table; setting it here
+                          clears the flag on every other item server-side and the
+                          updateItem optimistic patch reflects that locally. */}
+                      {isGlobalView && (
+                        <label className="flex items-start gap-2 cursor-pointer rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 hover:border-accent/40">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 cursor-pointer"
+                            checked={!!itemPanelForm.is_modifier_multiplier}
+                            onChange={e => setItemPanelForm(f => f ? { ...f, is_modifier_multiplier: e.target.checked } : f)}
+                          />
+                          <div className="text-xs">
+                            <div className="font-semibold text-text-1">Modifier multiplier</div>
+                            <div className="text-text-3 mt-0.5">
+                              When set, this item’s qty (<span className="font-mono">{itemPanelForm.prep_qty || '?'}</span>) multiplies every modifier-option cost on sales items / combo step options that use this recipe. Only one item per recipe can carry the flag — saving here clears it on the others.
+                            </div>
+                          </div>
+                        </label>
                       )}
                     </>
                   )}
@@ -3020,6 +3120,7 @@ interface ItemForm {
   prep_qty: string
   prep_unit: string
   prep_to_base_conversion: string
+  is_modifier_multiplier?: boolean
 }
 
 function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onClose }: {

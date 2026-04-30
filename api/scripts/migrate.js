@@ -4105,6 +4105,18 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-30' AND title = 'Pepper auto-derived directives'
    )`,
+
+  // ── Step 169: Changelog — Apr 30 — Recipes side-panel + optimistic edits ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-04-30', 'Recipes side panel + optimistic inline edits', '[
+     {"type":"added","description":"Modifier multiplier checkbox now appears in the Recipes side panel as well as the inline × mod column. Visible only on the global view for ingredient items (matches the existing column behaviour). Includes inline copy explaining how the multiplier works and that saving here clears the flag on every other item in the same recipe (server-side single-flag-per-recipe rule)."},
+     {"type":"changed","description":"Recipe inline edits no longer trigger a full detail reload. Quantity inline edits, the side-panel save, and the × mod toggle now patch the local items array optimistically (and mirror the server-side single-flag-per-recipe rule for the multiplier toggle). loadDetail still fires in the background so server-recalculated COGS replaces the stale per-row cost without holding up the UI. Failed saves still roll back via loadDetail."},
+     {"type":"fixed","description":"Step 168 changelog INSERT had unescaped single quotes inside localStorage(‘backlog-time-window’) which terminated the outer SQL string literal early and rolled back the previous deploy. Replaced with curly quotes."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-04-30' AND title = 'Recipes side panel + optimistic inline edits'
+   )`,
 ];
 
 async function runMigrations(pool) {
