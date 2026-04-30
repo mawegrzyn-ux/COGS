@@ -8,6 +8,7 @@ import LoadingScreen        from './components/LoadingScreen'
 import InventoryPage        from './pages/InventoryPage'
 import RecipesPage          from './pages/RecipesPage'
 import MenusPage            from './pages/MenusPage'
+import MenuBuilderPage      from './pages/MenuBuilderPage'
 import SalesItemsPage       from './pages/SalesItemsPage'
 import AllergenMatrixPage   from './pages/AllergenMatrixPage'
 import HACCPPage            from './pages/HACCPPage'
@@ -91,6 +92,7 @@ export default function App() {
             <Route path="recipes"       element={<RecipesPage />} />
             <Route path="sales-items"   element={<SalesItemsPage />} />
             <Route path="menus"         element={<MenusPage />} />
+            <Route path="menu-builder"  element={<MenuBuilderPage />} />
             <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
             <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
             <Route path="audits"               element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense></FeatureRoute>} />

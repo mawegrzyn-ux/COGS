@@ -44,6 +44,7 @@ export default {
     recipes: 'Recipes',
     sales_items: 'Sales Items',
     menus: 'Menus',
+    menu_builder: 'Menu Builder',
     allergens: 'Allergens',
     haccp: 'HACCP',
     audits: 'Audits',
