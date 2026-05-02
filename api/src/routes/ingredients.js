@@ -86,7 +86,7 @@ router.get('/unquoted-in-recipes', async (req, res) => {
 // fallback if no translation exists.
 router.get('/', async (req, res) => {
   try {
-    const { category_id } = req.query
+    const { category_id, country_id } = req.query
     const lang = req.language && req.language !== 'en' ? req.language : null
 
     // Build translation-aware SELECT expressions. When lang is null, skip the
@@ -100,9 +100,45 @@ router.get('/', async (req, res) => {
     let whereIdx = null
     if (category_id) { vals.push(category_id); whereIdx = vals.length }
 
+    // Optional: when country_id is supplied, also compute per-country active
+    // cost via preferred-vendor first, falling back to the cheapest active
+    // quote whose vendor sits in that country. Used by the Menu Builder
+    // ingredient picker (BACK-2548) to show market-specific cost + drive the
+    // "no quote in this market — add one" inline-add-quote affordance.
+    let countryIdx = null
+    if (country_id) { vals.push(Number(country_id)); countryIdx = vals.length }
+
     // Assemble the query with numbered placeholders
     const langIdx = lang ? 1 : null
     const substitutePlaceholders = (sql) => sql.replace(/\$LANG/g, `$${langIdx}`)
+
+    const marketCostSelect = country_id
+      ? `, market_cost.cost_per_base_unit AS market_cost_per_base_unit,
+            market_cost.purchase_unit     AS market_purchase_unit,
+            market_cost.purchase_price    AS market_purchase_price,
+            market_cost.qty_in_base_units AS market_qty_in_base_units,
+            market_cost.vendor_name       AS market_vendor_name,
+            market_cost.is_preferred      AS market_quote_is_preferred,
+            (market_cost.cost_per_base_unit IS NOT NULL) AS has_market_quote`
+      : ''
+
+    const marketCostJoin = country_id ? `
+      LEFT JOIN LATERAL (
+        SELECT pq.purchase_price, pq.qty_in_base_units, pq.purchase_unit,
+               (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) AS cost_per_base_unit,
+               v.name AS vendor_name,
+               (ipv.quote_id IS NOT NULL AND ipv.quote_id = pq.id) AS is_preferred
+        FROM   mcogs_price_quotes pq
+        JOIN   mcogs_vendors      v   ON v.id = pq.vendor_id
+        LEFT JOIN mcogs_ingredient_preferred_vendor ipv
+                 ON ipv.ingredient_id = i.id AND ipv.country_id = $${countryIdx}
+        WHERE  pq.ingredient_id = i.id
+          AND  pq.is_active = TRUE
+          AND  v.country_id  = $${countryIdx}
+        ORDER BY (ipv.quote_id IS NOT NULL AND ipv.quote_id = pq.id) DESC,
+                 (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
+        LIMIT 1
+      ) market_cost ON true` : ''
 
     let query = substitutePlaceholders(`
       SELECT i.id, ${iName} AS name, ${iNotes} AS notes,
@@ -117,6 +153,7 @@ router.get('/', async (req, res) => {
              g.name         AS category_group_name,
              pq_stats.quote_count,
              pq_stats.active_quote_count
+             ${marketCostSelect}
       FROM mcogs_ingredients i
       LEFT JOIN mcogs_units           u  ON u.id  = i.base_unit_id
       LEFT JOIN mcogs_categories      c  ON c.id  = i.category_id
@@ -127,6 +164,7 @@ router.get('/', async (req, res) => {
         FROM   mcogs_price_quotes
         WHERE  ingredient_id = i.id
       ) pq_stats ON true
+      ${marketCostJoin}
     `)
     if (whereIdx) query += ` WHERE i.category_id = $${whereIdx}`
     query += ` ORDER BY name ASC`

@@ -27,6 +27,8 @@ interface Menu {
   name: string
   country_id: number
   country_name: string
+  currency_code?: string | null
+  currency_symbol?: string | null
   description: string | null
 }
 
@@ -55,26 +57,12 @@ interface MenuItemPrice {
   tax_rate_id: number | null
 }
 
-interface Country {
-  id: number
-  name: string
-  currency_code: string
-  currency_symbol: string
-}
-
 interface TaxRate {
   id: number
   country_id: number
   name: string
   rate_percent: number
   is_default: boolean
-}
-
-interface SalesItemMarket {
-  sales_item_id: number
-  country_id: number
-  is_active: boolean
-  country_name: string
 }
 
 interface ModifierGroup {
@@ -152,6 +140,25 @@ interface IngredientRow {
   category_name: string | null
   base_unit_abbr: string | null
   image_url: string | null
+  // BACK-2548 — when fetched with ?country_id=X, the API attaches market-
+  // specific cost data so we can show cost in the picker + offer "+ Add quote"
+  // when none exists for the current market.
+  has_market_quote?: boolean
+  market_cost_per_base_unit?: number | null
+  market_purchase_unit?: string | null
+  market_purchase_price?: number | null
+  market_qty_in_base_units?: number | null
+  market_vendor_name?: string | null
+  market_quote_is_preferred?: boolean
+}
+
+interface VendorRow {
+  id: number
+  name: string
+  country_id: number
+  country_name?: string | null
+  currency_code?: string | null
+  currency_symbol?: string | null
 }
 
 interface CategoryRow {
@@ -208,8 +215,6 @@ export default function MenuBuilderPage() {
   const [editingMsi,   setEditingMsi]   = useState<MenuSalesItem | null>(null)
   // Tax rates filtered to the selected menu's country, lazy-loaded.
   const [taxRates,     setTaxRates]     = useState<TaxRate[]>([])
-  // All countries — used by the markets tab and by the user-RBAC scope.
-  const [countries,    setCountries]    = useState<Country[]>([])
 
   // Story 7 — shared panel width (px). Persisted across reloads so the user
   // gets their preferred width back. Clamped 320–720.
@@ -311,11 +316,6 @@ export default function MenuBuilderPage() {
       .catch(() => setTaxRates([]))
   }, [api, selectedMenu])
 
-  useEffect(() => {
-    api.get('/countries')
-      .then((d: Country[]) => setCountries(d || []))
-      .catch(() => setCountries([]))
-  }, [api])
 
   // Attach an existing sales item to the current menu
   const attachExisting = useCallback(async (si: SalesItemRow) => {
@@ -524,7 +524,7 @@ export default function MenuBuilderPage() {
                 className="btn-primary"
                 onClick={() => { setEditingMsi(null); setAddMode('search'); setPanelOpen(true) }}
                 disabled={!selectedMenu}
-              >+ Add item</button>
+              >+ Add Sales Item</button>
             </div>
 
             {/* ── Items list ── */}
@@ -535,7 +535,7 @@ export default function MenuBuilderPage() {
                 <div className="flex justify-center p-12"><Spinner /></div>
               ) : items.length === 0 ? (
                 <div className="p-8 text-center text-text-3 text-sm">
-                  No items on this menu yet. Click <strong>+ Add item</strong> to start.
+                  No items on this menu yet. Click <strong>+ Add Sales Item</strong> to start.
                 </div>
               ) : (
                 <ul className="divide-y divide-border bg-surface">
@@ -626,7 +626,6 @@ export default function MenuBuilderPage() {
               menu={selectedMenu}
               msi={editingMsi}
               taxRates={taxRates}
-              countries={countries}
               width={panelWidth}
               onResize={setPanelWidth}
               onChanged={() => loadItems(selectedMenu.id)}
@@ -767,7 +766,7 @@ function AddItemPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-wide text-text-3 font-semibold">{menu.name} <span className="text-text-3/60">›</span> Add item</div>
+          <div className="text-[10px] uppercase tracking-wide text-text-3 font-semibold">{menu.name} <span className="text-text-3/60">›</span> Add Sales Item</div>
           <div className="font-semibold text-sm text-text-1">{addMode === 'search' ? 'Search existing' : 'Create new'}</div>
         </div>
         <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
@@ -794,9 +793,12 @@ function AddItemPanel({
             results={filtered}
             loading={catalogLoading}
             onPick={onAttach}
+            catalogTotal={catalog.length}
+            alreadyOnMenuCount={catalog.filter(c => currentItemIds.includes(c.id)).length}
           />
         ) : (
           <CreateNewTab
+            menu={menu}
             catalog={catalog}
             categories={categories}
             onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
@@ -815,14 +817,21 @@ function AddItemPanel({
 // ── Tab: search existing catalog ────────────────────────────────────────────
 
 function SearchExistingTab({
-  search, setSearch, results, loading, onPick,
+  search, setSearch, results, loading, onPick, catalogTotal, alreadyOnMenuCount,
 }: {
   search: string
   setSearch: (s: string) => void
   results: SalesItemRow[]
   loading: boolean
   onPick: (si: SalesItemRow) => void | Promise<void>
+  catalogTotal: number
+  alreadyOnMenuCount: number
 }) {
+  // Distinguish three empty states (BACK-2546):
+  //   1. no catalog at all                  → suggest Create new
+  //   2. catalog exists but every item already on the menu  → say so explicitly
+  //   3. search yielded nothing             → No matches
+  const allOnMenu = !loading && !search && catalogTotal > 0 && results.length === 0 && alreadyOnMenuCount === catalogTotal
   return (
     <div className="space-y-3">
       <input
@@ -835,8 +844,12 @@ function SearchExistingTab({
       {loading ? (
         <div className="flex justify-center py-8"><Spinner /></div>
       ) : results.length === 0 ? (
-        <div className="text-xs text-text-3 italic py-6 text-center">
-          {search ? 'No matches.' : 'No sales items in the catalog yet — switch to “Create new”.'}
+        <div className="text-xs text-text-3 italic py-6 text-center px-3">
+          {search
+            ? 'No matches.'
+            : allOnMenu
+              ? <>Every sales item in the catalog is already on this menu. Switch to <strong>Create new</strong> to add a fresh one.</>
+              : <>No sales items in the catalog yet — switch to <strong>Create new</strong>.</>}
         </div>
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
@@ -878,8 +891,9 @@ function SearchExistingTab({
 // stubs awaiting BACK-2519 / BACK-2520.
 
 function CreateNewTab({
-  catalog, categories, onCategoryCreated, onAttachExisting, onCreateAndAttach, onCreateComboAndAttach, onAskReuse, onCancel,
+  menu, catalog, categories, onCategoryCreated, onAttachExisting, onCreateAndAttach, onCreateComboAndAttach, onAskReuse, onCancel,
 }: {
+  menu: Menu
   catalog: SalesItemRow[]
   categories: CategoryRow[]
   onCategoryCreated: (c: CategoryRow) => void
@@ -905,7 +919,7 @@ function CreateNewTab({
   return (
     <div className="space-y-4">
       <div>
-        <div className="text-xs font-semibold text-text-2 mb-2">Type</div>
+        <div className="text-xs font-semibold text-text-2 mb-2">Linked to</div>
         <div className="grid grid-cols-2 gap-2">
           {TYPES.map(t => (
             <label
@@ -939,6 +953,7 @@ function CreateNewTab({
       {(type === 'recipe' || type === 'ingredient') && (
         <RecipeOrIngredientPicker
           mode={type}
+          menu={menu}
           catalog={catalog}
           onAttachExisting={onAttachExisting}
           onCreateAndAttach={onCreateAndAttach}
@@ -975,9 +990,10 @@ function CreateNewTab({
 // it and immediately attach to the menu.
 
 function RecipeOrIngredientPicker({
-  mode, catalog, onAttachExisting, onCreateAndAttach, onAskReuse,
+  mode, menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse,
 }: {
   mode: 'recipe' | 'ingredient'
+  menu: Menu
   catalog: SalesItemRow[]
   onAttachExisting: (si: SalesItemRow) => void | Promise<void>
   onCreateAndAttach: (payload: {
@@ -995,9 +1011,20 @@ function RecipeOrIngredientPicker({
   const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [search,  setSearch]  = useState('')
+  // BACK-2548 — track which ingredient row has the inline add-quote form open
+  const [addQuoteFor, setAddQuoteFor] = useState<IngredientRow | null>(null)
+
+  const reloadIngredients = useCallback(() => {
+    setLoading(true)
+    return api.get(`/ingredients?country_id=${menu.country_id}`)
+      .then((d: IngredientRow[]) => setIngredients(d || []))
+      .catch(() => setIngredients([]))
+      .finally(() => setLoading(false))
+  }, [api, menu.country_id])
 
   // Lazy-load whichever catalog matches the active mode. Cached locally so
-  // flipping between recipe ↔ ingredient doesn't refetch.
+  // flipping between recipe ↔ ingredient doesn't refetch. The ingredient
+  // call is scoped to the menu's country so each row carries cost data.
   useEffect(() => {
     if (mode === 'recipe' && recipes === null) {
       setLoading(true)
@@ -1006,13 +1033,9 @@ function RecipeOrIngredientPicker({
         .catch(() => setRecipes([]))
         .finally(() => setLoading(false))
     } else if (mode === 'ingredient' && ingredients === null) {
-      setLoading(true)
-      api.get('/ingredients')
-        .then((d: IngredientRow[]) => setIngredients(d || []))
-        .catch(() => setIngredients([]))
-        .finally(() => setLoading(false))
+      reloadIngredients()
     }
-  }, [api, mode, recipes, ingredients])
+  }, [api, mode, recipes, ingredients, reloadIngredients])
 
   // Active source list + filter
   const filtered = useMemo(() => {
@@ -1074,31 +1097,60 @@ function RecipeOrIngredientPicker({
               (mode === 'recipe'      && si.recipe_id     === row.id) ||
               (mode === 'ingredient'  && si.ingredient_id === row.id)
             )
+            // BACK-2548 — for ingredient mode, surface market cost / "no quote" badges.
+            const ingRow = mode === 'ingredient' ? (row as IngredientRow) : null
+            const cost = ingRow?.market_cost_per_base_unit
+            const hasQuote = !!ingRow?.has_market_quote
+            const symbol = menu.currency_symbol || menu.currency_code || ''
             return (
-              <li
-                key={row.id}
-                className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer"
-                onClick={() => handlePick(row)}
-              >
-                {mode === 'ingredient' && 'image_url' in row && row.image_url ? (
-                  <img src={row.image_url} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
-                ) : (
-                  <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-text-1 truncate">{row.name}</div>
-                  <div className="text-[11px] text-text-3 truncate">
-                    {row.category_name || 'Uncategorised'}
-                    {mode === 'recipe' && 'yield_qty' in row && (
-                      <> · yield {row.yield_qty}{row.yield_unit_abbr ? ' ' + row.yield_unit_abbr : ''}</>
-                    )}
-                    {mode === 'ingredient' && 'base_unit_abbr' in row && row.base_unit_abbr && (
-                      <> · {row.base_unit_abbr}</>
-                    )}
+              <li key={row.id} className="border-b border-border last:border-b-0">
+                <div
+                  className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer"
+                  onClick={() => handlePick(row)}
+                >
+                  {mode === 'ingredient' && 'image_url' in row && row.image_url ? (
+                    <img src={row.image_url} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
+                  ) : (
+                    <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-text-1 truncate">{row.name}</div>
+                    <div className="text-[11px] text-text-3 truncate">
+                      {row.category_name || 'Uncategorised'}
+                      {mode === 'recipe' && 'yield_qty' in row && (
+                        <> · yield {row.yield_qty}{row.yield_unit_abbr ? ' ' + row.yield_unit_abbr : ''}</>
+                      )}
+                      {mode === 'ingredient' && ingRow?.base_unit_abbr && (
+                        <> · {ingRow.base_unit_abbr}</>
+                      )}
+                      {mode === 'ingredient' && hasQuote && cost != null && (
+                        <> · <span className="text-accent font-semibold">{symbol}{Number(cost).toFixed(4)}</span>/{ingRow!.base_unit_abbr || 'unit'}{ingRow!.market_quote_is_preferred ? ' ★' : ''}</>
+                      )}
+                    </div>
                   </div>
+                  {mode === 'ingredient' && !hasQuote && (
+                    <button
+                      className="shrink-0 text-[10px] font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 px-1.5 py-0.5 rounded"
+                      onClick={(e) => { e.stopPropagation(); setAddQuoteFor(addQuoteFor?.id === row.id ? null : (row as IngredientRow)) }}
+                      title="No active quote in this market — click to add one"
+                    >+ Add quote</button>
+                  )}
+                  {exists && (
+                    <span className="shrink-0 text-[10px] font-semibold text-accent bg-accent-dim/60 px-1.5 py-0.5 rounded" title="Already wrapped by an existing sales item — picking will reuse it">in catalog</span>
+                  )}
                 </div>
-                {exists && (
-                  <span className="shrink-0 text-[10px] font-semibold text-accent bg-accent-dim/60 px-1.5 py-0.5 rounded" title="Already wrapped by an existing sales item — picking will reuse it">in catalog</span>
+                {/* Inline add-quote form (BACK-2548) */}
+                {mode === 'ingredient' && addQuoteFor?.id === row.id && (
+                  <AddQuoteInline
+                    ingredient={row as IngredientRow}
+                    countryId={menu.country_id}
+                    currencySymbol={symbol}
+                    onCancel={() => setAddQuoteFor(null)}
+                    onCreated={async () => {
+                      setAddQuoteFor(null)
+                      await reloadIngredients()
+                    }}
+                  />
                 )}
               </li>
             )
@@ -1110,6 +1162,160 @@ function RecipeOrIngredientPicker({
           ? 'No recipe creation here — build new recipes in the Recipes module.'
           : 'No ingredient creation here — add new ingredients in Inventory.'}
       </p>
+    </div>
+  )
+}
+
+// ── Inline add-quote form (BACK-2548) ──────────────────────────────────────
+// Surfaced when an ingredient has no active price quote in the menu's market.
+// Lazy-loads the vendor list scoped to the menu's country, lets the user pick
+// or create a vendor, then POSTs to /price-quotes. On success the parent
+// reloads the ingredient catalog so the cost shows up immediately.
+
+function AddQuoteInline({
+  ingredient, countryId, currencySymbol, onCancel, onCreated,
+}: {
+  ingredient: IngredientRow
+  countryId: number
+  currencySymbol: string
+  onCancel: () => void
+  onCreated: () => void | Promise<void>
+}) {
+  const api = useApi()
+  const [vendors,        setVendors]        = useState<VendorRow[]>([])
+  const [vendorsLoading, setVendorsLoading] = useState(false)
+  const [vendorId,       setVendorId]       = useState<string>('')
+  const [purchasePrice,  setPurchasePrice]  = useState<string>('')
+  const [qtyBase,        setQtyBase]        = useState<string>('1')
+  const [purchaseUnit,   setPurchaseUnit]   = useState<string>(ingredient.base_unit_abbr || '')
+  // Inline vendor creation
+  const [creatingVendor, setCreatingVendor] = useState(false)
+  const [newVendorName,  setNewVendorName]  = useState('')
+  const [saving,         setSaving]         = useState(false)
+  const [error,          setError]          = useState<string | null>(null)
+
+  useEffect(() => {
+    setVendorsLoading(true)
+    api.get(`/vendors?country_id=${countryId}`)
+      .then((d: VendorRow[]) => setVendors(d || []))
+      .catch(() => setVendors([]))
+      .finally(() => setVendorsLoading(false))
+  }, [api, countryId])
+
+  const submit = async () => {
+    setError(null)
+    let vendorIdNum = vendorId ? Number(vendorId) : null
+    // If the user typed a new vendor name, create it first.
+    if (creatingVendor) {
+      if (!newVendorName.trim()) { setError('Vendor name is required'); return }
+      try {
+        const v = await api.post('/vendors', {
+          name:       newVendorName.trim(),
+          country_id: countryId,
+        }) as VendorRow
+        vendorIdNum = v.id
+        setVendors(prev => [...prev, v])
+      } catch (err: unknown) {
+        setError((err as { message?: string })?.message || 'Failed to create vendor')
+        return
+      }
+    }
+    if (!vendorIdNum) { setError('Pick or create a vendor'); return }
+    const price = Number(purchasePrice)
+    if (!Number.isFinite(price) || price <= 0) { setError('Purchase price must be > 0'); return }
+    const qty = Number(qtyBase)
+    if (!Number.isFinite(qty) || qty <= 0) { setError('Qty in base units must be > 0'); return }
+    setSaving(true)
+    try {
+      await api.post('/price-quotes', {
+        ingredient_id:     ingredient.id,
+        vendor_id:         vendorIdNum,
+        purchase_price:    price,
+        qty_in_base_units: qty,
+        purchase_unit:     purchaseUnit.trim() || ingredient.base_unit_abbr || null,
+        is_active:         true,
+      })
+      await onCreated()
+    } catch (err: unknown) {
+      setError((err as { message?: string })?.message || 'Failed to save quote')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-amber-50/40 border-t border-amber-200 px-3 py-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+      <div className="text-[11px] font-semibold text-amber-800">
+        Add a price quote for <strong>{ingredient.name}</strong> in {currencySymbol ? <>{currencySymbol} </> : ''}this market
+      </div>
+
+      {/* Vendor picker / inline-create toggle */}
+      <Field label="Vendor" required>
+        {creatingVendor ? (
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              autoFocus
+              value={newVendorName}
+              onChange={e => setNewVendorName(e.target.value)}
+              placeholder="New vendor name…"
+            />
+            <button className="btn-ghost text-[11px] px-2" onClick={() => { setCreatingVendor(false); setNewVendorName('') }}>← Pick existing</button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <select
+              className="input flex-1 text-sm"
+              value={vendorId}
+              onChange={e => setVendorId(e.target.value)}
+              disabled={vendorsLoading}
+            >
+              <option value="">— Pick a vendor —</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <button className="btn-ghost text-[11px] px-2" onClick={() => setCreatingVendor(true)}>+ New</button>
+          </div>
+        )}
+      </Field>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Purchase price" required>
+          <CalcInput
+            className="input w-full font-mono text-sm"
+            value={purchasePrice}
+            onChange={setPurchasePrice}
+            placeholder="0.00"
+          />
+        </Field>
+        <Field label={`Qty in ${ingredient.base_unit_abbr || 'base unit'}`} required>
+          <CalcInput
+            className="input w-full font-mono text-sm"
+            value={qtyBase}
+            onChange={setQtyBase}
+            placeholder="1"
+          />
+        </Field>
+      </div>
+
+      <Field label="Purchase unit (label only)" hint="e.g. case, kg, bag">
+        <input
+          className="input w-full text-sm"
+          value={purchaseUnit}
+          onChange={e => setPurchaseUnit(e.target.value)}
+          placeholder={ingredient.base_unit_abbr || 'unit'}
+        />
+      </Field>
+
+      {error && <div className="text-[11px] text-rose-700 font-medium">{error}</div>}
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button className="btn-ghost text-xs" onClick={onCancel}>Cancel</button>
+        <button
+          className="btn-primary text-xs"
+          disabled={saving}
+          onClick={submit}
+        >{saving ? 'Saving…' : 'Save quote'}</button>
+      </div>
     </div>
   )
 }
@@ -1274,12 +1480,11 @@ function ManualItemForm({
 // two tabs. Save fires server roundtrip per row; markets toggle auto-saves.
 
 function EditItemPanel({
-  menu, msi, taxRates, countries, width, onResize, onChanged, onClose, onToast,
+  menu, msi, taxRates, width, onResize, onChanged, onClose, onToast,
 }: {
   menu: Menu
   msi: MenuSalesItem
   taxRates: TaxRate[]
-  countries: Country[]
   width: number
   onResize: (w: number) => void
   onChanged: () => void
@@ -1287,11 +1492,12 @@ function EditItemPanel({
   onToast: (t: { message: string; type?: 'success' | 'error' }) => void
 }) {
   const api = useApi()
-  type EditTab = 'pricing' | 'markets' | 'modifiers'
+  // BACK-2549 — Markets tab removed from this panel. Sales-item market
+  // visibility is now managed exclusively from the Sales Items page (the
+  // menu is already scoped to one country, so the tab was redundant here).
+  type EditTab = 'pricing' | 'modifiers'
   const [tab,    setTab]    = useState<EditTab>('pricing')
   const [prices, setPrices] = useState<MenuItemPrice[]>(msi.prices || [])
-  const [markets, setMarkets] = useState<SalesItemMarket[]>([])
-  const [marketsLoading, setMarketsLoading] = useState(false)
   const [savingPriceLevels, setSavingPriceLevels] = useState<Set<number>>(new Set())
   // Story 5 — modifier groups
   const [allModGroups,    setAllModGroups]    = useState<ModifierGroup[]>([])
@@ -1320,15 +1526,6 @@ function EditItemPanel({
       .catch(() => { /* fall back to msi.prices already in state */ })
   }, [api, msi.id])
 
-  // Load markets on first switch to the markets tab.
-  useEffect(() => {
-    if (tab !== 'markets' || markets.length) return
-    setMarketsLoading(true)
-    api.get(`/sales-items/${msi.sales_item_id}`)
-      .then((si: { markets?: SalesItemMarket[] }) => setMarkets(si.markets || []))
-      .catch(() => setMarkets([]))
-      .finally(() => setMarketsLoading(false))
-  }, [api, tab, msi.sales_item_id, markets.length])
 
   // Story 5 — load modifier-group catalog + currently attached groups on
   // first switch to the modifiers tab. Both refresh after every save so the
@@ -1398,30 +1595,6 @@ function EditItemPanel({
     }
   }
 
-  // Toggle a country's active flag for this sales item. Auto-save.
-  // The PUT /sales-items/:id/markets endpoint takes { country_ids: [...] } —
-  // the FULL list of currently-active country IDs (everything else is set to
-  // inactive on the server side).
-  const toggleMarket = async (countryId: number, checked: boolean) => {
-    const previousMarkets = markets
-    // Compute the next list optimistically
-    const nextMarkets = (() => {
-      const existing = markets.find(m => m.country_id === countryId)
-      if (existing) return markets.map(m => m.country_id === countryId ? { ...m, is_active: checked } : m)
-      const country = countries.find(c => c.id === countryId)
-      return [...markets, { sales_item_id: msi.sales_item_id, country_id: countryId, is_active: checked, country_name: country?.name || '' }]
-    })()
-    setMarkets(nextMarkets)
-    try {
-      const activeIds = nextMarkets.filter(m => m.is_active).map(m => m.country_id)
-      await api.put(`/sales-items/${msi.sales_item_id}/markets`, { country_ids: activeIds })
-    } catch (err: unknown) {
-      // Rollback
-      setMarkets(previousMarkets)
-      const msg = (err as { message?: string })?.message || 'Failed to update market visibility'
-      onToast({ message: msg, type: 'error' })
-    }
-  }
 
   return (
     <aside
@@ -1444,16 +1617,12 @@ function EditItemPanel({
         <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs (Markets tab removed in BACK-2549 — manage market visibility from Sales Items) */}
       <div className="flex border-b border-border">
         <button
           className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'pricing' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
           onClick={() => setTab('pricing')}
         >Pricing</button>
-        <button
-          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'markets' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
-          onClick={() => setTab('markets')}
-        >Markets</button>
         <button
           className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'modifiers' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
           onClick={() => setTab('modifiers')}
@@ -1473,13 +1642,6 @@ function EditItemPanel({
               setPrices(prev => prev.map(x => x.price_level_id === p.price_level_id ? { ...x, tax_rate_id: taxId } : x))
               savePrice({ ...p, tax_rate_id: taxId }, p.sell_price)
             }}
-          />
-        ) : tab === 'markets' ? (
-          <MarketsTab
-            countries={countries}
-            markets={markets}
-            loading={marketsLoading}
-            onToggle={toggleMarket}
           />
         ) : (
           <ModifiersTab
@@ -1642,152 +1804,124 @@ function ModifiersTab({
   onAttach: (toAttach: ModifierGroup[]) => void | Promise<void>
   onCreated: (newGroup: ModifierGroup) => void | Promise<void>
 }) {
-  type Mode = 'list' | 'attach' | 'create'
-  const [mode, setMode] = useState<Mode>('list')
+  // BACK-2550 — flattened to a single screen. Two sections:
+  //   (a) Currently attached  — detach + auto-show toggle
+  //   (b) Available to attach — one-click row attach (no multi-select)
+  // "Create new" still toggles its own form.
+  const [creating, setCreating] = useState(false)
+  const [search,   setSearch]   = useState('')
 
   if (loading) return <div className="flex justify-center py-8"><Spinner /></div>
 
-  if (mode === 'attach') {
-    return (
-      <AttachExistingMods
-        allGroups={allGroups}
-        attachedIds={attached.map(a => a.modifier_group_id)}
-        onCancel={() => setMode('list')}
-        onAttach={async (gs) => { await onAttach(gs); setMode('list') }}
-      />
-    )
-  }
-
-  if (mode === 'create') {
+  if (creating) {
     return (
       <CreateModifierGroupForm
-        onCancel={() => setMode('list')}
-        onCreated={async (g) => { await onCreated(g); setMode('list') }}
+        onCancel={() => setCreating(false)}
+        onCreated={async (g) => { await onCreated(g); setCreating(false) }}
       />
     )
   }
 
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] text-text-3 italic">
-        Modifier groups attached to this sales item appear in the customer flow / kiosk. Detach removes the link only — the group itself stays in the catalog.
-      </p>
-
-      {attached.length === 0 ? (
-        <div className="text-xs text-text-3 italic py-4 text-center">No modifier groups attached.</div>
-      ) : (
-        <ul className="space-y-2">
-          {attached.map(g => (
-            <li key={g.modifier_group_id} className="rounded-lg border border-border px-3 py-2.5 bg-surface-2/30">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-text-1 truncate">{g.name}</div>
-                  <div className="text-[11px] text-text-3 mt-0.5">
-                    Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
-                  </div>
-                </div>
-                <button
-                  className="text-text-3 hover:text-red-600 text-xs px-2 shrink-0"
-                  onClick={() => onDetach(g.modifier_group_id)}
-                  title="Detach (does not delete the group)"
-                >Detach</button>
-              </div>
-              <label className="flex items-center gap-2 mt-2 text-[11px] text-text-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={g.auto_show}
-                  onChange={(e) => onToggleAutoShow(g.modifier_group_id, e.target.checked)}
-                />
-                Show inline (un-tick to hide behind a button)
-              </label>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="flex gap-2 pt-1">
-        <button className="btn-outline flex-1 text-xs" onClick={() => setMode('attach')}>+ Attach existing</button>
-        <button className="btn-primary flex-1 text-xs" onClick={() => setMode('create')}>+ Create new</button>
-      </div>
-    </div>
-  )
-}
-
-function AttachExistingMods({
-  allGroups, attachedIds, onCancel, onAttach,
-}: {
-  allGroups: ModifierGroup[]
-  attachedIds: number[]
-  onCancel: () => void
-  onAttach: (gs: ModifierGroup[]) => void | Promise<void>
-}) {
-  const [search, setSearch] = useState('')
-  const [picked, setPicked] = useState<Set<number>>(new Set())
-
-  const candidates = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return allGroups
-      .filter(g => !attachedIds.includes(g.id))
-      .filter(g => !q || g.name.toLowerCase().includes(q))
-  }, [allGroups, attachedIds, search])
+  const attachedIds = new Set(attached.map(a => a.modifier_group_id))
+  const q = search.trim().toLowerCase()
+  const available = allGroups
+    .filter(g => !attachedIds.has(g.id))
+    .filter(g => !q || g.name.toLowerCase().includes(q))
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <button className="text-text-3 hover:text-text-1 text-xs" onClick={onCancel}>← Back</button>
-        <div className="text-xs font-semibold text-text-2">Attach existing modifier groups</div>
-      </div>
-      <input
-        className="input w-full"
-        autoFocus
-        placeholder="Search modifier groups…"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-      />
-      {candidates.length === 0 ? (
-        <div className="text-xs text-text-3 italic py-4 text-center">
-          {allGroups.length === 0 ? 'No modifier groups in the catalog yet.' : 'All groups already attached.'}
+    <div className="space-y-4">
+      {/* Attached section */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-text-2">Attached{attached.length > 0 && <span className="ml-1 font-mono text-text-3">({attached.length})</span>}</div>
+          <button className="btn-primary text-xs px-2.5 py-1" onClick={() => setCreating(true)}>+ New group</button>
         </div>
-      ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
-          {candidates.map(g => {
-            const checked = picked.has(g.id)
-            return (
-              <li key={g.id}>
-                <label className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => setPicked(prev => {
-                      const next = new Set(prev)
-                      if (next.has(g.id)) next.delete(g.id); else next.add(g.id)
-                      return next
-                    })}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm text-text-1 truncate">{g.name}</div>
-                    <div className="text-[11px] text-text-3">
+        {attached.length === 0 ? (
+          <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded-lg">No modifier groups attached. Click any row below to attach.</div>
+        ) : (
+          <ul className="space-y-2">
+            {attached.map(g => (
+              <li key={g.modifier_group_id} className="rounded-lg border border-border px-3 py-2.5 bg-surface-2/30">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-text-1 truncate">{g.name}</div>
+                    <div className="text-[11px] text-text-3 mt-0.5">
                       Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
-                      {g.option_count != null ? ` · ${g.option_count} option${g.option_count === 1 ? '' : 's'}` : ''}
                     </div>
                   </div>
+                  <button
+                    className="text-text-3 hover:text-red-600 text-xs px-2 shrink-0"
+                    onClick={() => onDetach(g.modifier_group_id)}
+                    title="Detach (does not delete the group)"
+                  >Detach</button>
+                </div>
+                <label className="flex items-center gap-2 mt-2 text-[11px] text-text-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={g.auto_show}
+                    onChange={(e) => onToggleAutoShow(g.modifier_group_id, e.target.checked)}
+                  />
+                  Show inline (un-tick to hide behind a button)
                 </label>
               </li>
-            )
-          })}
-        </ul>
-      )}
-      <div className="flex justify-end gap-2 pt-1">
-        <button className="btn-ghost text-xs" onClick={onCancel}>Cancel</button>
-        <button
-          className="btn-primary text-xs"
-          disabled={picked.size === 0}
-          onClick={() => onAttach(allGroups.filter(g => picked.has(g.id)))}
-        >Attach {picked.size > 0 ? `(${picked.size})` : ''}</button>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Available section — one-click attach */}
+      <div className="pt-3 border-t border-border">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-text-2">Available{allGroups.length - attached.length > 0 && <span className="ml-1 font-mono text-text-3">({allGroups.length - attached.length})</span>}</div>
+        </div>
+        {allGroups.length === 0 ? (
+          <div className="text-xs text-text-3 italic py-3 text-center">No modifier groups in the catalog. Use <strong>+ New group</strong> to create one.</div>
+        ) : available.length === 0 && !search ? (
+          <div className="text-xs text-text-3 italic py-3 text-center">All groups already attached.</div>
+        ) : (
+          <>
+            {allGroups.length > 6 && (
+              <input
+                className="input w-full mb-2"
+                placeholder="Search groups…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            )}
+            {available.length === 0 ? (
+              <div className="text-xs text-text-3 italic py-3 text-center">No matches.</div>
+            ) : (
+              <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
+                {available.map(g => (
+                  <li key={g.id}>
+                    <button
+                      type="button"
+                      className="w-full text-left px-2.5 py-2 hover:bg-accent-dim/40 flex items-center gap-2"
+                      onClick={() => onAttach([g])}
+                      title="Click to attach"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-text-1 truncate">{g.name}</div>
+                        <div className="text-[11px] text-text-3">
+                          Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
+                          {g.option_count != null ? ` · ${g.option_count} option${g.option_count === 1 ? '' : 's'}` : ''}
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-accent font-semibold shrink-0">+ Attach</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
 }
+
+// AttachExistingMods removed in BACK-2550 — replaced by inline click-to-attach
+// list inside ModifiersTab.
 
 function CreateModifierGroupForm({
   onCancel, onCreated,
@@ -2332,45 +2466,6 @@ function ComboOptionEditor({
   )
 }
 
-function MarketsTab({
-  countries, markets, loading, onToggle,
-}: {
-  countries: Country[]
-  markets: SalesItemMarket[]
-  loading: boolean
-  onToggle: (countryId: number, checked: boolean) => void
-}) {
-  if (loading) return <div className="flex justify-center py-8"><Spinner /></div>
-  if (countries.length === 0) {
-    return <div className="text-xs text-text-3 italic py-4 text-center">No countries in scope.</div>
-  }
-  return (
-    <div className="space-y-2">
-      <p className="text-[11px] text-text-3 italic">
-        Sales-item market visibility. Items not active in a market won't be addable to that market's menus. Auto-saves on toggle.
-      </p>
-      <ul className="space-y-1">
-        {countries.map(c => {
-          // Default: if no row exists, treat as active (matches server-side
-          // logic in POST /menu-sales-items which only blocks when an explicit
-          // is_active=false row is present).
-          const row = markets.find(m => m.country_id === c.id)
-          const active = row ? row.is_active : true
-          return (
-            <li key={c.id} className="flex items-center gap-2">
-              <label className="flex items-center gap-2 cursor-pointer flex-1 px-2.5 py-1.5 rounded hover:bg-surface-2/60">
-                <input
-                  type="checkbox"
-                  checked={active}
-                  onChange={(e) => onToggle(c.id, e.target.checked)}
-                />
-                <span className="text-sm text-text-1 flex-1">{c.name}</span>
-                <span className="text-[10px] text-text-3 font-mono">{c.currency_symbol || c.currency_code}</span>
-              </label>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
+// MarketsTab removed in BACK-2549 — sales-item market visibility is managed
+// from the Sales Items page only. The Country / SalesItemMarket interfaces
+// remain exported above for any future feature that needs them.

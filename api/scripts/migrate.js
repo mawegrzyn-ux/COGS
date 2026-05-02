@@ -4115,6 +4115,26 @@ const migrations = [
    WHERE key IN ('BACK-2516','BACK-2518','BACK-2519','BACK-2520','BACK-2521','BACK-2522','BACK-2523')
      AND status <> 'done'`,
 
+  // ── Step 168d: Flip Menu Builder follow-ups (BACK-2545..2550) to done ─────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key IN ('BACK-2545','BACK-2546','BACK-2547','BACK-2548','BACK-2549','BACK-2550')
+     AND status <> 'done'`,
+
+  // ── Step 168e: Changelog — May 03 — Menu Builder follow-ups ───────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Menu Builder follow-ups', '[
+     {"type":"changed","description":"BACK-2545: + Add Sales Item button label (was “+ Add item”). Same change to the panel breadcrumb and the empty-state hint so the wording is consistent across the page."},
+     {"type":"added","description":"BACK-2546: empty-state for the Search existing tab. When every catalog item is already on the menu, the panel says so explicitly and points the user to the Create new tab. Distinct from the no-catalog and no-search-match cases."},
+     {"type":"changed","description":"BACK-2547: Linked to label (was “Type”) on the Create new tab radio. Clearer about what recipe / ingredient / manual / combo means in context."},
+     {"type":"added","description":"BACK-2548: Ingredient picker shows market cost. New optional country_id query param on GET /api/ingredients adds a market-scoped cost LATERAL: preferred-vendor first, falling back to the cheapest active quote whose vendor sits in the same country. Picker rows in the menu builder now show {symbol}{cost}/{base_unit} and a star when the quote is the preferred one. When no active quote exists in the menu market, the row shows a + Add quote pill that opens an inline form for vendor (pick existing or inline-create) + price + qty in base units. Save fires POST /price-quotes and reloads the catalog so the cost shows up immediately."},
+     {"type":"removed","description":"BACK-2549: Markets tab gone from the Edit-item panel. Sales-item market visibility is managed exclusively from the Sales Items page now — the menu is already scoped to one country, so the tab was redundant. Country / SalesItemMarket interfaces, the markets state, the toggle handler, the MarketsTab component, and the page-level countries fetch were all removed."},
+     {"type":"changed","description":"BACK-2550: Modifiers tab flattened to one screen. Attached groups list at the top, Available groups list below — clicking any Available row attaches it in one click, no multi-select dialog. + New group button opens the create form. Optional search input appears only when the catalog has more than 6 groups."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Menu Builder follow-ups'
+   )`,
+
   // ── Step 169: Changelog — Apr 30 — Recipes side-panel + optimistic edits ──
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-04-30', 'Recipes side panel + optimistic inline edits', '[

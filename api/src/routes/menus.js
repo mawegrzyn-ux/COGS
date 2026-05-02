@@ -12,7 +12,8 @@ router.get('/', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT m.id, ${mName} AS name, ${mDesc} AS description,
              m.country_id, m.created_at, m.updated_at, m.translations,
-             c.name AS country_name
+             c.name AS country_name,
+             c.currency_code, c.currency_symbol
       FROM   mcogs_menus m
       LEFT JOIN mcogs_countries c ON c.id = m.country_id
       ORDER BY name ASC
