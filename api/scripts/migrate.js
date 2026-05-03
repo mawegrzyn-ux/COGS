@@ -4184,7 +4184,8 @@ const migrations = [
   // ── Step 170a: Flip Pepper-tier epic + all stories to done ────────────────
   `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
    WHERE key IN ('BACK-2561','BACK-2562','BACK-2563','BACK-2564','BACK-2565','BACK-2566','BACK-2567','BACK-2568',
-                 'BACK-2570','BACK-2571','BACK-2572','BACK-2573','BACK-2574')
+                 'BACK-2570','BACK-2571','BACK-2572','BACK-2573','BACK-2574',
+                 'BACK-2585','BACK-2586','BACK-2587')
      AND status <> 'done'`,
 
   // ── Step 170b: Changelog — May 03 — Pepper model tier switcher shipped ────
@@ -4202,7 +4203,11 @@ const migrations = [
      {"type":"added","description":"BACK-2572: Drag-drop sort for menu items. Native HTML5 DnD with accent-coloured drop indicator and 40% opacity on the dragged row. Persisted via new POST /api/menu-sales-items/reorder which updates sort_order in a single transaction. Optimistic UI + rollback on failure. Disabled while group-by-category is on."},
      {"type":"added","description":"BACK-2573: Menu Builder shows attached modifier groups inline below each item, collapsible via a caret on the parent row. Each modifier option renders one editable price cell per country-enabled price level — same column layout as the parent. Per-menu overrides save via PUT /menu-sales-items/:id/modifier-option-price; the catalog price_addon is the fallback display when no override exists. Override cells get the amber tint. Sub-prices are lazy-loaded via GET /menu-sales-items/:id/sub-prices on first expand and cached in-memory. /sub-prices loadModifierGroupsForItem now returns mo.price_addon on every option."},
      {"type":"added","description":"BACK-2574: Menu Builder shows full combo structure inline below combo items — steps → step options → step-option modifier groups → modifier options. Step options have per-level editable prices (PUT /menu-sales-items/:id/combo-option-price) and their own modifier groups expand into editable per-option/per-level cells. Indented to make the hierarchy obvious. /sub-prices loadComboStructure returns cso.price_addon on each step option and mo.price_addon on each step-option modifier option. Both stories share the same expand state + caret + ExpandedItemContent component."},
-     {"type":"changed","description":"GET /api/menu-sales-items now returns modifier_group_count per row so the items list can decide whether to render the expand caret without an extra fetch."}
+     {"type":"changed","description":"GET /api/menu-sales-items now returns modifier_group_count per row so the items list can decide whether to render the expand caret without an extra fetch."},
+     {"type":"added","description":"BACK-2587: Right panel becomes context-aware via a discriminated EditTarget union — { kind: sales-item | modifier-group | combo-step }. Clicking a modifier-group header in the expanded inline view (or a group in the attached list) opens the group editor; clicking a combo-step header opens the step editor. Both editors share a common look: settings card up top, options list below with full CRUD + drag-drop reorder. Breadcrumb back to the SI panel."},
+     {"type":"added","description":"BACK-2585: Modifier-group editor panel — full options CRUD inline. Settings auto-save on blur (name + min/max + allow_repeat + default_auto_show). Options list shows each option with name + type radio (recipe / ingredient / manual) + recipe/ingredient picker OR manual_cost + price_addon + qty. Drag-drop reorder via new POST /api/modifier-groups/:id/options/reorder (transactional sort_order UPDATE). + Add option creates a manual placeholder ready for editing. Per-option spinner during save."},
+     {"type":"added","description":"BACK-2587: Combo-step editor panel — same shape as the modifier-group editor but for combo steps. Settings include auto_select. Options persist into mcogs_combo_step_options via the existing PUT /combos/:id/steps/:sid/options/:oid endpoint. Drag-drop via new POST /combos/:id/steps/:sid/options/reorder."},
+     {"type":"added","description":"BACK-2586: Drag-drop sort attached modifier groups inside the side-panel attached list. New order persists via the existing replace-set PUT /sales-items/:id/modifier-groups (sort_order implied by array index). Drop indicator + 40% opacity on the dragged item match the parent items-list pattern."}
    ]'::jsonb
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog

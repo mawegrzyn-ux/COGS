@@ -261,8 +261,18 @@ export default function MenuBuilderPage() {
   const [panelOpen,    setPanelOpen]    = useState(false)
   const [addMode,      setAddMode]      = useState<AddMode>('search')
 
-  // Edit-item side panel (Story 6 — click an item to open Pricing / Markets)
-  const [editingMsi,   setEditingMsi]   = useState<MenuSalesItem | null>(null)
+  // Right-side editor target. BACK-2587 — panel becomes context-aware:
+  //   • sales-item    → modifier-groups list for the active SI (default mode)
+  //   • modifier-group → single group editor with options CRUD (BACK-2585)
+  //   • combo-step    → single combo step editor with options CRUD
+  // Setting null closes the panel entirely.
+  type EditTarget =
+    | { kind: 'sales-item';     msi: MenuSalesItem }
+    | { kind: 'modifier-group'; msi: MenuSalesItem; modifierGroupId: number }
+    | { kind: 'combo-step';     msi: MenuSalesItem; comboStepId:     number }
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
+  // Convenience accessor — most read-sites only need the parent MSI.
+  const editingMsi = editTarget?.msi ?? null
   // BACK-2569 — price levels enabled in the selected menu's country. Drives
   // the inline price columns on the items list. Filtered to is_enabled=true.
   const [enabledPriceLevels, setEnabledPriceLevels] = useState<CountryPriceLevel[]>([])
@@ -304,16 +314,16 @@ export default function MenuBuilderPage() {
 
   // Story 7 — Esc closes any open panel.
   useEffect(() => {
-    if (!panelOpen && !editingMsi) return
+    if (!panelOpen && !editTarget) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (panelOpen) setPanelOpen(false)
-        if (editingMsi) setEditingMsi(null)
+        if (editTarget) setEditTarget(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [panelOpen, editingMsi])
+  }, [panelOpen, editTarget])
 
   // Confirm-reuse modal — story 2 duplicate detection. When the user picks a
   // recipe/ingredient that already has a wrapping sales item in the catalog,
@@ -755,7 +765,7 @@ export default function MenuBuilderPage() {
               </label>
               <button
                 className="btn-primary"
-                onClick={() => { setEditingMsi(null); setAddMode('search'); setPanelOpen(true) }}
+                onClick={() => { setEditTarget(null); setAddMode('search'); setPanelOpen(true) }}
                 disabled={!selectedMenu}
               >+ Add Sales Item to Menu</button>
             </div>
@@ -784,7 +794,9 @@ export default function MenuBuilderPage() {
                   subPricesLoading={subPricesLoading}
                   savingOptionCells={savingOptionCells}
                   onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
-                  onOpenModifiers={(it) => { setPanelOpen(false); setEditingMsi(it) }}
+                  onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it }) }}
+                  onOpenModifierGroup={(it, mgid) => { setPanelOpen(false); setEditTarget({ kind: 'modifier-group', msi: it, modifierGroupId: mgid }) }}
+                  onOpenComboStep={(it, sid) => { setPanelOpen(false); setEditTarget({ kind: 'combo-step', msi: it, comboStepId: sid }) }}
                   onRemove={(it) => removeItem(it)}
                   onToggleExpand={toggleExpand}
                   onSaveOptionPrice={saveOptionPrice}
@@ -831,16 +843,45 @@ export default function MenuBuilderPage() {
             />
           )}
 
-          {/* ── Edit-item side panel (Story 6) ── */}
-          {editingMsi && selectedMenu && !panelOpen && (
+          {/* ── Right-side editor — context-aware (BACK-2587) ── */}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'sales-item' && (
             <EditItemPanel
-              key={editingMsi.id}
+              key={`si-${editTarget.msi.id}`}
               menu={selectedMenu}
-              msi={editingMsi}
+              msi={editTarget.msi}
               width={panelWidth}
               onResize={setPanelWidth}
-              onChanged={() => loadItems(selectedMenu.id)}
-              onClose={() => setEditingMsi(null)}
+              onChanged={() => { loadItems(selectedMenu.id); if (subPricesById[editTarget.msi.id]) loadSubPrices(editTarget.msi.id) }}
+              onOpenGroupEditor={(mgid) => setEditTarget({ kind: 'modifier-group', msi: editTarget.msi, modifierGroupId: mgid })}
+              onClose={() => setEditTarget(null)}
+              onToast={(t) => setToast(t)}
+            />
+          )}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'modifier-group' && (
+            <ModifierGroupEditorPanel
+              key={`mg-${editTarget.modifierGroupId}`}
+              menu={selectedMenu}
+              msi={editTarget.msi}
+              modifierGroupId={editTarget.modifierGroupId}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onBack={() => setEditTarget({ kind: 'sales-item', msi: editTarget.msi })}
+              onClose={() => setEditTarget(null)}
+              onChanged={() => { loadItems(selectedMenu.id); loadSubPrices(editTarget.msi.id) }}
+              onToast={(t) => setToast(t)}
+            />
+          )}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'combo-step' && (
+            <ComboStepEditorPanel
+              key={`cs-${editTarget.comboStepId}`}
+              menu={selectedMenu}
+              msi={editTarget.msi}
+              comboStepId={editTarget.comboStepId}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onBack={() => setEditTarget({ kind: 'sales-item', msi: editTarget.msi })}
+              onClose={() => setEditTarget(null)}
+              onChanged={() => { loadItems(selectedMenu.id); loadSubPrices(editTarget.msi.id) }}
               onToast={(t) => setToast(t)}
             />
           )}
@@ -885,7 +926,7 @@ function ItemsList({
   items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
   dragId, dragOverId,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
-  onPriceSave, onOpenModifiers, onRemove, onToggleExpand, onSaveOptionPrice,
+  onPriceSave, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
   items: MenuSalesItem[]
@@ -901,6 +942,8 @@ function ItemsList({
   savingOptionCells: Set<string>
   onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
   onOpenModifiers: (it: MenuSalesItem) => void
+  onOpenModifierGroup: (it: MenuSalesItem, modifierGroupId: number) => void
+  onOpenComboStep: (it: MenuSalesItem, comboStepId: number) => void
   onRemove: (it: MenuSalesItem) => void
   onToggleExpand: (msiId: number) => void
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
@@ -1023,6 +1066,8 @@ function ItemsList({
                 enabledPriceLevels={enabledPriceLevels}
                 savingOptionCells={savingOptionCells}
                 onSaveOptionPrice={onSaveOptionPrice}
+                onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
+                onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
               />
             ) : (
               <div className="px-12 py-3 text-xs text-text-3 italic">Failed to load sub-prices.</div>
@@ -1079,16 +1124,25 @@ function ItemsList({
 
 function ExpandedItemContent({
   msiId, sub, enabledPriceLevels, savingOptionCells, onSaveOptionPrice,
+  onOpenModifierGroup, onOpenComboStep,
 }: {
   msiId: number
   sub: SubPricesResp
   enabledPriceLevels: CountryPriceLevel[]
   savingOptionCells: Set<string>
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  onOpenModifierGroup: (modifierGroupId: number) => void
+  onOpenComboStep: (comboStepId: number) => void
 }) {
   // Stable nested renderers — small helpers to keep the JSX tree readable.
   const renderModGroup = (g: SubModifierGroup, indentPx: number) => (
-    <NestedGroup key={g.modifier_group_id} title={g.name} subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`} indentPx={indentPx}>
+    <NestedGroup
+      key={g.modifier_group_id}
+      title={g.name}
+      subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`}
+      indentPx={indentPx}
+      onClick={() => onOpenModifierGroup(g.modifier_group_id)}
+    >
       {g.options.map(o => (
         <NestedOption
           key={o.id}
@@ -1125,11 +1179,18 @@ function ExpandedItemContent({
         <div>
           {sub.combo_steps.map((step, idx) => (
             <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
-              <div className="flex items-center gap-2 px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: 16 }}>
+              <button
+                type="button"
+                className="flex items-center gap-2 px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors w-full text-left"
+                style={{ paddingLeft: 16 }}
+                onClick={() => onOpenComboStep(step.id)}
+                title="Edit step (settings + options)"
+              >
                 <span className="text-text-3">Step {idx + 1}</span>
-                <span>{step.name}</span>
+                <span className="text-accent">{step.name}</span>
                 <span className="text-text-3 font-mono">Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`}</span>
-              </div>
+                <span className="ml-auto text-accent text-[10px]">Edit ›</span>
+              </button>
               {step.options.map(o => (
                 <div key={o.id}>
                   <NestedOption
@@ -1182,21 +1243,38 @@ function ExpandedItemContent({
   )
 }
 
-// Section header for a modifier group inside the expanded view.
+// Section header for a modifier group inside the expanded view. When onClick
+// is provided (BACK-2587), the header acts as a button that opens the group
+// editor in the right panel.
 function NestedGroup({
-  title, subtitle, indentPx, children,
+  title, subtitle, indentPx, onClick, children,
 }: {
   title: string
   subtitle?: string
   indentPx: number
+  onClick?: () => void
   children: React.ReactNode
 }) {
   return (
     <div>
-      <div className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
-        <span>{title}</span>
-        {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
-      </div>
+      {onClick ? (
+        <button
+          type="button"
+          className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors w-full text-left"
+          style={{ paddingLeft: indentPx, paddingRight: 16 }}
+          onClick={onClick}
+          title="Edit group (settings + options)"
+        >
+          <span className="text-accent">{title}</span>
+          {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
+          <span className="ml-auto text-accent text-[10px]">Edit ›</span>
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
+          <span>{title}</span>
+          {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
+        </div>
+      )}
       {children}
     </div>
   )
@@ -2086,13 +2164,14 @@ function ManualItemForm({
 // two tabs. Save fires server roundtrip per row; markets toggle auto-saves.
 
 function EditItemPanel({
-  menu, msi, width, onResize, onChanged, onClose, onToast,
+  menu, msi, width, onResize, onChanged, onOpenGroupEditor, onClose, onToast,
 }: {
   menu: Menu
   msi: MenuSalesItem
   width: number
   onResize: (w: number) => void
   onChanged: () => void
+  onOpenGroupEditor: (modifierGroupId: number) => void
   onClose: () => void
   onToast: (t: { message: string; type?: 'success' | 'error' }) => void
 }) {
@@ -2212,6 +2291,8 @@ function EditItemPanel({
             } satisfies AttachedModifierGroup]
             return persistAttachedGroups(merged)
           }}
+          onReorder={(newOrder) => persistAttachedGroups(newOrder)}
+          onOpenEditor={(mgid) => onOpenGroupEditor(mgid)}
         />
       </div>
     </aside>
@@ -2221,6 +2302,814 @@ function EditItemPanel({
 // PricingTab + PriceLevelRow removed in BACK-2569 — pricing now edits inline
 // on the items list via the PriceCell component.
 
+// ── Modifier-group editor panel (BACK-2585 / BACK-2587) ────────────────────
+// Single-purpose panel that opens when the user clicks a modifier group in
+// the attached list OR in the expanded inline view. Lets them edit group
+// settings + manage options end-to-end (CRUD + drag-drop reorder).
+
+interface FullModifierOption {
+  id: number
+  modifier_group_id: number
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  recipe_id: number | null
+  ingredient_id: number | null
+  manual_cost: number | null
+  price_addon: number
+  qty: number
+  sort_order: number
+  recipe_name?: string | null
+  ingredient_name?: string | null
+}
+
+interface FullModifierGroup {
+  id: number
+  name: string
+  display_name: string | null
+  description: string | null
+  min_select: number
+  max_select: number
+  allow_repeat_selection: boolean
+  default_auto_show: boolean
+  options: FullModifierOption[]
+}
+
+function ModifierGroupEditorPanel({
+  menu, msi, modifierGroupId, width, onResize, onBack, onClose, onChanged, onToast,
+}: {
+  menu: Menu
+  msi: MenuSalesItem
+  modifierGroupId: number
+  width: number
+  onResize: (w: number) => void
+  onBack: () => void
+  onClose: () => void
+  onChanged: () => void
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+}) {
+  const api = useApi()
+  const [group, setGroup] = useState<FullModifierGroup | null>(null)
+  const [loading, setLoading] = useState(true)
+  // Catalogs for option pickers — loaded lazily.
+  const [recipes, setRecipes] = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  // Drag-drop reorder state.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // Per-option saving spinner.
+  const [savingOpts, setSavingOpts] = useState<Set<number>>(new Set())
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api.get(`/modifier-groups/${modifierGroupId}`) as FullModifierGroup
+      setGroup(data)
+    } catch {
+      onToast({ message: 'Failed to load modifier group', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [api, modifierGroupId, onToast])
+
+  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    if (recipes === null) {
+      api.get('/recipes').then((d: RecipeRow[]) => setRecipes(d || [])).catch(() => setRecipes([]))
+    }
+    if (ingredients === null) {
+      api.get('/ingredients').then((d: IngredientRow[]) => setIngredients(d || [])).catch(() => setIngredients([]))
+    }
+  }, [api, recipes, ingredients])
+
+  // ── Group settings save (debounced via blur) ──────────────────────────────
+  const saveGroupSettings = async (patch: Partial<FullModifierGroup>) => {
+    if (!group) return
+    const next = { ...group, ...patch }
+    setGroup(next)
+    try {
+      await api.put(`/modifier-groups/${group.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        description: next.description,
+        min_select: next.min_select,
+        max_select: next.max_select,
+        allow_repeat_selection: next.allow_repeat_selection,
+        default_auto_show: next.default_auto_show,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save settings', type: 'error' })
+    }
+  }
+
+  // ── Option CRUD ───────────────────────────────────────────────────────────
+  const addOption = async () => {
+    if (!group) return
+    const nextSort = group.options.length
+    try {
+      const created = await api.post(`/modifier-groups/${group.id}/options`, {
+        name: `Option ${nextSort + 1}`,
+        item_type: 'manual',
+        manual_cost: 0,
+        price_addon: 0,
+        qty: 1,
+        sort_order: nextSort,
+      }) as FullModifierOption
+      setGroup({ ...group, options: [...group.options, created] })
+      onChanged()
+    } catch (err: unknown) {
+      onToast({ message: (err as { message?: string })?.message || 'Failed to add option', type: 'error' })
+    }
+  }
+
+  const saveOption = async (opt: FullModifierOption, patch: Partial<FullModifierOption>) => {
+    if (!group) return
+    const next = { ...opt, ...patch }
+    // Optimistic
+    setGroup({ ...group, options: group.options.map(o => o.id === opt.id ? next : o) })
+    setSavingOpts(prev => { const s = new Set(prev); s.add(opt.id); return s })
+    try {
+      await api.put(`/modifier-groups/${group.id}/options/${opt.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        item_type: next.item_type,
+        recipe_id: next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        manual_cost: next.manual_cost,
+        price_addon: next.price_addon,
+        qty: next.qty,
+        sort_order: next.sort_order,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save option', type: 'error' })
+    } finally {
+      setSavingOpts(prev => { const s = new Set(prev); s.delete(opt.id); return s })
+    }
+  }
+
+  const deleteOption = async (opt: FullModifierOption) => {
+    if (!group) return
+    const before = group
+    setGroup({ ...group, options: group.options.filter(o => o.id !== opt.id) })
+    try {
+      await api.delete(`/modifier-groups/${group.id}/options/${opt.id}`)
+      onChanged()
+    } catch (err: unknown) {
+      setGroup(before)
+      onToast({ message: (err as { message?: string })?.message || 'Failed to delete option', type: 'error' })
+    }
+  }
+
+  const reorderOptions = async (sourceId: number, targetId: number) => {
+    if (!group || sourceId === targetId) return
+    const fromIdx = group.options.findIndex(o => o.id === sourceId)
+    const toIdx   = group.options.findIndex(o => o.id === targetId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const next = [...group.options]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    const reindexed = next.map((o, i) => ({ ...o, sort_order: i }))
+    setGroup({ ...group, options: reindexed })
+    try {
+      await api.post(`/modifier-groups/${group.id}/options/reorder`, { order: reindexed.map(o => o.id) })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to reorder', type: 'error' })
+    }
+  }
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <button
+            type="button"
+            className="text-[10px] uppercase tracking-wide text-text-3 hover:text-accent font-semibold flex items-center gap-1"
+            onClick={onBack}
+          >‹ {menu.name} <span className="text-text-3/60">›</span> {msi.sales_item_name}</button>
+          <div className="font-semibold text-sm text-text-1 truncate mt-0.5">
+            Modifier group: {group?.name || '…'}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {loading || !group ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : (
+          <>
+            {/* Settings */}
+            <div className="rounded-lg border border-border bg-surface-2/30 px-3 py-3 space-y-2">
+              <div className="text-xs font-semibold text-text-2">Settings</div>
+              <Field label="Name" required>
+                <input
+                  className="input w-full text-sm"
+                  defaultValue={group.name}
+                  onBlur={(e) => { if (e.target.value.trim() !== group.name) saveGroupSettings({ name: e.target.value.trim() }) }}
+                />
+              </Field>
+              <Field label="Description">
+                <input
+                  className="input w-full text-sm"
+                  defaultValue={group.description || ''}
+                  onBlur={(e) => { if ((e.target.value || null) !== group.description) saveGroupSettings({ description: e.target.value || null }) }}
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Min select">
+                  <input
+                    className="input w-full font-mono text-sm" type="number" min={0}
+                    defaultValue={group.min_select}
+                    onBlur={(e) => { const n = Math.max(0, Math.floor(Number(e.target.value)||0)); if (n !== group.min_select) saveGroupSettings({ min_select: n }) }}
+                  />
+                </Field>
+                <Field label="Max select">
+                  <input
+                    className="input w-full font-mono text-sm" type="number" min={1}
+                    defaultValue={group.max_select}
+                    onBlur={(e) => { const n = Math.max(1, Math.floor(Number(e.target.value)||1)); if (n !== group.max_select) saveGroupSettings({ max_select: n }) }}
+                  />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={group.allow_repeat_selection}
+                  onChange={(e) => saveGroupSettings({ allow_repeat_selection: e.target.checked })} />
+                Allow the same option to be picked multiple times
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={group.default_auto_show}
+                  onChange={(e) => saveGroupSettings({ default_auto_show: e.target.checked })} />
+                Show inline by default (vs. behind a button)
+              </label>
+              <div className="text-[10px] text-text-3 italic">Settings auto-save on blur.</div>
+            </div>
+
+            {/* Options */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-text-2">Options{group.options.length > 0 && <span className="ml-1 text-text-3 font-mono">({group.options.length})</span>}</div>
+                <button className="btn-primary text-xs px-2.5 py-1" onClick={addOption}>+ Add option</button>
+              </div>
+              {group.options.length === 0 ? (
+                <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded">No options yet — click + Add option.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {group.options.map(o => (
+                    <li
+                      key={o.id}
+                      draggable
+                      onDragStart={() => setDragId(o.id)}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverId(o.id) }}
+                      onDragLeave={() => setDragOverId(null)}
+                      onDrop={() => { if (dragId !== null) reorderOptions(dragId, o.id); setDragId(null); setDragOverId(null) }}
+                      onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                      className={`rounded border bg-surface-2/30 px-2.5 py-2 cursor-grab active:cursor-grabbing transition-colors ${
+                        dragOverId === o.id && dragId !== o.id ? 'border-accent border-t-2' : 'border-border'
+                      } ${dragId === o.id ? 'opacity-40' : ''} ${savingOpts.has(o.id) ? 'ring-1 ring-accent/30' : ''}`}
+                    >
+                      <ModifierOptionEditor
+                        option={o}
+                        recipes={recipes}
+                        ingredients={ingredients}
+                        onChange={(patch) => saveOption(o, patch)}
+                        onDelete={() => deleteOption(o)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// Inline editor for a single modifier option.
+function ModifierOptionEditor({
+  option, recipes, ingredients, onChange, onDelete,
+}: {
+  option: FullModifierOption
+  recipes: RecipeRow[] | null
+  ingredients: IngredientRow[] | null
+  onChange: (patch: Partial<FullModifierOption>) => void | Promise<void>
+  onDelete: () => void
+}) {
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+
+  return (
+    <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2">
+        <span className="text-text-3 text-xs">⠿</span>
+        <input
+          className="input flex-1 text-sm"
+          defaultValue={option.name}
+          onBlur={(e) => { if (e.target.value.trim() !== option.name) onChange({ name: e.target.value.trim() }) }}
+          placeholder="Option name"
+        />
+        <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
+      </div>
+      <div className="flex items-center gap-3 text-[11px] text-text-2">
+        {(['recipe','ingredient','manual'] as const).map(t => (
+          <label key={t} className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name={`opt-type-${option.id}`} checked={option.item_type === t}
+              onChange={() => onChange({ item_type: t, recipe_id: null, ingredient_id: null, manual_cost: t === 'manual' ? 0 : null })} />
+            <span className="capitalize">{t}</span>
+          </label>
+        ))}
+      </div>
+
+      {option.item_type === 'recipe' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.recipe_id ? (option.recipe_name || `Recipe #${option.recipe_id}`) : recipeSearch}
+            onChange={(e) => setRecipeSearch(e.target.value)}
+            onFocus={() => { if (option.recipe_id) onChange({ recipe_id: null }); setRecipeSearch('') }}
+            placeholder="Search recipe…"
+          />
+          {!option.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ recipe_id: r.id, recipe_name: r.name, name: option.name || r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {option.item_type === 'ingredient' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.ingredient_id ? (option.ingredient_name || `Ingredient #${option.ingredient_id}`) : ingredientSearch}
+            onChange={(e) => setIngredientSearch(e.target.value)}
+            onFocus={() => { if (option.ingredient_id) onChange({ ingredient_id: null }); setIngredientSearch('') }}
+            placeholder="Search ingredient…"
+          />
+          {!option.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ ingredient_id: i.id, ingredient_name: i.name, name: option.name || i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {option.item_type === 'manual' && (
+        <input
+          className="input w-full text-xs font-mono"
+          defaultValue={option.manual_cost ?? 0}
+          onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.manual_cost)) onChange({ manual_cost: n }) }}
+          placeholder="Manual cost (e.g. 0.25)"
+        />
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-[10px] text-text-3">
+          <span className="block">Price add-on</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.price_addon}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.price_addon)) onChange({ price_addon: n }) }}
+          />
+        </label>
+        <label className="text-[10px] text-text-3">
+          <span className="block">Qty</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.qty}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0 && n !== Number(option.qty)) onChange({ qty: n }) }}
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
+// ── Combo step editor panel (BACK-2587) ────────────────────────────────────
+// Mirror of ModifierGroupEditorPanel but for a combo step. Settings include
+// auto_select. Options point at the same recipe / ingredient / manual model
+// but persist into mcogs_combo_step_options.
+
+interface FullComboStepOption {
+  id: number
+  combo_step_id: number
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  recipe_id: number | null
+  ingredient_id: number | null
+  sales_item_id: number | null
+  manual_cost: number | null
+  price_addon: number
+  qty: number
+  sort_order: number
+}
+
+interface FullComboStep {
+  id: number
+  combo_id: number
+  name: string
+  display_name: string | null
+  description: string | null
+  sort_order: number
+  min_select: number
+  max_select: number
+  allow_repeat: boolean
+  auto_select: boolean
+  options: FullComboStepOption[]
+}
+
+function ComboStepEditorPanel({
+  menu, msi, comboStepId, width, onResize, onBack, onClose, onChanged, onToast,
+}: {
+  menu: Menu
+  msi: MenuSalesItem
+  comboStepId: number
+  width: number
+  onResize: (w: number) => void
+  onBack: () => void
+  onClose: () => void
+  onChanged: () => void
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+}) {
+  const api = useApi()
+  const [step, setStep] = useState<FullComboStep | null>(null)
+  const [comboId, setComboId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [recipes, setRecipes] = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  const [savingOpts, setSavingOpts] = useState<Set<number>>(new Set())
+
+  // Resolve combo_id from the parent SI, then fetch the full combo and pick
+  // out the matching step.
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const si = await api.get(`/sales-items/${msi.sales_item_id}`) as { combo_id: number | null }
+      if (!si.combo_id) { setStep(null); return }
+      setComboId(si.combo_id)
+      const combo = await api.get(`/combos/${si.combo_id}`) as { steps: FullComboStep[] }
+      const found = combo.steps?.find(s => s.id === comboStepId) || null
+      setStep(found)
+    } catch {
+      onToast({ message: 'Failed to load combo step', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [api, msi.sales_item_id, comboStepId, onToast])
+
+  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    if (recipes === null)     api.get('/recipes').then((d: RecipeRow[]) => setRecipes(d || [])).catch(() => setRecipes([]))
+    if (ingredients === null) api.get('/ingredients').then((d: IngredientRow[]) => setIngredients(d || [])).catch(() => setIngredients([]))
+  }, [api, recipes, ingredients])
+
+  const saveStepSettings = async (patch: Partial<FullComboStep>) => {
+    if (!step || !comboId) return
+    const next = { ...step, ...patch }
+    setStep(next)
+    try {
+      await api.put(`/combos/${comboId}/steps/${step.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        description: next.description,
+        sort_order: next.sort_order,
+        min_select: next.min_select,
+        max_select: next.max_select,
+        allow_repeat: next.allow_repeat,
+        auto_select: next.auto_select,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save settings', type: 'error' })
+    }
+  }
+
+  const addOption = async () => {
+    if (!step || !comboId) return
+    try {
+      const created = await api.post(`/combos/${comboId}/steps/${step.id}/options`, {
+        name: `Option ${step.options.length + 1}`,
+        item_type: 'manual',
+        manual_cost: 0,
+        price_addon: 0,
+        qty: 1,
+        sort_order: step.options.length,
+      }) as FullComboStepOption
+      setStep({ ...step, options: [...step.options, created] })
+      onChanged()
+    } catch (err: unknown) {
+      onToast({ message: (err as { message?: string })?.message || 'Failed to add option', type: 'error' })
+    }
+  }
+
+  const saveOption = async (opt: FullComboStepOption, patch: Partial<FullComboStepOption>) => {
+    if (!step || !comboId) return
+    const next = { ...opt, ...patch }
+    setStep({ ...step, options: step.options.map(o => o.id === opt.id ? next : o) })
+    setSavingOpts(prev => { const s = new Set(prev); s.add(opt.id); return s })
+    try {
+      await api.put(`/combos/${comboId}/steps/${step.id}/options/${opt.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        item_type: next.item_type,
+        recipe_id: next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        sales_item_id: next.sales_item_id,
+        manual_cost: next.manual_cost,
+        price_addon: next.price_addon,
+        qty: next.qty,
+        sort_order: next.sort_order,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save option', type: 'error' })
+    } finally {
+      setSavingOpts(prev => { const s = new Set(prev); s.delete(opt.id); return s })
+    }
+  }
+
+  const deleteOption = async (opt: FullComboStepOption) => {
+    if (!step || !comboId) return
+    const before = step
+    setStep({ ...step, options: step.options.filter(o => o.id !== opt.id) })
+    try {
+      await api.delete(`/combos/${comboId}/steps/${step.id}/options/${opt.id}`)
+      onChanged()
+    } catch (err: unknown) {
+      setStep(before)
+      onToast({ message: (err as { message?: string })?.message || 'Failed to delete option', type: 'error' })
+    }
+  }
+
+  const reorderOptions = async (sourceId: number, targetId: number) => {
+    if (!step || !comboId || sourceId === targetId) return
+    const fromIdx = step.options.findIndex(o => o.id === sourceId)
+    const toIdx   = step.options.findIndex(o => o.id === targetId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const next = [...step.options]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    const reindexed = next.map((o, i) => ({ ...o, sort_order: i }))
+    setStep({ ...step, options: reindexed })
+    try {
+      await api.post(`/combos/${comboId}/steps/${step.id}/options/reorder`, { order: reindexed.map(o => o.id) })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to reorder', type: 'error' })
+    }
+  }
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <button
+            type="button"
+            className="text-[10px] uppercase tracking-wide text-text-3 hover:text-accent font-semibold flex items-center gap-1"
+            onClick={onBack}
+          >‹ {menu.name} <span className="text-text-3/60">›</span> {msi.sales_item_name}</button>
+          <div className="font-semibold text-sm text-text-1 truncate mt-0.5">
+            Combo step: {step?.name || '…'}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {loading || !step ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : (
+          <>
+            <div className="rounded-lg border border-border bg-surface-2/30 px-3 py-3 space-y-2">
+              <div className="text-xs font-semibold text-text-2">Settings</div>
+              <Field label="Name" required>
+                <input className="input w-full text-sm" defaultValue={step.name}
+                  onBlur={(e) => { if (e.target.value.trim() !== step.name) saveStepSettings({ name: e.target.value.trim() }) }} />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Min select">
+                  <input className="input w-full font-mono text-sm" type="number" min={0}
+                    defaultValue={step.min_select}
+                    onBlur={(e) => { const n = Math.max(0, Math.floor(Number(e.target.value)||0)); if (n !== step.min_select) saveStepSettings({ min_select: n }) }} />
+                </Field>
+                <Field label="Max select">
+                  <input className="input w-full font-mono text-sm" type="number" min={1}
+                    defaultValue={step.max_select}
+                    onBlur={(e) => { const n = Math.max(1, Math.floor(Number(e.target.value)||1)); if (n !== step.max_select) saveStepSettings({ max_select: n }) }} />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={step.auto_select}
+                  onChange={(e) => saveStepSettings({ auto_select: e.target.checked })} />
+                Auto-advance when only one option
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={step.allow_repeat}
+                  onChange={(e) => saveStepSettings({ allow_repeat: e.target.checked })} />
+                Allow same option picked multiple times
+              </label>
+              <div className="text-[10px] text-text-3 italic">Settings auto-save on blur.</div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-text-2">Options{step.options.length > 0 && <span className="ml-1 text-text-3 font-mono">({step.options.length})</span>}</div>
+                <button className="btn-primary text-xs px-2.5 py-1" onClick={addOption}>+ Add option</button>
+              </div>
+              {step.options.length === 0 ? (
+                <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded">No options yet — click + Add option.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {step.options.map(o => (
+                    <li
+                      key={o.id}
+                      draggable
+                      onDragStart={() => setDragId(o.id)}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverId(o.id) }}
+                      onDragLeave={() => setDragOverId(null)}
+                      onDrop={() => { if (dragId !== null) reorderOptions(dragId, o.id); setDragId(null); setDragOverId(null) }}
+                      onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                      className={`rounded border bg-surface-2/30 px-2.5 py-2 cursor-grab active:cursor-grabbing transition-colors ${
+                        dragOverId === o.id && dragId !== o.id ? 'border-accent border-t-2' : 'border-border'
+                      } ${dragId === o.id ? 'opacity-40' : ''} ${savingOpts.has(o.id) ? 'ring-1 ring-accent/30' : ''}`}
+                    >
+                      <ComboStepOptionEditor
+                        option={o}
+                        recipes={recipes}
+                        ingredients={ingredients}
+                        onChange={(patch) => saveOption(o, patch)}
+                        onDelete={() => deleteOption(o)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function ComboStepOptionEditor({
+  option, recipes, ingredients, onChange, onDelete,
+}: {
+  option: FullComboStepOption
+  recipes: RecipeRow[] | null
+  ingredients: IngredientRow[] | null
+  onChange: (patch: Partial<FullComboStepOption>) => void | Promise<void>
+  onDelete: () => void
+}) {
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+
+  return (
+    <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2">
+        <span className="text-text-3 text-xs">⠿</span>
+        <input
+          className="input flex-1 text-sm"
+          defaultValue={option.name}
+          onBlur={(e) => { if (e.target.value.trim() !== option.name) onChange({ name: e.target.value.trim() }) }}
+          placeholder="Option name"
+        />
+        <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
+      </div>
+      <div className="flex items-center gap-3 text-[11px] text-text-2">
+        {(['recipe','ingredient','manual'] as const).map(t => (
+          <label key={t} className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name={`cs-opt-type-${option.id}`} checked={option.item_type === t}
+              onChange={() => onChange({ item_type: t, recipe_id: null, ingredient_id: null, manual_cost: t === 'manual' ? 0 : null })} />
+            <span className="capitalize">{t}</span>
+          </label>
+        ))}
+      </div>
+      {option.item_type === 'recipe' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.recipe_id ? `Recipe #${option.recipe_id}` : recipeSearch}
+            onChange={(e) => setRecipeSearch(e.target.value)}
+            onFocus={() => { if (option.recipe_id) onChange({ recipe_id: null }); setRecipeSearch('') }}
+            placeholder="Search recipe…"
+          />
+          {!option.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ recipe_id: r.id, name: option.name || r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {option.item_type === 'ingredient' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.ingredient_id ? `Ingredient #${option.ingredient_id}` : ingredientSearch}
+            onChange={(e) => setIngredientSearch(e.target.value)}
+            onFocus={() => { if (option.ingredient_id) onChange({ ingredient_id: null }); setIngredientSearch('') }}
+            placeholder="Search ingredient…"
+          />
+          {!option.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ ingredient_id: i.id, name: option.name || i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {option.item_type === 'manual' && (
+        <input
+          className="input w-full text-xs font-mono"
+          defaultValue={option.manual_cost ?? 0}
+          onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.manual_cost)) onChange({ manual_cost: n }) }}
+          placeholder="Manual cost"
+        />
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-[10px] text-text-3">
+          <span className="block">Price add-on</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.price_addon}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.price_addon)) onChange({ price_addon: n }) }}
+          />
+        </label>
+        <label className="text-[10px] text-text-3">
+          <span className="block">Qty</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.qty}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0 && n !== Number(option.qty)) onChange({ qty: n }) }}
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
 // ── Modifiers tab (Story 5 / BACK-2521) ────────────────────────────────────
 // Shows currently attached modifier groups with detach + auto-show toggle.
 // Two add actions: attach existing (multi-select catalog) or create new
@@ -2228,7 +3117,7 @@ function EditItemPanel({
 
 function ModifiersTab({
   allGroups, attached, loading,
-  onDetach, onToggleAutoShow, onAttach, onCreated,
+  onDetach, onToggleAutoShow, onAttach, onCreated, onReorder, onOpenEditor,
 }: {
   allGroups: ModifierGroup[]
   attached: AttachedModifierGroup[]
@@ -2237,7 +3126,14 @@ function ModifiersTab({
   onToggleAutoShow: (modifier_group_id: number, autoShow: boolean) => void | Promise<void>
   onAttach: (toAttach: ModifierGroup[]) => void | Promise<void>
   onCreated: (newGroup: ModifierGroup) => void | Promise<void>
+  /** BACK-2586 — reorder attached groups via drag-drop. */
+  onReorder: (newOrder: AttachedModifierGroup[]) => void | Promise<void>
+  /** BACK-2587 — click an attached group to open its editor in this same panel. */
+  onOpenEditor: (modifier_group_id: number) => void
 }) {
+  // BACK-2586 — drag-drop reorder state for attached groups.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
   // BACK-2550 — flattened to a single screen. Two sections:
   //   (a) Currently attached  — detach + auto-show toggle
   //   (b) Available to attach — one-click row attach (no multi-select)
@@ -2275,17 +3171,49 @@ function ModifiersTab({
         ) : (
           <ul className="space-y-2">
             {attached.map(g => (
-              <li key={g.modifier_group_id} className="rounded-lg border border-border px-3 py-2.5 bg-surface-2/30">
+              <li
+                key={g.modifier_group_id}
+                draggable
+                onDragStart={() => setDragId(g.modifier_group_id)}
+                onDragOver={(e) => { e.preventDefault(); setDragOverId(g.modifier_group_id) }}
+                onDragLeave={() => setDragOverId(null)}
+                onDrop={() => {
+                  if (dragId !== null && dragId !== g.modifier_group_id) {
+                    const fromIdx = attached.findIndex(a => a.modifier_group_id === dragId)
+                    const toIdx   = attached.findIndex(a => a.modifier_group_id === g.modifier_group_id)
+                    if (fromIdx >= 0 && toIdx >= 0) {
+                      const next = [...attached]
+                      const [m] = next.splice(fromIdx, 1)
+                      next.splice(toIdx, 0, m)
+                      onReorder(next.map((a, i) => ({ ...a, sort_order: i })))
+                    }
+                  }
+                  setDragId(null); setDragOverId(null)
+                }}
+                onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                className={`rounded-lg border px-3 py-2.5 bg-surface-2/30 cursor-grab active:cursor-grabbing transition-colors ${
+                  dragOverId === g.modifier_group_id && dragId !== g.modifier_group_id ? 'border-accent border-t-2' : 'border-border'
+                } ${dragId === g.modifier_group_id ? 'opacity-40' : ''}`}
+              >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-text-1 truncate">{g.name}</div>
+                  <button
+                    type="button"
+                    className="min-w-0 text-left flex-1 cursor-pointer hover:text-accent"
+                    onClick={() => onOpenEditor(g.modifier_group_id)}
+                    title="Edit group (settings + options)"
+                  >
+                    <div className="text-sm font-semibold truncate flex items-center gap-1.5">
+                      <span className="text-text-3 text-[10px]">⠿</span>
+                      {g.name}
+                      <span className="ml-auto text-accent text-[10px] font-normal">Edit ›</span>
+                    </div>
                     <div className="text-[11px] text-text-3 mt-0.5">
                       Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
                     </div>
-                  </div>
+                  </button>
                   <button
                     className="text-text-3 hover:text-red-600 text-xs px-2 shrink-0"
-                    onClick={() => onDetach(g.modifier_group_id)}
+                    onClick={(e) => { e.stopPropagation(); onDetach(g.modifier_group_id) }}
                     title="Detach (does not delete the group)"
                   >Detach</button>
                 </div>
@@ -2294,6 +3222,7 @@ function ModifiersTab({
                     type="checkbox"
                     checked={g.auto_show}
                     onChange={(e) => onToggleAutoShow(g.modifier_group_id, e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
                   />
                   Show inline (un-tick to hide behind a button)
                 </label>

@@ -347,6 +347,32 @@ router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── POST /combos/:id/steps/:sid/options/reorder ─────────────────────────────
+// BACK-2587 — drag-drop reorder. Body: { order: [option_id, ...] }
+router.post('/:id/steps/:sid/options/reorder', async (req, res, next) => {
+  const { order } = req.body;
+  if (!Array.isArray(order) || order.length === 0) {
+    return res.status(400).json({ error: { message: 'order must be a non-empty array of option ids' } });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < order.length; i++) {
+      await client.query(
+        `UPDATE mcogs_combo_step_options SET sort_order = $1 WHERE id = $2 AND combo_step_id = $3`,
+        [i, order[i], req.params.sid]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, count: order.length });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 router.delete('/:id/steps/:sid/options/:oid', async (req, res, next) => {
   try {
     const { rowCount } = await pool.query(
