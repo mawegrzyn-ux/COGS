@@ -4311,6 +4311,20 @@ const migrations = [
      WHERE version = '2026-05-03' AND title = 'Media Library — preserve original filename on upload'
    )`,
 
+  // ── Step 170o: Flip BACK-2695 to done (resizable list view columns) ──────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2695' AND status <> 'done'`,
+
+  // ── Step 170p: Changelog — May 04 — Media Library resizable columns ──────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Media Library — drag-resizable list view columns', '[
+     {"type":"added","description":"BACK-2695: Each header in the Media Library list view (Filename, Dimensions, Size, Date, Category) now has a 4px right-edge grab strip. Drag to resize the column; double-click to reset to default. Pointer-event-based handler keeps dragging smooth even when the cursor leaves the row. Widths persist per-browser to localStorage(media-library-list-col-widths) so a tweaked layout sticks across reloads. Min width 60px to prevent hiding columns by accident. The select column has no handle. Table is wrapped in overflow-x-auto so wide totals scroll horizontally instead of breaking the layout."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Media Library — drag-resizable list view columns'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

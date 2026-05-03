@@ -923,21 +923,100 @@ function GridView({ items, selectedIds, onSelect }: {
 
 // ── List View ─────────────────────────────────────────────────────────────────
 
+// BACK-2695 — column widths are persisted per-browser so a user's tweak
+// sticks across reloads. The select column has no resize handle; every
+// other column gets a 4px right-edge grab strip that drives a pointer-move
+// listener until pointerup.
+type ListColKey = 'filename' | 'dimensions' | 'size' | 'date' | 'category'
+const LIST_COL_DEFAULTS: Record<ListColKey, number> = {
+  filename:   320,
+  dimensions: 110,
+  size:       80,
+  date:       110,
+  category:   180,
+}
+const LIST_COL_MIN = 60
+const LIST_COL_STORAGE = 'media-library-list-col-widths'
+
+function loadListColWidths(): Record<ListColKey, number> {
+  try {
+    const raw = localStorage.getItem(LIST_COL_STORAGE)
+    if (!raw) return { ...LIST_COL_DEFAULTS }
+    const parsed = JSON.parse(raw) as Partial<Record<ListColKey, number>>
+    return {
+      filename:   Number(parsed.filename)   || LIST_COL_DEFAULTS.filename,
+      dimensions: Number(parsed.dimensions) || LIST_COL_DEFAULTS.dimensions,
+      size:       Number(parsed.size)       || LIST_COL_DEFAULTS.size,
+      date:       Number(parsed.date)       || LIST_COL_DEFAULTS.date,
+      category:   Number(parsed.category)   || LIST_COL_DEFAULTS.category,
+    }
+  } catch { return { ...LIST_COL_DEFAULTS } }
+}
+
 function ListView({ items, selectedIds, onSelect }: {
   items: MediaItem[]
   selectedIds: Set<number>
   onSelect: (item: MediaItem, fromCheckbox?: boolean) => void
 }) {
+  const [colWidths, setColWidths] = useState<Record<ListColKey, number>>(() => loadListColWidths())
+  // Persist on every committed width change (cheap, single key).
+  useEffect(() => {
+    try { localStorage.setItem(LIST_COL_STORAGE, JSON.stringify(colWidths)) } catch { /* quota — ignore */ }
+  }, [colWidths])
+
+  const startResize = useCallback((key: ListColKey, e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX     = e.clientX
+    const startWidth = colWidths[key]
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.max(LIST_COL_MIN, startWidth + (ev.clientX - startX))
+      setColWidths(prev => prev[key] === next ? prev : { ...prev, [key]: next })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup',   onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup',   onUp)
+  }, [colWidths])
+
+  // Header cell with a 4px right-edge resize grip. Reset on double-click.
+  const headerCell = (key: ListColKey, label: string) => (
+    <th
+      style={{ width: colWidths[key], minWidth: LIST_COL_MIN }}
+      className="text-left pb-2 pr-3 font-semibold relative whitespace-nowrap select-none"
+    >
+      {label}
+      <span
+        onPointerDown={(e) => startResize(key, e)}
+        onDoubleClick={(e) => { e.stopPropagation(); setColWidths(prev => ({ ...prev, [key]: LIST_COL_DEFAULTS[key] })) }}
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-accent/40 active:bg-accent/60 -mr-0.5"
+        title="Drag to resize · double-click to reset"
+        aria-hidden
+      />
+    </th>
+  )
+
   return (
-    <table className="w-full text-sm border-separate border-spacing-0">
+    <div className="overflow-x-auto">
+    <table className="text-sm border-separate border-spacing-0" style={{ tableLayout: 'fixed', width: 'max-content', minWidth: '100%' }}>
+      <colgroup>
+        <col style={{ width: 40 }} />
+        <col style={{ width: colWidths.filename }} />
+        <col style={{ width: colWidths.dimensions }} />
+        <col style={{ width: colWidths.size }} />
+        <col style={{ width: colWidths.date }} />
+        <col style={{ width: colWidths.category }} />
+      </colgroup>
       <thead>
         <tr className="text-xs text-text-3 uppercase tracking-wide">
-          <th className="text-left pb-2 pr-3 font-semibold w-10"></th>
-          <th className="text-left pb-2 pr-3 font-semibold">Filename</th>
-          <th className="text-left pb-2 pr-3 font-semibold whitespace-nowrap">Dimensions</th>
-          <th className="text-left pb-2 pr-3 font-semibold">Size</th>
-          <th className="text-left pb-2 pr-3 font-semibold">Date</th>
-          <th className="text-left pb-2 font-semibold">Category</th>
+          <th className="text-left pb-2 pr-3 font-semibold"></th>
+          {headerCell('filename',   'Filename')}
+          {headerCell('dimensions', 'Dimensions')}
+          {headerCell('size',       'Size')}
+          {headerCell('date',       'Date')}
+          {headerCell('category',   'Category')}
         </tr>
       </thead>
       <tbody>
@@ -962,23 +1041,24 @@ function ListView({ items, selectedIds, onSelect }: {
                   )}
                 </div>
               </td>
-              <td className="py-1.5 pr-3">
-                <div className="flex items-center gap-2">
+              <td className="py-1.5 pr-3 overflow-hidden">
+                <div className="flex items-center gap-2 min-w-0">
                   <img src={thumb} alt="" className="w-9 h-9 rounded object-cover shrink-0 border border-border" loading="lazy" />
-                  <span className="text-text-1 truncate max-w-[180px]">{item.filename}</span>
+                  <span className="text-text-1 truncate flex-1 min-w-0" title={item.filename}>{item.filename}</span>
                 </div>
               </td>
-              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap">
+              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap overflow-hidden text-ellipsis">
                 {item.width && item.height ? `${item.width}×${item.height}` : '—'}
               </td>
-              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap">{formatSize(item.size_bytes)}</td>
-              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap">{formatDate(item.created_at)}</td>
-              <td className="py-1.5 text-text-3">{item.category_name || <span className="text-text-3 italic">None</span>}</td>
+              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap overflow-hidden text-ellipsis">{formatSize(item.size_bytes)}</td>
+              <td className="py-1.5 pr-3 text-text-3 whitespace-nowrap overflow-hidden text-ellipsis">{formatDate(item.created_at)}</td>
+              <td className="py-1.5 text-text-3 truncate" title={item.category_name || ''}>{item.category_name || <span className="text-text-3 italic">None</span>}</td>
             </tr>
           )
         })}
       </tbody>
     </table>
+    </div>
   )
 }
 
