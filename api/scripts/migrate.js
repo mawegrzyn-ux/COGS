@@ -4153,6 +4153,61 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-04-30' AND title = 'Recipes side panel + optimistic inline edits'
    )`,
+
+  // ── Step 169a: Per-conversation model id + tier on the chat log ───────────
+  // Lets Settings → AI break out usage by tier (Story 6 / BACK-2568) — and
+  // is generally useful for cost analysis once a deployment runs both Haiku
+  // and Opus side by side.
+  `ALTER TABLE mcogs_ai_chat_log ADD COLUMN IF NOT EXISTS model_id   VARCHAR(100)`,
+  `ALTER TABLE mcogs_ai_chat_log ADD COLUMN IF NOT EXISTS model_tier VARCHAR(20)`,
+
+  // ── Step 170: BACK-2563 — AI premium access flag + default model config ────
+  // Two-tier Pepper: a default (cheap) model and a premium (newest) model.
+  // Per-user toggle stored on mcogs_users.ai_premium_access; tier-to-model
+  // mapping is configurable via mcogs_settings.data.ai_models so an admin
+  // can promote to whichever Anthropic flagship is current without a deploy.
+  `ALTER TABLE mcogs_users ADD COLUMN IF NOT EXISTS ai_premium_access BOOLEAN NOT NULL DEFAULT FALSE`,
+
+  `UPDATE mcogs_settings
+   SET data = COALESCE(data, '{}'::jsonb)
+              || jsonb_build_object('ai_models',
+                   COALESCE(data->'ai_models',
+                     jsonb_build_object(
+                       'default', 'claude-haiku-4-5-20251001',
+                       'premium', 'claude-opus-4-7'
+                     )
+                   )
+                 ),
+       updated_at = NOW()
+   WHERE id = 1`,
+
+  // ── Step 170a: Flip Pepper-tier epic + all stories to done ────────────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key IN ('BACK-2561','BACK-2562','BACK-2563','BACK-2564','BACK-2565','BACK-2566','BACK-2567','BACK-2568',
+                 'BACK-2570','BACK-2571','BACK-2572','BACK-2573','BACK-2574')
+     AND status <> 'done'`,
+
+  // ── Step 170b: Changelog — May 03 — Pepper model tier switcher shipped ────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Pepper — per-user model tier (cheap + premium switcher)', '[
+     {"type":"added","description":"BACK-2563: Schema + plumbing. New mcogs_users.ai_premium_access boolean column, mcogs_settings.data.ai_models JSON object (default + premium model IDs, seeded with claude-haiku-4-5-20251001 + claude-opus-4-7), new mcogs_ai_chat_log.model_id + model_tier columns. /api/me now returns ai_premium_access + ai_models so the frontend can render the picker. PUT /api/users/:id accepts ai_premium_access for admin toggling. middleware/auth.js threads the flag onto req.user."},
+     {"type":"added","description":"BACK-2564: Settings → AI gains a Model Tiers section with two text inputs for default + premium model IDs. Saves via PATCH /settings { ai_models: { default, premium } }. Admin-only (settings:write). Validation rejects values that do not start with claude-. Empty fields fall back to the hardcoded defaults so a fresh deployment still works without saving anything."},
+     {"type":"added","description":"BACK-2565: POST /api/ai-chat and POST /api/ai-upload accept an optional model field (values: default | premium). Server resolves the requested tier to the actual Anthropic model ID via the new helpers/aiModels.js helper. Premium requests from users without ai_premium_access are rejected with 403 — never trust the client. Selected model id + tier persist to mcogs_ai_chat_log on every turn."},
+     {"type":"added","description":"BACK-2566: Pepper header gains a Fast / Smart dropdown — only renders when the user has ai_premium_access. Selection persists to localStorage(pepper-model-tier) and snaps back to default if access is revoked. SSE stream now emits a {type: model, model: <id>} event before the first token so each assistant message can render a tiny model badge (Haiku / Sonnet / ✨ Opus). Subtitle under Pepper title shows the active model id when premium is granted."},
+     {"type":"added","description":"BACK-2567: Configuration → Users & Roles gains a ✨ button next to the existing </> dev-flag toggle. Toggles ai_premium_access via PUT /users/:id with optimistic update and rollback on failure. Tooltip warns that premium burns the monthly token cap ~5× faster."},
+     {"type":"added","description":"BACK-2568: Per-tier usage reporting. /api/ai-chat/my-usage now returns by_tier: { default, premium } alongside the rollup so users can see how much of their cap each model consumed. /api/ai-chat/usage gains premium_tokens + premium_period_tokens columns on the per-user breakdown so admins can spot heavy Opus users when deciding access."},
+     {"type":"changed","description":"BACK-2561: Menu Builder button relabel — “+ Add Sales Item” is now “+ Add Sales Item to Menu” (button + empty-state hint, both kept consistent). No functional change."},
+     {"type":"changed","description":"BACK-2570: Menu Builder pricing UX. Per-menu price overrides now edit inline on the items list — one editable cell per country-enabled price level (filtered via /country-price-levels/:countryId where is_enabled=true). Save on blur with optimistic patch + rollback. Pricing tab + PricingTab + PriceLevelRow components removed; the side panel is now single-purpose (modifier groups). Tax-rate selector removed from the inline cell — the cell saves with tax_rate_id null and existing per-item tax assignment is untouched."},
+     {"type":"added","description":"BACK-2571: Group items by category toggle on the Menu Builder. Header gains a checkbox; when on, items render under sticky category headers (Uncategorised pinned to the top). Persisted to localStorage(menu-builder-group-by-category). Drag-drop is auto-disabled while grouping is on (in-group reorder is a follow-up)."},
+     {"type":"added","description":"BACK-2572: Drag-drop sort for menu items. Native HTML5 DnD with accent-coloured drop indicator and 40% opacity on the dragged row. Persisted via new POST /api/menu-sales-items/reorder which updates sort_order in a single transaction. Optimistic UI + rollback on failure. Disabled while group-by-category is on."},
+     {"type":"added","description":"BACK-2573: Menu Builder shows attached modifier groups inline below each item, collapsible via a caret on the parent row. Each modifier option renders one editable price cell per country-enabled price level — same column layout as the parent. Per-menu overrides save via PUT /menu-sales-items/:id/modifier-option-price; the catalog price_addon is the fallback display when no override exists. Override cells get the amber tint. Sub-prices are lazy-loaded via GET /menu-sales-items/:id/sub-prices on first expand and cached in-memory. /sub-prices loadModifierGroupsForItem now returns mo.price_addon on every option."},
+     {"type":"added","description":"BACK-2574: Menu Builder shows full combo structure inline below combo items — steps → step options → step-option modifier groups → modifier options. Step options have per-level editable prices (PUT /menu-sales-items/:id/combo-option-price) and their own modifier groups expand into editable per-option/per-level cells. Indented to make the hierarchy obvious. /sub-prices loadComboStructure returns cso.price_addon on each step option and mo.price_addon on each step-option modifier option. Both stories share the same expand state + caret + ExpandedItemContent component."},
+     {"type":"changed","description":"GET /api/menu-sales-items now returns modifier_group_count per row so the items list can decide whether to render the expand caret without an extra fetch."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Pepper — per-user model tier (cheap + premium switcher)'
+   )`,
 ];
 
 async function runMigrations(pool) {

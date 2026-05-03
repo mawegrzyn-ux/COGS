@@ -44,6 +44,51 @@ interface MenuSalesItem {
   category: string | null
   prices?: MenuItemPrice[]       // story 6 — already in the GET response
   has_price_override?: boolean
+  modifier_group_count?: number  // BACK-2573 — surfaced via the GET join
+}
+
+// BACK-2573 / BACK-2574 — sub-prices payload from
+// GET /menu-sales-items/:id/sub-prices. Both modifier groups (for non-combo
+// items) and combo step structure are returned in one shot.
+interface SubPricesResp {
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  modifier_groups: SubModifierGroup[]
+  combo_steps: SubComboStep[]
+}
+
+interface SubModifierGroup {
+  modifier_group_id: number
+  name: string
+  min_select: number
+  max_select: number
+  options: SubOption[]
+}
+
+interface SubComboStep {
+  id: number
+  name: string
+  min_select: number
+  max_select: number
+  options: SubComboOption[]
+}
+
+interface SubOption {
+  id: number              // modifier_option_id
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  price_addon: number
+  prices: Record<string, number>  // { [price_level_id]: sell_price }
+}
+
+interface SubComboOption {
+  id: number              // combo_step_option_id
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  price_addon: number
+  prices: Record<string, number>
+  modifier_groups: SubModifierGroup[]
 }
 
 interface MenuItemPrice {
@@ -57,13 +102,18 @@ interface MenuItemPrice {
   tax_rate_id: number | null
 }
 
-interface TaxRate {
-  id: number
-  country_id: number
-  name: string
-  rate_percent: number
-  is_default: boolean
+// BACK-2569 — country-scoped price-level row used to filter the inline price
+// columns. Returned by GET /api/country-price-levels/:countryId. is_enabled
+// false means the level is configured but turned off for that country and
+// should NOT appear as a column.
+interface CountryPriceLevel {
+  price_level_id: number
+  price_level_name: string
+  is_enabled: boolean
 }
+
+// TaxRate interface removed in BACK-2569 — inline price cells are tax-rate-
+// agnostic for now (sales-item-level tax_rate_id stays untouched on save).
 
 interface ModifierGroup {
   id: number
@@ -213,8 +263,30 @@ export default function MenuBuilderPage() {
 
   // Edit-item side panel (Story 6 — click an item to open Pricing / Markets)
   const [editingMsi,   setEditingMsi]   = useState<MenuSalesItem | null>(null)
-  // Tax rates filtered to the selected menu's country, lazy-loaded.
-  const [taxRates,     setTaxRates]     = useState<TaxRate[]>([])
+  // BACK-2569 — price levels enabled in the selected menu's country. Drives
+  // the inline price columns on the items list. Filtered to is_enabled=true.
+  const [enabledPriceLevels, setEnabledPriceLevels] = useState<CountryPriceLevel[]>([])
+  // BACK-2571 — group items by category toggle. Persisted to localStorage so
+  // each user's preference sticks across sessions.
+  const [groupByCategory, setGroupByCategory] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('menu-builder-group-by-category') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('menu-builder-group-by-category', groupByCategory ? '1' : '0') } catch { /* ignore */ }
+  }, [groupByCategory])
+  // BACK-2572 — drag-drop reorder state.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // BACK-2573/2574 — per-row expansion of modifiers / combo structure.
+  // expanded keyed by msi.id; subPrices cached by msi.id once fetched.
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [subPricesById, setSubPricesById] = useState<Record<number, SubPricesResp>>({})
+  const [subPricesLoading, setSubPricesLoading] = useState<Set<number>>(new Set())
+  // Per-cell saving for nested option price edits.
+  const [savingOptionCells, setSavingOptionCells] = useState<Set<string>>(new Set())
+  // Per-cell saving state — keyed by `${msi_id}:${price_level_id}` so each
+  // price cell shows its own spinner without blocking the others.
+  const [savingPriceCells, setSavingPriceCells] = useState<Set<string>>(new Set())
 
   // Story 7 — shared panel width (px). Persisted across reloads so the user
   // gets their preferred width back. Clamped 320–720.
@@ -306,15 +378,167 @@ export default function MenuBuilderPage() {
     else setItems([])
   }, [selectedMenu, loadItems])
 
-  // Story 6 — load tax rates for the active menu's country, and all countries
-  // for the markets tab. Lazy on selectedMenu change so we don't pay the cost
-  // before the user opens the edit panel.
+  // BACK-2569 — load the price levels enabled for this menu's country so the
+  // inline price columns only show columns the operator can actually use.
   useEffect(() => {
-    if (!selectedMenu) return
-    api.get(`/tax-rates?country_id=${selectedMenu.country_id}`)
-      .then((d: TaxRate[]) => setTaxRates(d || []))
-      .catch(() => setTaxRates([]))
+    if (!selectedMenu) { setEnabledPriceLevels([]); return }
+    api.get(`/country-price-levels/${selectedMenu.country_id}`)
+      .then((d: CountryPriceLevel[]) => setEnabledPriceLevels((d || []).filter(l => l.is_enabled)))
+      .catch(() => setEnabledPriceLevels([]))
   }, [api, selectedMenu])
+
+  // BACK-2573 / BACK-2574 — toggle expansion + lazy-load /sub-prices.
+  // Cached once fetched so collapsing-then-expanding is instant. Reload on
+  // demand happens after a nested price save so the override marker updates.
+  const loadSubPrices = useCallback(async (msiId: number) => {
+    setSubPricesLoading(prev => { const n = new Set(prev); n.add(msiId); return n })
+    try {
+      const data = await api.get(`/menu-sales-items/${msiId}/sub-prices`) as SubPricesResp
+      setSubPricesById(prev => ({ ...prev, [msiId]: data }))
+    } catch {
+      // empty state will render
+    } finally {
+      setSubPricesLoading(prev => { const n = new Set(prev); n.delete(msiId); return n })
+    }
+  }, [api])
+
+  const toggleExpand = useCallback((msiId: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(msiId)) {
+        next.delete(msiId)
+      } else {
+        next.add(msiId)
+        // Lazy-fetch on first expand
+        if (!subPricesById[msiId]) loadSubPrices(msiId)
+      }
+      return next
+    })
+  }, [subPricesById, loadSubPrices])
+
+  // Save a per-menu override on a nested option price (modifier OR combo step).
+  // Uses the appropriate PUT depending on `kind`. Optimistic patch on the
+  // cached SubPricesResp; reload from server on failure to recover state.
+  const saveOptionPrice = useCallback(async (
+    kind: 'modifier' | 'combo',
+    msiId: number,
+    optionId: number,
+    priceLevelId: number,
+    newSell: number,
+  ) => {
+    const cellKey = `${kind}:${msiId}:${optionId}:${priceLevelId}`
+    setSavingOptionCells(prev => { const n = new Set(prev); n.add(cellKey); return n })
+
+    // Optimistic patch into the cached SubPricesResp
+    setSubPricesById(prev => {
+      const sp = prev[msiId]; if (!sp) return prev
+      const patchOption = (o: SubOption | SubComboOption): SubOption | SubComboOption => ({
+        ...o,
+        prices: { ...o.prices, [String(priceLevelId)]: newSell },
+      })
+      const patchedModGroups = (groups: SubModifierGroup[]): SubModifierGroup[] =>
+        groups.map(g => ({ ...g, options: g.options.map(o => o.id === optionId && kind === 'modifier' ? patchOption(o) as SubOption : o) }))
+      const next: SubPricesResp = {
+        ...sp,
+        modifier_groups: patchedModGroups(sp.modifier_groups),
+        combo_steps: sp.combo_steps.map(step => ({
+          ...step,
+          options: step.options.map(opt => {
+            if (opt.id === optionId && kind === 'combo') return patchOption(opt) as SubComboOption
+            return { ...opt, modifier_groups: patchedModGroups(opt.modifier_groups) }
+          }),
+        })),
+      }
+      return { ...prev, [msiId]: next }
+    })
+
+    try {
+      const url = kind === 'modifier'
+        ? `/menu-sales-items/${msiId}/modifier-option-price`
+        : `/menu-sales-items/${msiId}/combo-option-price`
+      const body = kind === 'modifier'
+        ? { modifier_option_id: optionId, price_level_id: priceLevelId, sell_price: newSell }
+        : { combo_step_option_id: optionId, price_level_id: priceLevelId, sell_price: newSell }
+      await api.put(url, body)
+    } catch (err: unknown) {
+      // Rollback by re-fetching from server
+      loadSubPrices(msiId)
+      const msg = (err as { message?: string })?.message || 'Failed to save price'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setSavingOptionCells(prev => { const n = new Set(prev); n.delete(cellKey); return n })
+    }
+  }, [api, loadSubPrices])
+
+  // BACK-2572 — drag-drop reorder. Persist via POST /menu-sales-items/reorder
+  // (transactional sort_order update). Optimistic local reorder + reload on
+  // failure. Disabled while group-by-category is on (sort within category is
+  // a separate follow-up).
+  const reorderItems = useCallback(async (sourceId: number, targetId: number) => {
+    if (!selectedMenu || sourceId === targetId) return
+    const before = items
+    const reordered = (() => {
+      const arr = [...items]
+      const fromIdx = arr.findIndex(i => i.id === sourceId)
+      const toIdx   = arr.findIndex(i => i.id === targetId)
+      if (fromIdx < 0 || toIdx < 0) return arr
+      const [moved] = arr.splice(fromIdx, 1)
+      arr.splice(toIdx, 0, moved)
+      return arr.map((it, idx) => ({ ...it, sort_order: idx }))
+    })()
+    setItems(reordered)
+    try {
+      await api.post('/menu-sales-items/reorder', {
+        menu_id: selectedMenu.id,
+        order:   reordered.map(i => i.id),
+      })
+    } catch (err: unknown) {
+      setItems(before)
+      const msg = (err as { message?: string })?.message || 'Failed to save new order'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, selectedMenu, items])
+
+  // Save a single price cell. Optimistic patch on items[]; rolls back on
+  // failure. Used by the inline editor in the items list.
+  const savePriceCell = useCallback(async (msi: MenuSalesItem, priceLevel: CountryPriceLevel, newSell: number) => {
+    if (!selectedMenu) return
+    const cellKey = `${msi.id}:${priceLevel.price_level_id}`
+    setSavingPriceCells(prev => { const next = new Set(prev); next.add(cellKey); return next })
+
+    // Optimistic patch
+    const previous = items
+    setItems(prev => prev.map(it => {
+      if (it.id !== msi.id) return it
+      const existing = (it.prices || []).find(p => p.price_level_id === priceLevel.price_level_id)
+      const updatedPrices = existing
+        ? (it.prices || []).map(p => p.price_level_id === priceLevel.price_level_id ? { ...p, sell_price: newSell, is_overridden: p.default_price !== null && newSell !== p.default_price } : p)
+        : [...(it.prices || []), {
+            id: 0,
+            menu_sales_item_id: msi.id,
+            price_level_id: priceLevel.price_level_id,
+            price_level_name: priceLevel.price_level_name,
+            sell_price: newSell,
+            default_price: null,
+            is_overridden: true,
+            tax_rate_id: null,
+          } as MenuItemPrice]
+      return { ...it, prices: updatedPrices, has_price_override: updatedPrices.some(p => p.is_overridden) }
+    }))
+    try {
+      await api.put(`/menu-sales-items/${msi.id}/prices`, {
+        price_level_id: priceLevel.price_level_id,
+        sell_price:     newSell,
+        tax_rate_id:    null,
+      })
+    } catch (err: unknown) {
+      setItems(previous)
+      const msg = (err as { message?: string })?.message || 'Failed to save price'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setSavingPriceCells(prev => { const next = new Set(prev); next.delete(cellKey); return next })
+    }
+  }, [api, selectedMenu, items])
 
 
   // Attach an existing sales item to the current menu
@@ -520,11 +744,20 @@ export default function MenuBuilderPage() {
                 </select>
               </Field>
               <div className="flex-1" />
+              {/* BACK-2571 — group-by-category toggle */}
+              <label className="flex items-center gap-1.5 text-xs text-text-2 cursor-pointer select-none mr-2">
+                <input
+                  type="checkbox"
+                  checked={groupByCategory}
+                  onChange={(e) => setGroupByCategory(e.target.checked)}
+                />
+                Group by category
+              </label>
               <button
                 className="btn-primary"
                 onClick={() => { setEditingMsi(null); setAddMode('search'); setPanelOpen(true) }}
                 disabled={!selectedMenu}
-              >+ Add Sales Item</button>
+              >+ Add Sales Item to Menu</button>
             </div>
 
             {/* ── Items list ── */}
@@ -535,58 +768,37 @@ export default function MenuBuilderPage() {
                 <div className="flex justify-center p-12"><Spinner /></div>
               ) : items.length === 0 ? (
                 <div className="p-8 text-center text-text-3 text-sm">
-                  No items on this menu yet. Click <strong>+ Add Sales Item</strong> to start.
+                  No items on this menu yet. Click <strong>+ Add Sales Item to Menu</strong> to start.
                 </div>
               ) : (
-                <ul className="divide-y divide-border bg-surface">
-                  {items.map(it => {
-                    const overridden = it.has_price_override
-                    const selected = editingMsi?.id === it.id
-                    return (
-                      <li
-                        key={it.id}
-                        className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors ${
-                          selected ? 'bg-accent-dim/50 border-l-2 border-accent' : 'hover:bg-surface-2/60'
-                        }`}
-                        onClick={() => { setPanelOpen(false); setEditingMsi(it) }}
-                      >
-                        {/* Type badge */}
-                        <span
-                          className={`shrink-0 w-6 h-6 rounded text-[11px] font-bold flex items-center justify-center ${TYPE_BADGE[it.item_type].cls}`}
-                          title={TYPE_LABELS[it.item_type]}
-                        >{TYPE_BADGE[it.item_type].label}</span>
-
-                        {/* Image thumb if any */}
-                        {it.si_image_url ? (
-                          <img src={it.si_image_url} alt="" className="shrink-0 w-10 h-10 rounded object-cover border border-border" />
-                        ) : (
-                          <div className="shrink-0 w-10 h-10 rounded bg-surface-2 border border-border" />
-                        )}
-
-                        {/* Name + meta */}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm text-text-1 truncate">
-                            {it.sales_item_name}
-                            {overridden && (
-                              <span className="ml-2 text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded" title="At least one price level has a per-menu override">price override</span>
-                            )}
-                          </div>
-                          <div className="text-xs text-text-3 truncate">
-                            {it.category || 'Uncategorised'} · {TYPE_LABELS[it.item_type]}
-                            {it.qty !== 1 ? ` · qty ${it.qty}` : ''}
-                          </div>
-                        </div>
-
-                        {/* Remove */}
-                        <button
-                          className="text-text-3 hover:text-red-600 text-xs px-2"
-                          onClick={(e) => { e.stopPropagation(); removeItem(it) }}
-                          title="Remove from menu (does not delete the sales item)"
-                        >Remove</button>
-                      </li>
-                    )
-                  })}
-                </ul>
+                <ItemsList
+                  items={items}
+                  enabledPriceLevels={enabledPriceLevels}
+                  selectedMsiId={editingMsi?.id}
+                  groupByCategory={groupByCategory}
+                  savingPriceCells={savingPriceCells}
+                  dragId={dragId}
+                  dragOverId={dragOverId}
+                  expandedRows={expandedRows}
+                  subPricesById={subPricesById}
+                  subPricesLoading={subPricesLoading}
+                  savingOptionCells={savingOptionCells}
+                  onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
+                  onOpenModifiers={(it) => { setPanelOpen(false); setEditingMsi(it) }}
+                  onRemove={(it) => removeItem(it)}
+                  onToggleExpand={toggleExpand}
+                  onSaveOptionPrice={saveOptionPrice}
+                  onDragStart={(id) => setDragId(id)}
+                  onDragOver={(e, id) => { e.preventDefault(); setDragOverId(id) }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDrop={() => {
+                    if (dragId !== null && dragOverId !== null && dragId !== dragOverId) {
+                      reorderItems(dragId, dragOverId)
+                    }
+                    setDragId(null); setDragOverId(null)
+                  }}
+                  onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                />
               )}
             </div>
           </div>
@@ -625,7 +837,6 @@ export default function MenuBuilderPage() {
               key={editingMsi.id}
               menu={selectedMenu}
               msi={editingMsi}
-              taxRates={taxRates}
               width={panelWidth}
               onResize={setPanelWidth}
               onChanged={() => loadItems(selectedMenu.id)}
@@ -665,7 +876,402 @@ export default function MenuBuilderPage() {
   )
 }
 
+// ── Items list (BACK-2569 / 2571 / 2572) ───────────────────────────────────
+// Pulls flat-vs-grouped rendering, drag-drop sort, and the inline price
+// columns into one component. Drag-drop is disabled while group-by-category
+// is on (in-group reorder is a follow-up).
+
+function ItemsList({
+  items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
+  dragId, dragOverId,
+  expandedRows, subPricesById, subPricesLoading, savingOptionCells,
+  onPriceSave, onOpenModifiers, onRemove, onToggleExpand, onSaveOptionPrice,
+  onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
+}: {
+  items: MenuSalesItem[]
+  enabledPriceLevels: CountryPriceLevel[]
+  selectedMsiId?: number
+  groupByCategory: boolean
+  savingPriceCells: Set<string>
+  dragId: number | null
+  dragOverId: number | null
+  expandedRows: Set<number>
+  subPricesById: Record<number, SubPricesResp>
+  subPricesLoading: Set<number>
+  savingOptionCells: Set<string>
+  onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
+  onOpenModifiers: (it: MenuSalesItem) => void
+  onRemove: (it: MenuSalesItem) => void
+  onToggleExpand: (msiId: number) => void
+  onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  onDragStart: (id: number) => void
+  onDragOver: (e: React.DragEvent, id: number) => void
+  onDragLeave: () => void
+  onDrop: () => void
+  onDragEnd: () => void
+}) {
+  const draggable = !groupByCategory  // disabled in grouped mode
+
+  // BACK-2571 — bucket items by category. Uncategorised pinned to the top.
+  const groups = useMemo(() => {
+    const buckets = new Map<string, MenuSalesItem[]>()
+    for (const it of items) {
+      const key = (it.category || '').trim() || 'Uncategorised'
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key)!.push(it)
+    }
+    return Array.from(buckets.entries())
+      .sort(([a], [b]) => {
+        if (a === 'Uncategorised') return -1
+        if (b === 'Uncategorised') return 1
+        return a.localeCompare(b, undefined, { sensitivity: 'base' })
+      })
+  }, [items])
+
+  const renderRow = (it: MenuSalesItem) => {
+    const selected = selectedMsiId === it.id
+    const isDragging  = dragId === it.id
+    const isDropOver  = dragOverId === it.id && dragId !== it.id
+    const expandable  = it.item_type === 'combo' || (it.modifier_group_count ?? 0) > 0
+    const isExpanded  = expandedRows.has(it.id)
+    const sub         = subPricesById[it.id]
+    const loadingSub  = subPricesLoading.has(it.id)
+    return (
+      <li key={it.id}>
+        <div
+          draggable={draggable}
+          onDragStart={draggable ? () => onDragStart(it.id) : undefined}
+          onDragOver={draggable ? (e) => onDragOver(e, it.id) : undefined}
+          onDragLeave={draggable ? onDragLeave : undefined}
+          onDrop={draggable ? onDrop : undefined}
+          onDragEnd={draggable ? onDragEnd : undefined}
+          className={`flex items-center gap-3 px-4 py-3 transition-colors ${
+            selected     ? 'bg-accent-dim/50 border-l-2 border-accent' :
+            isDropOver   ? 'bg-accent-dim/30 border-t-2 border-accent' :
+                           'hover:bg-surface-2/60 border-l-2 border-transparent'
+          } ${isDragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        >
+          {/* Expand caret — only for items with modifiers OR combos */}
+          {expandable ? (
+            <button
+              type="button"
+              className="shrink-0 w-4 h-4 flex items-center justify-center text-text-3 hover:text-text-1 text-xs"
+              onClick={(e) => { e.stopPropagation(); onToggleExpand(it.id) }}
+              title={isExpanded ? 'Collapse' : 'Expand'}
+            >{isExpanded ? '▼' : '▶'}</button>
+          ) : (
+            <span className="shrink-0 w-4" />
+          )}
+
+          <span
+            className={`shrink-0 w-6 h-6 rounded text-[11px] font-bold flex items-center justify-center ${TYPE_BADGE[it.item_type].cls}`}
+            title={TYPE_LABELS[it.item_type]}
+          >{TYPE_BADGE[it.item_type].label}</span>
+
+          {it.si_image_url ? (
+            <img src={it.si_image_url} alt="" className="shrink-0 w-10 h-10 rounded object-cover border border-border" />
+          ) : (
+            <div className="shrink-0 w-10 h-10 rounded bg-surface-2 border border-border" />
+          )}
+
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-sm text-text-1 truncate">{it.sales_item_name}</div>
+            <div className="text-xs text-text-3 truncate">
+              {it.category || 'Uncategorised'} · {TYPE_LABELS[it.item_type]}
+              {it.qty !== 1 ? ` · qty ${it.qty}` : ''}
+              {(it.modifier_group_count ?? 0) > 0 && <> · {it.modifier_group_count} mod{it.modifier_group_count === 1 ? '' : 's'}</>}
+            </div>
+          </div>
+
+          {enabledPriceLevels.map(lvl => {
+            const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
+            const cellKey = `${it.id}:${lvl.price_level_id}`
+            return (
+              <PriceCell
+                key={lvl.price_level_id}
+                value={price?.sell_price ?? 0}
+                isOverride={price?.is_overridden ?? false}
+                defaultPrice={price?.default_price ?? null}
+                saving={savingPriceCells.has(cellKey)}
+                onSave={(v) => onPriceSave(it, lvl, v)}
+              />
+            )
+          })}
+
+          <button
+            className={`shrink-0 w-20 text-xs px-2 py-1 rounded transition-colors text-right ${selected ? 'bg-accent text-white' : 'text-accent hover:bg-accent-dim/40'}`}
+            onClick={(e) => { e.stopPropagation(); onOpenModifiers(it) }}
+            title="Open modifiers"
+          >Modifiers ›</button>
+
+          <button
+            className="shrink-0 w-14 text-text-3 hover:text-red-600 text-xs text-right"
+            onClick={(e) => { e.stopPropagation(); onRemove(it) }}
+            title="Remove from menu (does not delete the sales item)"
+          >Remove</button>
+        </div>
+
+        {/* BACK-2573 / BACK-2574 — nested expanded section */}
+        {expandable && isExpanded && (
+          <div className="bg-surface-2/30 border-t border-border">
+            {loadingSub && !sub ? (
+              <div className="px-12 py-3 text-xs text-text-3 italic">Loading…</div>
+            ) : sub ? (
+              <ExpandedItemContent
+                msiId={it.id}
+                sub={sub}
+                enabledPriceLevels={enabledPriceLevels}
+                savingOptionCells={savingOptionCells}
+                onSaveOptionPrice={onSaveOptionPrice}
+              />
+            ) : (
+              <div className="px-12 py-3 text-xs text-text-3 italic">Failed to load sub-prices.</div>
+            )}
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  return (
+    <div className="bg-surface">
+      {enabledPriceLevels.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border bg-surface-2/40 text-[10px] uppercase tracking-wide text-text-3 font-semibold">
+          <span className="shrink-0 w-4" />
+          <span className="shrink-0 w-6" />
+          <span className="shrink-0 w-10" />
+          <span className="flex-1 min-w-0">Item</span>
+          {enabledPriceLevels.map(lvl => (
+            <span key={lvl.price_level_id} className="shrink-0 w-24 text-right">{lvl.price_level_name}</span>
+          ))}
+          <span className="shrink-0 w-20 text-right">Modifiers</span>
+          <span className="shrink-0 w-14 text-right" />
+        </div>
+      )}
+
+      {groupByCategory ? (
+        groups.map(([category, rows]) => (
+          <div key={category}>
+            <div className="px-4 py-1.5 bg-surface-2/70 border-b border-border text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1]">
+              {category} <span className="ml-1 font-mono text-text-3">({rows.length})</span>
+            </div>
+            <ul className="divide-y divide-border">
+              {rows.map(renderRow)}
+            </ul>
+          </div>
+        ))
+      ) : (
+        <ul className="divide-y divide-border">
+          {items.map(renderRow)}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ── Expanded item content (BACK-2573 / BACK-2574) ──────────────────────────
+// Renders the nested structure under an expanded row:
+//   • Modifier groups → options (per-level price cells)            [BACK-2573]
+//   • Combo steps → step options (per-level prices) → step-option
+//     modifier groups → modifier options (per-level prices)        [BACK-2574]
+// Each option-level price cell saves via the appropriate per-menu override
+// endpoint. Indented to make the hierarchy visually obvious.
+
+function ExpandedItemContent({
+  msiId, sub, enabledPriceLevels, savingOptionCells, onSaveOptionPrice,
+}: {
+  msiId: number
+  sub: SubPricesResp
+  enabledPriceLevels: CountryPriceLevel[]
+  savingOptionCells: Set<string>
+  onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+}) {
+  // Stable nested renderers — small helpers to keep the JSX tree readable.
+  const renderModGroup = (g: SubModifierGroup, indentPx: number) => (
+    <NestedGroup key={g.modifier_group_id} title={g.name} subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`} indentPx={indentPx}>
+      {g.options.map(o => (
+        <NestedOption
+          key={o.id}
+          title={o.display_name || o.name}
+          subtitle={`+${o.price_addon.toFixed(2)} addon`}
+          indentPx={indentPx + 16}
+        >
+          {enabledPriceLevels.map(lvl => {
+            const overrideKey = String(lvl.price_level_id)
+            const override = o.prices[overrideKey]
+            const value = override != null ? override : o.price_addon
+            const isOverride = override != null
+            const cellKey = `modifier:${msiId}:${o.id}:${lvl.price_level_id}`
+            return (
+              <PriceCell
+                key={lvl.price_level_id}
+                value={value}
+                isOverride={isOverride}
+                defaultPrice={o.price_addon}
+                saving={savingOptionCells.has(cellKey)}
+                onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
+              />
+            )
+          })}
+        </NestedOption>
+      ))}
+    </NestedGroup>
+  )
+
+  return (
+    <div className="py-2">
+      {/* Combo structure (BACK-2574) — only rendered for combo items */}
+      {sub.item_type === 'combo' && sub.combo_steps.length > 0 && (
+        <div>
+          {sub.combo_steps.map((step, idx) => (
+            <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
+              <div className="flex items-center gap-2 px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: 16 }}>
+                <span className="text-text-3">Step {idx + 1}</span>
+                <span>{step.name}</span>
+                <span className="text-text-3 font-mono">Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`}</span>
+              </div>
+              {step.options.map(o => (
+                <div key={o.id}>
+                  <NestedOption
+                    title={o.display_name || o.name}
+                    subtitle={`Combo option · +${o.price_addon.toFixed(2)} addon`}
+                    indentPx={32}
+                  >
+                    {enabledPriceLevels.map(lvl => {
+                      const overrideKey = String(lvl.price_level_id)
+                      const override = o.prices[overrideKey]
+                      const value = override != null ? override : o.price_addon
+                      const isOverride = override != null
+                      const cellKey = `combo:${msiId}:${o.id}:${lvl.price_level_id}`
+                      return (
+                        <PriceCell
+                          key={lvl.price_level_id}
+                          value={value}
+                          isOverride={isOverride}
+                          defaultPrice={o.price_addon}
+                          saving={savingOptionCells.has(cellKey)}
+                          onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
+                        />
+                      )
+                    })}
+                  </NestedOption>
+                  {/* Per-step-option modifier groups (BACK-2574) */}
+                  {o.modifier_groups.length > 0 && (
+                    <div>
+                      {o.modifier_groups.map(g => renderModGroup(g, 48))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Modifier groups for non-combo items (BACK-2573) */}
+      {sub.modifier_groups.length > 0 && (
+        <div>
+          {sub.modifier_groups.map(g => renderModGroup(g, 16))}
+        </div>
+      )}
+
+      {sub.modifier_groups.length === 0 && sub.combo_steps.length === 0 && (
+        <div className="px-12 py-2 text-xs text-text-3 italic">Nothing nested under this item.</div>
+      )}
+    </div>
+  )
+}
+
+// Section header for a modifier group inside the expanded view.
+function NestedGroup({
+  title, subtitle, indentPx, children,
+}: {
+  title: string
+  subtitle?: string
+  indentPx: number
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
+        <span>{title}</span>
+        {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// Single nested option row — keeps the column alignment matching the parent
+// list (item info on the left, price-level cells on the right).
+function NestedOption({
+  title, subtitle, indentPx, children,
+}: {
+  title: string
+  subtitle?: string
+  indentPx: number
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-3 py-1.5" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-text-1 truncate">{title}</div>
+        {subtitle && <div className="text-[10px] text-text-3 truncate">{subtitle}</div>}
+      </div>
+      {children}
+      <span className="shrink-0 w-20" />
+      <span className="shrink-0 w-14" />
+    </div>
+  )
+}
+
 // ── Shared bits ─────────────────────────────────────────────────────────────
+
+// Inline price cell for the items list (BACK-2569). Each cell is a small
+// editable input that saves on blur when the value has changed. Shows an
+// amber tint when the per-menu override differs from the catalog default,
+// and a saving spinner while the PUT is in flight.
+function PriceCell({
+  value, isOverride, defaultPrice, saving, onSave,
+}: {
+  value: number
+  isOverride: boolean
+  defaultPrice: number | null
+  saving: boolean
+  onSave: (v: number) => void | Promise<void>
+}) {
+  const [draft, setDraft] = useState<string>(String(value ?? 0))
+  // Re-sync local draft when the upstream value changes (e.g. after a save
+  // bumps is_overridden or after a parent reload).
+  useEffect(() => { setDraft(String(value ?? 0)) }, [value])
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    if (trimmed === '') return
+    const n = Number(trimmed)
+    if (!Number.isFinite(n)) { setDraft(String(value ?? 0)); return }
+    if (Math.abs(n - Number(value)) < 0.0005) return // no-op: within rounding
+    onSave(n)
+  }
+
+  return (
+    <div className="shrink-0 w-24 relative">
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`input w-full text-right text-sm font-mono px-2 py-1 ${isOverride ? 'border-amber-300 bg-amber-50/40' : ''}`}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        title={defaultPrice != null ? `Default: ${defaultPrice}${isOverride ? ' (overridden)' : ''}` : (isOverride ? 'Per-menu override' : '')}
+      />
+      {saving && (
+        <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-accent" title="Saving…">●</span>
+      )}
+    </div>
+  )
+}
 
 // Drag handle on the LEFT edge of a right-side panel. Left-side mouse drag
 // changes width inversely (drag left → wider). Clamped 320–720.
@@ -1480,11 +2086,10 @@ function ManualItemForm({
 // two tabs. Save fires server roundtrip per row; markets toggle auto-saves.
 
 function EditItemPanel({
-  menu, msi, taxRates, width, onResize, onChanged, onClose, onToast,
+  menu, msi, width, onResize, onChanged, onClose, onToast,
 }: {
   menu: Menu
   msi: MenuSalesItem
-  taxRates: TaxRate[]
   width: number
   onResize: (w: number) => void
   onChanged: () => void
@@ -1492,44 +2097,18 @@ function EditItemPanel({
   onToast: (t: { message: string; type?: 'success' | 'error' }) => void
 }) {
   const api = useApi()
-  // BACK-2549 — Markets tab removed from this panel. Sales-item market
-  // visibility is now managed exclusively from the Sales Items page (the
-  // menu is already scoped to one country, so the tab was redundant here).
-  type EditTab = 'pricing' | 'modifiers'
-  const [tab,    setTab]    = useState<EditTab>('pricing')
-  const [prices, setPrices] = useState<MenuItemPrice[]>(msi.prices || [])
-  const [savingPriceLevels, setSavingPriceLevels] = useState<Set<number>>(new Set())
-  // Story 5 — modifier groups
+  // BACK-2569 — Pricing tab removed. Pricing is now edited inline on the
+  // items list (one editable cell per country-enabled price level). The
+  // panel is single-purpose: modifier groups attached to this sales item.
+  // BACK-2549 — Markets tab also gone (managed from Sales Items only).
+  // Modifier-group state — what was previously the Modifiers tab is now the
+  // entire body.
   const [allModGroups,    setAllModGroups]    = useState<ModifierGroup[]>([])
   const [attachedGroups,  setAttachedGroups]  = useState<AttachedModifierGroup[]>([])
   const [modsLoading,     setModsLoading]     = useState(false)
 
-  // Load fresh pricing on open — the catalog row may be slightly stale.
-  useEffect(() => {
-    api.get(`/menu-sales-items/${msi.id}/price-diff`)
-      .then((d: { price_level_id: number; price_level_name: string; default_price: number | null; menu_price: number | null; is_overridden: boolean }[]) => {
-        // Map price-diff response into the MenuItemPrice shape our UI uses.
-        // The diff endpoint only returns price-level meta + numbers, not row
-        // ids — we treat it as the source of truth on open and patch back
-        // through PUT /menu-sales-items/:id/prices on save.
-        setPrices(d.map((row) => ({
-          id: 0,
-          menu_sales_item_id: msi.id,
-          price_level_id:    row.price_level_id,
-          price_level_name:  row.price_level_name,
-          sell_price:        row.menu_price ?? row.default_price ?? 0,
-          default_price:     row.default_price,
-          is_overridden:     row.is_overridden,
-          tax_rate_id:       null,  // tax-rate edits handled separately
-        })))
-      })
-      .catch(() => { /* fall back to msi.prices already in state */ })
-  }, [api, msi.id])
-
-
-  // Story 5 — load modifier-group catalog + currently attached groups on
-  // first switch to the modifiers tab. Both refresh after every save so the
-  // attached list reflects server state.
+  // Load modifier-group catalog + currently attached groups on mount. Both
+  // refresh after every save so the attached list reflects server state.
   const loadMods = useCallback(async () => {
     setModsLoading(true)
     try {
@@ -1546,10 +2125,7 @@ function EditItemPanel({
     }
   }, [api, msi.sales_item_id])
 
-  useEffect(() => {
-    if (tab !== 'modifiers' || allModGroups.length) return
-    loadMods()
-  }, [tab, allModGroups.length, loadMods])
+  useEffect(() => { loadMods() }, [loadMods])
 
   // Persist the attached set to the server. PUT replaces — we send the FULL
   // list of {modifier_group_id, auto_show} entries.
@@ -1565,33 +2141,6 @@ function EditItemPanel({
       onToast({ message: msg, type: 'error' })
       // Reload to recover authoritative state
       loadMods()
-    }
-  }
-
-  // Save a single price row (ON CONFLICT upsert server-side).
-  const savePrice = async (p: MenuItemPrice, newSell: number) => {
-    setSavingPriceLevels(prev => new Set(prev).add(p.price_level_id))
-    try {
-      await api.put(`/menu-sales-items/${msi.id}/prices`, {
-        price_level_id: p.price_level_id,
-        sell_price:     newSell,
-        tax_rate_id:    p.tax_rate_id,
-      })
-      // Optimistic update
-      setPrices(prev => prev.map(x =>
-        x.price_level_id === p.price_level_id
-          ? { ...x, sell_price: newSell, is_overridden: x.default_price !== null && newSell !== x.default_price }
-          : x
-      ))
-      onChanged()
-      onToast({ message: 'Price saved', type: 'success' })
-    } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message || 'Failed to save price'
-      onToast({ message: msg, type: 'error' })
-    } finally {
-      setSavingPriceLevels(prev => {
-        const next = new Set(prev); next.delete(p.price_level_id); return next
-      })
     }
   }
 
@@ -1617,175 +2166,60 @@ function EditItemPanel({
         <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
       </div>
 
-      {/* Tabs (Markets tab removed in BACK-2549 — manage market visibility from Sales Items) */}
-      <div className="flex border-b border-border">
-        <button
-          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'pricing' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
-          onClick={() => setTab('pricing')}
-        >Pricing</button>
-        <button
-          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'modifiers' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
-          onClick={() => setTab('modifiers')}
-        >Modifiers{attachedGroups.length > 0 && <span className="ml-1 text-[10px] text-text-3 font-mono">({attachedGroups.length})</span>}</button>
+      {/* BACK-2569 — single section header (was tabs). Pricing edits inline
+          on the items list now; this panel only manages modifier groups. */}
+      <div className="px-3 py-2 border-b border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
+        Modifier groups{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-3">
-        {tab === 'pricing' ? (
-          <PricingTab
-            menu={menu}
-            prices={prices}
-            taxRates={taxRates}
-            saving={savingPriceLevels}
-            onSave={savePrice}
-            onTaxChange={(p, taxId) => {
-              setPrices(prev => prev.map(x => x.price_level_id === p.price_level_id ? { ...x, tax_rate_id: taxId } : x))
-              savePrice({ ...p, tax_rate_id: taxId }, p.sell_price)
-            }}
-          />
-        ) : (
-          <ModifiersTab
-            allGroups={allModGroups}
-            attached={attachedGroups}
-            loading={modsLoading}
-            onDetach={(mgid) => persistAttachedGroups(attachedGroups.filter(g => g.modifier_group_id !== mgid))}
-            onToggleAutoShow={(mgid, autoShow) => persistAttachedGroups(
-              attachedGroups.map(g => g.modifier_group_id === mgid ? { ...g, auto_show: autoShow } : g)
-            )}
-            onAttach={(toAttach) => {
-              const merged = [
-                ...attachedGroups,
-                ...toAttach
-                  .filter(g => !attachedGroups.some(a => a.modifier_group_id === g.id))
-                  .map((g, idx) => ({
-                    modifier_group_id: g.id,
-                    sort_order: attachedGroups.length + idx,
-                    auto_show: g.default_auto_show,
-                    name: g.name,
-                    description: null,
-                    min_select: g.min_select,
-                    max_select: g.max_select,
-                  } satisfies AttachedModifierGroup)),
-              ]
-              return persistAttachedGroups(merged)
-            }}
-            onCreated={(newGroup) => {
-              setAllModGroups(prev => [...prev, newGroup])
-              const merged = [...attachedGroups, {
-                modifier_group_id: newGroup.id,
-                sort_order: attachedGroups.length,
-                auto_show: newGroup.default_auto_show,
-                name: newGroup.name,
-                description: null,
-                min_select: newGroup.min_select,
-                max_select: newGroup.max_select,
-              } satisfies AttachedModifierGroup]
-              return persistAttachedGroups(merged)
-            }}
-          />
-        )}
+        <ModifiersTab
+          allGroups={allModGroups}
+          attached={attachedGroups}
+          loading={modsLoading}
+          onDetach={(mgid) => persistAttachedGroups(attachedGroups.filter(g => g.modifier_group_id !== mgid))}
+          onToggleAutoShow={(mgid, autoShow) => persistAttachedGroups(
+            attachedGroups.map(g => g.modifier_group_id === mgid ? { ...g, auto_show: autoShow } : g)
+          )}
+          onAttach={(toAttach) => {
+            const merged = [
+              ...attachedGroups,
+              ...toAttach
+                .filter(g => !attachedGroups.some(a => a.modifier_group_id === g.id))
+                .map((g, idx) => ({
+                  modifier_group_id: g.id,
+                  sort_order: attachedGroups.length + idx,
+                  auto_show: g.default_auto_show,
+                  name: g.name,
+                  description: null,
+                  min_select: g.min_select,
+                  max_select: g.max_select,
+                } satisfies AttachedModifierGroup)),
+            ]
+            return persistAttachedGroups(merged)
+          }}
+          onCreated={(newGroup) => {
+            setAllModGroups(prev => [...prev, newGroup])
+            const merged = [...attachedGroups, {
+              modifier_group_id: newGroup.id,
+              sort_order: attachedGroups.length,
+              auto_show: newGroup.default_auto_show,
+              name: newGroup.name,
+              description: null,
+              min_select: newGroup.min_select,
+              max_select: newGroup.max_select,
+            } satisfies AttachedModifierGroup]
+            return persistAttachedGroups(merged)
+          }}
+        />
       </div>
     </aside>
   )
 }
 
-function PricingTab({
-  menu, prices, taxRates, saving, onSave, onTaxChange,
-}: {
-  menu: Menu
-  prices: MenuItemPrice[]
-  taxRates: TaxRate[]
-  saving: Set<number>
-  onSave: (p: MenuItemPrice, newSell: number) => void
-  onTaxChange: (p: MenuItemPrice, taxId: number | null) => void
-}) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] text-text-3 italic">
-        Per-menu price overrides are saved to <code className="text-[10px]">mcogs_menu_sales_item_prices</code>. Defaults come from the sales-item catalog. Reset clears the override.
-      </p>
-      {prices.length === 0 ? (
-        <div className="text-xs text-text-3 italic py-4 text-center">No price levels configured.</div>
-      ) : (
-        <ul className="space-y-2">
-          {prices.map(p => (
-            <PriceLevelRow
-              key={p.price_level_id}
-              menu={menu}
-              price={p}
-              taxRates={taxRates}
-              saving={saving.has(p.price_level_id)}
-              onSave={(v) => onSave(p, v)}
-              onTaxChange={(taxId) => onTaxChange(p, taxId)}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function PriceLevelRow({
-  menu, price, taxRates, saving, onSave, onTaxChange,
-}: {
-  menu: Menu
-  price: MenuItemPrice
-  taxRates: TaxRate[]
-  saving: boolean
-  onSave: (newSell: number) => void
-  onTaxChange: (taxId: number | null) => void
-}) {
-  const [draft, setDraft] = useState<string>(String(price.sell_price ?? 0))
-  // Reset draft when the underlying price changes (e.g. after a save)
-  useEffect(() => { setDraft(String(price.sell_price ?? 0)) }, [price.sell_price])
-
-  const dirty = Number(draft) !== Number(price.sell_price)
-
-  return (
-    <li className="rounded-lg border border-border px-3 py-2.5 bg-surface-2/30">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs font-semibold text-text-2">{price.price_level_name}</div>
-        {price.is_overridden && (
-          <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded" title={`Default: ${menu.country_name} ${price.default_price ?? '—'}`}>override</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <CalcInput
-          className="input flex-1 font-mono text-sm"
-          value={draft}
-          onChange={setDraft}
-        />
-        <select
-          className="input text-xs w-28"
-          value={price.tax_rate_id ?? ''}
-          onChange={(e) => onTaxChange(e.target.value ? Number(e.target.value) : null)}
-          title="Tax rate"
-        >
-          <option value="">No tax</option>
-          {taxRates.map(t => (
-            <option key={t.id} value={t.id}>{t.name} {t.rate_percent}%</option>
-          ))}
-        </select>
-        <button
-          className="btn-primary text-xs px-3 py-1.5"
-          disabled={!dirty || saving}
-          onClick={() => onSave(Number(draft))}
-        >{saving ? 'Saving…' : 'Save'}</button>
-      </div>
-      {price.default_price !== null && (
-        <div className="text-[10px] text-text-3 mt-1.5 flex items-center gap-2">
-          <span>Default: <span className="font-mono">{price.default_price}</span></span>
-          {price.is_overridden && (
-            <button
-              className="text-accent hover:underline"
-              onClick={() => { setDraft(String(price.default_price)); onSave(price.default_price as number) }}
-            >Reset to default</button>
-          )}
-        </div>
-      )}
-    </li>
-  )
-}
+// PricingTab + PriceLevelRow removed in BACK-2569 — pricing now edits inline
+// on the items list via the PriceCell component.
 
 // ── Modifiers tab (Story 5 / BACK-2521) ────────────────────────────────────
 // Shows currently attached modifier groups with detach + auto-show toggle.

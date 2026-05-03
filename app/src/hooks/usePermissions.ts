@@ -26,6 +26,10 @@ export interface MeUser {
   role_id:         number | null
   role_name:       string | null
   is_dev:          boolean
+  /** BACK-2563 — true if this user can pick the premium AI model in Pepper */
+  ai_premium_access?: boolean
+  /** BACK-2564 — configured tier→model-id mapping; set by admin in Settings → AI */
+  ai_models?:      { default: string; premium: string }
   /** Union permissions across all allowed markets — used for nav-level checks */
   permissions:     Partial<Record<Feature, AccessLevel>>
   /** null = unrestricted; otherwise list of allowed country IDs */

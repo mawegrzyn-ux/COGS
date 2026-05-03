@@ -4610,8 +4610,26 @@ router.post('/', async (req, res) => {
     return res.status(503).json({ error: { message: 'Anthropic API key is not configured. Add it in Settings → AI.' } });
   }
 
-  const { message, context = {}, history = [], sessionId, userEmail, userSub } = req.body;
+  const { message, context = {}, history = [], sessionId, userEmail, userSub, model: requestedTier } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: { message: 'message is required' } });
+
+  // BACK-2565 — resolve the requested tier ('default' | 'premium') to the
+  // configured Anthropic model ID, gating premium behind ai_premium_access.
+  // Defence: never trust the client. We re-check req.user.ai_premium_access
+  // even if the client sent { model: 'premium' }.
+  let modelId;
+  let modelTier = 'default';
+  try {
+    const { resolveModelForTier } = require('../helpers/aiModels');
+    const resolved = await resolveModelForTier(requestedTier, { userHasPremium: !!req.user?.ai_premium_access });
+    modelId   = resolved.modelId;
+    modelTier = resolved.tier;
+  } catch (err) {
+    if (err.statusCode === 403) {
+      return res.status(403).json({ error: { message: err.message, code: err.code } });
+    }
+    return res.status(500).json({ error: { message: 'Failed to resolve AI model: ' + err.message } });
+  }
 
   // ── Monthly token allowance check ────────────────────────────────────────────
   const allowance = await checkTokenAllowance(userSub || req.user?.sub);
@@ -4662,16 +4680,18 @@ router.post('/', async (req, res) => {
   const boundExecuteTool = (name, input, send) => executeTool(name, input, send, userCtxWithLang);
 
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
-    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res, model: modelId });
 
-  // Log to DB (best-effort)
+  // Log to DB (best-effort) — includes model tier so usage can be split by
+  // Haiku / Opus per user (Story 6 / BACK-2568).
   pool.query(
     `INSERT INTO mcogs_ai_chat_log
-       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id, model_id, model_tier)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [message, responseText, JSON.stringify(toolsCalled), JSON.stringify(context),
      tokensIn, tokensOut, errorMsg,
-     userEmail || null, userSub || null, sessionId || null]
+     userEmail || null, userSub || null, sessionId || null,
+     modelId, modelTier]
   ).catch(e => console.error('[ai-chat] log error:', e.message));
 });
 
@@ -4802,19 +4822,31 @@ router.get('/my-usage', async (req, res) => {
     const userSub      = req.user?.sub;
 
     let periodTokens = 0;
+    let byTier = { default: 0, premium: 0 };
     if (userSub) {
+      // BACK-2568 — break out tokens by tier so the frontend can render a
+      // per-model usage chip alongside the rollup. Single query — group by
+      // tier with a fallback bucket for legacy rows that have NULL model_tier.
       const { rows } = await pool.query(`
-        SELECT COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
+        SELECT COALESCE(model_tier, 'default')::text AS tier,
+               COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
         FROM   mcogs_ai_chat_log
         WHERE  user_sub = $1 AND created_at >= $2
+        GROUP  BY COALESCE(model_tier, 'default')
       `, [userSub, periodStart.toISOString()]);
-      periodTokens = Number(rows[0]?.total || 0);
+      for (const r of rows) {
+        const n = Number(r.total || 0);
+        periodTokens += n;
+        if (r.tier === 'premium') byTier.premium += n;
+        else                      byTier.default += n;
+      }
     }
 
     res.json({
       period_start:  periodStart.toISOString(),
       next_reset:    nextReset.toISOString(),
       period_tokens: periodTokens,
+      by_tier:       byTier,
       limit:         globalLimit,
       remaining:     globalLimit > 0 ? Math.max(0, globalLimit - periodTokens) : null,
       exceeded:      globalLimit > 0 && periodTokens >= globalLimit,
@@ -4861,7 +4893,9 @@ router.get('/usage', async (req, res) => {
         ORDER BY 1 ASC
       `),
 
-      // Per-user breakdown — top 20 by total tokens, including current billing period
+      // Per-user breakdown — top 20 by total tokens, including current billing period.
+      // BACK-2568 — also expose tokens by tier so admins can see Haiku vs Opus
+      // spend per user when deciding whether to grant premium access.
       pool.query(`
         SELECT
           COALESCE(user_email, user_sub, 'unknown')  AS user_label,
@@ -4870,6 +4904,10 @@ router.get('/usage', async (req, res) => {
           COALESCE(SUM(tokens_out), 0)::bigint       AS tokens_out,
           COALESCE(SUM(CASE WHEN created_at >= $1
             THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS period_tokens,
+          COALESCE(SUM(CASE WHEN model_tier = 'premium'
+            THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS premium_tokens,
+          COALESCE(SUM(CASE WHEN model_tier = 'premium' AND created_at >= $1
+            THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS premium_period_tokens,
           MAX(created_at)                            AS last_active
         FROM mcogs_ai_chat_log
         GROUP BY COALESCE(user_email, user_sub, 'unknown')

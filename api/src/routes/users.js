@@ -18,7 +18,7 @@ router.get('/', auth, adminRead, async (req, res) => {
     // PostgreSQL versions).
     const usersResult = await pool.query(`
       SELECT u.id, u.auth0_sub, u.email, u.name, u.picture,
-             u.status, u.is_dev, u.created_at, u.last_login_at,
+             u.status, u.is_dev, u.ai_premium_access, u.created_at, u.last_login_at,
              u.role_id, r.name AS role_name
       FROM   mcogs_users u
       LEFT JOIN mcogs_roles r ON r.id = u.role_id
@@ -184,7 +184,7 @@ router.put('/:id/scope', auth, admin, async (req, res) => {
 // Scope changes go through PUT /:id/scope so the audit trail is granular.
 router.put('/:id', auth, admin, async (req, res) => {
   const { id } = req.params;
-  const { status, role_id, is_dev } = req.body;
+  const { status, role_id, is_dev, ai_premium_access } = req.body;
 
   // Prevent self-disable
   if (Number(id) === req.user.id && status === 'disabled') {
@@ -199,6 +199,7 @@ router.put('/:id', auth, admin, async (req, res) => {
     if (status !== undefined)  { updates.push(`status = $${idx++}`);  vals.push(status); }
     if (role_id !== undefined) { updates.push(`role_id = $${idx++}`); vals.push(role_id); }
     if (is_dev  !== undefined) { updates.push(`is_dev  = $${idx++}`); vals.push(!!is_dev); }
+    if (ai_premium_access !== undefined) { updates.push(`ai_premium_access = $${idx++}`); vals.push(!!ai_premium_access); }
 
     if (updates.length === 0) {
       const { rows: [u] } = await pool.query('SELECT u.*, r.name AS role_name FROM mcogs_users u LEFT JOIN mcogs_roles r ON r.id=u.role_id WHERE u.id=$1', [id]);

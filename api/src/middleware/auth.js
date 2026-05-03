@@ -330,6 +330,7 @@ async function requireAuth(req, res, next) {
       role_id:         dbUser.role_id,
       role_name:       dbUser.role_name,
       is_dev:          !!dbUser.is_dev,
+      ai_premium_access: !!dbUser.ai_premium_access,
       permissions,
       allowedCountries, // null = unrestricted, number[] = restricted
       scopedAccess:    scoped.scopedAccess, // { country_id: { roleId, roleName, permissions } }

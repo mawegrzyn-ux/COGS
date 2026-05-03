@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
 import { useVoiceInput } from '../hooks/useVoiceInput'
 import { useVoiceOutput } from '../hooks/useVoiceOutput'
+import { usePermissions } from '../hooks/usePermissions'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -15,6 +16,8 @@ interface Message {
   fileName?: string
   /** Set when an Excel export was triggered during this message */
   downloadFile?: { filename: string }
+  /** BACK-2566 — model id that produced this assistant message (Haiku / Opus / etc.) */
+  modelId?: string
 }
 
 interface ChatSession {
@@ -28,6 +31,8 @@ interface ChatSession {
 
 interface MyUsage {
   period_tokens: number
+  /** BACK-2568 — period tokens split by model tier */
+  by_tier?:      { default: number; premium: number }
   limit:         number
   remaining:     number | null
   exceeded:      boolean
@@ -397,6 +402,16 @@ function ChatPanel({
                   ))}
                 </div>
               ) : null}
+              {/* BACK-2566 — per-assistant-message model badge */}
+              {msg.role === 'assistant' && msg.modelId && (
+                <div className="mb-1">
+                  <span
+                    className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(0,0,0,0.05)', color: 'var(--text-3)' }}
+                    title={msg.modelId}
+                  >{msg.modelId.includes('opus') ? '✨ Opus' : msg.modelId.includes('sonnet') ? 'Sonnet' : 'Haiku'}</span>
+                </div>
+              )}
               {msg.downloadFile && (
                 <div className="flex items-center gap-1.5 mt-1.5 mb-0.5 text-xs px-2 py-1 rounded"
                   style={{ background: 'rgba(20,106,52,0.12)', color: 'var(--accent-dark)' }}>
@@ -549,6 +564,27 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
   isMobile?: boolean
 }) {
   const { user, getAccessTokenSilently } = useAuth0()
+  const { user: meUser } = usePermissions()
+  const hasPremium = !!meUser?.ai_premium_access
+  const aiModelsCfg = meUser?.ai_models || { default: 'claude-haiku-4-5-20251001', premium: 'claude-opus-4-7' }
+
+  // BACK-2566 — selected model tier (default | premium). Persists to
+  // localStorage so the picker remembers the user's preference across reloads.
+  // Hidden entirely when the user does not have premium access.
+  const [modelTier, setModelTier] = useState<'default' | 'premium'>(() => {
+    try {
+      const stored = window.localStorage.getItem('pepper-model-tier')
+      return stored === 'premium' ? 'premium' : 'default'
+    } catch { return 'default' }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('pepper-model-tier', modelTier) } catch { /* ignore */ }
+  }, [modelTier])
+  // If the admin revokes premium mid-session, snap back to default so the
+  // server does not 403 every chat request.
+  useEffect(() => {
+    if (!hasPremium && modelTier === 'premium') setModelTier('default')
+  }, [hasPremium, modelTier])
 
   // Returns { Authorization: 'Bearer <token>' } for every authenticated fetch
   const authHeader = useCallback(async () => {
@@ -744,6 +780,7 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
         form.append('context',   JSON.stringify(context))
         form.append('history',   JSON.stringify(history))
         form.append('sessionId', sessionId)
+        form.append('model',     modelTier)
         if (user?.email)   form.append('userEmail',  user.email)
         if (user?.sub)     form.append('userSub',    user.sub)
         res = await fetch(`${API_BASE}/ai-upload`, { method: 'POST', body: form, headers: await authHeader() })
@@ -756,6 +793,7 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
             sessionId,
             userEmail: user?.email ?? null,
             userSub:   user?.sub   ?? null,
+            model:     modelTier,
           }),
         })
       }
@@ -806,6 +844,16 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
               // Feed sentence-buffered TTS so voice output tracks the stream
               // in real time. Hook is a no-op when toggle is off.
               tts.feed(event.text)
+            }
+            if (event.type === 'model') {
+              // BACK-2566 — server announces which model is producing this
+              // response. Stamp the in-flight assistant message so the per-
+              // message badge appears before the first text token arrives.
+              setMessages(prev => {
+                const msgs = [...prev]
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], modelId: event.model }
+                return msgs
+              })
             }
             if (event.type === 'tool') {
               setToolLabel(event.name)
@@ -1049,10 +1097,30 @@ export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen
           <CogIcon size={26} color="#fff" />
           <div>
             <div className="font-semibold text-sm leading-tight">Pepper</div>
-            <div className="text-xs opacity-75">Powered by Claude</div>
+            <div className="text-xs opacity-75">
+              {hasPremium ? (
+                <>{modelTier === 'premium' ? '✨ Smart' : 'Fast'} — {modelTier === 'premium' ? aiModelsCfg.premium : aiModelsCfg.default}</>
+              ) : (
+                <>Powered by Claude</>
+              )}
+            </div>
           </div>
         </div>
       <div className="flex items-center gap-1">
+        {/* BACK-2566 — model tier picker (only visible when premium granted) */}
+        {hasPremium && (
+          <select
+            value={modelTier}
+            onChange={(e) => setModelTier(e.target.value as 'default' | 'premium')}
+            disabled={streaming}
+            className="text-[11px] font-semibold rounded px-1.5 py-1 mr-1 cursor-pointer border-0"
+            style={{ background: 'rgba(255,255,255,0.18)', color: '#fff' }}
+            title={`Active: ${modelTier === 'premium' ? aiModelsCfg.premium : aiModelsCfg.default}`}
+          >
+            <option value="default" style={{ color: '#000' }}>Fast</option>
+            <option value="premium" style={{ color: '#000' }}>✨ Smart</option>
+          </select>
+        )}
         {/* Dock-mode toggles — hidden on mobile (full-viewport sheet only) */}
         {!isMobile && (
           <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>

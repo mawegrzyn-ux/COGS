@@ -2367,6 +2367,12 @@ function AiTab() {
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
   const [savingLimit,        setSavingLimit]        = useState(false)
+  // BACK-2564 — configurable AI tier model IDs (default + premium).
+  const [modelDefault,      setModelDefault]      = useState<string>('claude-haiku-4-5-20251001')
+  const [modelPremium,      setModelPremium]      = useState<string>('claude-opus-4-7')
+  const [modelDefaultSaved, setModelDefaultSaved] = useState<string>('claude-haiku-4-5-20251001')
+  const [modelPremiumSaved, setModelPremiumSaved] = useState<string>('claude-opus-4-7')
+  const [savingModels,      setSavingModels]      = useState(false)
   const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
   const [usage,            setUsage]            = useState<UsageData | null>(null)
   const [usageLoading,     setUsageLoading]     = useState(false)
@@ -2390,6 +2396,11 @@ function AiTab() {
         setDirectives(dir)
         setDirectivesSaved(dir)
         setClaudeCodeKey(keyData?.key ?? null)
+        const aiModels = (settings as { ai_models?: { default?: string; premium?: string } } | null)?.ai_models || {}
+        const md = aiModels.default || 'claude-haiku-4-5-20251001'
+        const mp = aiModels.premium || 'claude-opus-4-7'
+        setModelDefault(md); setModelDefaultSaved(md)
+        setModelPremium(mp); setModelPremiumSaved(mp)
         setDerivedDirectives({
           directives: Array.isArray(derived?.directives) ? derived.directives : [],
           derived_at: derived?.derived_at || null,
@@ -2433,6 +2444,26 @@ function AiTab() {
       setToast({ message: err.message || 'Failed to save', type: 'error' })
     } finally {
       setSavingLimit(false)
+    }
+  }
+
+  async function handleSaveModels() {
+    const md = modelDefault.trim()
+    const mp = modelPremium.trim()
+    if (!md.startsWith('claude-') || !mp.startsWith('claude-')) {
+      setToast({ message: 'Model IDs must look like Anthropic model IDs (claude-…)', type: 'error' })
+      return
+    }
+    setSavingModels(true)
+    try {
+      await api.patch('/settings', { ai_models: { default: md, premium: mp } })
+      setModelDefaultSaved(md)
+      setModelPremiumSaved(mp)
+      setToast({ message: 'AI tier models saved — applies to next chat session', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingModels(false)
     }
   }
 
@@ -3007,6 +3038,66 @@ function AiTab() {
         />
       )}
 
+      {/* ── AI Model Tiers (BACK-2564) ──────────────────────────────────────
+          Two configurable tiers — default (cheap) and premium (newest). Tier
+          IDs are stored on mcogs_settings.data.ai_models so the deployment
+          owner can promote to whichever Anthropic flagship is current
+          without a code deploy. Per-user access to the premium tier is
+          granted from Configuration → Users & Roles. */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">AI Model Tiers</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Pepper supports two model tiers. Users without premium access only see the default model. Promote to a newer Anthropic model here when one ships — no code deploy needed.
+        </p>
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-text-2 mb-1.5">Default tier (cheap, fast)</label>
+              <input
+                className="input w-full font-mono text-sm"
+                value={modelDefault}
+                onChange={e => setModelDefault(e.target.value)}
+                placeholder="claude-haiku-4-5-20251001"
+              />
+              <p className="text-[11px] text-text-3 mt-1">Used for every user. Burns the monthly token cap at the lowest rate.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-text-2 mb-1.5">Premium tier (newest, smart)</label>
+              <input
+                className="input w-full font-mono text-sm"
+                value={modelPremium}
+                onChange={e => setModelPremium(e.target.value)}
+                placeholder="claude-opus-4-7"
+              />
+              <p className="text-[11px] text-text-3 mt-1">Granted per-user via the AI Premium toggle in Users & Roles. ~5× cost per token.</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div className="text-xs text-text-3">
+              {modelDefault !== modelDefaultSaved || modelPremium !== modelPremiumSaved ? (
+                <span className="text-amber-600 font-medium">● unsaved changes</span>
+              ) : (
+                <>Saved. Applies to the next chat session each user opens.</>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {(modelDefault !== modelDefaultSaved || modelPremium !== modelPremiumSaved) && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-sm"
+                  onClick={() => { setModelDefault(modelDefaultSaved); setModelPremium(modelPremiumSaved) }}
+                  disabled={savingModels}
+                >Discard</button>
+              )}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm"
+                onClick={handleSaveModels}
+                disabled={savingModels || (modelDefault === modelDefaultSaved && modelPremium === modelPremiumSaved)}
+              >{savingModels ? 'Saving…' : 'Save tier models'}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* ── Monthly Token Allowance ── */}
       <div className="mt-8 pt-6 border-t border-border">
         <h2 className="text-base font-bold text-text-1 mb-1">Monthly Token Allowance</h2>
@@ -3267,6 +3358,7 @@ interface AppUser {
   role_id:       number | null
   role_name:     string | null
   is_dev:        boolean
+  ai_premium_access: boolean
   scope: ScopeRow[]
   created_at:    string
   last_login_at: string | null
@@ -3423,6 +3515,20 @@ function UsersTab() {
       // Revert on error
       setUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_dev: u.is_dev } : x))
       setToast({ message: err.message || 'Failed to update dev access', type: 'error' })
+    }
+  }
+
+  // BACK-2567 — toggle AI premium tier access. Same optimistic+rollback
+  // pattern as handleToggleDev.
+  async function handleTogglePremium(u: AppUser) {
+    const next = !u.ai_premium_access
+    setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ai_premium_access: next } : x))
+    try {
+      await api.put(`/users/${u.id}`, { ai_premium_access: next })
+      setToast({ message: next ? `${u.name || u.email} granted AI premium access` : `AI premium access removed from ${u.name || u.email}`, type: 'success' })
+    } catch (err: any) {
+      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ai_premium_access: u.ai_premium_access } : x))
+      setToast({ message: err.message || 'Failed to update AI premium access', type: 'error' })
     }
   }
 
@@ -3620,6 +3726,18 @@ function UsersTab() {
                         onClick={() => handleToggleDev(u)}
                       >
                         {'</>'}
+                      </button>
+                      {/* BACK-2567 — AI Premium tier toggle */}
+                      <button
+                        className={`p-1.5 rounded transition-colors text-xs font-bold leading-none
+                          ${u.ai_premium_access
+                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                            : 'hover:bg-surface-2 text-text-3 hover:text-amber-600'
+                          }`}
+                        title={u.ai_premium_access ? 'Revoke AI premium access (premium model burns the monthly token cap ~5× faster)' : 'Grant AI premium access (lets the user pick the premium model in Pepper)'}
+                        onClick={() => handleTogglePremium(u)}
+                      >
+                        ✨
                       </button>
                       <button
                         className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"

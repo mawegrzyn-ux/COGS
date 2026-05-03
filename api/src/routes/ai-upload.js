@@ -199,9 +199,25 @@ router.post('/', (req, res, next) => {
   let history = [];
   try { context = JSON.parse(req.body.context || '{}'); } catch {}
   try { history = JSON.parse(req.body.history || '[]'); } catch {}
-  const sessionId  = req.body.sessionId  || null;
-  const userEmail  = req.body.userEmail  || null;
-  const userSub    = req.body.userSub    || null;
+  const sessionId    = req.body.sessionId  || null;
+  const userEmail    = req.body.userEmail  || null;
+  const userSub      = req.body.userSub    || null;
+  const requestedTier = req.body.model || 'default';
+
+  // BACK-2565 — same model tier resolution + access gate as /api/ai-chat.
+  let modelId;
+  let modelTier = 'default';
+  try {
+    const { resolveModelForTier } = require('../helpers/aiModels');
+    const resolved = await resolveModelForTier(requestedTier, { userHasPremium: !!req.user?.ai_premium_access });
+    modelId   = resolved.modelId;
+    modelTier = resolved.tier;
+  } catch (err) {
+    if (err.statusCode === 403) {
+      return res.status(403).json({ error: { message: err.message, code: err.code } });
+    }
+    return res.status(500).json({ error: { message: 'Failed to resolve AI model: ' + err.message } });
+  }
 
   // ── Monthly token allowance check ────────────────────────────────────────────
   const allowance = await checkTokenAllowance(userSub || req.user?.sub);
@@ -332,12 +348,12 @@ router.post('/', (req, res, next) => {
   const boundExecuteTool = (name, input, send) => executeTool(name, input, send, userCtxWithLang);
 
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
-    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res, model: modelId });
 
   pool.query(
     `INSERT INTO mcogs_ai_chat_log
-       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id, model_id, model_tier)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       message || `[file: ${file?.originalname}]`,
       responseText,
@@ -349,6 +365,8 @@ router.post('/', (req, res, next) => {
       userEmail,
       userSub,
       sessionId,
+      modelId,
+      modelTier,
     ]
   ).catch(e => console.error('[ai-upload] log error:', e.message));
 });

@@ -78,7 +78,8 @@ router.get('/', async (req, res, next) => {
               si.name      AS sales_item_name,
               si.item_type,
               si.image_url AS si_image_url,
-              cat.name     AS category
+              cat.name     AS category,
+              (SELECT COUNT(*)::int FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
        FROM   mcogs_menu_sales_items msi
        JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
        LEFT JOIN mcogs_categories cat ON cat.id = si.category_id
@@ -226,6 +227,35 @@ router.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── POST /menu-sales-items/reorder ──────────────────────────────────────────
+// BACK-2572 — drag-drop reorder. Body: { menu_id, order: [msi_id, ...] }
+// Updates sort_order positions inside a single transaction. Order indices
+// start at 0 to match the existing default for new items.
+router.post('/reorder', async (req, res, next) => {
+  const { menu_id, order } = req.body;
+  if (!menu_id) return res.status(400).json({ error: { message: 'menu_id is required' } });
+  if (!Array.isArray(order) || order.length === 0) {
+    return res.status(400).json({ error: { message: 'order must be a non-empty array of menu_sales_item ids' } });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < order.length; i++) {
+      await client.query(
+        `UPDATE mcogs_menu_sales_items SET sort_order = $1 WHERE id = $2 AND menu_id = $3`,
+        [i, order[i], menu_id]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, count: order.length });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 // ─── PUT /menu-sales-items/:id/prices ─────────────────────────────────────────
 // Upsert a single price level override
 router.put('/:id/prices', async (req, res, next) => {
@@ -290,9 +320,11 @@ async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
 
   const mgIds = mgRows.map(r => r.modifier_group_id);
   // Pull qty + linked recipe yield so we can compute per-option cost.
+  // price_addon is the catalog-level baseline price; per-menu/per-level
+  // overrides come through priceMap below (BACK-2573).
   const { rows: optRows } = await pool.query(
     `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
-            mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty,
+            mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty, mo.price_addon,
             r.yield_qty AS recipe_yield_qty
      FROM   mcogs_modifier_options mo
      LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
@@ -343,6 +375,7 @@ async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
     optByMg[o.modifier_group_id].push({
       id: o.id, name: o.name, display_name: o.display_name || null,
       item_type: o.item_type, qty: Number(o.qty || 1),
+      price_addon: Number(o.price_addon || 0),
       cost,
       prices: priceMap[o.id] || {},
     });
@@ -377,7 +410,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
   const stepIds = steps.map(s => s.id);
   const { rows: opts } = await pool.query(
     `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type,
-            cso.recipe_id, cso.ingredient_id, cso.manual_cost,
+            cso.recipe_id, cso.ingredient_id, cso.manual_cost, cso.price_addon,
             r.yield_qty AS recipe_yield_qty
      FROM   mcogs_combo_step_options cso
      LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
@@ -419,7 +452,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
     if (optMgIds.length) {
       const { rows: modOptRows } = await pool.query(
         `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
-                mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty,
+                mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty, mo.price_addon,
                 r.yield_qty AS recipe_yield_qty
          FROM   mcogs_modifier_options mo
          LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
@@ -471,6 +504,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
         const groupOpts = rawOpts.map(o => ({
           id: o.id, name: o.name, display_name: o.display_name || null,
           item_type: o.item_type, qty: Number(o.qty || 1),
+          price_addon: Number(o.price_addon || 0),
           cost: computeModCost(o, M),
           prices: modPriceMap[o.id] || {},
         }));
@@ -494,6 +528,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
     if (!optByStep[o.combo_step_id]) optByStep[o.combo_step_id] = [];
     optByStep[o.combo_step_id].push({
       id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type,
+      price_addon: Number(o.price_addon || 0),
       cost: computeOptCost(o),
       prices: priceMap[o.id] || {},
       modifier_groups: optModMap[o.id] || [],
