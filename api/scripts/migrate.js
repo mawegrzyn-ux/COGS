@@ -4269,12 +4269,26 @@ const migrations = [
      {"type":"changed","description":"BACK-2652: Menu Builder + Add new picker shortcut no longer opens a new tab. It now stashes the menu + item type in sessionStorage and same-tab navigates to the source module (/recipes for recipe, /inventory for ingredient, /sales-items?new=combo for combo, /sales-items?new=manual for manual). The source page auto-opens its Create modal and renders a sticky ReturnToMenuBuilderBanner at the top while the user builds the entity at their own pace — multi-step flows like recipes-with-variants and combos-with-steps-and-modifiers are fully supported because the banner does not constrain the source modules Save / Cancel buttons."},
      {"type":"added","description":"New shared component ReturnToMenuBuilderBanner reads the handoff + pending-attach state from sessionStorage and shows two states: Awaiting save while the user is still building, then + Add <name> to <menu> once the source module saves. Click attaches the new entity to the originating menu (wrapping recipe / ingredient / combo in a fresh sales-item where needed via POST /sales-items, then POST /menu-sales-items) and bounces back to /menu-builder?menu=X&attached=Y. Cancel button on the banner clears the handoff without attaching anything."},
      {"type":"added","description":"New helper module app/src/lib/menuBuilderHandoff.ts owns the sessionStorage keys (menu-builder-handoff + menu-builder-pending-attach), exposes typed setters / getters, fires a custom event so the same-tab banner flips state without polling, and TTLs stale handoffs after 24 hours so an abandoned flow does not haunt the UI."},
-     {"type":"changed","description":"Menu Builder mount now reads ?menu=<id> + ?attached=<msi_id> on return: the menu= half overrides the localStorage-restored selection so the user lands on the originating menu, and the attached= half surfaces a confirmation toast Added \"<name>\" to <menu>. Both params are stripped from the URL after consumption so a reload does not re-fire the toast."},
+     {"type":"changed","description":"Menu Builder mount now reads ?menu=<id> + ?attached=<msi_id> on return: the menu= half overrides the localStorage-restored selection so the user lands on the originating menu, and the attached= half surfaces a confirmation toast Added <name> to <menu>. Both params are stripped from the URL after consumption so a reload does not re-fire the toast."},
      {"type":"added","description":"Recipes / Inventory / Sales Items pages each: (a) mount ReturnToMenuBuilderBanner at the top of the layout, (b) auto-open their Create modal when ?new= is set AND a handoff is present (the handoff guard means a stray ?new= is a no-op), and (c) call setPendingAttach after a successful new-entity save so the banner flips into Add-to-menu state. Sales Items handles ?new=combo (opens Combo create modal on combos tab) and ?new=manual (opens Sales Item modal pre-selected to manual on items tab). The IngredientsTab gains autoOpenNew + onAutoOpenNewConsumed props; SalesItemsPage gains a parallel newManualMode flag alongside the existing newComboMode."}
    ]'::jsonb
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-03' AND title = 'Menu Builder — Seamless Add new with Return-to-Menu-Builder banner'
+   )`,
+
+  // ── Step 170i: Flip BUG-1164 to resolved (170h JSONB parse fix) ──────────
+  `UPDATE mcogs_bugs SET status = 'resolved', updated_at = NOW()
+   WHERE key = 'BUG-1164' AND status <> 'resolved'`,
+
+  // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[
+     {"type":"fixed","description":"BUG-1164: Migration step 170h failed on production with invalid input syntax for type json (Token < is invalid). Cause: changelog description used a single-backslash escape sequence inside a JS template literal, which JavaScript collapses to a bare double-quote before PostgreSQL parses the JSON string — so the inner quote closed the string prematurely and the next character (an angle bracket) was unparseable. Same failure mode as BUG-1035. Removed the unnecessary inner quotes from the placeholder text (they were just emphasis around the name and menu placeholders). Added scripts/_validate-changelog.js — a one-shot Node validator that simulates JS template-literal evaluation on every mcogs_changelog INSERT in migrate.js and runs JSON.parse on the result. Pre-flight validation is now mandatory in the EOS protocol before any changelog commit."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Deploy fix — migration step 170h JSONB parse'
    )`,
 ];
 
