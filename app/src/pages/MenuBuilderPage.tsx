@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
+import { PageHeader, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -670,99 +670,6 @@ export default function MenuBuilderPage() {
     }
   }, [api, selectedMenu, items, loadItems])
 
-  // Story 4 — Combo builder save sequence. Creates the combo shell, the
-  // wrapping sales item, the menu link, and every step + option in order.
-  // Not transactional across the API boundary; if a step / option POST fails
-  // partway, we surface the error and leave the partial combo in place so
-  // the user can retry from the catalog (or delete the half-built combo
-  // from the Sales Items page).
-  const createComboAndAttach = useCallback(async (def: {
-    name: string
-    category_id: number | null
-    description: string | null
-    image_url: string | null
-    steps: Array<{
-      name: string
-      min_select: number
-      max_select: number
-      allow_repeat: boolean
-      auto_select: boolean
-      options: Array<{
-        name: string
-        item_type: 'recipe' | 'ingredient' | 'manual'
-        recipe_id: number | null
-        ingredient_id: number | null
-        manual_cost: number | null
-        price_addon: number
-        qty: number
-      }>
-    }>
-  }): Promise<boolean> => {
-    if (!selectedMenu) return false
-    try {
-      // 1) Create the combo shell
-      const combo = await api.post('/combos', {
-        name:        def.name,
-        description: def.description,
-        category_id: def.category_id,
-        image_url:   def.image_url,
-      }) as { id: number; name: string }
-
-      // 2) Create the wrapping sales item pointing at the new combo
-      const newSi = await api.post('/sales-items', {
-        item_type:    'combo',
-        name:         def.name,
-        category_id:  def.category_id,
-        description:  def.description,
-        image_url:    def.image_url,
-        combo_id:     combo.id,
-      }) as SalesItemRow
-
-      // 3) Attach to the active menu
-      const nextSort = items.length ? Math.max(...items.map(i => i.sort_order)) + 1 : 0
-      await api.post('/menu-sales-items', {
-        menu_id:       selectedMenu.id,
-        sales_item_id: newSi.id,
-        sort_order:    nextSort,
-      })
-
-      // 4) Steps + options in order
-      for (let stepIdx = 0; stepIdx < def.steps.length; stepIdx++) {
-        const s = def.steps[stepIdx]
-        const step = await api.post(`/combos/${combo.id}/steps`, {
-          name:         s.name,
-          min_select:   s.min_select,
-          max_select:   s.max_select,
-          allow_repeat: s.allow_repeat,
-          auto_select:  s.auto_select,
-          sort_order:   stepIdx,
-        }) as { id: number }
-
-        for (let optIdx = 0; optIdx < s.options.length; optIdx++) {
-          const o = s.options[optIdx]
-          await api.post(`/combos/${combo.id}/steps/${step.id}/options`, {
-            name:          o.name,
-            item_type:     o.item_type,
-            recipe_id:     o.recipe_id,
-            ingredient_id: o.ingredient_id,
-            manual_cost:   o.manual_cost,
-            price_addon:   o.price_addon,
-            qty:           o.qty,
-            sort_order:    optIdx,
-          })
-        }
-      }
-
-      setToast({ message: `Combo “${def.name}” created with ${def.steps.length} step${def.steps.length === 1 ? '' : 's'}`, type: 'success' })
-      loadItems(selectedMenu.id)
-      return true
-    } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message || 'Failed to create combo'
-      setToast({ message: `${msg} — partial combo may have been saved; check Sales Items.`, type: 'error' })
-      return false
-    }
-  }, [api, selectedMenu, items, loadItems])
-
   // Remove an item from the menu (does NOT delete the sales item itself)
   const removeItem = useCallback(async (msi: MenuSalesItem) => {
     if (!selectedMenu) return
@@ -894,10 +801,6 @@ export default function MenuBuilderPage() {
               onCreateAndAttach={async (payload) => {
                 const result = await createAndAttach(payload)
                 if (result) setPanelOpen(false)
-              }}
-              onCreateComboAndAttach={async (def) => {
-                const ok = await createComboAndAttach(def)
-                if (ok) setPanelOpen(false)
               }}
               onAskReuse={(existing, onReuse, onCreateNew) =>
                 setReuseConfirm({ existing, onReuse, onCreateNew })
@@ -1508,7 +1411,7 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (w: number
 // ── Add-item side panel ─────────────────────────────────────────────────────
 
 function AddItemPanel({
-  menu, currentItemIds, addMode, setAddMode, width, onResize, onAttach, onCreateAndAttach, onCreateComboAndAttach, onAskReuse, onClose,
+  menu, currentItemIds, addMode, setAddMode, width, onResize, onAttach, onCreateAndAttach, onAskReuse, onClose,
 }: {
   menu: Menu
   currentItemIds: number[]
@@ -1529,7 +1432,6 @@ function AddItemPanel({
     image_url?: string | null
     description?: string | null
   }) => void | Promise<void>
-  onCreateComboAndAttach: (def: ComboDef) => void | Promise<void>
   onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
   onClose: () => void
 }) {
@@ -1617,7 +1519,6 @@ function AddItemPanel({
             onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
             onAttachExisting={onAttach}
             onCreateAndAttach={onCreateAndAttach}
-            onCreateComboAndAttach={onCreateComboAndAttach}
             onAskReuse={onAskReuse}
             onCancel={onClose}
           />
@@ -1704,7 +1605,7 @@ function SearchExistingTab({
 // stubs awaiting BACK-2519 / BACK-2520.
 
 function CreateNewTab({
-  menu, catalog, categories, onCategoryCreated, onAttachExisting, onCreateAndAttach, onCreateComboAndAttach, onAskReuse, onCancel,
+  menu, catalog, categories, onCategoryCreated, onAttachExisting, onCreateAndAttach, onAskReuse, onCancel,
 }: {
   menu: Menu
   catalog: SalesItemRow[]
@@ -1723,7 +1624,6 @@ function CreateNewTab({
     image_url?: string | null
     description?: string | null
   }) => void | Promise<void>
-  onCreateComboAndAttach: (def: ComboDef) => void | Promise<void>
   onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
   onCancel: () => void
 }) {
@@ -2474,8 +2374,6 @@ function EditItemPanel({
                 categories={categories}
                 onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
                 onPatch={saveSiPatch}
-                onReload={loadAll}
-                onToast={onToast}
                 api={api}
               />
             )}
@@ -3348,18 +3246,15 @@ function ComboStepOptionEditor({
 // fields and on change for everything else.
 
 function SalesItemDetailsForm({
-  si, categories, onCategoryCreated, onPatch, onReload, onToast, api,
+  si, categories, onCategoryCreated, onPatch, api,
 }: {
   si: FullSalesItem
   categories: CategoryRow[]
   onCategoryCreated: (c: CategoryRow) => void
   onPatch: (patch: Partial<FullSalesItem>) => void | Promise<void>
-  onReload: () => void | Promise<void>
-  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
   api: {
     post: (p: string, b: unknown) => Promise<unknown>;
     get: (p: string) => Promise<unknown>;
-    put: (p: string, b: unknown) => Promise<unknown>;
   }
 }) {
   // Recipe / ingredient pickers — lazy-loaded on demand for the relevant types.
