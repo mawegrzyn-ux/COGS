@@ -112,6 +112,12 @@ interface CountryPriceLevel {
   price_level_id: number
   price_level_name: string
   is_enabled: boolean
+  // BACK-2673 — tax mapping for this country+level combo. Populated by
+  // mcogs_country_level_tax → mcogs_country_tax_rates. Null when the
+  // operator has not assigned a tax rate to this level for the country.
+  tax_rate_id?:   number | null
+  tax_rate_name?: string | null
+  tax_rate?:      number | null   // e.g. 20 means 20%, stored NUMERIC(8,4)
 }
 
 // TaxRate interface removed in BACK-2569 — inline price cells are tax-rate-
@@ -1050,8 +1056,9 @@ function ItemsList({
             </div>
           </div>
 
-          {/* BACK-2638 — cost + COGS% are stacked beneath the price input
-              within each price-level cell (no separate Cost column). */}
+          {/* BACK-2638 + BACK-2673 — each level cell is a 3-column row:
+              tax (assigned country+level tax %)  ·  price input  ·  cost+COGS% stack.
+              Tax shows the configured rate from mcogs_country_level_tax. */}
           {enabledPriceLevels.map(lvl => {
             const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
             const cellKey = `${it.id}:${lvl.price_level_id}`
@@ -1059,8 +1066,18 @@ function ItemsList({
             const hasCost = cost != null && Number.isFinite(cost) && cost > 0
             const sell = Number(price?.sell_price ?? 0)
             const cogsPct = (hasCost && sell > 0) ? (cost / sell) * 100 : null
+            const taxRate = lvl.tax_rate
+            const hasTax  = taxRate != null && Number.isFinite(Number(taxRate))
             return (
-              <div key={lvl.price_level_id} onClick={(e) => e.stopPropagation()} className="shrink-0">
+              <div
+                key={lvl.price_level_id}
+                onClick={(e) => e.stopPropagation()}
+                className="shrink-0 flex items-center gap-1.5"
+              >
+                <span
+                  className="shrink-0 w-9 text-right text-[10px] font-mono text-text-3"
+                  title={hasTax ? `${lvl.tax_rate_name || 'Tax'} · ${Number(taxRate).toFixed(2)}%` : 'No tax assigned for this level in this market'}
+                >{hasTax ? `${Number(taxRate).toFixed(0)}%` : '—'}</span>
                 <PriceCell
                   value={price?.sell_price ?? 0}
                   isOverride={price?.is_overridden ?? false}
@@ -1068,7 +1085,7 @@ function ItemsList({
                   saving={savingPriceCells.has(cellKey)}
                   onSave={(v) => onPriceSave(it, lvl, v)}
                 />
-                <div className="text-right pr-1 -mt-0.5 font-mono leading-tight">
+                <div className="shrink-0 w-14 text-right font-mono leading-tight">
                   <div className="text-[10px] text-text-2">
                     {hasCost ? `${currencySymbol}${cost.toFixed(2)}` : '\u2014'}
                   </div>
@@ -1128,7 +1145,11 @@ function ItemsList({
           <span className="shrink-0 w-10" />
           <span className="flex-1 min-w-0">Item</span>
           {enabledPriceLevels.map(lvl => (
-            <span key={lvl.price_level_id} className="shrink-0 w-24 text-right" title="Sell price · cost · COGS%">{lvl.price_level_name}</span>
+            <span
+              key={lvl.price_level_id}
+              className="shrink-0 w-[14.5rem] text-right pr-[3.75rem]"
+              title="Tax % · sell price · cost / COGS%"
+            >{lvl.price_level_name}</span>
           ))}
           <span className="shrink-0 w-20 text-right">Modifiers</span>
           <span className="shrink-0 w-14 text-right" />

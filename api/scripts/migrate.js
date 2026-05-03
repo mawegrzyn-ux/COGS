@@ -4281,6 +4281,22 @@ const migrations = [
   `UPDATE mcogs_bugs SET status = 'resolved', updated_at = NOW()
    WHERE key = 'BUG-1164' AND status <> 'resolved'`,
 
+  // ── Step 170k: Flip BACK-2673 to done (tax + cost layout in price cell) ──
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2673' AND status <> 'done'`,
+
+  // ── Step 170l: Changelog — May 03 — Tax + cost beside the price ──────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Menu Builder — Tax before price, cost + COGS% beside it', '[
+     {"type":"changed","description":"BACK-2673: Each per-level price cell now lays out horizontally — Tax % on the left, the sell-price input in the middle, cost stacked above COGS% on the right. Replaces the previous below-the-input stack so the operator can see all four numbers without vertical scanning. Tax is the assigned country + level rate from mcogs_country_level_tax; it shows an em-dash when no rate is assigned for the level in this market. Hover title on the tax cell reveals the rate name and exact percentage."},
+     {"type":"added","description":"GET /api/country-price-levels/:countryId now joins mcogs_country_level_tax + mcogs_country_tax_rates and returns tax_rate_id + tax_rate_name + tax_rate alongside the existing price_level_id / price_level_name / is_enabled. Frontend CountryPriceLevel type extended to match. No additional API calls — the tax lookup piggybacks on the existing per-menu price-level fetch."},
+     {"type":"changed","description":"Items list column header for each price level widened from w-24 to w-58 to fit the tax · price · cost layout, with right-padding so the level name still aligns over the price input. Header tooltip updated to read Tax % · sell price · cost / COGS%."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Menu Builder — Tax before price, cost + COGS% beside it'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

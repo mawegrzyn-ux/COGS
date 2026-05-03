@@ -43,10 +43,17 @@ router.get('/:countryId', async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT p.id                                   AS price_level_id,
               p.name                                 AS price_level_name,
-              COALESCE(cpl.is_enabled, TRUE)         AS is_enabled
+              COALESCE(cpl.is_enabled, TRUE)         AS is_enabled,
+              ctr.id                                 AS tax_rate_id,
+              ctr.name                               AS tax_rate_name,
+              ctr.rate                               AS tax_rate
        FROM   mcogs_price_levels p
        LEFT   JOIN mcogs_country_price_levels cpl
               ON cpl.price_level_id = p.id AND cpl.country_id = $1
+       LEFT   JOIN mcogs_country_level_tax clt
+              ON clt.price_level_id = p.id AND clt.country_id = $1
+       LEFT   JOIN mcogs_country_tax_rates ctr
+              ON ctr.id = clt.tax_rate_id
        ORDER  BY p.name`,
       [countryId]
     );
