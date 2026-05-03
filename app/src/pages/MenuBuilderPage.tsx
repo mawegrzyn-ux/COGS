@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
+import { PageHeader, Modal, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 
 // ── Types ───────────────────────────────────────────────────────────────────
