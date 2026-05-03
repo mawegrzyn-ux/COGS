@@ -4244,6 +4244,20 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-03' AND title = 'Menu Builder — COGS column, manual picker, Add new shortcuts'
    )`,
+
+  // ── Step 170e: Flip BACK-2651 to done (price-cell cost + COGS% stack) ─────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2651' AND status <> 'done'`,
+
+  // ── Step 170f: Changelog — May 03 — Cost + COGS% folded into the price ───
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Menu Builder — Cost + COGS% folded into the price cell', '[
+     {"type":"changed","description":"BACK-2651: Menu Builder items list drops the standalone Cost column. Each per-level price cell now stacks the sell-price input on top, the cost in the market currency just below it (₹20.46), and the COGS% under that (1.9%). Saves horizontal space and keeps cost / sell-price / margin together for each level. Column header tooltip on the level name now reads Sell price · cost · COGS%."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Menu Builder — Cost + COGS% folded into the price cell'
+   )`,
 ];
 
 async function runMigrations(pool) {

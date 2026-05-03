@@ -1011,25 +1011,15 @@ function ItemsList({
             </div>
           </div>
 
-          {/* BACK-2638 — cost column. Read-only; cost is computed server-side. */}
-          {(() => {
-            const cost = costByMsi[it.id]
-            const hasCost = cost != null && Number.isFinite(cost) && cost > 0
-            return (
-              <div className="shrink-0 w-20 text-right text-xs font-mono">
-                {hasCost
-                  ? <span className="text-text-1">{currencySymbol}{cost.toFixed(2)}</span>
-                  : <span className="text-text-3">—</span>}
-              </div>
-            )
-          })()}
-
+          {/* BACK-2638 — cost + COGS% are stacked beneath the price input
+              within each price-level cell (no separate Cost column). */}
           {enabledPriceLevels.map(lvl => {
             const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
             const cellKey = `${it.id}:${lvl.price_level_id}`
             const cost = costByMsi[it.id]
+            const hasCost = cost != null && Number.isFinite(cost) && cost > 0
             const sell = Number(price?.sell_price ?? 0)
-            const cogsPct = (cost && sell > 0) ? (cost / sell) * 100 : null
+            const cogsPct = (hasCost && sell > 0) ? (cost / sell) * 100 : null
             return (
               <div key={lvl.price_level_id} onClick={(e) => e.stopPropagation()} className="shrink-0">
                 <PriceCell
@@ -1039,9 +1029,14 @@ function ItemsList({
                   saving={savingPriceCells.has(cellKey)}
                   onSave={(v) => onPriceSave(it, lvl, v)}
                 />
-                {cogsPct != null && (
-                  <div className="text-[9px] text-text-3 text-right pr-1 -mt-0.5 font-mono">{cogsPct.toFixed(1)}%</div>
-                )}
+                <div className="text-right pr-1 -mt-0.5 font-mono leading-tight">
+                  <div className="text-[10px] text-text-2">
+                    {hasCost ? `${currencySymbol}${cost.toFixed(2)}` : '\u2014'}
+                  </div>
+                  {cogsPct != null && (
+                    <div className="text-[9px] text-text-3">{cogsPct.toFixed(1)}%</div>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -1093,9 +1088,8 @@ function ItemsList({
           <span className="shrink-0 w-6" />
           <span className="shrink-0 w-10" />
           <span className="flex-1 min-w-0">Item</span>
-          <span className="shrink-0 w-20 text-right" title="Cost per portion in market currency">Cost</span>
           {enabledPriceLevels.map(lvl => (
-            <span key={lvl.price_level_id} className="shrink-0 w-24 text-right">{lvl.price_level_name}</span>
+            <span key={lvl.price_level_id} className="shrink-0 w-24 text-right" title="Sell price · cost · COGS%">{lvl.price_level_name}</span>
           ))}
           <span className="shrink-0 w-20 text-right">Modifiers</span>
           <span className="shrink-0 w-14 text-right" />
