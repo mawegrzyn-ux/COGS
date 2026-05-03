@@ -4258,6 +4258,24 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-03' AND title = 'Menu Builder — Cost + COGS% folded into the price cell'
    )`,
+
+  // ── Step 170g: Flip BACK-2652 to done (seamless Add new flow + banner) ────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2652' AND status <> 'done'`,
+
+  // ── Step 170h: Changelog — May 03 — Seamless Add new + Return banner ─────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Menu Builder — Seamless Add new with Return-to-Menu-Builder banner', '[
+     {"type":"changed","description":"BACK-2652: Menu Builder + Add new picker shortcut no longer opens a new tab. It now stashes the menu + item type in sessionStorage and same-tab navigates to the source module (/recipes for recipe, /inventory for ingredient, /sales-items?new=combo for combo, /sales-items?new=manual for manual). The source page auto-opens its Create modal and renders a sticky ReturnToMenuBuilderBanner at the top while the user builds the entity at their own pace — multi-step flows like recipes-with-variants and combos-with-steps-and-modifiers are fully supported because the banner does not constrain the source modules Save / Cancel buttons."},
+     {"type":"added","description":"New shared component ReturnToMenuBuilderBanner reads the handoff + pending-attach state from sessionStorage and shows two states: Awaiting save while the user is still building, then + Add <name> to <menu> once the source module saves. Click attaches the new entity to the originating menu (wrapping recipe / ingredient / combo in a fresh sales-item where needed via POST /sales-items, then POST /menu-sales-items) and bounces back to /menu-builder?menu=X&attached=Y. Cancel button on the banner clears the handoff without attaching anything."},
+     {"type":"added","description":"New helper module app/src/lib/menuBuilderHandoff.ts owns the sessionStorage keys (menu-builder-handoff + menu-builder-pending-attach), exposes typed setters / getters, fires a custom event so the same-tab banner flips state without polling, and TTLs stale handoffs after 24 hours so an abandoned flow does not haunt the UI."},
+     {"type":"changed","description":"Menu Builder mount now reads ?menu=<id> + ?attached=<msi_id> on return: the menu= half overrides the localStorage-restored selection so the user lands on the originating menu, and the attached= half surfaces a confirmation toast Added \"<name>\" to <menu>. Both params are stripped from the URL after consumption so a reload does not re-fire the toast."},
+     {"type":"added","description":"Recipes / Inventory / Sales Items pages each: (a) mount ReturnToMenuBuilderBanner at the top of the layout, (b) auto-open their Create modal when ?new= is set AND a handoff is present (the handoff guard means a stray ?new= is a no-op), and (c) call setPendingAttach after a successful new-entity save so the banner flips into Add-to-menu state. Sales Items handles ?new=combo (opens Combo create modal on combos tab) and ?new=manual (opens Sales Item modal pre-selected to manual on items tab). The IngredientsTab gains autoOpenNew + onAutoOpenNewConsumed props; SalesItemsPage gains a parallel newManualMode flag alongside the existing newComboMode."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Menu Builder — Seamless Add new with Return-to-Menu-Builder banner'
+   )`,
 ];
 
 async function runMigrations(pool) {

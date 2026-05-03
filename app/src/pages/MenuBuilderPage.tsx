@@ -16,9 +16,11 @@
 // =============================================================================
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
+import { setHandoff, type HandoffItemType } from '../lib/menuBuilderHandoff'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -376,20 +378,38 @@ export default function MenuBuilderPage() {
     onCreateNew: () => void
   } | null>(null)
 
+  // BACK-2652 — pick up ?menu=<id>&attached=<msi_id> set by the
+  // ReturnToMenuBuilderBanner so we land on the originating menu and
+  // surface a toast confirming the new item was added. The menu= half
+  // overrides the localStorage-restored menu for this navigation. Both
+  // params are consumed once and stripped from the URL so a reload
+  // doesn't re-fire the toast.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const returnedMenuParam     = searchParams.get('menu')
+  const returnedAttachedParam = searchParams.get('attached')
+
   // Persist last-selected menu across reloads so the page reopens where the
-  // user left off.
+  // user left off. The ?menu= URL param wins if present (set by the banner).
   useEffect(() => {
     try {
+      // ?menu= takes precedence over localStorage so a return-from-source
+      // hands the user back to the right menu even if localStorage is stale.
+      if (returnedMenuParam) {
+        const id = Number(returnedMenuParam)
+        if (Number.isFinite(id)) {
+          ;(window as unknown as { __mbRestoreId?: number }).__mbRestoreId = id
+          return
+        }
+      }
       const stored = window.localStorage.getItem('menu-builder-selected-menu')
       if (stored) {
         const id = Number(stored)
         if (Number.isFinite(id)) {
-          // Hold the id for restoration after menus arrive.
           ;(window as unknown as { __mbRestoreId?: number }).__mbRestoreId = id
         }
       }
     } catch { /* ignore */ }
-  }, [])
+  }, [returnedMenuParam])
 
   // Load menus on mount
   useEffect(() => {
@@ -441,6 +461,25 @@ export default function MenuBuilderPage() {
     if (selectedMenu) loadItems(selectedMenu.id)
     else setItems([])
   }, [selectedMenu, loadItems])
+
+  // BACK-2652 — once the menu items have loaded after a return from the
+  // source-module banner, find the freshly-attached msi by id, show a
+  // success toast, and strip both params from the URL so a reload doesn't
+  // re-fire the toast.
+  useEffect(() => {
+    if (!returnedAttachedParam || !selectedMenu) return
+    if (itemsLoading) return
+    const id = Number(returnedAttachedParam)
+    if (!Number.isFinite(id)) return
+    const found = items.find(it => it.id === id)
+    if (found) {
+      setToast({ message: `Added "${found.sales_item_name}" to ${selectedMenu.name}`, type: 'success' })
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('attached')
+    next.delete('menu')
+    setSearchParams(next, { replace: true })
+  }, [returnedAttachedParam, selectedMenu, items, itemsLoading, searchParams, setSearchParams])
 
   // BACK-2569 — load the price levels enabled for this menu's country so the
   // inline price columns only show columns the operator can actually use.
@@ -1804,10 +1843,24 @@ function RecipeOrIngredientPicker({
     }
   }, [mode, catalog, onAttachExisting, onCreateAndAttach, onAskReuse])
 
-  // BACK-2640 — "Add new" link routes to the relevant module in a new tab.
-  const addNewHref = mode === 'recipe'     ? '/recipes'
-                   : mode === 'ingredient' ? '/inventory'
-                   : '/sales-items'        // manual + combo both live here
+  // BACK-2652 — "Add new" stashes the menu + item type in sessionStorage and
+  // same-tab navigates to the source module's create flow. The source page
+  // mounts a ReturnToMenuBuilderBanner that lets the user attach the new
+  // entity back to this menu when they're done building it (recipes can take
+  // multiple steps for variants, combos for steps + modifiers, etc.).
+  const navigate = useNavigate()
+  const addNewTarget = mode === 'recipe'     ? '/recipes?new=1'
+                     : mode === 'ingredient' ? '/inventory?new=1'
+                     : mode === 'combo'      ? '/sales-items?new=combo'
+                     : '/sales-items?new=manual'
+  const onAddNew = () => {
+    setHandoff({
+      menu_id:   menu.id,
+      menu_name: menu.name,
+      item_type: mode as HandoffItemType,
+    })
+    navigate(addNewTarget)
+  }
   const placeholder = mode === 'recipe'     ? 'Search recipes…'
                     : mode === 'ingredient' ? 'Search ingredients…'
                     : mode === 'combo'      ? 'Search combos…'
@@ -1823,13 +1876,12 @@ function RecipeOrIngredientPicker({
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
-        <a
+        <button
+          type="button"
           className="btn-ghost text-xs px-3 py-1 shrink-0 inline-flex items-center"
-          href={addNewHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Open ${mode === 'recipe' ? 'Recipes' : mode === 'ingredient' ? 'Inventory' : 'Sales Items'} module in a new tab to create one`}
-        >+ Add new ↗</a>
+          onClick={onAddNew}
+          title={`Create a new ${mode === 'manual' ? 'manual sales item' : mode} and add it to ${menu.name}`}
+        >+ Add new</button>
       </div>
       {loading ? (
         <div className="flex justify-center py-8"><Spinner /></div>
@@ -1932,12 +1984,12 @@ function RecipeOrIngredientPicker({
       )}
       <p className="text-[11px] text-text-3 italic">
         {mode === 'recipe'
-          ? 'No recipe creation here — use + Add new ↗ to open the Recipes module.'
+          ? 'Click + Add new to create a recipe — you’ll come back here when it’s ready.'
           : mode === 'ingredient'
-            ? 'No ingredient creation here — use + Add new ↗ to open Inventory.'
+            ? 'Click + Add new to create an ingredient — you’ll come back here when it’s ready.'
             : mode === 'combo'
-              ? 'No combo creation here — use + Add new ↗ to open the Sales Items module.'
-              : 'No manual creation here — use + Add new ↗ to open the Sales Items module.'}
+              ? 'Click + Add new to create a combo — you’ll come back here when it’s ready.'
+              : 'Click + Add new to create a manual sales item — you’ll come back here when it’s ready.'}
       </p>
     </div>
   )

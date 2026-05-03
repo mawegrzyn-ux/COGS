@@ -5,6 +5,8 @@ import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 import TranslationEditor from '../components/TranslationEditor'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 import { useCurrency } from '../contexts/CurrencyContext'
 
@@ -352,6 +354,18 @@ export default function RecipesPage() {
     }
   }, [deepLinkRecipeId, recipes, loadDetail])
 
+  // BACK-2652 — when arriving from Menu Builder via ?new=1, open the create
+  // modal automatically. We only do this if a Menu Builder handoff is
+  // present, so a stray ?new=1 from elsewhere is harmless. Single-shot.
+  const newDeepLinkAppliedRef = useRef(false)
+  useEffect(() => {
+    if (newDeepLinkAppliedRef.current) return
+    if (searchParams.get('new') !== '1') return
+    if (!getHandoff()) return
+    newDeepLinkAppliedRef.current = true
+    setRecipeModal('new')
+  }, [searchParams])
+
   // Fetch menu assignments for this recipe across ALL markets
   useEffect(() => {
     if (!selected || !menus.length) {
@@ -660,6 +674,18 @@ export default function RecipesPage() {
         showToast('Recipe created')
         setRecipeModal(null)
         loadDetail(r.id)
+        // BACK-2652 — if the user came from Menu Builder via "+ Add new",
+        // signal the new recipe id to the ReturnToMenuBuilderBanner so it
+        // can flip into the "Add to menu" state. The banner reads this on
+        // its own custom event and on the next render.
+        if (getHandoff()?.item_type === 'recipe') {
+          setPendingAttach({
+            type: 'recipe',
+            id: r.id,
+            name: r.name,
+            category_id: r.category_id ?? null,
+          })
+        }
       } else {
         const r = await api.put(`/recipes/${(recipeModal as Recipe).id}`, payload)
         setRecipes(prev => prev.map(x => x.id === r.id ? { ...x, ...r } : x))
@@ -1311,6 +1337,7 @@ export default function RecipesPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <ReturnToMenuBuilderBanner />
       <PageHeader
         title="Recipes"
         subtitle={

@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { Field, Spinner, Modal, Toast, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Country    { id: number; name: string }
@@ -304,6 +307,7 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
 export default function SalesItemsPage() {
   const api = useApi()
   const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>('items')
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // ── Items-tab view mode — 'list' = existing dense table, 'excel' = editable
   //     spreadsheet grid with frozen Name/Type/Category + a column per price
@@ -428,6 +432,9 @@ export default function SalesItemsPage() {
   // ── Create / edit / delete ─────────────────────────────────────────────────
   const [siModal,       setSiModal]       = useState<'new' | null>(null)
   const [newComboMode,  setNewComboMode]  = useState(false)
+  // BACK-2652 — pre-select 'manual' when arriving from Menu Builder via
+  // ?new=manual so the user lands on the right tab inside the SalesItemModal.
+  const [newManualMode, setNewManualMode] = useState(false)
   const [saving,        setSaving]        = useState(false)
   const [deleting,      setDeleting]      = useState<SalesItem | null>(null)
 
@@ -442,7 +449,15 @@ export default function SalesItemsPage() {
       const full: SalesItem = await api.get(`/sales-items/${created.id}`)
       setSalesItems(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)))
       showToast('Sales Item created')
-      setSiModal(null); setNewComboMode(false)
+      setSiModal(null); setNewComboMode(false); setNewManualMode(false)
+      // BACK-2652 — flip the ReturnToMenuBuilderBanner into "+ Add to menu"
+      // state for the manual flow. (Combo is handled in saveCombo since the
+      // user creates the combo entity first; the sales-item wrapper is
+      // created by the banner click itself.)
+      const handoff = getHandoff()
+      if (handoff?.item_type === 'manual' && full.item_type === 'manual') {
+        setPendingAttach({ type: 'sales_item', id: full.id, name: full.name })
+      }
     } catch { showToast('Save failed') } finally { setSaving(false) }
   }
 
@@ -589,6 +604,32 @@ export default function SalesItemsPage() {
   const [comboDetailLoading, setComboDetailLoading] = useState(false)
   const [expandedStep,       setExpandedStep]       = useState<number | null>(null)
   const [comboModal,         setComboModal]         = useState<'new' | null>(null)
+
+  // BACK-2652 — when arriving from Menu Builder via ?new=combo or ?new=manual,
+  // auto-open the matching create modal. The handoff guard ensures a stray
+  // ?new= from elsewhere is a no-op so the user isn't surprised by a popped
+  // modal. Single-shot — params are stripped from the URL after consumption.
+  const newDeepLinkAppliedRef = useRef(false)
+  useEffect(() => {
+    if (newDeepLinkAppliedRef.current) return
+    const newParam = searchParams.get('new')
+    if (!newParam) return
+    if (!getHandoff()) return
+    newDeepLinkAppliedRef.current = true
+    if (newParam === 'combo') {
+      setActiveTab('combos')
+      setComboModal('new')
+    } else if (newParam === 'manual') {
+      setActiveTab('items')
+      setNewComboMode(false)
+      setNewManualMode(true)
+      setSiModal('new')
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
   // ── Combo side panel ─────────────────────────────────────────────────────
   const [comboPanelWidth,    setComboPanelWidth]    = useState(360)
   const [comboEditTarget,    setComboEditTarget]    = useState<ComboEditTarget>(null)
@@ -640,6 +681,13 @@ export default function SalesItemsPage() {
       setSelectedComboId(created.id)
       showToast('Combo created')
       setComboModal(null)
+      // BACK-2652 — let the user keep building combo steps + options + mods
+      // at their own pace. The banner flips into the "+ Add to menu" state
+      // immediately so they can attach whenever they're ready; the wrapping
+      // sales-item with item_type='combo' is created by the banner click.
+      if (getHandoff()?.item_type === 'combo' && created?.id) {
+        setPendingAttach({ type: 'combo', id: created.id, name: created.name })
+      }
     } catch { showToast('Save failed') } finally { setSavingCombo(false) }
   }
 
@@ -991,6 +1039,7 @@ export default function SalesItemsPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <ReturnToMenuBuilderBanner />
       {/* Header */}
       <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
         <div className="flex items-center justify-between mb-3">
@@ -2476,10 +2525,10 @@ export default function SalesItemsPage() {
         <SalesItemModal
           mode="new"
           initial={null}
-          defaultType={newComboMode ? 'combo' : undefined}
+          defaultType={newComboMode ? 'combo' : newManualMode ? 'manual' : undefined}
           recipes={recipes} ingredients={ingredients} combos={combos}
           onSave={saveSalesItem} saving={saving}
-          onClose={() => { setSiModal(null); setNewComboMode(false) }}
+          onClose={() => { setSiModal(null); setNewComboMode(false); setNewManualMode(false) }}
         />
       )}
 

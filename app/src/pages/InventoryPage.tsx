@@ -8,6 +8,8 @@ import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
 import type { GridColumn, GridOption } from '../components/DataGrid'
 import ImageUpload from '../components/ImageUpload'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
 import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -138,6 +140,9 @@ export default function InventoryPage() {
   // the Ingredients tab and opens the edit modal for that ingredient on
   // first load. Cleared after consumption.
   const [autoOpenEditIngId, setAutoOpenEditIngId] = useState<number | undefined>(undefined)
+  // BACK-2652 — when arriving from Menu Builder via ?new=1, switch to the
+  // Ingredients tab and open the create modal automatically. Single-shot.
+  const [autoOpenNewIng, setAutoOpenNewIng] = useState(false)
   // Sticky flag — once a + Quote auto-open has been triggered we keep
   // PriceQuotesTab mounted (hidden) for the rest of the page lifetime.
   // Without this, the wrapper unmounts the moment onAutoOpenConsumed clears
@@ -174,6 +179,19 @@ export default function InventoryPage() {
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
 
+  // BACK-2652 — ?new=1 from Menu Builder + active handoff → open the new
+  // ingredient modal on the Ingredients tab. The handoff guard makes a stray
+  // ?new=1 from elsewhere a no-op so the user isn't surprised.
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return
+    if (!getHandoff()) return
+    setTab('ingredients')
+    setAutoOpenNewIng(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
   // Single lightweight stats call for header badges — avoids full-table fetches just for counts
   useEffect(() => {
     api.get('/ingredients/stats').then((s: any) => {
@@ -199,6 +217,7 @@ export default function InventoryPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <ReturnToMenuBuilderBanner />
       <PageHeader
         title="Inventory"
         subtitle={
@@ -254,6 +273,8 @@ export default function InventoryPage() {
           }}
           autoOpenEditIngredientId={autoOpenEditIngId}
           onAutoOpenEditConsumed={() => setAutoOpenEditIngId(undefined)}
+          autoOpenNew={autoOpenNewIng}
+          onAutoOpenNewConsumed={() => setAutoOpenNewIng(false)}
         />}
         {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
 
@@ -614,7 +635,7 @@ function QuoteHoverPopover({ ing, onViewQuotes }: {
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
-function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, onAutoOpenEditConsumed }: {
+function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, onAutoOpenEditConsumed, autoOpenNew, onAutoOpenNewConsumed }: {
   onViewQuotes?: (id: number) => void
   /** Switch to the Quotes tab AND auto-open the Add Quote modal pre-filled
    *  with this ingredient. Triggered by the per-row `+ Quote` button. */
@@ -623,6 +644,10 @@ function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, on
    *  load. Used by Menu Builder's quick-edit modal "Open in Inventory" link. */
   autoOpenEditIngredientId?: number
   onAutoOpenEditConsumed?: () => void
+  /** BACK-2652 — auto-open the create-ingredient modal on mount. Used when
+   *  the user came from Menu Builder via the "+ Add new" picker shortcut. */
+  autoOpenNew?: boolean
+  onAutoOpenNewConsumed?: () => void
 }) {
   const api = useApi()
 
@@ -746,6 +771,16 @@ function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, on
       onAutoOpenEditConsumed?.()
     }
   }, [autoOpenEditIngredientId, ingredients, onAutoOpenEditConsumed])
+
+  // BACK-2652 — open the create modal on mount when the parent passes the
+  // single-shot autoOpenNew flag (set by InventoryPage when ?new=1 fires).
+  const autoOpenNewAppliedRef = useRef(false)
+  useEffect(() => {
+    if (!autoOpenNew || autoOpenNewAppliedRef.current) return
+    autoOpenNewAppliedRef.current = true
+    openAdd()
+    onAutoOpenNewConsumed?.()
+  }, [autoOpenNew, onAutoOpenNewConsumed])
 
   useEffect(() => {
     api.get('/allergens/ingredients').then((rows: { ingredient_id: number; code: string; status: string }[]) => {
@@ -980,6 +1015,17 @@ function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, on
           showToast('Ingredient and quote added')
         } else {
           showToast('Ingredient added')
+        }
+        // BACK-2652 — if the user came from Menu Builder, signal the new
+        // ingredient to the ReturnToMenuBuilderBanner so it flips into the
+        // "+ Add to menu" state.
+        if (newIng?.id && getHandoff()?.item_type === 'ingredient') {
+          setPendingAttach({
+            type: 'ingredient',
+            id: newIng.id,
+            name: newIng.name || form.name.trim(),
+            category_id: newIng.category_id ?? (Number(form.category_id) || null),
+          })
         }
       } else if (modal != null) {
         await api.put(`/ingredients/${(modal as Ingredient).id}`, payload)
