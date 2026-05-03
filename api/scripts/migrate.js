@@ -4227,6 +4227,23 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-03' AND title = 'Pepper — per-user model tier (cheap + premium switcher)'
    )`,
+
+  // ── Step 170c: Flip Menu Builder follow-up trio to done ───────────────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key IN ('BACK-2638','BACK-2639','BACK-2640')
+     AND status <> 'done'`,
+
+  // ── Step 170d: Changelog — May 03 — Menu Builder cost + manual + add-new ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Menu Builder — COGS column, manual picker, Add new shortcuts', '[
+     {"type":"added","description":"BACK-2638: Menu Builder items list now shows the cost per item in its own Cost column (market currency, two-decimal). Cost is sourced from /api/cogs/menu-sales/:menuId — fetched alongside /menu-sales-items on every load — and mapped by menu_sales_item id. Each per-level price cell now also renders a small COGS% beneath it (cost ÷ price × 100, rounded to one decimal); the percentage hides when the price is zero. Modifier rows and combo step-option rows still show their own price-addon column, unchanged."},
+     {"type":"changed","description":"BACK-2639: Manual sales items now use the same picker pattern as recipes / ingredients / combos in the Add new sales item side panel. The Manual tab lists every existing item_type=manual sales item from the catalog with its name, category, and image — pick one and it is attached straight to the menu via the existing onAttachExisting flow. The previous inline ManualItemForm (name + cost + category) is removed from the create path. Manual creation moves to the Sales Items module (consistent with the combo move in BACK-2627)."},
+     {"type":"added","description":"BACK-2640: Each picker tab in the Add new sales item side panel now shows a + Add new ↗ link next to the search input. Recipe → /recipes, Ingredient → /inventory, Combo → /sales-items, Manual → /sales-items. Links open in a new tab via target=_blank + rel=noopener,noreferrer so the operator can create an entity in the source module without losing their place in the menu builder. Empty-state and bottom-hint copy updated to point at the new shortcut."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Menu Builder — COGS column, manual picker, Add new shortcuts'
+   )`,
 ];
 
 async function runMigrations(pool) {

@@ -303,6 +303,10 @@ export default function MenuBuilderPage() {
   // BACK-2572 — drag-drop reorder state.
   const [dragId,    setDragId]    = useState<number | null>(null)
   const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // BACK-2638 — per-item cost (cost_per_portion in market currency) keyed by
+  // menu_sales_item_id. Populated from /api/cogs/menu-sales when the menu
+  // loads + after every items reload (so a price/recipe change refreshes).
+  const [costByMsi, setCostByMsi] = useState<Record<number, number>>({})
   // BACK-2573/2574 — per-row expansion of modifiers / combo structure.
   // expanded keyed by msi.id; subPrices cached by msi.id once fetched.
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
@@ -418,6 +422,18 @@ export default function MenuBuilderPage() {
       setToast({ message: 'Failed to load menu items', type: 'error' })
     } finally {
       setItemsLoading(false)
+    }
+    // BACK-2638 — fetch per-item cost in parallel. Best-effort: failure here
+    // just leaves the Cost column blank, the items list still renders.
+    try {
+      const cogs = await api.get(`/cogs/menu-sales/${menuId}`) as { items?: Array<{ menu_sales_item_id: number; cost_per_portion: number }> }
+      const map: Record<number, number> = {}
+      for (const it of cogs?.items || []) {
+        map[it.menu_sales_item_id] = Number(it.cost_per_portion) || 0
+      }
+      setCostByMsi(map)
+    } catch {
+      setCostByMsi({})
     }
   }, [api])
 
@@ -741,6 +757,8 @@ export default function MenuBuilderPage() {
                   savingOptionCells={savingOptionCells}
                   expandedInnerKeys={expandedInnerKeys}
                   onToggleInnerKey={toggleInnerKey}
+                  costByMsi={costByMsi}
+                  currencySymbol={selectedMenu.currency_symbol || selectedMenu.currency_code || ''}
                   onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
                   onOpenDetails={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'details' }) }}
                   onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'modifiers' }) }}
@@ -873,6 +891,7 @@ function ItemsList({
   dragId, dragOverId,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
   expandedInnerKeys, onToggleInnerKey,
+  costByMsi, currencySymbol,
   onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
@@ -889,6 +908,8 @@ function ItemsList({
   savingOptionCells: Set<string>
   expandedInnerKeys: Set<string>
   onToggleInnerKey: (key: string) => void
+  costByMsi: Record<number, number>
+  currencySymbol: string
   onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
   onOpenDetails: (it: MenuSalesItem) => void
   onOpenModifiers: (it: MenuSalesItem) => void
@@ -990,11 +1011,27 @@ function ItemsList({
             </div>
           </div>
 
+          {/* BACK-2638 — cost column. Read-only; cost is computed server-side. */}
+          {(() => {
+            const cost = costByMsi[it.id]
+            const hasCost = cost != null && Number.isFinite(cost) && cost > 0
+            return (
+              <div className="shrink-0 w-20 text-right text-xs font-mono">
+                {hasCost
+                  ? <span className="text-text-1">{currencySymbol}{cost.toFixed(2)}</span>
+                  : <span className="text-text-3">—</span>}
+              </div>
+            )
+          })()}
+
           {enabledPriceLevels.map(lvl => {
             const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
             const cellKey = `${it.id}:${lvl.price_level_id}`
+            const cost = costByMsi[it.id]
+            const sell = Number(price?.sell_price ?? 0)
+            const cogsPct = (cost && sell > 0) ? (cost / sell) * 100 : null
             return (
-              <div key={lvl.price_level_id} onClick={(e) => e.stopPropagation()}>
+              <div key={lvl.price_level_id} onClick={(e) => e.stopPropagation()} className="shrink-0">
                 <PriceCell
                   value={price?.sell_price ?? 0}
                   isOverride={price?.is_overridden ?? false}
@@ -1002,6 +1039,9 @@ function ItemsList({
                   saving={savingPriceCells.has(cellKey)}
                   onSave={(v) => onPriceSave(it, lvl, v)}
                 />
+                {cogsPct != null && (
+                  <div className="text-[9px] text-text-3 text-right pr-1 -mt-0.5 font-mono">{cogsPct.toFixed(1)}%</div>
+                )}
               </div>
             )
           })}
@@ -1053,6 +1093,7 @@ function ItemsList({
           <span className="shrink-0 w-6" />
           <span className="shrink-0 w-10" />
           <span className="flex-1 min-w-0">Item</span>
+          <span className="shrink-0 w-20 text-right" title="Cost per portion in market currency">Cost</span>
           {enabledPriceLevels.map(lvl => (
             <span key={lvl.price_level_id} className="shrink-0 w-24 text-right">{lvl.price_level_name}</span>
           ))}
@@ -1418,13 +1459,10 @@ function AddItemPanel({
   const [catalog, setCatalog] = useState<SalesItemRow[]>([])
   const [searchText, setSearchText] = useState('')
   const [catalogLoading, setCatalogLoading] = useState(false)
-  // Categories scoped to sales_items — used by both the manual capture form
-  // (Story 3) and any future create-new branch that needs a category dropdown.
-  const [categories, setCategories] = useState<CategoryRow[]>([])
 
   // Sales-item catalog: lazy-load on first open of either tab. Both tabs need
   // it (search-existing for picking, create-new for duplicate detection on
-  // the recipe / ingredient picker).
+  // the recipe / ingredient / combo / manual picker).
   useEffect(() => {
     if (catalog.length) return
     setCatalogLoading(true)
@@ -1433,14 +1471,6 @@ function AddItemPanel({
       .catch(() => { /* surfaced via empty state */ })
       .finally(() => setCatalogLoading(false))
   }, [api, catalog.length])
-
-  // Categories: load once on panel open. Filter to sales-item-scoped categories
-  // for the picker; CategoryPicker can still create new ones with for_sales_items.
-  useEffect(() => {
-    api.get('/categories?for_sales_items=true')
-      .then((d: CategoryRow[]) => setCategories(d || []))
-      .catch(() => { /* non-fatal */ })
-  }, [api])
 
   const filtered = useMemo(() => {
     const q = searchText.trim().toLowerCase()
@@ -1494,8 +1524,6 @@ function AddItemPanel({
           <CreateNewTab
             menu={menu}
             catalog={catalog}
-            categories={categories}
-            onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
             onAttachExisting={onAttach}
             onCreateAndAttach={onCreateAndAttach}
             onAskReuse={onAskReuse}
@@ -1584,12 +1612,10 @@ function SearchExistingTab({
 // stubs awaiting BACK-2519 / BACK-2520.
 
 function CreateNewTab({
-  menu, catalog, categories, onCategoryCreated, onAttachExisting, onCreateAndAttach, onAskReuse, onCancel,
+  menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse, onCancel,
 }: {
   menu: Menu
   catalog: SalesItemRow[]
-  categories: CategoryRow[]
-  onCategoryCreated: (c: CategoryRow) => void
   onAttachExisting: (si: SalesItemRow) => void | Promise<void>
   onCreateAndAttach: (payload: {
     item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
@@ -1642,27 +1668,18 @@ function CreateNewTab({
         </div>
       </div>
 
-      {/* Branch by type. BACK-2627 — combo joins recipe + ingredient as a
-          search-only picker. Manual stays its own form because there is
-          nothing to link to. */}
-      {(type === 'recipe' || type === 'ingredient' || type === 'combo') && (
-        <RecipeOrIngredientPicker
-          mode={type}
-          menu={menu}
-          catalog={catalog}
-          onAttachExisting={onAttachExisting}
-          onCreateAndAttach={onCreateAndAttach}
-          onAskReuse={onAskReuse}
-        />
-      )}
-
-      {type === 'manual' && (
-        <ManualItemForm
-          categories={categories}
-          onCategoryCreated={onCategoryCreated}
-          onCreateAndAttach={onCreateAndAttach}
-        />
-      )}
+      {/* Branch by type. BACK-2627 + BACK-2639 — every type uses the same
+          search-only picker. Manual lists existing item_type='manual' rows
+          from the catalog; new manuals are created in the Sales Items module
+          via the + Add new ↗ shortcut (BACK-2640). */}
+      <RecipeOrIngredientPicker
+        mode={type}
+        menu={menu}
+        catalog={catalog}
+        onAttachExisting={onAttachExisting}
+        onCreateAndAttach={onCreateAndAttach}
+        onAskReuse={onAskReuse}
+      />
 
       <div className="flex justify-end gap-2 pt-2">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
@@ -1679,10 +1696,11 @@ function CreateNewTab({
 function RecipeOrIngredientPicker({
   mode, menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse,
 }: {
-  // BACK-2627 — combo joins recipe + ingredient in this picker. All three
-  // are treated identically: pick an existing entity, the wrapping sales
-  // item is created and attached. Manual stays separate.
-  mode: 'recipe' | 'ingredient' | 'combo'
+  // BACK-2627 — combo joins recipe + ingredient in this picker.
+  // BACK-2639 — manual joins too. For manual, picking attaches the existing
+  // sales item directly (no wrapping needed since manual sales items are
+  // themselves the entity).
+  mode: 'recipe' | 'ingredient' | 'combo' | 'manual'
   menu: Menu
   catalog: SalesItemRow[]
   onAttachExisting: (si: SalesItemRow) => void | Promise<void>
@@ -1715,9 +1733,10 @@ function RecipeOrIngredientPicker({
   }, [api, menu.country_id])
 
   // Lazy-load whichever catalog matches the active mode. Cached locally so
-  // flipping between recipe ↔ ingredient ↔ combo doesn't refetch. The
-  // ingredient call is scoped to the menu's country so each row carries
-  // cost data.
+  // flipping between modes doesn't refetch. Ingredient call is scoped to
+  // the menu's country so each row carries cost data. Manual mode reuses
+  // the existing sales-item catalog (filtered to type='manual') so no
+  // separate fetch is needed.
   useEffect(() => {
     if (mode === 'recipe' && recipes === null) {
       setLoading(true)
@@ -1736,7 +1755,8 @@ function RecipeOrIngredientPicker({
     }
   }, [api, mode, recipes, ingredients, combos, reloadIngredients])
 
-  // Active source list + filter
+  // Active source list + filter. For manual, source is the page-level
+  // sales-item catalog filtered to type='manual'.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (mode === 'recipe') {
@@ -1747,17 +1767,26 @@ function RecipeOrIngredientPicker({
       const list = ingredients || []
       if (!q) return list.slice(0, 50)
       return list.filter(i => (i.name + ' ' + (i.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
-    } else {
-      // combo
+    } else if (mode === 'combo') {
       const list = combos || []
       if (!q) return list.slice(0, 50)
       return list.filter(c => (c.name + ' ' + (c.category_name || '') + ' ' + (c.description || '')).toLowerCase().includes(q)).slice(0, 50)
+    } else {
+      // manual — picker over existing manual sales items in the catalog
+      const list = catalog.filter(si => si.item_type === 'manual')
+      if (!q) return list.slice(0, 50)
+      return list.filter(s => (s.name + ' ' + (s.display_name || '') + ' ' + (s.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
     }
-  }, [mode, recipes, ingredients, combos, search])
+  }, [mode, recipes, ingredients, combos, catalog, search])
 
-  // Click a row → duplicate-detect against the existing sales-item catalog,
-  // then either reuse or create-and-attach.
-  const handlePick = useCallback((row: RecipeRow | IngredientRow | ComboRow) => {
+  // Click a row → for recipe / ingredient / combo: duplicate-detect against
+  // existing sales-item catalog, then reuse or create-and-attach. For
+  // manual: the row IS the sales item, attach directly.
+  const handlePick = useCallback((row: RecipeRow | IngredientRow | ComboRow | SalesItemRow) => {
+    if (mode === 'manual') {
+      onAttachExisting(row as SalesItemRow)
+      return
+    }
     const existing = catalog.find(si =>
       (mode === 'recipe'      && si.item_type === 'recipe'     && si.recipe_id     === row.id) ||
       (mode === 'ingredient'  && si.item_type === 'ingredient' && si.ingredient_id === row.id) ||
@@ -1781,15 +1810,33 @@ function RecipeOrIngredientPicker({
     }
   }, [mode, catalog, onAttachExisting, onCreateAndAttach, onAskReuse])
 
+  // BACK-2640 — "Add new" link routes to the relevant module in a new tab.
+  const addNewHref = mode === 'recipe'     ? '/recipes'
+                   : mode === 'ingredient' ? '/inventory'
+                   : '/sales-items'        // manual + combo both live here
+  const placeholder = mode === 'recipe'     ? 'Search recipes…'
+                    : mode === 'ingredient' ? 'Search ingredients…'
+                    : mode === 'combo'      ? 'Search combos…'
+                    : 'Search manual items…'
+
   return (
     <div className="space-y-3">
-      <input
-        className="input w-full"
-        autoFocus
-        placeholder={mode === 'recipe' ? 'Search recipes…' : 'Search ingredients…'}
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-      />
+      <div className="flex gap-2">
+        <input
+          className="input flex-1"
+          autoFocus
+          placeholder={placeholder}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <a
+          className="btn-ghost text-xs px-3 py-1 shrink-0 inline-flex items-center"
+          href={addNewHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Open ${mode === 'recipe' ? 'Recipes' : mode === 'ingredient' ? 'Inventory' : 'Sales Items'} module in a new tab to create one`}
+        >+ Add new ↗</a>
+      </div>
       {loading ? (
         <div className="flex justify-center py-8"><Spinner /></div>
       ) : filtered.length === 0 ? (
@@ -1797,28 +1844,40 @@ function RecipeOrIngredientPicker({
           {search
             ? 'No matches.'
             : mode === 'recipe'
-              ? 'No recipes yet — build one in the Recipes module.'
+              ? 'No recipes yet — click + Add new to create one.'
               : mode === 'ingredient'
-                ? 'No ingredients yet — add one in Inventory.'
-                : 'No combos yet — build one in the Sales Items module.'}
+                ? 'No ingredients yet — click + Add new to create one.'
+                : mode === 'combo'
+                  ? 'No combos yet — click + Add new to create one.'
+                  : 'No manual sales items yet — click + Add new to create one.'}
         </div>
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
           {filtered.map(row => {
-            const exists = catalog.some(si =>
-              (mode === 'recipe'      && si.recipe_id     === row.id) ||
-              (mode === 'ingredient'  && si.ingredient_id === row.id) ||
-              (mode === 'combo'       && si.combo_id      === row.id)
-            )
+            const exists = mode === 'manual'
+              ? false  // every manual row IS a sales item; picking attaches it directly
+              : catalog.some(si =>
+                  (mode === 'recipe'      && si.recipe_id     === row.id) ||
+                  (mode === 'ingredient'  && si.ingredient_id === row.id) ||
+                  (mode === 'combo'       && si.combo_id      === row.id)
+                )
             // BACK-2548 — for ingredient mode, surface market cost / "no quote" badges.
             const ingRow = mode === 'ingredient' ? (row as IngredientRow) : null
             const cost = ingRow?.market_cost_per_base_unit
             const hasQuote = !!ingRow?.has_market_quote
             const symbol = menu.currency_symbol || menu.currency_code || ''
             const comboRow = mode === 'combo' ? (row as ComboRow) : null
+            const manualRow = mode === 'manual' ? (row as SalesItemRow) : null
             const imageSrc = mode === 'ingredient'
               ? (ingRow?.image_url || null)
-              : (mode === 'combo' ? (comboRow?.image_url || null) : null)
+              : mode === 'combo'
+                ? (comboRow?.image_url || null)
+                : mode === 'manual'
+                  ? (manualRow?.image_url || null)
+                  : null
+            const displayName = mode === 'manual'
+              ? (manualRow?.display_name || manualRow?.name || row.name)
+              : row.name
             return (
               <li key={row.id} className="border-b border-border last:border-b-0">
                 <div
@@ -1831,9 +1890,9 @@ function RecipeOrIngredientPicker({
                     <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
                   )}
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-text-1 truncate">{row.name}</div>
+                    <div className="text-sm font-medium text-text-1 truncate">{displayName}</div>
                     <div className="text-[11px] text-text-3 truncate">
-                      {row.category_name || 'Uncategorised'}
+                      {('category_name' in row ? row.category_name : null) || 'Uncategorised'}
                       {mode === 'recipe' && 'yield_qty' in row && (
                         <> · yield {row.yield_qty}{row.yield_unit_abbr ? ' ' + row.yield_unit_abbr : ''}</>
                       )}
@@ -1879,10 +1938,12 @@ function RecipeOrIngredientPicker({
       )}
       <p className="text-[11px] text-text-3 italic">
         {mode === 'recipe'
-          ? 'No recipe creation here — build new recipes in the Recipes module.'
+          ? 'No recipe creation here — use + Add new ↗ to open the Recipes module.'
           : mode === 'ingredient'
-            ? 'No ingredient creation here — add new ingredients in Inventory.'
-            : 'No combo creation here — build new combos from the Sales Items module.'}
+            ? 'No ingredient creation here — use + Add new ↗ to open Inventory.'
+            : mode === 'combo'
+              ? 'No combo creation here — use + Add new ↗ to open the Sales Items module.'
+              : 'No manual creation here — use + Add new ↗ to open the Sales Items module.'}
       </p>
     </div>
   )
@@ -2042,159 +2103,10 @@ function AddQuoteInline({
   )
 }
 
-// ── Manual sales item form (Story 3 / BACK-2519) ───────────────────────────
-// Capture display name + manual_cost + image + description inline. Saves a
-// new mcogs_sales_items row of type=manual and attaches it to the menu in
-// one user action via createAndAttach (which fires both POSTs back-to-back).
-
-function ManualItemForm({
-  categories, onCategoryCreated, onCreateAndAttach,
-}: {
-  categories: CategoryRow[]
-  onCategoryCreated: (c: CategoryRow) => void
-  onCreateAndAttach: (payload: {
-    item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
-    name: string
-    display_name?: string | null
-    category_id?: number | null
-    manual_cost?: number | null
-    image_url?: string | null
-    description?: string | null
-  }) => void | Promise<void>
-}) {
-  const api = useApi()
-  // Story 7 — restore draft from sessionStorage on mount so an accidental
-  // panel close doesn't lose typed work.
-  const draftKey = 'menu-builder-manual-draft'
-  const initialDraft = (() => {
-    try {
-      const raw = window.sessionStorage.getItem(draftKey)
-      if (!raw) return null
-      return JSON.parse(raw) as { name: string; displayName: string; categoryId: string; manualCost: string; imageUrl: string | null; description: string }
-    } catch { return null }
-  })()
-  const [name,        setName]        = useState(initialDraft?.name || '')
-  const [displayName, setDisplayName] = useState(initialDraft?.displayName || '')
-  const [categoryId,  setCategoryId]  = useState<string>(initialDraft?.categoryId || '')
-  const [manualCost,  setManualCost]  = useState<string>(initialDraft?.manualCost || '')
-  const [imageUrl,    setImageUrl]    = useState<string | null>(initialDraft?.imageUrl || null)
-  const [description, setDescription] = useState(initialDraft?.description || '')
-  const [saving,      setSaving]      = useState(false)
-  const [error,       setError]       = useState<string | null>(null)
-  // Persist draft on every change.
-  useEffect(() => {
-    const draft = { name, displayName, categoryId, manualCost, imageUrl, description }
-    const isEmpty = !name && !displayName && !categoryId && !manualCost && !imageUrl && !description
-    try {
-      if (isEmpty) window.sessionStorage.removeItem(draftKey)
-      else         window.sessionStorage.setItem(draftKey, JSON.stringify(draft))
-    } catch { /* quota — ignore */ }
-  }, [name, displayName, categoryId, manualCost, imageUrl, description])
-
-  const canSave = name.trim().length > 0 && !saving
-
-  const submit = async () => {
-    setError(null)
-    if (!name.trim()) { setError('Name is required'); return }
-    const cost = manualCost === '' ? null : Number(manualCost)
-    if (manualCost !== '' && !Number.isFinite(cost)) {
-      setError('Manual cost must be a number')
-      return
-    }
-    setSaving(true)
-    try {
-      await onCreateAndAttach({
-        item_type:    'manual',
-        name:         name.trim(),
-        display_name: displayName.trim() || null,
-        category_id:  categoryId ? Number(categoryId) : null,
-        manual_cost:  cost,
-        image_url:    imageUrl || null,
-        description:  description.trim() || null,
-      })
-      // Clear draft + reset local state on successful save.
-      try { window.sessionStorage.removeItem(draftKey) } catch { /* ignore */ }
-      setName(''); setDisplayName(''); setCategoryId(''); setManualCost('')
-      setImageUrl(null); setDescription('')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <Field label="Name" required>
-        <input
-          className="input w-full"
-          autoFocus
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="e.g. Takeaway bag"
-        />
-      </Field>
-
-      <Field label="Display name" hint="Shown on menus / receipts. Falls back to Name if blank.">
-        <input
-          className="input w-full"
-          value={displayName}
-          onChange={e => setDisplayName(e.target.value)}
-        />
-      </Field>
-
-      <Field label="Category">
-        <CategoryPicker
-          value={categoryId}
-          onChange={setCategoryId}
-          categories={categories}
-          scope="for_sales_items"
-          onCategoryCreated={(c) => {
-            onCategoryCreated(c)
-            setCategoryId(String(c.id))
-          }}
-          apiPost={(p, b) => api.post(p, b)}
-        />
-      </Field>
-
-      <Field label="Manual cost" hint="Currency follows the menu's market. Type a number or expression (e.g. 0.25 + 0.10).">
-        <CalcInput
-          className="input w-full font-mono"
-          value={manualCost}
-          onChange={setManualCost}
-          placeholder="0.00"
-        />
-      </Field>
-
-      <Field label="Image">
-        <ImageUpload
-          value={imageUrl}
-          onChange={setImageUrl}
-          formKey="sales-item-manual"
-        />
-      </Field>
-
-      <Field label="Description">
-        <textarea
-          className="input w-full"
-          rows={2}
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-        />
-      </Field>
-
-      {error && (
-        <div className="text-xs text-rose-600 font-medium">{error}</div>
-      )}
-
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          className="btn-primary"
-          disabled={!canSave}
-          onClick={submit}
-        >{saving ? 'Saving…' : 'Create & add to menu'}</button>
-      </div>
-    </div>
-  )
-}
+// ── Manual sales item form — REMOVED (BACK-2639) ───────────────────────────
+// Manual sales items now use the same search-only picker as recipes /
+// ingredients / combos. Creating a new manual item is done from the Sales
+// Items module via the + Add new ↗ shortcut on the picker.
 
 // ── Edit-item side panel (Story 6 / BACK-2522) ─────────────────────────────
 // Opens when the user clicks an item row in the menu items list. Surfaces the
