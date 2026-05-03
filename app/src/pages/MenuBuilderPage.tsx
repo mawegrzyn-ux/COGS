@@ -217,6 +217,30 @@ interface CategoryRow {
   for_sales_items?: boolean
 }
 
+// BACK-2599 — full sales item from GET /api/sales-items/:id. Used by the
+// right-panel Details section so the operator can edit every field without
+// leaving Menu Builder.
+interface FullSalesItem {
+  id: number
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  name: string
+  display_name: string | null
+  category_id: number | null
+  category_name?: string | null
+  description: string | null
+  recipe_id: number | null
+  recipe_name?: string | null
+  ingredient_id: number | null
+  ingredient_name?: string | null
+  combo_id: number | null
+  combo_name?: string | null
+  manual_cost: number | null
+  image_url: string | null
+  sort_order: number
+  qty: number
+  modifier_groups?: AttachedModifierGroup[]
+}
+
 type SalesItemType = 'recipe' | 'ingredient' | 'manual' | 'combo'
 
 // Side-panel mode: search existing catalog vs. create-new walker
@@ -292,6 +316,28 @@ export default function MenuBuilderPage() {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [subPricesById, setSubPricesById] = useState<Record<number, SubPricesResp>>({})
   const [subPricesLoading, setSubPricesLoading] = useState<Set<number>>(new Set())
+  // BACK-2598 — inner expansion within an expanded item. Keys:
+  //   • `${msiId}:mg:${modifier_group_id}`     — modifier group
+  //   • `${msiId}:cs:${combo_step_id}`         — combo step
+  //   • `${msiId}:csmg:${cso_id}:${mg_id}`     — modifier group on a combo step option
+  // Default: not in the set → collapsed. Persists across reloads so the
+  // operator does not have to re-collapse every time.
+  const [expandedInnerKeys, setExpandedInnerKeys] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('menu-builder-expanded-inner-keys')
+      return new Set(raw ? JSON.parse(raw) : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('menu-builder-expanded-inner-keys', JSON.stringify([...expandedInnerKeys])) } catch { /* ignore */ }
+  }, [expandedInnerKeys])
+  const toggleInnerKey = useCallback((key: string) => {
+    setExpandedInnerKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }, [])
   // Per-cell saving for nested option price edits.
   const [savingOptionCells, setSavingOptionCells] = useState<Set<string>>(new Set())
   // Per-cell saving state — keyed by `${msi_id}:${price_level_id}` so each
@@ -793,6 +839,8 @@ export default function MenuBuilderPage() {
                   subPricesById={subPricesById}
                   subPricesLoading={subPricesLoading}
                   savingOptionCells={savingOptionCells}
+                  expandedInnerKeys={expandedInnerKeys}
+                  onToggleInnerKey={toggleInnerKey}
                   onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
                   onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it }) }}
                   onOpenModifierGroup={(it, mgid) => { setPanelOpen(false); setEditTarget({ kind: 'modifier-group', msi: it, modifierGroupId: mgid }) }}
@@ -926,6 +974,7 @@ function ItemsList({
   items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
   dragId, dragOverId,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
+  expandedInnerKeys, onToggleInnerKey,
   onPriceSave, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
@@ -940,6 +989,8 @@ function ItemsList({
   subPricesById: Record<number, SubPricesResp>
   subPricesLoading: Set<number>
   savingOptionCells: Set<string>
+  expandedInnerKeys: Set<string>
+  onToggleInnerKey: (key: string) => void
   onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
   onOpenModifiers: (it: MenuSalesItem) => void
   onOpenModifierGroup: (it: MenuSalesItem, modifierGroupId: number) => void
@@ -1065,6 +1116,8 @@ function ItemsList({
                 sub={sub}
                 enabledPriceLevels={enabledPriceLevels}
                 savingOptionCells={savingOptionCells}
+                expandedInnerKeys={expandedInnerKeys}
+                onToggleInnerKey={onToggleInnerKey}
                 onSaveOptionPrice={onSaveOptionPrice}
                 onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
                 onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
@@ -1123,109 +1176,139 @@ function ItemsList({
 // endpoint. Indented to make the hierarchy visually obvious.
 
 function ExpandedItemContent({
-  msiId, sub, enabledPriceLevels, savingOptionCells, onSaveOptionPrice,
+  msiId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
   onOpenModifierGroup, onOpenComboStep,
 }: {
   msiId: number
   sub: SubPricesResp
   enabledPriceLevels: CountryPriceLevel[]
   savingOptionCells: Set<string>
+  expandedInnerKeys: Set<string>
+  onToggleInnerKey: (key: string) => void
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
   onOpenModifierGroup: (modifierGroupId: number) => void
   onOpenComboStep: (comboStepId: number) => void
 }) {
   // Stable nested renderers — small helpers to keep the JSX tree readable.
-  const renderModGroup = (g: SubModifierGroup, indentPx: number) => (
-    <NestedGroup
-      key={g.modifier_group_id}
-      title={g.name}
-      subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`}
-      indentPx={indentPx}
-      onClick={() => onOpenModifierGroup(g.modifier_group_id)}
-    >
-      {g.options.map(o => (
-        <NestedOption
-          key={o.id}
-          title={o.display_name || o.name}
-          subtitle={`+${o.price_addon.toFixed(2)} addon`}
-          indentPx={indentPx + 16}
-        >
-          {enabledPriceLevels.map(lvl => {
-            const overrideKey = String(lvl.price_level_id)
-            const override = o.prices[overrideKey]
-            const value = override != null ? override : o.price_addon
-            const isOverride = override != null
-            const cellKey = `modifier:${msiId}:${o.id}:${lvl.price_level_id}`
-            return (
-              <PriceCell
-                key={lvl.price_level_id}
-                value={value}
-                isOverride={isOverride}
-                defaultPrice={o.price_addon}
-                saving={savingOptionCells.has(cellKey)}
-                onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
-              />
-            )
-          })}
-        </NestedOption>
-      ))}
-    </NestedGroup>
-  )
+  // BACK-2598 — modifier groups + combo steps are collapsed by default; the
+  // user toggles each individually via the caret on the header.
+  const renderModGroup = (g: SubModifierGroup, indentPx: number, parentKey?: string) => {
+    // parentKey distinguishes a top-level mod group (`mg:N`) from one nested
+    // under a combo step option (`csmg:OPT_ID:MG_ID`) so the collapse state
+    // is independent.
+    const innerKey = parentKey ? `${msiId}:${parentKey}:${g.modifier_group_id}` : `${msiId}:mg:${g.modifier_group_id}`
+    const open = expandedInnerKeys.has(innerKey)
+    return (
+      <NestedGroup
+        key={g.modifier_group_id}
+        title={g.name}
+        subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`}
+        indentPx={indentPx}
+        collapsed={!open}
+        onToggleCollapse={() => onToggleInnerKey(innerKey)}
+        onEdit={() => onOpenModifierGroup(g.modifier_group_id)}
+      >
+        {open && g.options.map(o => (
+          <NestedOption
+            key={o.id}
+            title={o.display_name || o.name}
+            subtitle={`+${o.price_addon.toFixed(2)} addon`}
+            indentPx={indentPx + 16}
+          >
+            {enabledPriceLevels.map(lvl => {
+              const overrideKey = String(lvl.price_level_id)
+              const override = o.prices[overrideKey]
+              const value = override != null ? override : o.price_addon
+              const isOverride = override != null
+              const cellKey = `modifier:${msiId}:${o.id}:${lvl.price_level_id}`
+              return (
+                <PriceCell
+                  key={lvl.price_level_id}
+                  value={value}
+                  isOverride={isOverride}
+                  defaultPrice={o.price_addon}
+                  saving={savingOptionCells.has(cellKey)}
+                  onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
+                />
+              )
+            })}
+          </NestedOption>
+        ))}
+      </NestedGroup>
+    )
+  }
 
   return (
     <div className="py-2">
       {/* Combo structure (BACK-2574) — only rendered for combo items */}
       {sub.item_type === 'combo' && sub.combo_steps.length > 0 && (
         <div>
-          {sub.combo_steps.map((step, idx) => (
-            <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
-              <button
-                type="button"
-                className="flex items-center gap-2 px-4 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors w-full text-left"
-                style={{ paddingLeft: 16 }}
-                onClick={() => onOpenComboStep(step.id)}
-                title="Edit step (settings + options)"
-              >
-                <span className="text-text-3">Step {idx + 1}</span>
-                <span className="text-accent">{step.name}</span>
-                <span className="text-text-3 font-mono">Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`}</span>
-                <span className="ml-auto text-accent text-[10px]">Edit ›</span>
-              </button>
-              {step.options.map(o => (
-                <div key={o.id}>
-                  <NestedOption
-                    title={o.display_name || o.name}
-                    subtitle={`Combo option · +${o.price_addon.toFixed(2)} addon`}
-                    indentPx={32}
+          {sub.combo_steps.map((step, idx) => {
+            // BACK-2598 — combo steps default collapsed.
+            const stepKey = `${msiId}:cs:${step.id}`
+            const stepOpen = expandedInnerKeys.has(stepKey)
+            return (
+              <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
+                <div className="flex items-center" style={{ paddingLeft: 16 }}>
+                  <button
+                    type="button"
+                    className="shrink-0 w-5 h-5 flex items-center justify-center text-text-3 hover:text-text-1 text-[10px]"
+                    onClick={() => onToggleInnerKey(stepKey)}
+                    title={stepOpen ? 'Collapse step' : 'Expand step'}
+                  >{stepOpen ? '▼' : '▶'}</button>
+                  <button
+                    type="button"
+                    className="flex-1 flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors text-left"
+                    onClick={() => onToggleInnerKey(stepKey)}
+                    title={stepOpen ? 'Collapse step' : 'Expand step'}
                   >
-                    {enabledPriceLevels.map(lvl => {
-                      const overrideKey = String(lvl.price_level_id)
-                      const override = o.prices[overrideKey]
-                      const value = override != null ? override : o.price_addon
-                      const isOverride = override != null
-                      const cellKey = `combo:${msiId}:${o.id}:${lvl.price_level_id}`
-                      return (
-                        <PriceCell
-                          key={lvl.price_level_id}
-                          value={value}
-                          isOverride={isOverride}
-                          defaultPrice={o.price_addon}
-                          saving={savingOptionCells.has(cellKey)}
-                          onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
-                        />
-                      )
-                    })}
-                  </NestedOption>
-                  {/* Per-step-option modifier groups (BACK-2574) */}
-                  {o.modifier_groups.length > 0 && (
-                    <div>
-                      {o.modifier_groups.map(g => renderModGroup(g, 48))}
-                    </div>
-                  )}
+                    <span className="text-text-3">Step {idx + 1}</span>
+                    <span className="text-accent">{step.name}</span>
+                    <span className="text-text-3 font-mono normal-case tracking-normal">· Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`} · {step.options.length} option{step.options.length === 1 ? '' : 's'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 text-accent text-[10px] hover:underline px-2"
+                    onClick={(e) => { e.stopPropagation(); onOpenComboStep(step.id) }}
+                    title="Edit step (settings + options)"
+                  >Edit ›</button>
                 </div>
-              ))}
-            </div>
-          ))}
+                {stepOpen && step.options.map(o => (
+                  <div key={o.id}>
+                    <NestedOption
+                      title={o.display_name || o.name}
+                      subtitle={`Combo option · +${o.price_addon.toFixed(2)} addon`}
+                      indentPx={48}
+                    >
+                      {enabledPriceLevels.map(lvl => {
+                        const overrideKey = String(lvl.price_level_id)
+                        const override = o.prices[overrideKey]
+                        const value = override != null ? override : o.price_addon
+                        const isOverride = override != null
+                        const cellKey = `combo:${msiId}:${o.id}:${lvl.price_level_id}`
+                        return (
+                          <PriceCell
+                            key={lvl.price_level_id}
+                            value={value}
+                            isOverride={isOverride}
+                            defaultPrice={o.price_addon}
+                            saving={savingOptionCells.has(cellKey)}
+                            onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
+                          />
+                        )
+                      })}
+                    </NestedOption>
+                    {/* Per-step-option modifier groups (BACK-2574) — collapsed by default */}
+                    {o.modifier_groups.length > 0 && (
+                      <div>
+                        {o.modifier_groups.map(g => renderModGroup(g, 64, `csmg:${o.id}`))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -1243,38 +1326,51 @@ function ExpandedItemContent({
   )
 }
 
-// Section header for a modifier group inside the expanded view. When onClick
-// is provided (BACK-2587), the header acts as a button that opens the group
-// editor in the right panel.
+// Section header for a modifier group inside the expanded view. The caret on
+// the left toggles collapse (BACK-2598); the Edit › pill on the right routes
+// to the group editor in the side panel (BACK-2587).
 function NestedGroup({
-  title, subtitle, indentPx, onClick, children,
+  title, subtitle, indentPx, collapsed, onToggleCollapse, onEdit, children,
 }: {
   title: string
   subtitle?: string
   indentPx: number
-  onClick?: () => void
+  collapsed?: boolean
+  onToggleCollapse?: () => void
+  onEdit?: () => void
   children: React.ReactNode
 }) {
   return (
     <div>
-      {onClick ? (
+      <div className="flex items-center" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
+        {onToggleCollapse ? (
+          <button
+            type="button"
+            className="shrink-0 w-5 h-5 flex items-center justify-center text-text-3 hover:text-text-1 text-[10px]"
+            onClick={onToggleCollapse}
+            title={collapsed ? 'Expand' : 'Collapse'}
+          >{collapsed ? '▶' : '▼'}</button>
+        ) : (
+          <span className="shrink-0 w-5" />
+        )}
         <button
           type="button"
-          className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors w-full text-left"
-          style={{ paddingLeft: indentPx, paddingRight: 16 }}
-          onClick={onClick}
-          title="Edit group (settings + options)"
+          className="flex-1 flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors text-left"
+          onClick={onToggleCollapse}
+          disabled={!onToggleCollapse}
         >
-          <span className="text-accent">{title}</span>
-          {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
-          <span className="ml-auto text-accent text-[10px]">Edit ›</span>
-        </button>
-      ) : (
-        <div className="flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
           <span>{title}</span>
           {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
-        </div>
-      )}
+        </button>
+        {onEdit && (
+          <button
+            type="button"
+            className="shrink-0 text-accent text-[10px] hover:underline px-2"
+            onClick={(e) => { e.stopPropagation(); onEdit() }}
+            title="Edit group (settings + options)"
+          >Edit ›</button>
+        )}
+      </div>
       {children}
     </div>
   )
@@ -2177,34 +2273,73 @@ function EditItemPanel({
 }) {
   const api = useApi()
   // BACK-2569 — Pricing tab removed. Pricing is now edited inline on the
-  // items list (one editable cell per country-enabled price level). The
-  // panel is single-purpose: modifier groups attached to this sales item.
+  // items list (one editable cell per country-enabled price level).
   // BACK-2549 — Markets tab also gone (managed from Sales Items only).
-  // Modifier-group state — what was previously the Modifiers tab is now the
-  // entire body.
+  // BACK-2599 — panel now has TWO sections: Details (full sales-item edit)
+  // and Modifier groups.
   const [allModGroups,    setAllModGroups]    = useState<ModifierGroup[]>([])
   const [attachedGroups,  setAttachedGroups]  = useState<AttachedModifierGroup[]>([])
   const [modsLoading,     setModsLoading]     = useState(false)
+  // BACK-2599 — full sales-item record for the Details section.
+  const [siFull, setSiFull] = useState<FullSalesItem | null>(null)
+  const [siLoading, setSiLoading] = useState(false)
+  const [categories, setCategories] = useState<CategoryRow[]>([])
 
-  // Load modifier-group catalog + currently attached groups on mount. Both
-  // refresh after every save so the attached list reflects server state.
-  const loadMods = useCallback(async () => {
+  // Load modifier-group catalog + the full sales item (which already returns
+  // attached modifier_groups in the same shape). One round-trip covers both.
+  const loadAll = useCallback(async () => {
     setModsLoading(true)
+    setSiLoading(true)
     try {
-      const [catalog, full] = await Promise.all([
+      const [catalog, full, cats] = await Promise.all([
         api.get('/modifier-groups') as Promise<ModifierGroup[]>,
-        api.get(`/sales-items/${msi.sales_item_id}`) as Promise<{ modifier_groups?: AttachedModifierGroup[] }>,
+        api.get(`/sales-items/${msi.sales_item_id}`) as Promise<FullSalesItem>,
+        api.get('/categories?for_sales_items=true') as Promise<CategoryRow[]>,
       ])
       setAllModGroups(catalog || [])
+      setSiFull(full)
       setAttachedGroups(full?.modifier_groups || [])
+      setCategories(cats || [])
     } catch {
       // surfaced via empty state
     } finally {
       setModsLoading(false)
+      setSiLoading(false)
     }
   }, [api, msi.sales_item_id])
 
-  useEffect(() => { loadMods() }, [loadMods])
+  useEffect(() => { loadAll() }, [loadAll])
+  // Back-compat alias used in the rollback path of the modifier-group save.
+  const loadMods = loadAll
+
+  // BACK-2599 — auto-save patch on the full sales item via PUT /sales-items/:id.
+  // Optimistic local merge + reload on failure. onChanged also bubbles up so
+  // the items list refreshes (name / image changes are visible right away).
+  const saveSiPatch = async (patch: Partial<FullSalesItem>) => {
+    if (!siFull) return
+    const next = { ...siFull, ...patch } as FullSalesItem
+    setSiFull(next)
+    try {
+      await api.put(`/sales-items/${siFull.id}`, {
+        name:          next.name,
+        display_name:  next.display_name,
+        category_id:   next.category_id,
+        description:   next.description,
+        recipe_id:     next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        combo_id:      next.combo_id,
+        manual_cost:   next.manual_cost,
+        image_url:     next.image_url,
+        sort_order:    next.sort_order,
+        qty:           next.qty,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      // Recover authoritative state on failure
+      loadAll()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save sales item', type: 'error' })
+    }
+  }
 
   // Persist the attached set to the server. PUT replaces — we send the FULL
   // list of {modifier_group_id, auto_show} entries.
@@ -2245,14 +2380,32 @@ function EditItemPanel({
         <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
       </div>
 
-      {/* BACK-2569 — single section header (was tabs). Pricing edits inline
-          on the items list now; this panel only manages modifier groups. */}
-      <div className="px-3 py-2 border-b border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
-        Modifier groups{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}
-      </div>
-
       {/* Body */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 overflow-y-auto">
+        {/* BACK-2599 — full sales-item Details section (auto-saves on blur) */}
+        <div className="px-3 py-2 border-b border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
+          Details
+        </div>
+        <div className="p-3">
+          {siLoading || !siFull ? (
+            <div className="flex justify-center py-4"><Spinner /></div>
+          ) : (
+            <SalesItemDetailsForm
+              si={siFull}
+              categories={categories}
+              onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
+              onPatch={saveSiPatch}
+              onReload={loadAll}
+              onToast={onToast}
+              api={api}
+            />
+          )}
+        </div>
+
+        <div className="px-3 py-2 border-y border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
+          Modifier groups{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}
+        </div>
+        <div className="p-3">
         <ModifiersTab
           allGroups={allModGroups}
           attached={attachedGroups}
@@ -2294,6 +2447,7 @@ function EditItemPanel({
           onReorder={(newOrder) => persistAttachedGroups(newOrder)}
           onOpenEditor={(mgid) => onOpenGroupEditor(mgid)}
         />
+        </div>
       </div>
     </aside>
   )
@@ -3107,6 +3261,485 @@ function ComboStepOptionEditor({
         </label>
       </div>
     </div>
+  )
+}
+
+// ── Sales-item details form (BACK-2599) ────────────────────────────────────
+// Surfaces every field on mcogs_sales_items so the operator can edit a sales
+// item end-to-end without leaving Menu Builder. Auto-saves on blur for text
+// fields and on change for everything else.
+
+function SalesItemDetailsForm({
+  si, categories, onCategoryCreated, onPatch, onReload, onToast, api,
+}: {
+  si: FullSalesItem
+  categories: CategoryRow[]
+  onCategoryCreated: (c: CategoryRow) => void
+  onPatch: (patch: Partial<FullSalesItem>) => void | Promise<void>
+  onReload: () => void | Promise<void>
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+  api: {
+    post: (p: string, b: unknown) => Promise<unknown>;
+    get: (p: string) => Promise<unknown>;
+    put: (p: string, b: unknown) => Promise<unknown>;
+  }
+}) {
+  // Recipe / ingredient pickers — lazy-loaded on demand for the relevant types.
+  const [recipes,     setRecipes]     = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+  // BACK-2600 — quick-edit modal target ('recipe' | 'ingredient' | null)
+  const [quickEditing, setQuickEditing] = useState<'recipe' | 'ingredient' | null>(null)
+
+  useEffect(() => {
+    if (si.item_type === 'recipe' && recipes === null) {
+      api.get('/recipes').then((d) => setRecipes((d as RecipeRow[]) || [])).catch(() => setRecipes([]))
+    }
+    if (si.item_type === 'ingredient' && ingredients === null) {
+      api.get('/ingredients').then((d) => setIngredients((d as IngredientRow[]) || [])).catch(() => setIngredients([]))
+    }
+  }, [api, si.item_type, recipes, ingredients])
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+
+  return (
+    <div className="space-y-3">
+      {/* Image — always editable */}
+      <Field label="Image">
+        <ImageUpload
+          value={si.image_url}
+          onChange={(url) => onPatch({ image_url: url })}
+          formKey={`sales-item-${si.item_type}`}
+        />
+      </Field>
+
+      <Field label="Name" required>
+        <input
+          className="input w-full text-sm"
+          defaultValue={si.name}
+          onBlur={(e) => { if (e.target.value.trim() !== si.name) onPatch({ name: e.target.value.trim() }) }}
+        />
+      </Field>
+
+      <Field label="Display name" hint="Shown on menus / receipts. Falls back to Name if blank.">
+        <input
+          className="input w-full text-sm"
+          defaultValue={si.display_name || ''}
+          onBlur={(e) => { const v = e.target.value || null; if (v !== si.display_name) onPatch({ display_name: v }) }}
+        />
+      </Field>
+
+      <Field label="Category">
+        <CategoryPicker
+          value={si.category_id != null ? String(si.category_id) : ''}
+          onChange={(idStr) => onPatch({ category_id: idStr ? Number(idStr) : null })}
+          categories={categories}
+          scope="for_sales_items"
+          onCategoryCreated={(c) => { onCategoryCreated(c); onPatch({ category_id: c.id }) }}
+          apiPost={(p, b) => api.post(p, b)}
+        />
+      </Field>
+
+      <Field label="Description">
+        <textarea
+          className="input w-full text-sm"
+          rows={2}
+          defaultValue={si.description || ''}
+          onBlur={(e) => { const v = e.target.value || null; if (v !== si.description) onPatch({ description: v }) }}
+        />
+      </Field>
+
+      {/* Type-specific link (changeable) */}
+      {si.item_type === 'manual' && (
+        <Field label="Manual cost" hint="Currency follows the menu's market.">
+          <CalcInput
+            className="input w-full text-sm font-mono"
+            value={si.manual_cost == null ? '' : String(si.manual_cost)}
+            onChange={(v) => {
+              const n = v === '' ? null : Number(v)
+              if (Number.isFinite(n) || n === null) onPatch({ manual_cost: n })
+            }}
+            placeholder="0.00"
+          />
+        </Field>
+      )}
+
+      {si.item_type === 'recipe' && (
+        <Field label="Linked recipe">
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              value={si.recipe_id ? (si.recipe_name || `Recipe #${si.recipe_id}`) : recipeSearch}
+              onChange={(e) => { setRecipeSearch(e.target.value); if (si.recipe_id) onPatch({ recipe_id: null }) }}
+              placeholder="Search recipe…"
+            />
+            {si.recipe_id && (
+              <button
+                type="button"
+                className="btn-ghost text-xs px-2 shrink-0"
+                onClick={() => setQuickEditing('recipe')}
+                title="Quick-edit this recipe without leaving Menu Builder"
+              >Edit ✎</button>
+            )}
+          </div>
+          {!si.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-40 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onPatch({ recipe_id: r.id, recipe_name: r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </Field>
+      )}
+
+      {si.item_type === 'ingredient' && (
+        <Field label="Linked ingredient">
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              value={si.ingredient_id ? (si.ingredient_name || `Ingredient #${si.ingredient_id}`) : ingredientSearch}
+              onChange={(e) => { setIngredientSearch(e.target.value); if (si.ingredient_id) onPatch({ ingredient_id: null }) }}
+              placeholder="Search ingredient…"
+            />
+            {si.ingredient_id && (
+              <button
+                type="button"
+                className="btn-ghost text-xs px-2 shrink-0"
+                onClick={() => setQuickEditing('ingredient')}
+                title="Quick-edit this ingredient without leaving Menu Builder"
+              >Edit ✎</button>
+            )}
+          </div>
+          {!si.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-40 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onPatch({ ingredient_id: i.id, ingredient_name: i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </Field>
+      )}
+
+      {/* BACK-2600 — quick-edit modal */}
+      {quickEditing === 'recipe' && si.recipe_id && (
+        <RecipeQuickEditModal
+          recipeId={si.recipe_id}
+          categories={categories}
+          onCategoryCreated={onCategoryCreated}
+          onClose={() => setQuickEditing(null)}
+          onSaved={() => { setQuickEditing(null); onReload(); onToast({ message: 'Recipe updated', type: 'success' }) }}
+          api={api}
+        />
+      )}
+      {quickEditing === 'ingredient' && si.ingredient_id && (
+        <IngredientQuickEditModal
+          ingredientId={si.ingredient_id}
+          categories={categories}
+          onCategoryCreated={onCategoryCreated}
+          onClose={() => setQuickEditing(null)}
+          onSaved={() => { setQuickEditing(null); onReload(); onToast({ message: 'Ingredient updated', type: 'success' }) }}
+          api={api}
+        />
+      )}
+
+      {si.item_type === 'combo' && (
+        <Field label="Linked combo">
+          <div className="text-xs text-text-3 italic px-2 py-1.5 border border-border rounded bg-surface-2/40">
+            {si.combo_name || `Combo #${si.combo_id ?? '—'}`}. Edit steps and options by clicking a step header in the expanded inline view.
+          </div>
+        </Field>
+      )}
+
+      <div className="text-[10px] text-text-3 italic">All fields auto-save on blur (image, category and pickers save on change).</div>
+    </div>
+  )
+}
+
+// ── Recipe quick-edit modal (BACK-2600) ────────────────────────────────────
+// Lets the operator update a recipe's core fields without navigating away
+// from Menu Builder. Heavier operations (recipe items, allergens, market
+// variations) still live in the Recipes module — the modal links there.
+
+interface RecipeFull {
+  id: number
+  name: string
+  category_id: number | null
+  description: string | null
+  yield_qty: number
+  yield_unit_text: string | null
+  yield_unit_abbr?: string | null
+  image_url: string | null
+}
+
+function RecipeQuickEditModal({
+  recipeId, categories, onCategoryCreated, onClose, onSaved, api,
+}: {
+  recipeId: number
+  categories: CategoryRow[]
+  onCategoryCreated: (c: CategoryRow) => void
+  onClose: () => void
+  onSaved: () => void
+  api: { post: (p: string, b: unknown) => Promise<unknown>; get: (p: string) => Promise<unknown>; put: (p: string, b: unknown) => Promise<unknown> }
+}) {
+  const [recipe, setRecipe] = useState<RecipeFull | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.get(`/recipes/${recipeId}`)
+      .then((d) => setRecipe(d as RecipeFull))
+      .catch(() => setError('Failed to load recipe'))
+      .finally(() => setLoading(false))
+  }, [api, recipeId])
+
+  const submit = async () => {
+    if (!recipe || !recipe.name.trim()) { setError('Name is required'); return }
+    setSaving(true); setError(null)
+    try {
+      await api.put(`/recipes/${recipe.id}`, {
+        name:            recipe.name.trim(),
+        category_id:     recipe.category_id,
+        description:     recipe.description,
+        yield_qty:       recipe.yield_qty,
+        yield_unit_text: recipe.yield_unit_text,
+        image_url:       recipe.image_url,
+      })
+      onSaved()
+    } catch (err: unknown) {
+      setError((err as { message?: string })?.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Edit recipe" onClose={onClose}>
+      {loading || !recipe ? (
+        <div className="flex justify-center py-6"><Spinner /></div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Image">
+            <ImageUpload
+              value={recipe.image_url}
+              onChange={(url) => setRecipe({ ...recipe, image_url: url })}
+              formKey="recipe"
+            />
+          </Field>
+          <Field label="Name" required>
+            <input className="input w-full" autoFocus
+              value={recipe.name}
+              onChange={(e) => setRecipe({ ...recipe, name: e.target.value })} />
+          </Field>
+          <Field label="Category">
+            <CategoryPicker
+              value={recipe.category_id != null ? String(recipe.category_id) : ''}
+              onChange={(idStr) => setRecipe({ ...recipe, category_id: idStr ? Number(idStr) : null })}
+              categories={categories}
+              scope="for_recipes"
+              onCategoryCreated={(c) => { onCategoryCreated(c); setRecipe({ ...recipe, category_id: c.id }) }}
+              apiPost={(p, b) => api.post(p, b)}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Yield qty">
+              <CalcInput
+                className="input w-full font-mono"
+                value={String(recipe.yield_qty ?? 1)}
+                onChange={(v) => setRecipe({ ...recipe, yield_qty: Number(v) || 1 })}
+              />
+            </Field>
+            <Field label="Yield unit">
+              <input className="input w-full text-sm"
+                value={recipe.yield_unit_text || ''}
+                onChange={(e) => setRecipe({ ...recipe, yield_unit_text: e.target.value || null })}
+                placeholder="e.g. portion, kg, ea" />
+            </Field>
+          </div>
+          <Field label="Description">
+            <textarea className="input w-full" rows={2}
+              value={recipe.description || ''}
+              onChange={(e) => setRecipe({ ...recipe, description: e.target.value || null })} />
+          </Field>
+          <p className="text-[11px] text-text-3 italic">
+            For ingredients, allergens, market variations, and full COGS — open this recipe in the Recipes module.
+          </p>
+          {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
+          <div className="flex justify-end gap-2 pt-1">
+            <a className="btn-ghost text-xs" href={`/recipes`} target="_blank" rel="noopener noreferrer">Open in Recipes ↗</a>
+            <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="btn-primary" onClick={submit} disabled={saving || !recipe.name.trim()}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// ── Ingredient quick-edit modal (BACK-2600) ────────────────────────────────
+
+interface IngredientFull {
+  id: number
+  name: string
+  category_id: number | null
+  base_unit_id: number | null
+  base_unit_abbr?: string | null
+  default_prep_unit: string | null
+  default_prep_to_base_conversion: number | null
+  notes: string | null
+  image_url: string | null
+  waste_pct: number | null
+}
+
+interface UnitRow { id: number; name: string; abbreviation: string | null }
+
+function IngredientQuickEditModal({
+  ingredientId, categories, onCategoryCreated, onClose, onSaved, api,
+}: {
+  ingredientId: number
+  categories: CategoryRow[]
+  onCategoryCreated: (c: CategoryRow) => void
+  onClose: () => void
+  onSaved: () => void
+  api: { post: (p: string, b: unknown) => Promise<unknown>; get: (p: string) => Promise<unknown>; put: (p: string, b: unknown) => Promise<unknown> }
+}) {
+  const [ing, setIng] = useState<IngredientFull | null>(null)
+  const [units, setUnits] = useState<UnitRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    Promise.all([
+      api.get(`/ingredients/${ingredientId}`),
+      api.get('/units'),
+    ])
+      .then(([i, u]) => { setIng(i as IngredientFull); setUnits((u as UnitRow[]) || []) })
+      .catch(() => setError('Failed to load ingredient'))
+      .finally(() => setLoading(false))
+  }, [api, ingredientId])
+
+  const submit = async () => {
+    if (!ing || !ing.name.trim()) { setError('Name is required'); return }
+    setSaving(true); setError(null)
+    try {
+      await api.put(`/ingredients/${ing.id}`, {
+        name:                            ing.name.trim(),
+        category_id:                     ing.category_id,
+        base_unit_id:                    ing.base_unit_id,
+        default_prep_unit:               ing.default_prep_unit,
+        default_prep_to_base_conversion: ing.default_prep_to_base_conversion,
+        notes:                           ing.notes,
+        image_url:                       ing.image_url,
+        waste_pct:                       ing.waste_pct,
+      })
+      onSaved()
+    } catch (err: unknown) {
+      setError((err as { message?: string })?.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Edit ingredient" onClose={onClose}>
+      {loading || !ing ? (
+        <div className="flex justify-center py-6"><Spinner /></div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Image">
+            <ImageUpload
+              value={ing.image_url}
+              onChange={(url) => setIng({ ...ing, image_url: url })}
+              formKey="ingredient"
+            />
+          </Field>
+          <Field label="Name" required>
+            <input className="input w-full" autoFocus
+              value={ing.name}
+              onChange={(e) => setIng({ ...ing, name: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Category">
+              <CategoryPicker
+                value={ing.category_id != null ? String(ing.category_id) : ''}
+                onChange={(idStr) => setIng({ ...ing, category_id: idStr ? Number(idStr) : null })}
+                categories={categories}
+                scope="for_ingredients"
+                onCategoryCreated={(c) => { onCategoryCreated(c); setIng({ ...ing, category_id: c.id }) }}
+                apiPost={(p, b) => api.post(p, b)}
+              />
+            </Field>
+            <Field label="Base unit">
+              <select className="input w-full text-sm"
+                value={ing.base_unit_id ?? ''}
+                onChange={(e) => setIng({ ...ing, base_unit_id: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">— Select —</option>
+                {units.map(u => (
+                  <option key={u.id} value={u.id}>{u.name}{u.abbreviation ? ` (${u.abbreviation})` : ''}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Default prep unit" hint="e.g. cup, tbsp">
+              <input className="input w-full text-sm"
+                value={ing.default_prep_unit || ''}
+                onChange={(e) => setIng({ ...ing, default_prep_unit: e.target.value || null })} />
+            </Field>
+            <Field label="Prep → base conversion">
+              <CalcInput
+                className="input w-full font-mono"
+                value={ing.default_prep_to_base_conversion == null ? '' : String(ing.default_prep_to_base_conversion)}
+                onChange={(v) => setIng({ ...ing, default_prep_to_base_conversion: v === '' ? null : Number(v) })}
+                placeholder="1"
+              />
+            </Field>
+          </div>
+          <Field label="Waste %" hint="0–100">
+            <input className="input w-full text-sm font-mono" type="number" min={0} max={100} step={0.1}
+              value={ing.waste_pct == null ? '' : ing.waste_pct}
+              onChange={(e) => setIng({ ...ing, waste_pct: e.target.value === '' ? null : Number(e.target.value) })} />
+          </Field>
+          <Field label="Notes">
+            <textarea className="input w-full" rows={2}
+              value={ing.notes || ''}
+              onChange={(e) => setIng({ ...ing, notes: e.target.value || null })} />
+          </Field>
+          <p className="text-[11px] text-text-3 italic">
+            For price quotes, vendors, and allergens — open this ingredient in Inventory.
+          </p>
+          {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
+          <div className="flex justify-end gap-2 pt-1">
+            <a className="btn-ghost text-xs" href={`/inventory`} target="_blank" rel="noopener noreferrer">Open in Inventory ↗</a>
+            <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="btn-primary" onClick={submit} disabled={saving || !ing.name.trim()}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 
