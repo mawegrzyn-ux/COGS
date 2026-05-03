@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, CalcInput, CategoryPicker } from '../components/ui'
@@ -159,6 +159,10 @@ export default function RecipesPage() {
   const api            = useApi()
   const cogsThresholds = useCogsThresholds()
   const navigate       = useNavigate()
+  // BACK-2615 — deep-link a specific recipe via ?recipe_id=X. Used by Menu
+  // Builder's quick-edit modal "Open in Recipes" link.
+  const [searchParams] = useSearchParams()
+  const deepLinkRecipeId = searchParams.get('recipe_id')
   const { flags }      = useFeatureFlags()
   const variationsEnabled = flags.variations
 
@@ -312,6 +316,24 @@ export default function RecipesPage() {
 
   useEffect(() => { load() }, [load])
 
+  // BACK-2615 — auto-open the recipe matching ?recipe_id= once the list
+  // loads. Runs once per query-param change; no-op when the id is missing
+  // or doesn't exist in the loaded set.
+  const deepLinkAppliedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!deepLinkRecipeId || deepLinkAppliedRef.current === deepLinkRecipeId) return
+    if (!recipes.length) return
+    const id = Number(deepLinkRecipeId)
+    if (Number.isFinite(id) && recipes.some(r => r.id === id)) {
+      deepLinkAppliedRef.current = deepLinkRecipeId
+      loadDetailRef.current?.(id)
+    }
+  }, [deepLinkRecipeId, recipes])
+
+  // Forward ref so the deep-link effect can call loadDetail without putting
+  // it in the dep array (loadDetail is defined later via useCallback).
+  const loadDetailRef = useRef<((id: number) => void) | null>(null)
+
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true)
     setSelected(null)
@@ -330,6 +352,9 @@ export default function RecipesPage() {
       setLoadingDetail(false)
     }
   }, [api])
+  // Keep the ref in sync so the deep-link effect can dispatch without
+  // putting loadDetail in its deps (which would re-run on every render).
+  useEffect(() => { loadDetailRef.current = loadDetail }, [loadDetail])
 
   // Fetch menu assignments for this recipe across ALL markets
   useEffect(() => {

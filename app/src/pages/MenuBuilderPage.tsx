@@ -291,7 +291,7 @@ export default function MenuBuilderPage() {
   //   • combo-step    → single combo step editor with options CRUD
   // Setting null closes the panel entirely.
   type EditTarget =
-    | { kind: 'sales-item';     msi: MenuSalesItem }
+    | { kind: 'sales-item';     msi: MenuSalesItem; tab?: 'details' | 'modifiers' }
     | { kind: 'modifier-group'; msi: MenuSalesItem; modifierGroupId: number }
     | { kind: 'combo-step';     msi: MenuSalesItem; comboStepId:     number }
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
@@ -842,7 +842,8 @@ export default function MenuBuilderPage() {
                   expandedInnerKeys={expandedInnerKeys}
                   onToggleInnerKey={toggleInnerKey}
                   onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
-                  onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it }) }}
+                  onOpenDetails={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'details' }) }}
+                  onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'modifiers' }) }}
                   onOpenModifierGroup={(it, mgid) => { setPanelOpen(false); setEditTarget({ kind: 'modifier-group', msi: it, modifierGroupId: mgid }) }}
                   onOpenComboStep={(it, sid) => { setPanelOpen(false); setEditTarget({ kind: 'combo-step', msi: it, comboStepId: sid }) }}
                   onRemove={(it) => removeItem(it)}
@@ -897,6 +898,7 @@ export default function MenuBuilderPage() {
               key={`si-${editTarget.msi.id}`}
               menu={selectedMenu}
               msi={editTarget.msi}
+              initialTab={editTarget.tab || 'details'}
               width={panelWidth}
               onResize={setPanelWidth}
               onChanged={() => { loadItems(selectedMenu.id); if (subPricesById[editTarget.msi.id]) loadSubPrices(editTarget.msi.id) }}
@@ -975,7 +977,7 @@ function ItemsList({
   dragId, dragOverId,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
   expandedInnerKeys, onToggleInnerKey,
-  onPriceSave, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
+  onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
   items: MenuSalesItem[]
@@ -992,6 +994,7 @@ function ItemsList({
   expandedInnerKeys: Set<string>
   onToggleInnerKey: (key: string) => void
   onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
+  onOpenDetails: (it: MenuSalesItem) => void
   onOpenModifiers: (it: MenuSalesItem) => void
   onOpenModifierGroup: (it: MenuSalesItem, modifierGroupId: number) => void
   onOpenComboStep: (it: MenuSalesItem, comboStepId: number) => void
@@ -1033,18 +1036,32 @@ function ItemsList({
     return (
       <li key={it.id}>
         <div
-          draggable={draggable}
-          onDragStart={draggable ? () => onDragStart(it.id) : undefined}
+          // BACK-2611 / BACK-2612 — only the drag handle is draggable; the
+          // rest of the row is a regular click target that opens the panel.
           onDragOver={draggable ? (e) => onDragOver(e, it.id) : undefined}
           onDragLeave={draggable ? onDragLeave : undefined}
           onDrop={draggable ? onDrop : undefined}
-          onDragEnd={draggable ? onDragEnd : undefined}
-          className={`flex items-center gap-3 px-4 py-3 transition-colors ${
+          onClick={() => onOpenDetails(it)}
+          className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer ${
             selected     ? 'bg-accent-dim/50 border-l-2 border-accent' :
             isDropOver   ? 'bg-accent-dim/30 border-t-2 border-accent' :
                            'hover:bg-surface-2/60 border-l-2 border-transparent'
-          } ${isDragging ? 'opacity-40' : ''} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+          } ${isDragging ? 'opacity-40' : ''}`}
         >
+          {/* Drag handle (BACK-2611) — only this element starts a drag */}
+          {draggable ? (
+            <span
+              draggable
+              onDragStart={(e) => { e.stopPropagation(); onDragStart(it.id) }}
+              onDragEnd={(e) => { e.stopPropagation(); onDragEnd() }}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 w-4 h-6 flex items-center justify-center text-text-3 hover:text-text-1 cursor-grab active:cursor-grabbing"
+              title="Drag to reorder"
+            >⠿</span>
+          ) : (
+            <span className="shrink-0 w-4" />
+          )}
+
           {/* Expand caret — only for items with modifiers OR combos */}
           {expandable ? (
             <button
@@ -1081,14 +1098,15 @@ function ItemsList({
             const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
             const cellKey = `${it.id}:${lvl.price_level_id}`
             return (
-              <PriceCell
-                key={lvl.price_level_id}
-                value={price?.sell_price ?? 0}
-                isOverride={price?.is_overridden ?? false}
-                defaultPrice={price?.default_price ?? null}
-                saving={savingPriceCells.has(cellKey)}
-                onSave={(v) => onPriceSave(it, lvl, v)}
-              />
+              <div key={lvl.price_level_id} onClick={(e) => e.stopPropagation()}>
+                <PriceCell
+                  value={price?.sell_price ?? 0}
+                  isOverride={price?.is_overridden ?? false}
+                  defaultPrice={price?.default_price ?? null}
+                  saving={savingPriceCells.has(cellKey)}
+                  onSave={(v) => onPriceSave(it, lvl, v)}
+                />
+              </div>
             )
           })}
 
@@ -2260,10 +2278,11 @@ function ManualItemForm({
 // two tabs. Save fires server roundtrip per row; markets toggle auto-saves.
 
 function EditItemPanel({
-  menu, msi, width, onResize, onChanged, onOpenGroupEditor, onClose, onToast,
+  menu, msi, initialTab, width, onResize, onChanged, onOpenGroupEditor, onClose, onToast,
 }: {
   menu: Menu
   msi: MenuSalesItem
+  initialTab: 'details' | 'modifiers'
   width: number
   onResize: (w: number) => void
   onChanged: () => void
@@ -2271,6 +2290,12 @@ function EditItemPanel({
   onClose: () => void
   onToast: (t: { message: string; type?: 'success' | 'error' }) => void
 }) {
+  // BACK-2613 — two tabs (Details + Modifiers). Initial tab driven by what
+  // was clicked: row body → details; Modifiers button → modifiers.
+  const [tab, setTab] = useState<'details' | 'modifiers'>(initialTab)
+  // Keep the active tab in sync if the same panel re-opens to a different
+  // initial tab without unmounting (e.g. user clicks Modifiers after row).
+  useEffect(() => { setTab(initialTab) }, [initialTab])
   const api = useApi()
   // BACK-2569 — Pricing tab removed. Pricing is now edited inline on the
   // items list (one editable cell per country-enabled price level).
@@ -2380,32 +2405,39 @@ function EditItemPanel({
         <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
       </div>
 
+      {/* BACK-2613 — Details / Modifiers tabs */}
+      <div className="flex border-b border-border bg-surface-2/40">
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'details' ? 'text-accent border-b-2 border-accent bg-surface' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setTab('details')}
+        >Details</button>
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'modifiers' ? 'text-accent border-b-2 border-accent bg-surface' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setTab('modifiers')}
+        >Modifiers{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}</button>
+      </div>
+
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        {/* BACK-2599 — full sales-item Details section (auto-saves on blur) */}
-        <div className="px-3 py-2 border-b border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
-          Details
-        </div>
-        <div className="p-3">
-          {siLoading || !siFull ? (
-            <div className="flex justify-center py-4"><Spinner /></div>
-          ) : (
-            <SalesItemDetailsForm
-              si={siFull}
-              categories={categories}
-              onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
-              onPatch={saveSiPatch}
-              onReload={loadAll}
-              onToast={onToast}
-              api={api}
-            />
-          )}
-        </div>
-
-        <div className="px-3 py-2 border-y border-border bg-surface-2/40 text-[11px] font-semibold text-text-2">
-          Modifier groups{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}
-        </div>
-        <div className="p-3">
+        {tab === 'details' && (
+          <div className="p-3">
+            {siLoading || !siFull ? (
+              <div className="flex justify-center py-4"><Spinner /></div>
+            ) : (
+              <SalesItemDetailsForm
+                si={siFull}
+                categories={categories}
+                onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
+                onPatch={saveSiPatch}
+                onReload={loadAll}
+                onToast={onToast}
+                api={api}
+              />
+            )}
+          </div>
+        )}
+        {tab === 'modifiers' && (
+          <div className="p-3">
         <ModifiersTab
           allGroups={allModGroups}
           attached={attachedGroups}
@@ -2447,7 +2479,8 @@ function EditItemPanel({
           onReorder={(newOrder) => persistAttachedGroups(newOrder)}
           onOpenEditor={(mgid) => onOpenGroupEditor(mgid)}
         />
-        </div>
+          </div>
+        )}
       </div>
     </aside>
   )
@@ -3310,8 +3343,42 @@ function SalesItemDetailsForm({
     return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
   }, [ingredients, ingredientSearch])
 
+  // BACK-2614 — type change. Switching wipes the previous linked-entity ids
+  // so we never end up with a recipe-typed sales item that still carries an
+  // ingredient_id, etc. Manual type sets a default 0 cost so the field is not
+  // null on save.
+  const changeType = (newType: 'recipe' | 'ingredient' | 'manual' | 'combo') => {
+    if (newType === si.item_type) return
+    onPatch({
+      item_type:     newType,
+      recipe_id:     null,
+      ingredient_id: null,
+      combo_id:      newType === 'combo' ? si.combo_id : null,
+      manual_cost:   newType === 'manual' ? (si.manual_cost ?? 0) : null,
+    })
+  }
+  const TYPES: Array<'recipe' | 'ingredient' | 'manual' | 'combo'> = ['recipe', 'ingredient', 'manual', 'combo']
+
   return (
     <div className="space-y-3">
+      {/* BACK-2614 — type radio (mirrors the Sales Items page Details tab) */}
+      <Field label="Type">
+        <div className="flex flex-wrap gap-2">
+          {TYPES.map(t => (
+            <button
+              key={t}
+              type="button"
+              className={`text-xs font-semibold px-3 py-1.5 rounded border transition-colors ${
+                si.item_type === t
+                  ? 'bg-accent text-white border-accent'
+                  : 'bg-surface text-text-2 border-border hover:border-accent/40'
+              }`}
+              onClick={() => changeType(t)}
+            >{TYPE_LABELS[t]}</button>
+          ))}
+        </div>
+      </Field>
+
       {/* Image — always editable */}
       <Field label="Image">
         <ImageUpload
@@ -3584,7 +3651,7 @@ function RecipeQuickEditModal({
           </p>
           {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
           <div className="flex justify-end gap-2 pt-1">
-            <a className="btn-ghost text-xs" href={`/recipes`} target="_blank" rel="noopener noreferrer">Open in Recipes ↗</a>
+            <a className="btn-ghost text-xs" href={`/recipes?recipe_id=${recipe.id}`} target="_blank" rel="noopener noreferrer">Open in Recipes ↗</a>
             <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
             <button className="btn-primary" onClick={submit} disabled={saving || !recipe.name.trim()}>
               {saving ? 'Saving…' : 'Save changes'}
@@ -3731,7 +3798,7 @@ function IngredientQuickEditModal({
           </p>
           {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
           <div className="flex justify-end gap-2 pt-1">
-            <a className="btn-ghost text-xs" href={`/inventory`} target="_blank" rel="noopener noreferrer">Open in Inventory ↗</a>
+            <a className="btn-ghost text-xs" href={`/inventory?ingredient_id=${ing.id}`} target="_blank" rel="noopener noreferrer">Open in Inventory ↗</a>
             <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
             <button className="btn-primary" onClick={submit} disabled={saving || !ing.name.trim()}>
               {saving ? 'Saving…' : 'Save changes'}

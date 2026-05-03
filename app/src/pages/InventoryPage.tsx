@@ -134,6 +134,10 @@ export default function InventoryPage() {
   // Quote modal pre-filled with that ingredient. Cleared after consumption
   // so a tab re-mount doesn't re-open the modal.
   const [autoOpenAddIngId, setAutoOpenAddIngId] = useState<number | undefined>(undefined)
+  // BACK-2615 — deep-link an ingredient via ?ingredient_id=X. Switches to
+  // the Ingredients tab and opens the edit modal for that ingredient on
+  // first load. Cleared after consumption.
+  const [autoOpenEditIngId, setAutoOpenEditIngId] = useState<number | undefined>(undefined)
   // Sticky flag — once a + Quote auto-open has been triggered we keep
   // PriceQuotesTab mounted (hidden) for the rest of the page lifetime.
   // Without this, the wrapper unmounts the moment onAutoOpenConsumed clears
@@ -153,6 +157,20 @@ export default function InventoryPage() {
     if (Number.isFinite(id) && id > 0) setAutoOpenAddIngId(id)
     const next = new URLSearchParams(searchParams)
     next.delete('addQuote')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // BACK-2615 — ?ingredient_id=<id> deep-link from Menu Builder quick-edit.
+  useEffect(() => {
+    const raw = searchParams.get('ingredient_id')
+    if (!raw) return
+    const id = parseInt(raw, 10)
+    if (Number.isFinite(id) && id > 0) {
+      setAutoOpenEditIngId(id)
+      setTab('ingredients')
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('ingredient_id')
     setSearchParams(next, { replace: true })
   }, [searchParams, setSearchParams])
 
@@ -234,6 +252,8 @@ export default function InventoryPage() {
             setQuoteTabMounted(true)
             setAutoOpenAddIngId(id)
           }}
+          autoOpenEditIngredientId={autoOpenEditIngId}
+          onAutoOpenEditConsumed={() => setAutoOpenEditIngId(undefined)}
         />}
         {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
 
@@ -594,11 +614,15 @@ function QuoteHoverPopover({ ing, onViewQuotes }: {
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
-function IngredientsTab({ onViewQuotes, onAddQuote }: {
+function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, onAutoOpenEditConsumed }: {
   onViewQuotes?: (id: number) => void
   /** Switch to the Quotes tab AND auto-open the Add Quote modal pre-filled
    *  with this ingredient. Triggered by the per-row `+ Quote` button. */
   onAddQuote?:   (id: number) => void
+  /** BACK-2615 — auto-open the edit modal for this ingredient on first
+   *  load. Used by Menu Builder's quick-edit modal "Open in Inventory" link. */
+  autoOpenEditIngredientId?: number
+  onAutoOpenEditConsumed?: () => void
 }) {
   const api = useApi()
 
@@ -706,6 +730,22 @@ function IngredientsTab({ onViewQuotes, onAddQuote }: {
   useEffect(() => {
     api.get('/allergens').then((d: Allergen[]) => setAllAllergens(d || [])).catch(() => {})
   }, [api])
+
+  // BACK-2615 — open edit modal for the ingredient passed via ?ingredient_id=
+  // once the catalog is loaded. Single-shot — onAutoOpenEditConsumed clears
+  // the page-level state so a tab re-mount does not re-open the modal.
+  const autoOpenAppliedRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!autoOpenEditIngredientId || autoOpenAppliedRef.current === autoOpenEditIngredientId) return
+    if (!ingredients.length) return
+    const target = ingredients.find(i => i.id === autoOpenEditIngredientId)
+    if (target) {
+      autoOpenAppliedRef.current = autoOpenEditIngredientId
+      openEdit(target)
+      setSelectedIngId(target.id)
+      onAutoOpenEditConsumed?.()
+    }
+  }, [autoOpenEditIngredientId, ingredients, onAutoOpenEditConsumed])
 
   useEffect(() => {
     api.get('/allergens/ingredients').then((rows: { ingredient_id: number; code: string; status: string }[]) => {

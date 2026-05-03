@@ -4186,7 +4186,8 @@ const migrations = [
    WHERE key IN ('BACK-2561','BACK-2562','BACK-2563','BACK-2564','BACK-2565','BACK-2566','BACK-2567','BACK-2568',
                  'BACK-2570','BACK-2571','BACK-2572','BACK-2573','BACK-2574',
                  'BACK-2585','BACK-2586','BACK-2587',
-                 'BACK-2598','BACK-2599','BACK-2600')
+                 'BACK-2598','BACK-2599','BACK-2600',
+                 'BACK-2611','BACK-2612','BACK-2613','BACK-2614','BACK-2615')
      AND status <> 'done'`,
 
   // ── Step 170b: Changelog — May 03 — Pepper model tier switcher shipped ────
@@ -4211,7 +4212,12 @@ const migrations = [
      {"type":"added","description":"BACK-2586: Drag-drop sort attached modifier groups inside the side-panel attached list. New order persists via the existing replace-set PUT /sales-items/:id/modifier-groups (sort_order implied by array index). Drop indicator + 40% opacity on the dragged item match the parent items-list pattern."},
      {"type":"changed","description":"BACK-2598: Inside an expanded item, modifier groups + combo steps + per-step-option modifier groups are now collapsed by default. Each header gains its own caret toggle; the existing Edit › pill still routes to the right-panel editor. Per-key expand state persists to localStorage(menu-builder-expanded-inner-keys) so the operator does not have to re-collapse on every reload."},
      {"type":"added","description":"BACK-2599: Right panel sales-item context now shows a full Details section above the Modifier groups list. Auto-saves every field on blur (image, name, display_name, category with create, description, type-specific picker — manual_cost / linked recipe / linked ingredient / read-only combo pointer). The operator can edit every sales-item field without leaving Menu Builder."},
-     {"type":"added","description":"BACK-2600: Quick-edit recipe + ingredient modals. Edit ✎ button next to the linked-recipe / linked-ingredient picker opens a focused modal with the entity core fields (name, category, image, plus type-specific fields: yield_qty + yield_unit_text for recipes; base_unit_id + default_prep_unit + waste_pct for ingredients). Save fires PUT /api/recipes/:id or /api/ingredients/:id and reloads the right panel so name + image changes flow through immediately. Each modal links out to the parent module (Recipes / Inventory) for deep edits."}
+     {"type":"added","description":"BACK-2600: Quick-edit recipe + ingredient modals. Edit ✎ button next to the linked-recipe / linked-ingredient picker opens a focused modal with the entity core fields (name, category, image, plus type-specific fields: yield_qty + yield_unit_text for recipes; base_unit_id + default_prep_unit + waste_pct for ingredients). Save fires PUT /api/recipes/:id or /api/ingredients/:id and reloads the right panel so name + image changes flow through immediately. Each modal links out to the parent module (Recipes / Inventory) for deep edits."},
+     {"type":"changed","description":"BACK-2611: Menu Builder rows now have a dedicated drag handle (⠿) at the very left. Drag works only from that handle; the rest of the row is a normal click target."},
+     {"type":"changed","description":"BACK-2612: Clicking anywhere on a menu item row opens the side panel for that sales item. The Modifiers › button keeps its prior behaviour (opens the panel directly to the Modifiers tab); row-body click opens to the Details tab."},
+     {"type":"added","description":"BACK-2613: Side panel for sales-item context now has Details + Modifiers tabs. The initial tab is driven by what was clicked: row body → Details, Modifiers button → Modifiers. Tab state persists across the panel session; closing the panel resets it on next open."},
+     {"type":"added","description":"BACK-2614: Details tab gains a Type radio (Recipe / Ingredient / Manual / Combo). Switching wipes any previously linked entity ids so a recipe-typed sales item never carries an ingredient_id, etc. The matching field appears below — recipe picker, ingredient picker, manual cost, or read-only combo pointer."},
+     {"type":"changed","description":"BACK-2615: Recipe + Ingredient quick-edit modals Open in Recipes / Open in Inventory now deep-link to the specific entity. Recipes page reads ?recipe_id=X and auto-opens that recipe; Inventory page reads ?ingredient_id=X and auto-opens the edit modal for that ingredient on the Ingredients tab. Param consumed once and removed from the URL so reloads do not re-trigger."}
    ]'::jsonb
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
