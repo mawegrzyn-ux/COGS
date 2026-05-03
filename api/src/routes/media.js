@@ -112,7 +112,12 @@ async function generateVariants(buffer, mimeType) {
 
 // ── Save one file (all variants) to the configured storage backend ─────────────
 
-async function saveFile(cfg, base, ext, mimeType, variants, uploadedBy, categoryId, scope, formKey) {
+// BACK-2684 — `displayName` is the user-facing label shown in the UI; defaults
+// to the random base (legacy callers) but the upload route now passes the
+// uploaded file's original name so the operator sees what they uploaded.
+// The on-disk storage keys still use the unique random base to avoid
+// collisions when two users upload e.g. "logo.png" at the same time.
+async function saveFile(cfg, base, ext, mimeType, variants, uploadedBy, categoryId, scope, formKey, displayName) {
   const origKey  = makeKey(base, '',       ext);
   const thumbKey = makeKey(base, '_thumb', ext === '.gif' ? ext : '.jpg');
   const webKey   = makeKey(base, '_web',   ext === '.gif' ? ext : '.jpg');
@@ -136,6 +141,13 @@ async function saveFile(cfg, base, ext, mimeType, variants, uploadedBy, category
     webUrl   = localUrl(path.basename(webKey));
   }
 
+  // Display label fallback — pre-BACK-2684 callers (drag-from-paste, etc.)
+  // didn't pass an originalname. Fall back to the unique base + ext so the
+  // row still has a non-null filename.
+  const labelFallback = base + ext;
+  const filenameLabel = (displayName && displayName.trim()) ? displayName.trim() : labelFallback;
+  const originalLabel = (displayName && displayName.trim()) ? displayName.trim() : labelFallback;
+
   const { rows } = await pool.query(
     `INSERT INTO mcogs_media_items
        (filename, original_filename, url, thumb_url, web_url,
@@ -144,7 +156,7 @@ async function saveFile(cfg, base, ext, mimeType, variants, uploadedBy, category
         category_id, uploaded_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING *`,
-    [path.basename(origKey), base + ext, url, thumbUrl, webUrl,
+    [filenameLabel, originalLabel, url, thumbUrl, webUrl,
      storageType, origKey, thumbKey, webKey,
      mimeType, variants.original.length,
      variants.width, variants.height,
@@ -257,7 +269,12 @@ router.post('/upload', upload.array('images', 50), async (req, res) => {
       const base     = uniqueBase();
       const isDupe   = existingNames.has(file.originalname.toLowerCase());
       const variants = await generateVariants(file.buffer, file.mimetype);
-      const item     = await saveFile(cfg, base, ext, file.mimetype, variants, uploadedBy, categoryId, scope, formKey);
+      // BACK-2684 — pass the user's original filename so it shows up in the
+      // library list instead of the random unique base. file.originalname is
+      // path.basename'd to strip any path traversal a malicious client might
+      // include; multer also strips it but defence in depth.
+      const displayName = path.basename(file.originalname || '');
+      const item     = await saveFile(cfg, base, ext, file.mimetype, variants, uploadedBy, categoryId, scope, formKey, displayName);
       results.push({ ...item, duplicate_of: isDupe ? file.originalname : null });
       logAudit(pool, req, { action: 'create', entity_type: 'media_item', entity_id: item.id, entity_label: item.filename });
     }

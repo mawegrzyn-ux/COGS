@@ -4297,6 +4297,20 @@ const migrations = [
      WHERE version = '2026-05-03' AND title = 'Menu Builder — Tax before price, cost + COGS% beside it'
    )`,
 
+  // ── Step 170m: Flip BACK-2684 to done (preserve filename on upload) ──────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2684' AND status <> 'done'`,
+
+  // ── Step 170n: Changelog — May 03 — Media Library filename preserved ─────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-03', 'Media Library — preserve original filename on upload', '[
+     {"type":"fixed","description":"BACK-2684: POST /api/media/upload was overwriting both filename and original_filename in mcogs_media_items with a random unique base (timestamp + random base36), so the operator only ever saw cryptic labels like 1730841234567-abc.jpg in the library list. Now the user-facing label (filename column) and the original_filename column both store path.basename(file.originalname). The on-disk storage_key / thumb_key / web_key still use the unique random base so two simultaneous uploads of logo.png do not collide on disk. URLs and image-serving routes are unchanged. Existing legacy rows keep their random labels — operators can rename via the existing inline-edit affordance in the library list."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-03' AND title = 'Media Library — preserve original filename on upload'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[
