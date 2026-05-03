@@ -4187,7 +4187,8 @@ const migrations = [
                  'BACK-2570','BACK-2571','BACK-2572','BACK-2573','BACK-2574',
                  'BACK-2585','BACK-2586','BACK-2587',
                  'BACK-2598','BACK-2599','BACK-2600',
-                 'BACK-2611','BACK-2612','BACK-2613','BACK-2614','BACK-2615')
+                 'BACK-2611','BACK-2612','BACK-2613','BACK-2614','BACK-2615',
+                 'BACK-2626','BACK-2627')
      AND status <> 'done'`,
 
   // ── Step 170b: Changelog — May 03 — Pepper model tier switcher shipped ────
@@ -4217,7 +4218,10 @@ const migrations = [
      {"type":"changed","description":"BACK-2612: Clicking anywhere on a menu item row opens the side panel for that sales item. The Modifiers › button keeps its prior behaviour (opens the panel directly to the Modifiers tab); row-body click opens to the Details tab."},
      {"type":"added","description":"BACK-2613: Side panel for sales-item context now has Details + Modifiers tabs. The initial tab is driven by what was clicked: row body → Details, Modifiers button → Modifiers. Tab state persists across the panel session; closing the panel resets it on next open."},
      {"type":"added","description":"BACK-2614: Details tab gains a Type radio (Recipe / Ingredient / Manual / Combo). Switching wipes any previously linked entity ids so a recipe-typed sales item never carries an ingredient_id, etc. The matching field appears below — recipe picker, ingredient picker, manual cost, or read-only combo pointer."},
-     {"type":"changed","description":"BACK-2615: Recipe + Ingredient quick-edit modals Open in Recipes / Open in Inventory now deep-link to the specific entity. Recipes page reads ?recipe_id=X and auto-opens that recipe; Inventory page reads ?ingredient_id=X and auto-opens the edit modal for that ingredient on the Ingredients tab. Param consumed once and removed from the URL so reloads do not re-trigger."}
+     {"type":"changed","description":"BACK-2615: Recipe + Ingredient quick-edit modals Open in Recipes / Open in Inventory now deep-link to the specific entity. Recipes page reads ?recipe_id=X and auto-opens that recipe; Inventory page reads ?ingredient_id=X and auto-opens the edit modal for that ingredient on the Ingredients tab. Param consumed once and removed from the URL so reloads do not re-trigger."},
+     {"type":"changed","description":"BACK-2626: Type field on the Details tab is now a locked select with an Edit ✎ toggle, replacing the previous radio-row that fired changeType on every click and accidentally wiped linked recipe / ingredient / combo / manual_cost. Unlock state is amber-styled with an explicit warning that changing wipes the linked entity. Selecting a different value commits and re-locks the field."},
+     {"type":"fixed","description":"Recipes page deep-link (?recipe_id=) was firing the auto-open call against a still-null loadDetail ref because the ref-assignment effect ran AFTER the deep-link effect on the first render where recipes populated. Inlined loadDetail into the effect dep array (it is useCallback-wrapped on api so stays stable) and removed the ref indirection."},
+     {"type":"changed","description":"BACK-2627: Combo branch in the Create new tab now uses the same search picker as recipes and ingredients — pick an existing combo from /api/combos, the wrapping sales item is created with combo_id set and attached to the menu. Combo creation moves to the Sales Items module (where combos live). The previous inline ComboBuilderForm + createComboAndAttach pipeline are kept in code as dead-but-leaving-intact for now; they can be removed once the new flow is confirmed in production. Recipe + Ingredient quick-edit modals from earlier turns also fully removed in this change since they had been replaced with direct deep-links to the full modules."}
    ]'::jsonb
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog

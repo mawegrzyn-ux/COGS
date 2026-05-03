@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // Menu Builder — unified all-in-one menu setup page (BACK-2516 epic)
 // =============================================================================
 // One screen does everything: pick a menu, see its items, add items inline
@@ -168,10 +168,12 @@ interface SalesItemRow {
   category_id: number | null
   category_name?: string | null
   image_url: string | null
-  // Used by Story 2 to detect when a recipe/ingredient already has a wrapping
-  // sales item — instead of creating a duplicate, the picker offers to reuse.
+  // Used by Story 2 / BACK-2627 to detect when a recipe / ingredient / combo
+  // already has a wrapping sales item — instead of creating a duplicate the
+  // picker offers to reuse.
   recipe_id: number | null
   ingredient_id: number | null
+  combo_id: number | null
 }
 
 // Story 2 — recipe + ingredient catalog rows for the create-new picker.
@@ -200,6 +202,17 @@ interface IngredientRow {
   market_qty_in_base_units?: number | null
   market_vendor_name?: string | null
   market_quote_is_preferred?: boolean
+}
+
+// BACK-2627 — combo catalog row for the Create new picker (combos are now
+// treated like recipes / ingredients: existing-only picker, build a new
+// combo from the Sales Items module).
+interface ComboRow {
+  id: number
+  name: string
+  description: string | null
+  category_name: string | null
+  image_url: string | null
 }
 
 interface VendorRow {
@@ -627,6 +640,7 @@ export default function MenuBuilderPage() {
     category_id?: number | null
     recipe_id?: number | null
     ingredient_id?: number | null
+    combo_id?: number | null
     manual_cost?: number | null
     image_url?: string | null
     description?: string | null
@@ -1510,6 +1524,7 @@ function AddItemPanel({
     category_id?: number | null
     recipe_id?: number | null
     ingredient_id?: number | null
+    combo_id?: number | null
     manual_cost?: number | null
     image_url?: string | null
     description?: string | null
@@ -1703,6 +1718,7 @@ function CreateNewTab({
     category_id?: number | null
     recipe_id?: number | null
     ingredient_id?: number | null
+    combo_id?: number | null
     manual_cost?: number | null
     image_url?: string | null
     description?: string | null
@@ -1747,8 +1763,10 @@ function CreateNewTab({
         </div>
       </div>
 
-      {/* Branch by type */}
-      {(type === 'recipe' || type === 'ingredient') && (
+      {/* Branch by type. BACK-2627 — combo joins recipe + ingredient as a
+          search-only picker. Manual stays its own form because there is
+          nothing to link to. */}
+      {(type === 'recipe' || type === 'ingredient' || type === 'combo') && (
         <RecipeOrIngredientPicker
           mode={type}
           menu={menu}
@@ -1767,14 +1785,6 @@ function CreateNewTab({
         />
       )}
 
-      {type === 'combo' && (
-        <ComboBuilderForm
-          categories={categories}
-          onCategoryCreated={onCategoryCreated}
-          onSave={onCreateComboAndAttach}
-        />
-      )}
-
       <div className="flex justify-end gap-2 pt-2">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
@@ -1790,7 +1800,10 @@ function CreateNewTab({
 function RecipeOrIngredientPicker({
   mode, menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse,
 }: {
-  mode: 'recipe' | 'ingredient'
+  // BACK-2627 — combo joins recipe + ingredient in this picker. All three
+  // are treated identically: pick an existing entity, the wrapping sales
+  // item is created and attached. Manual stays separate.
+  mode: 'recipe' | 'ingredient' | 'combo'
   menu: Menu
   catalog: SalesItemRow[]
   onAttachExisting: (si: SalesItemRow) => void | Promise<void>
@@ -1801,12 +1814,14 @@ function RecipeOrIngredientPicker({
     category_id?: number | null
     recipe_id?: number | null
     ingredient_id?: number | null
+    combo_id?: number | null
   }) => void | Promise<void>
   onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
 }) {
   const api = useApi()
   const [recipes,     setRecipes]     = useState<RecipeRow[] | null>(null)
   const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  const [combos,      setCombos]      = useState<ComboRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [search,  setSearch]  = useState('')
   // BACK-2548 — track which ingredient row has the inline add-quote form open
@@ -1821,8 +1836,9 @@ function RecipeOrIngredientPicker({
   }, [api, menu.country_id])
 
   // Lazy-load whichever catalog matches the active mode. Cached locally so
-  // flipping between recipe ↔ ingredient doesn't refetch. The ingredient
-  // call is scoped to the menu's country so each row carries cost data.
+  // flipping between recipe ↔ ingredient ↔ combo doesn't refetch. The
+  // ingredient call is scoped to the menu's country so each row carries
+  // cost data.
   useEffect(() => {
     if (mode === 'recipe' && recipes === null) {
       setLoading(true)
@@ -1832,8 +1848,14 @@ function RecipeOrIngredientPicker({
         .finally(() => setLoading(false))
     } else if (mode === 'ingredient' && ingredients === null) {
       reloadIngredients()
+    } else if (mode === 'combo' && combos === null) {
+      setLoading(true)
+      api.get('/combos')
+        .then((d: ComboRow[]) => setCombos(d || []))
+        .catch(() => setCombos([]))
+        .finally(() => setLoading(false))
     }
-  }, [api, mode, recipes, ingredients, reloadIngredients])
+  }, [api, mode, recipes, ingredients, combos, reloadIngredients])
 
   // Active source list + filter
   const filtered = useMemo(() => {
@@ -1842,19 +1864,25 @@ function RecipeOrIngredientPicker({
       const list = recipes || []
       if (!q) return list.slice(0, 50)
       return list.filter(r => (r.name + ' ' + (r.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
-    } else {
+    } else if (mode === 'ingredient') {
       const list = ingredients || []
       if (!q) return list.slice(0, 50)
       return list.filter(i => (i.name + ' ' + (i.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
+    } else {
+      // combo
+      const list = combos || []
+      if (!q) return list.slice(0, 50)
+      return list.filter(c => (c.name + ' ' + (c.category_name || '') + ' ' + (c.description || '')).toLowerCase().includes(q)).slice(0, 50)
     }
-  }, [mode, recipes, ingredients, search])
+  }, [mode, recipes, ingredients, combos, search])
 
   // Click a row → duplicate-detect against the existing sales-item catalog,
   // then either reuse or create-and-attach.
-  const handlePick = useCallback((row: RecipeRow | IngredientRow) => {
+  const handlePick = useCallback((row: RecipeRow | IngredientRow | ComboRow) => {
     const existing = catalog.find(si =>
       (mode === 'recipe'      && si.item_type === 'recipe'     && si.recipe_id     === row.id) ||
-      (mode === 'ingredient'  && si.item_type === 'ingredient' && si.ingredient_id === row.id)
+      (mode === 'ingredient'  && si.item_type === 'ingredient' && si.ingredient_id === row.id) ||
+      (mode === 'combo'       && si.item_type === 'combo'      && si.combo_id      === row.id)
     )
     const createNew = () => {
       onCreateAndAttach({
@@ -1864,6 +1892,7 @@ function RecipeOrIngredientPicker({
         category_id: null,
         recipe_id:     mode === 'recipe'     ? row.id : null,
         ingredient_id: mode === 'ingredient' ? row.id : null,
+        combo_id:      mode === 'combo'      ? row.id : null,
       })
     }
     if (existing) {
@@ -1886,28 +1915,39 @@ function RecipeOrIngredientPicker({
         <div className="flex justify-center py-8"><Spinner /></div>
       ) : filtered.length === 0 ? (
         <div className="text-xs text-text-3 italic py-6 text-center">
-          {search ? 'No matches.' : (mode === 'recipe' ? 'No recipes yet — build one in the Recipes module.' : 'No ingredients yet — add one in Inventory.')}
+          {search
+            ? 'No matches.'
+            : mode === 'recipe'
+              ? 'No recipes yet — build one in the Recipes module.'
+              : mode === 'ingredient'
+                ? 'No ingredients yet — add one in Inventory.'
+                : 'No combos yet — build one in the Sales Items module.'}
         </div>
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
           {filtered.map(row => {
             const exists = catalog.some(si =>
               (mode === 'recipe'      && si.recipe_id     === row.id) ||
-              (mode === 'ingredient'  && si.ingredient_id === row.id)
+              (mode === 'ingredient'  && si.ingredient_id === row.id) ||
+              (mode === 'combo'       && si.combo_id      === row.id)
             )
             // BACK-2548 — for ingredient mode, surface market cost / "no quote" badges.
             const ingRow = mode === 'ingredient' ? (row as IngredientRow) : null
             const cost = ingRow?.market_cost_per_base_unit
             const hasQuote = !!ingRow?.has_market_quote
             const symbol = menu.currency_symbol || menu.currency_code || ''
+            const comboRow = mode === 'combo' ? (row as ComboRow) : null
+            const imageSrc = mode === 'ingredient'
+              ? (ingRow?.image_url || null)
+              : (mode === 'combo' ? (comboRow?.image_url || null) : null)
             return (
               <li key={row.id} className="border-b border-border last:border-b-0">
                 <div
                   className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer"
                   onClick={() => handlePick(row)}
                 >
-                  {mode === 'ingredient' && 'image_url' in row && row.image_url ? (
-                    <img src={row.image_url} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
+                  {imageSrc ? (
+                    <img src={imageSrc} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
                   ) : (
                     <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
                   )}
@@ -1923,6 +1963,9 @@ function RecipeOrIngredientPicker({
                       )}
                       {mode === 'ingredient' && hasQuote && cost != null && (
                         <> · <span className="text-accent font-semibold">{symbol}{Number(cost).toFixed(4)}</span>/{ingRow!.base_unit_abbr || 'unit'}{ingRow!.market_quote_is_preferred ? ' ★' : ''}</>
+                      )}
+                      {mode === 'combo' && comboRow?.description && (
+                        <> · {comboRow.description}</>
                       )}
                     </div>
                   </div>
@@ -1958,7 +2001,9 @@ function RecipeOrIngredientPicker({
       <p className="text-[11px] text-text-3 italic">
         {mode === 'recipe'
           ? 'No recipe creation here — build new recipes in the Recipes module.'
-          : 'No ingredient creation here — add new ingredients in Inventory.'}
+          : mode === 'ingredient'
+            ? 'No ingredient creation here — add new ingredients in Inventory.'
+            : 'No combo creation here — build new combos from the Sales Items module.'}
       </p>
     </div>
   )
@@ -3322,8 +3367,9 @@ function SalesItemDetailsForm({
   const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
   const [recipeSearch, setRecipeSearch] = useState('')
   const [ingredientSearch, setIngredientSearch] = useState('')
-  // BACK-2600 — quick-edit modal target ('recipe' | 'ingredient' | null)
-  const [quickEditing, setQuickEditing] = useState<'recipe' | 'ingredient' | null>(null)
+  // BACK-2600 originally opened a quick-edit modal here; replaced with a
+  // direct link to the Recipes / Inventory module (opens in a new tab) so
+  // the operator gets the full editor instead of a partial form.
 
   useEffect(() => {
     if (si.item_type === 'recipe' && recipes === null) {
@@ -3359,24 +3405,49 @@ function SalesItemDetailsForm({
   }
   const TYPES: Array<'recipe' | 'ingredient' | 'manual' | 'combo'> = ['recipe', 'ingredient', 'manual', 'combo']
 
+  // BACK-2626 — type field guarded against accidental changes. Disabled
+  // dropdown by default; user clicks Edit ✎ to enable it. Re-locks after
+  // the change is committed so a second accidental click does not wipe.
+  const [typeUnlocked, setTypeUnlocked] = useState(false)
+
   return (
     <div className="space-y-3">
-      {/* BACK-2614 — type radio (mirrors the Sales Items page Details tab) */}
+      {/* BACK-2614 / BACK-2626 — Type select. Locked by default, Edit ✎
+          unlocks it; selecting a different value commits the change AND
+          re-locks. Prevents the previous radio-row from wiping linked
+          recipe/ingredient ids on accidental clicks. */}
       <Field label="Type">
-        <div className="flex flex-wrap gap-2">
-          {TYPES.map(t => (
-            <button
-              key={t}
-              type="button"
-              className={`text-xs font-semibold px-3 py-1.5 rounded border transition-colors ${
-                si.item_type === t
-                  ? 'bg-accent text-white border-accent'
-                  : 'bg-surface text-text-2 border-border hover:border-accent/40'
-              }`}
-              onClick={() => changeType(t)}
-            >{TYPE_LABELS[t]}</button>
-          ))}
+        <div className="flex gap-2">
+          <select
+            className="input flex-1 text-sm"
+            value={si.item_type}
+            disabled={!typeUnlocked}
+            onChange={(e) => {
+              const next = e.target.value as 'recipe' | 'ingredient' | 'manual' | 'combo'
+              changeType(next)
+              setTypeUnlocked(false)  // re-lock after commit
+            }}
+          >
+            {TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+          </select>
+          <button
+            type="button"
+            className={`text-xs font-semibold px-3 py-1.5 rounded border shrink-0 transition-colors ${
+              typeUnlocked
+                ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                : 'bg-surface text-text-2 border-border hover:border-accent/40'
+            }`}
+            onClick={() => setTypeUnlocked(v => !v)}
+            title={typeUnlocked
+              ? 'Cancel — keep current type'
+              : 'Unlock — changing the type clears the linked recipe / ingredient / combo'}
+          >{typeUnlocked ? 'Cancel' : 'Edit ✎'}</button>
         </div>
+        {typeUnlocked && (
+          <p className="text-[11px] text-amber-700 mt-1">
+            Changing the type clears the linked {si.item_type === 'recipe' ? 'recipe' : si.item_type === 'ingredient' ? 'ingredient' : si.item_type === 'combo' ? 'combo' : 'manual cost'}.
+          </p>
+        )}
       </Field>
 
       {/* Image — always editable */}
@@ -3449,12 +3520,13 @@ function SalesItemDetailsForm({
               placeholder="Search recipe…"
             />
             {si.recipe_id && (
-              <button
-                type="button"
-                className="btn-ghost text-xs px-2 shrink-0"
-                onClick={() => setQuickEditing('recipe')}
-                title="Quick-edit this recipe without leaving Menu Builder"
-              >Edit ✎</button>
+              <a
+                className="btn-ghost text-xs px-2 shrink-0 inline-flex items-center"
+                href={`/recipes?recipe_id=${si.recipe_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this recipe in the Recipes module (new tab)"
+              >Edit ✎ ↗</a>
             )}
           </div>
           {!si.recipe_id && recipeSearch && (
@@ -3482,12 +3554,13 @@ function SalesItemDetailsForm({
               placeholder="Search ingredient…"
             />
             {si.ingredient_id && (
-              <button
-                type="button"
-                className="btn-ghost text-xs px-2 shrink-0"
-                onClick={() => setQuickEditing('ingredient')}
-                title="Quick-edit this ingredient without leaving Menu Builder"
-              >Edit ✎</button>
+              <a
+                className="btn-ghost text-xs px-2 shrink-0 inline-flex items-center"
+                href={`/inventory?ingredient_id=${si.ingredient_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this ingredient in Inventory (new tab)"
+              >Edit ✎ ↗</a>
             )}
           </div>
           {!si.ingredient_id && ingredientSearch && (
@@ -3505,27 +3578,9 @@ function SalesItemDetailsForm({
         </Field>
       )}
 
-      {/* BACK-2600 — quick-edit modal */}
-      {quickEditing === 'recipe' && si.recipe_id && (
-        <RecipeQuickEditModal
-          recipeId={si.recipe_id}
-          categories={categories}
-          onCategoryCreated={onCategoryCreated}
-          onClose={() => setQuickEditing(null)}
-          onSaved={() => { setQuickEditing(null); onReload(); onToast({ message: 'Recipe updated', type: 'success' }) }}
-          api={api}
-        />
-      )}
-      {quickEditing === 'ingredient' && si.ingredient_id && (
-        <IngredientQuickEditModal
-          ingredientId={si.ingredient_id}
-          categories={categories}
-          onCategoryCreated={onCategoryCreated}
-          onClose={() => setQuickEditing(null)}
-          onSaved={() => { setQuickEditing(null); onReload(); onToast({ message: 'Ingredient updated', type: 'success' }) }}
-          api={api}
-        />
-      )}
+      {/* BACK-2600 — quick-edit modals removed. Edit ✎ ↗ links above open
+          the full Recipes / Inventory module in a new tab via the
+          BACK-2615 deep-link query params. */}
 
       {si.item_type === 'combo' && (
         <Field label="Linked combo">
@@ -3540,275 +3595,14 @@ function SalesItemDetailsForm({
   )
 }
 
-// ── Recipe quick-edit modal (BACK-2600) ────────────────────────────────────
-// Lets the operator update a recipe's core fields without navigating away
-// from Menu Builder. Heavier operations (recipe items, allergens, market
-// variations) still live in the Recipes module — the modal links there.
+// Recipe + Ingredient quick-edit modals removed (follow-up to BACK-2615).
+// The Edit ✎ ↗ links on the Details tab open the full Recipes / Inventory
+// modules in a new tab via deep-link query params so the operator gets the
+// complete editor instead of a partial form.
+//
+// Removed components: RecipeQuickEditModal, IngredientQuickEditModal,
+// RecipeFull, IngredientFull, UnitRow.
 
-interface RecipeFull {
-  id: number
-  name: string
-  category_id: number | null
-  description: string | null
-  yield_qty: number
-  yield_unit_text: string | null
-  yield_unit_abbr?: string | null
-  image_url: string | null
-}
-
-function RecipeQuickEditModal({
-  recipeId, categories, onCategoryCreated, onClose, onSaved, api,
-}: {
-  recipeId: number
-  categories: CategoryRow[]
-  onCategoryCreated: (c: CategoryRow) => void
-  onClose: () => void
-  onSaved: () => void
-  api: { post: (p: string, b: unknown) => Promise<unknown>; get: (p: string) => Promise<unknown>; put: (p: string, b: unknown) => Promise<unknown> }
-}) {
-  const [recipe, setRecipe] = useState<RecipeFull | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    api.get(`/recipes/${recipeId}`)
-      .then((d) => setRecipe(d as RecipeFull))
-      .catch(() => setError('Failed to load recipe'))
-      .finally(() => setLoading(false))
-  }, [api, recipeId])
-
-  const submit = async () => {
-    if (!recipe || !recipe.name.trim()) { setError('Name is required'); return }
-    setSaving(true); setError(null)
-    try {
-      await api.put(`/recipes/${recipe.id}`, {
-        name:            recipe.name.trim(),
-        category_id:     recipe.category_id,
-        description:     recipe.description,
-        yield_qty:       recipe.yield_qty,
-        yield_unit_text: recipe.yield_unit_text,
-        image_url:       recipe.image_url,
-      })
-      onSaved()
-    } catch (err: unknown) {
-      setError((err as { message?: string })?.message || 'Failed to save')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title="Edit recipe" onClose={onClose}>
-      {loading || !recipe ? (
-        <div className="flex justify-center py-6"><Spinner /></div>
-      ) : (
-        <div className="space-y-3">
-          <Field label="Image">
-            <ImageUpload
-              value={recipe.image_url}
-              onChange={(url) => setRecipe({ ...recipe, image_url: url })}
-              formKey="recipe"
-            />
-          </Field>
-          <Field label="Name" required>
-            <input className="input w-full" autoFocus
-              value={recipe.name}
-              onChange={(e) => setRecipe({ ...recipe, name: e.target.value })} />
-          </Field>
-          <Field label="Category">
-            <CategoryPicker
-              value={recipe.category_id != null ? String(recipe.category_id) : ''}
-              onChange={(idStr) => setRecipe({ ...recipe, category_id: idStr ? Number(idStr) : null })}
-              categories={categories}
-              scope="for_recipes"
-              onCategoryCreated={(c) => { onCategoryCreated(c); setRecipe({ ...recipe, category_id: c.id }) }}
-              apiPost={(p, b) => api.post(p, b)}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Yield qty">
-              <CalcInput
-                className="input w-full font-mono"
-                value={String(recipe.yield_qty ?? 1)}
-                onChange={(v) => setRecipe({ ...recipe, yield_qty: Number(v) || 1 })}
-              />
-            </Field>
-            <Field label="Yield unit">
-              <input className="input w-full text-sm"
-                value={recipe.yield_unit_text || ''}
-                onChange={(e) => setRecipe({ ...recipe, yield_unit_text: e.target.value || null })}
-                placeholder="e.g. portion, kg, ea" />
-            </Field>
-          </div>
-          <Field label="Description">
-            <textarea className="input w-full" rows={2}
-              value={recipe.description || ''}
-              onChange={(e) => setRecipe({ ...recipe, description: e.target.value || null })} />
-          </Field>
-          <p className="text-[11px] text-text-3 italic">
-            For ingredients, allergens, market variations, and full COGS — open this recipe in the Recipes module.
-          </p>
-          {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
-          <div className="flex justify-end gap-2 pt-1">
-            <a className="btn-ghost text-xs" href={`/recipes?recipe_id=${recipe.id}`} target="_blank" rel="noopener noreferrer">Open in Recipes ↗</a>
-            <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
-            <button className="btn-primary" onClick={submit} disabled={saving || !recipe.name.trim()}>
-              {saving ? 'Saving…' : 'Save changes'}
-            </button>
-          </div>
-        </div>
-      )}
-    </Modal>
-  )
-}
-
-// ── Ingredient quick-edit modal (BACK-2600) ────────────────────────────────
-
-interface IngredientFull {
-  id: number
-  name: string
-  category_id: number | null
-  base_unit_id: number | null
-  base_unit_abbr?: string | null
-  default_prep_unit: string | null
-  default_prep_to_base_conversion: number | null
-  notes: string | null
-  image_url: string | null
-  waste_pct: number | null
-}
-
-interface UnitRow { id: number; name: string; abbreviation: string | null }
-
-function IngredientQuickEditModal({
-  ingredientId, categories, onCategoryCreated, onClose, onSaved, api,
-}: {
-  ingredientId: number
-  categories: CategoryRow[]
-  onCategoryCreated: (c: CategoryRow) => void
-  onClose: () => void
-  onSaved: () => void
-  api: { post: (p: string, b: unknown) => Promise<unknown>; get: (p: string) => Promise<unknown>; put: (p: string, b: unknown) => Promise<unknown> }
-}) {
-  const [ing, setIng] = useState<IngredientFull | null>(null)
-  const [units, setUnits] = useState<UnitRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    Promise.all([
-      api.get(`/ingredients/${ingredientId}`),
-      api.get('/units'),
-    ])
-      .then(([i, u]) => { setIng(i as IngredientFull); setUnits((u as UnitRow[]) || []) })
-      .catch(() => setError('Failed to load ingredient'))
-      .finally(() => setLoading(false))
-  }, [api, ingredientId])
-
-  const submit = async () => {
-    if (!ing || !ing.name.trim()) { setError('Name is required'); return }
-    setSaving(true); setError(null)
-    try {
-      await api.put(`/ingredients/${ing.id}`, {
-        name:                            ing.name.trim(),
-        category_id:                     ing.category_id,
-        base_unit_id:                    ing.base_unit_id,
-        default_prep_unit:               ing.default_prep_unit,
-        default_prep_to_base_conversion: ing.default_prep_to_base_conversion,
-        notes:                           ing.notes,
-        image_url:                       ing.image_url,
-        waste_pct:                       ing.waste_pct,
-      })
-      onSaved()
-    } catch (err: unknown) {
-      setError((err as { message?: string })?.message || 'Failed to save')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title="Edit ingredient" onClose={onClose}>
-      {loading || !ing ? (
-        <div className="flex justify-center py-6"><Spinner /></div>
-      ) : (
-        <div className="space-y-3">
-          <Field label="Image">
-            <ImageUpload
-              value={ing.image_url}
-              onChange={(url) => setIng({ ...ing, image_url: url })}
-              formKey="ingredient"
-            />
-          </Field>
-          <Field label="Name" required>
-            <input className="input w-full" autoFocus
-              value={ing.name}
-              onChange={(e) => setIng({ ...ing, name: e.target.value })} />
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Category">
-              <CategoryPicker
-                value={ing.category_id != null ? String(ing.category_id) : ''}
-                onChange={(idStr) => setIng({ ...ing, category_id: idStr ? Number(idStr) : null })}
-                categories={categories}
-                scope="for_ingredients"
-                onCategoryCreated={(c) => { onCategoryCreated(c); setIng({ ...ing, category_id: c.id }) }}
-                apiPost={(p, b) => api.post(p, b)}
-              />
-            </Field>
-            <Field label="Base unit">
-              <select className="input w-full text-sm"
-                value={ing.base_unit_id ?? ''}
-                onChange={(e) => setIng({ ...ing, base_unit_id: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">— Select —</option>
-                {units.map(u => (
-                  <option key={u.id} value={u.id}>{u.name}{u.abbreviation ? ` (${u.abbreviation})` : ''}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Default prep unit" hint="e.g. cup, tbsp">
-              <input className="input w-full text-sm"
-                value={ing.default_prep_unit || ''}
-                onChange={(e) => setIng({ ...ing, default_prep_unit: e.target.value || null })} />
-            </Field>
-            <Field label="Prep → base conversion">
-              <CalcInput
-                className="input w-full font-mono"
-                value={ing.default_prep_to_base_conversion == null ? '' : String(ing.default_prep_to_base_conversion)}
-                onChange={(v) => setIng({ ...ing, default_prep_to_base_conversion: v === '' ? null : Number(v) })}
-                placeholder="1"
-              />
-            </Field>
-          </div>
-          <Field label="Waste %" hint="0–100">
-            <input className="input w-full text-sm font-mono" type="number" min={0} max={100} step={0.1}
-              value={ing.waste_pct == null ? '' : ing.waste_pct}
-              onChange={(e) => setIng({ ...ing, waste_pct: e.target.value === '' ? null : Number(e.target.value) })} />
-          </Field>
-          <Field label="Notes">
-            <textarea className="input w-full" rows={2}
-              value={ing.notes || ''}
-              onChange={(e) => setIng({ ...ing, notes: e.target.value || null })} />
-          </Field>
-          <p className="text-[11px] text-text-3 italic">
-            For price quotes, vendors, and allergens — open this ingredient in Inventory.
-          </p>
-          {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
-          <div className="flex justify-end gap-2 pt-1">
-            <a className="btn-ghost text-xs" href={`/inventory?ingredient_id=${ing.id}`} target="_blank" rel="noopener noreferrer">Open in Inventory ↗</a>
-            <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
-            <button className="btn-primary" onClick={submit} disabled={saving || !ing.name.trim()}>
-              {saving ? 'Saving…' : 'Save changes'}
-            </button>
-          </div>
-        </div>
-      )}
-    </Modal>
-  )
-}
 
 // ── Modifiers tab (Story 5 / BACK-2521) ────────────────────────────────────
 // Shows currently attached modifier groups with detach + auto-show toggle.

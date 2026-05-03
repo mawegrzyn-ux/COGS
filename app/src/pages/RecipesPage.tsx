@@ -316,23 +316,9 @@ export default function RecipesPage() {
 
   useEffect(() => { load() }, [load])
 
-  // BACK-2615 — auto-open the recipe matching ?recipe_id= once the list
-  // loads. Runs once per query-param change; no-op when the id is missing
-  // or doesn't exist in the loaded set.
+  // Track which recipe_id has already been auto-opened — kept here so the
+  // deep-link effect (defined after loadDetail) can read it.
   const deepLinkAppliedRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!deepLinkRecipeId || deepLinkAppliedRef.current === deepLinkRecipeId) return
-    if (!recipes.length) return
-    const id = Number(deepLinkRecipeId)
-    if (Number.isFinite(id) && recipes.some(r => r.id === id)) {
-      deepLinkAppliedRef.current = deepLinkRecipeId
-      loadDetailRef.current?.(id)
-    }
-  }, [deepLinkRecipeId, recipes])
-
-  // Forward ref so the deep-link effect can call loadDetail without putting
-  // it in the dep array (loadDetail is defined later via useCallback).
-  const loadDetailRef = useRef<((id: number) => void) | null>(null)
 
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true)
@@ -352,9 +338,19 @@ export default function RecipesPage() {
       setLoadingDetail(false)
     }
   }, [api])
-  // Keep the ref in sync so the deep-link effect can dispatch without
-  // putting loadDetail in its deps (which would re-run on every render).
-  useEffect(() => { loadDetailRef.current = loadDetail }, [loadDetail])
+
+  // BACK-2615 — auto-open the recipe matching ?recipe_id= once the list
+  // loads. Defined here AFTER loadDetail so we can call it directly with
+  // it in the dep array; idempotent via deepLinkAppliedRef.
+  useEffect(() => {
+    if (!deepLinkRecipeId || deepLinkAppliedRef.current === deepLinkRecipeId) return
+    if (!recipes.length) return
+    const id = Number(deepLinkRecipeId)
+    if (Number.isFinite(id) && recipes.some(r => r.id === id)) {
+      deepLinkAppliedRef.current = deepLinkRecipeId
+      loadDetail(id)
+    }
+  }, [deepLinkRecipeId, recipes, loadDetail])
 
   // Fetch menu assignments for this recipe across ALL markets
   useEffect(() => {
