@@ -2407,6 +2407,7 @@ interface FullModifierOption {
   price_addon: number
   qty: number
   sort_order: number
+  image_url: string | null
   recipe_name?: string | null
   ingredient_name?: string | null
 }
@@ -2529,6 +2530,7 @@ function ModifierGroupEditorPanel({
         price_addon: next.price_addon,
         qty: next.qty,
         sort_order: next.sort_order,
+        image_url: next.image_url,
       })
       onChanged()
     } catch (err: unknown) {
@@ -2801,6 +2803,12 @@ function ModifierOptionEditor({
           />
         </label>
       </div>
+      <ImageUpload
+        label="Image"
+        value={option.image_url}
+        onChange={(url) => onChange({ image_url: url })}
+        formKey="modifier_option"
+      />
     </div>
   )
 }
