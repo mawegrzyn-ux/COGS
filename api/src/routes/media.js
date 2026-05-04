@@ -36,7 +36,13 @@ let sharp = null;
 try { sharp = require('sharp'); } catch { /* not installed yet — variants = original */ }
 
 // ── multer ────────────────────────────────────────────────────────────────────
-const ACCEPTED = ['image/jpeg','image/png','image/webp','image/gif','image/avif'];
+// BACK-2706 — TIFF support. Browsers cannot render TIFF in <img> tags, so
+// uploaded TIFFs are converted to JPEG by sharp before storage. We keep the
+// user's original filename (.tif) for display; the on-disk variants are
+// .jpg so URLs always serve a renderable format. Both image/tiff and
+// image/tif (some clients send the latter) are accepted.
+const ACCEPTED = ['image/jpeg','image/png','image/webp','image/gif','image/avif','image/tiff','image/tif'];
+const TIFF_MIMES = new Set(['image/tiff','image/tif']);
 const upload   = multer({
   storage: multer.memoryStorage(),
   limits:  { fileSize: 20 * 1024 * 1024 },
@@ -95,7 +101,7 @@ function uniqueBase() {
 async function generateVariants(buffer, mimeType) {
   if (!sharp || mimeType === 'image/gif') {
     // No sharp or animated GIF — serve original for all variants
-    return { original: buffer, thumb: buffer, web: buffer, width: null, height: null };
+    return { original: buffer, thumb: buffer, web: buffer, width: null, height: null, convertedMimeType: mimeType };
   }
   try {
     const img      = sharp(buffer);
@@ -104,9 +110,16 @@ async function generateVariants(buffer, mimeType) {
     const height   = meta.height || null;
     const thumbBuf = await sharp(buffer).resize(300, 300, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     const webBuf   = await sharp(buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
-    return { original: buffer, thumb: thumbBuf, web: webBuf, width, height };
+    // BACK-2706 — TIFF originals get converted to a high-quality JPEG too,
+    // since browsers cannot render TIFF in <img>. The user's original
+    // filename is preserved for display; only the on-disk bytes change.
+    if (TIFF_MIMES.has(mimeType)) {
+      const origBuf = await sharp(buffer).jpeg({ quality: 92 }).toBuffer();
+      return { original: origBuf, thumb: thumbBuf, web: webBuf, width, height, convertedMimeType: 'image/jpeg' };
+    }
+    return { original: buffer, thumb: thumbBuf, web: webBuf, width, height, convertedMimeType: mimeType };
   } catch {
-    return { original: buffer, thumb: buffer, web: buffer, width: null, height: null };
+    return { original: buffer, thumb: buffer, web: buffer, width: null, height: null, convertedMimeType: mimeType };
   }
 }
 
@@ -265,7 +278,7 @@ router.post('/upload', upload.array('images', 50), async (req, res) => {
 
     const results = [];
     for (const file of files) {
-      const ext      = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const userExt  = path.extname(file.originalname).toLowerCase() || '.jpg';
       const base     = uniqueBase();
       const isDupe   = existingNames.has(file.originalname.toLowerCase());
       const variants = await generateVariants(file.buffer, file.mimetype);
@@ -274,7 +287,14 @@ router.post('/upload', upload.array('images', 50), async (req, res) => {
       // path.basename'd to strip any path traversal a malicious client might
       // include; multer also strips it but defence in depth.
       const displayName = path.basename(file.originalname || '');
-      const item     = await saveFile(cfg, base, ext, file.mimetype, variants, uploadedBy, categoryId, scope, formKey, displayName);
+      // BACK-2706 — for TIFF the on-disk extension + mime type both flip to
+      // JPEG (sharp converted the bytes in generateVariants). The user-facing
+      // displayName keeps its .tif/.tiff suffix so the library list shows the
+      // original label. URLs and ContentType use the JPEG values.
+      const isTiff       = TIFF_MIMES.has(file.mimetype);
+      const storageExt   = isTiff ? '.jpg'        : userExt;
+      const storageMime  = isTiff ? 'image/jpeg'  : file.mimetype;
+      const item     = await saveFile(cfg, base, storageExt, storageMime, variants, uploadedBy, categoryId, scope, formKey, displayName);
       results.push({ ...item, duplicate_of: isDupe ? file.originalname : null });
       logAudit(pool, req, { action: 'create', entity_type: 'media_item', entity_id: item.id, entity_label: item.filename });
     }

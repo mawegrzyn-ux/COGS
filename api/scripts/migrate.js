@@ -4325,6 +4325,20 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — drag-resizable list view columns'
    )`,
 
+  // ── Step 170q: Flip BACK-2706 to done (TIFF upload support) ──────────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2706' AND status <> 'done'`,
+
+  // ── Step 170r: Changelog — May 04 — TIFF upload support ──────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Media Library — TIFF upload support', '[
+     {"type":"added","description":"BACK-2706: POST /api/media/upload now accepts image/tiff and image/tif (some clients send the latter). Browsers cannot render TIFF in img tags, so sharp transcodes the original variant to a quality-92 JPEG alongside the existing thumb and web JPEG variants. On-disk extension flips to .jpg and the stored mime_type becomes image/jpeg so URLs always serve a browser-renderable image. The user-facing display label preserves the original .tif / .tiff filename in the library list — only the on-disk bytes change. The file picker (accept=image/*) already included TIFF; the server fileFilter was the only blocker."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Media Library — TIFF upload support'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[
