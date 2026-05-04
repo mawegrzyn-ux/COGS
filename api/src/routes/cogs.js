@@ -1182,7 +1182,9 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
 
     const countryId = menu.country_id;
 
-    // All menu-sales-items for this menu
+    // All menu-sales-items for this menu. msi.* now includes tax_rate_id
+    // (BACK-2730 per-msi tax override) — used as the secondary priority below
+    // the per-level price-row tax_rate_id.
     const { rows: items } = await pool.query(`
       SELECT msi.*,
              si.name       AS sales_item_name,
@@ -1368,20 +1370,29 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         : 0;
       const modifierCostAdder = Math.round((siAdderUsd + comboAdderUsd) * exchRate * qty * 10000) / 10000;
 
-      // Sell price
+      // Sell price + tax priority chain (BACK-2730):
+      //   per-level price-row tax_rate_id → per-msi tax_rate_id (override) →
+      //   country_level_tax → country default → 0
+      // The msi-level override applies when the user hasn't set a per-level
+      // tax on a specific price-row. Per-level always wins so existing menus
+      // with row-level taxes don't change.
       const itemPrices = priceMap[item.id] || {};
       let sellGross = 0;
-      let useTaxRateId = null;
+      let useTaxRateId = item.tax_rate_id || null;   // per-msi default
       let isOverridden = false;
       if (priceLevelId && itemPrices[priceLevelId]) {
         const lp = itemPrices[priceLevelId];
         sellGross    = Number(lp.sell_price || 0);
-        useTaxRateId = lp.tax_rate_id || null;
+        if (lp.tax_rate_id) useTaxRateId = lp.tax_rate_id;
         isOverridden = !!lp.is_overridden;
       } else if (!priceLevelId) {
         // Use first price level available
         const first = Object.values(itemPrices)[0];
-        if (first) { sellGross = Number(first.sell_price || 0); useTaxRateId = first.tax_rate_id || null; isOverridden = !!first.is_overridden; }
+        if (first) {
+          sellGross = Number(first.sell_price || 0);
+          if (first.tax_rate_id) useTaxRateId = first.tax_rate_id;
+          isOverridden = !!first.is_overridden;
+        }
       }
 
       const { rate: taxRate, name: taxName } = await resolveItemTax(useTaxRateId, countryId, priceLevelId, defaultTaxMap, taxRateCache);
@@ -1411,6 +1422,10 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         // dropped on the way out.
         image_url:          item.image_url   || null,
         description:        item.description || null,
+        // BACK-2730 — per-msi tax override id, separate from useTaxRateId
+        // (which is the resolved id used to compute the rate). The frontend
+        // renders an amber tint on the tax cell when this is set.
+        msi_tax_rate_id:    item.tax_rate_id || null,
         qty,
         base_unit_abbr:     item.base_unit_abbr || '',
         cost_per_portion:   cpp,

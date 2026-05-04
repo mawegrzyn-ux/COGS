@@ -4339,6 +4339,13 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — TIFF upload support'
    )`,
 
+  // ── Step 171pre0: BACK-2730 — tax_rate_id on mcogs_menu_sales_items ──────
+  // Per-msi tax override. NULL means "fall back to mcogs_country_level_tax
+  // for this (country, price_level), then mcogs_country_tax_rates default,
+  // then 0". Same pattern as the existing tax_rate_id on mcogs_menu_items
+  // (the legacy table) and mcogs_menu_sales_item_prices (per-level).
+  `ALTER TABLE mcogs_menu_sales_items ADD COLUMN IF NOT EXISTS tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id) ON DELETE SET NULL`,
+
   // ── Step 171pre: BACK-2729 — image_url on combo step options ─────────────
   // Modifier options (mcogs_modifier_options) already have image_url for
   // kiosk tile thumbnails. Combo step options are the other kind of
@@ -4426,6 +4433,50 @@ const migrations = [
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-04' AND title = 'Kiosk — combo step option tiles now render images'
+   )`,
+
+  // ── Step 170y: Upsert BACK-2730 as done (per-msi tax + dividers) ─────────
+  // Internal API was rate-limited when the ticket was filed, so the row may
+  // not exist on the target database. Insert-or-flip pattern keeps the
+  // deploy idempotent regardless of whether the row was filed via the API.
+  `INSERT INTO mcogs_backlog (key, summary, item_type, priority, status, story_points, labels)
+   VALUES (
+     'BACK-2730',
+     'Menu Builder — per-msi tax override + column dividers + country-default tax fallback',
+     'story',
+     'medium',
+     'done',
+     3,
+     '["menu-builder","tax","ui"]'::jsonb
+   )
+   ON CONFLICT (key) DO UPDATE SET status = 'done', updated_at = NOW()
+   WHERE mcogs_backlog.status <> 'done'`,
+
+  // ── Step 170z: Changelog — May 04 — Per-msi tax override + dividers ──────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Menu Builder — per-msi tax override + level dividers + country-default fallback', '[
+     {"type":"fixed","description":"BACK-2730 (1/3): GET /api/country-price-levels/:countryId now falls back to the country default tax rate (mcogs_country_tax_rates is_default=TRUE) when no per-level row exists in mcogs_country_level_tax. Previously a country with only a default rate showed 0% in every menu builder cell because the SELECT only LEFT JOINed the per-level mapping. New tax_source field on the response distinguishes level-mapping vs country-default vs no-tax."},
+     {"type":"added","description":"BACK-2730 (2/3): mcogs_menu_sales_items gains a nullable tax_rate_id column for the per-item tax override. New PATCH /api/menu-sales-items/:id/tax accepts {tax_rate_id} (null clears). cogs.js /menu-sales priority chain is now: per-level price-row tax_rate_id (mcogs_menu_sales_item_prices) → msi.tax_rate_id (the new override) → mcogs_country_level_tax → country default → 0. Existing menus with row-level taxes are unchanged. Response payload includes msi_tax_rate_id so the UI can render override state."},
+     {"type":"added","description":"BACK-2730 (3/3): Each price-level cell in the items list now has an alternating background tint and a 1px left divider so columns are visually distinct (no more bleed). The tax cell is a TaxCell button — small label of the effective rate, click opens a portal-positioned dropdown listing every country tax rate plus a Use country default option. Selection writes via PATCH /:id/tax with optimistic UI; an amber tint marks every level cell of that row when an override is active. Override applies to the whole msi (all levels) — selecting from any cells dropdown sets the same rate for every level in that row."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Menu Builder — per-msi tax override + level dividers + country-default fallback'
+   )`,
+
+  // ── Step 170aa: Flip BUG-1173 to resolved (Media Library 429) ────────────
+  `UPDATE mcogs_bugs SET status = 'resolved', updated_at = NOW()
+   WHERE key = 'BUG-1173' AND status <> 'resolved'`,
+
+  // ── Step 170ab: Changelog — May 04 — Media Library 429 fix ───────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Media Library — fix 429 rate-limit on public image route', '[
+     {"type":"fixed","description":"BUG-1173: GET /api/media/img is mounted before requireAuth (img tags cannot send Auth0 bearer tokens) so every render counted against the 500/15min unauthenticated cap. Heavy usage — opening the Media Library a few times, attaching images to sales items / modifiers, kiosk PWA polling — blew past the cap in well under 15 minutes and the browser started showing broken-image placeholders with 429 in the console. The skip predicate on the rate limiter in api/src/index.js now matches /api/media/img + /media/img and bypasses the cap entirely. Filenames are random timestamp + nanoid so enumeration is not a meaningful threat; the path-traversal guard in media-file.js is the actual access control."},
+     {"type":"changed","description":"GET /api/media/img now sets Cache-Control: public, max-age=31536000, immutable. Files are content-addressed (the storage key is unique per upload) so the bytes never change in place. Repeat library opens + menu reloads now pull from the browser cache without round-tripping at all, which keeps the rate-limited surface tiny even before the skip rule kicks in."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Media Library — fix 429 rate-limit on public image route'
    )`,
 
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────

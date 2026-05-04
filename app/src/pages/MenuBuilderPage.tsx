@@ -15,7 +15,8 @@
 //   this shell in stories 2–7.
 // =============================================================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
@@ -47,6 +48,17 @@ interface MenuSalesItem {
   prices?: MenuItemPrice[]       // story 6 — already in the GET response
   has_price_override?: boolean
   modifier_group_count?: number  // BACK-2573 — surfaced via the GET join
+  // BACK-2730 — per-msi tax override. NULL = fall back to the country_level_tax
+  // / country default chain. Set via PATCH /menu-sales-items/:id/tax.
+  tax_rate_id?: number | null
+}
+
+// BACK-2730 — country tax rate option for the override dropdown.
+interface TaxRateOption {
+  id:         number
+  name:       string
+  rate:       number              // e.g. 0.18 → 18%
+  is_default: boolean
 }
 
 // BACK-2573 / BACK-2574 — sub-prices payload from
@@ -300,6 +312,11 @@ export default function MenuBuilderPage() {
   // BACK-2569 — price levels enabled in the selected menu's country. Drives
   // the inline price columns on the items list. Filtered to is_enabled=true.
   const [enabledPriceLevels, setEnabledPriceLevels] = useState<CountryPriceLevel[]>([])
+  // BACK-2730 — country tax rates available for the per-msi override dropdown.
+  // Refetched whenever the menu (and therefore country) changes.
+  const [taxRates, setTaxRates] = useState<TaxRateOption[]>([])
+  // BACK-2730 — saving spinner per cell during the PATCH /:id/tax round-trip.
+  const [savingTaxCells, setSavingTaxCells] = useState<Set<number>>(new Set())
   // BACK-2571 — group items by category toggle. Persisted to localStorage so
   // each user's preference sticks across sessions.
   const [groupByCategory, setGroupByCategory] = useState<boolean>(() => {
@@ -495,6 +512,33 @@ export default function MenuBuilderPage() {
       .then((d: CountryPriceLevel[]) => setEnabledPriceLevels((d || []).filter(l => l.is_enabled)))
       .catch(() => setEnabledPriceLevels([]))
   }, [api, selectedMenu])
+
+  // BACK-2730 — load this country's tax rates so the per-msi override dropdown
+  // can list them. Default rate is highlighted; selecting it (or a different
+  // rate) writes through to mcogs_menu_sales_items.tax_rate_id.
+  useEffect(() => {
+    if (!selectedMenu) { setTaxRates([]); return }
+    api.get(`/tax-rates?country_id=${selectedMenu.country_id}`)
+      .then((d: TaxRateOption[]) => setTaxRates(d || []))
+      .catch(() => setTaxRates([]))
+  }, [api, selectedMenu])
+
+  // BACK-2730 — set or clear the tax override on a menu_sales_item. NULL
+  // clears it; the row falls back to country_level_tax / country default.
+  const saveTaxOverride = useCallback(async (msi: MenuSalesItem, taxRateId: number | null) => {
+    setSavingTaxCells(prev => { const n = new Set(prev); n.add(msi.id); return n })
+    // Optimistic update so the cell flips colour immediately.
+    setItems(prev => prev.map(it => it.id === msi.id ? { ...it, tax_rate_id: taxRateId } : it))
+    try {
+      await api.patch(`/menu-sales-items/${msi.id}/tax`, { tax_rate_id: taxRateId })
+    } catch {
+      setToast({ message: 'Failed to save tax override', type: 'error' })
+      // Roll back to the previous value on failure.
+      setItems(prev => prev.map(it => it.id === msi.id ? { ...it, tax_rate_id: msi.tax_rate_id ?? null } : it))
+    } finally {
+      setSavingTaxCells(prev => { const n = new Set(prev); n.delete(msi.id); return n })
+    }
+  }, [api])
 
   // BACK-2573 / BACK-2574 — toggle expansion + lazy-load /sub-prices.
   // Cached once fetched so collapsing-then-expanding is instant. Reload on
@@ -804,6 +848,9 @@ export default function MenuBuilderPage() {
                   onToggleInnerKey={toggleInnerKey}
                   costByMsi={costByMsi}
                   currencySymbol={selectedMenu.currency_symbol || selectedMenu.currency_code || ''}
+                  taxRates={taxRates}
+                  savingTaxCells={savingTaxCells}
+                  onSaveTaxOverride={saveTaxOverride}
                   onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
                   onOpenDetails={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'details' }) }}
                   onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'modifiers' }) }}
@@ -937,6 +984,7 @@ function ItemsList({
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
   expandedInnerKeys, onToggleInnerKey,
   costByMsi, currencySymbol,
+  taxRates, savingTaxCells, onSaveTaxOverride,
   onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }: {
@@ -955,6 +1003,10 @@ function ItemsList({
   onToggleInnerKey: (key: string) => void
   costByMsi: Record<number, number>
   currencySymbol: string
+  // BACK-2730 — per-msi tax override.
+  taxRates: TaxRateOption[]
+  savingTaxCells: Set<number>
+  onSaveTaxOverride: (msi: MenuSalesItem, taxRateId: number | null) => void | Promise<void>
   onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
   onOpenDetails: (it: MenuSalesItem) => void
   onOpenModifiers: (it: MenuSalesItem) => void
@@ -1056,28 +1108,44 @@ function ItemsList({
             </div>
           </div>
 
-          {/* BACK-2638 + BACK-2673 — each level cell is a 3-column row:
-              tax (assigned country+level tax %)  ·  price input  ·  cost+COGS% stack.
-              Tax shows the configured rate from mcogs_country_level_tax. */}
-          {enabledPriceLevels.map(lvl => {
+          {/* BACK-2638 + BACK-2673 + BACK-2730 — each level cell is a 3-column
+              row: tax (clickable for per-msi override) · price input ·
+              cost+COGS% stack. Visual separation between levels via alt-bg
+              + a left divider. The msi-level tax override applies to ALL
+              levels in this row (any cell's dropdown writes the same
+              override) — when set, every cell gets an amber tint. */}
+          {enabledPriceLevels.map((lvl, lvlIdx) => {
             const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
             const cellKey = `${it.id}:${lvl.price_level_id}`
             const cost = costByMsi[it.id]
             const hasCost = cost != null && Number.isFinite(cost) && cost > 0
             const sell = Number(price?.sell_price ?? 0)
             const cogsPct = (hasCost && sell > 0) ? (cost / sell) * 100 : null
-            const taxRate = lvl.tax_rate
-            const hasTax  = taxRate != null && Number.isFinite(Number(taxRate))
+            // Effective tax: msi override → level fallback (already country-default
+            // resolved server-side) → null. Override flag drives the amber tint.
+            const overrideRate = it.tax_rate_id
+              ? taxRates.find(r => r.id === it.tax_rate_id) || null
+              : null
+            const effectiveRate = overrideRate
+              ? Number(overrideRate.rate)
+              : (lvl.tax_rate != null ? Number(lvl.tax_rate) : null)
+            const isOverride = overrideRate != null
+            const altBg = lvlIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/50'
             return (
               <div
                 key={lvl.price_level_id}
                 onClick={(e) => e.stopPropagation()}
-                className="shrink-0 flex items-center gap-1.5"
+                className={`shrink-0 flex items-center gap-1.5 px-1 py-0.5 rounded ${altBg} ${lvlIdx > 0 ? 'border-l border-border/60 ml-1' : ''}`}
               >
-                <span
-                  className="shrink-0 w-9 text-right text-[10px] font-mono text-text-3"
-                  title={hasTax ? `${lvl.tax_rate_name || 'Tax'} · ${Number(taxRate).toFixed(2)}%` : 'No tax assigned for this level in this market'}
-                >{hasTax ? `${Number(taxRate).toFixed(0)}%` : '—'}</span>
+                <TaxCell
+                  msiId={it.id}
+                  effectiveRate={effectiveRate}
+                  effectiveName={overrideRate?.name || lvl.tax_rate_name || null}
+                  isOverride={isOverride}
+                  saving={savingTaxCells.has(it.id)}
+                  taxRates={taxRates}
+                  onPick={(taxRateId) => onSaveTaxOverride(it, taxRateId)}
+                />
                 <PriceCell
                   value={price?.sell_price ?? 0}
                   isOverride={price?.is_overridden ?? false}
@@ -1409,6 +1477,112 @@ function NestedOption({
 }
 
 // ── Shared bits ─────────────────────────────────────────────────────────────
+
+// Inline tax cell for the items list (BACK-2730). Renders the effective tax
+// rate as a tiny clickable button; clicking opens a portal-positioned
+// dropdown that lists every country tax rate plus a "Use default" option to
+// clear the override. Override applies to the whole menu_sales_item (all
+// price levels) — selecting a rate from any cell affects every level cell
+// in that row.
+function TaxCell({
+  msiId, effectiveRate, effectiveName, isOverride, saving, taxRates, onPick,
+}: {
+  msiId: number
+  effectiveRate: number | null
+  effectiveName: string | null
+  isOverride: boolean
+  saving: boolean
+  taxRates: TaxRateOption[]
+  onPick: (taxRateId: number | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos]   = useState<{ top: number; left: number } | null>(null)
+  const btnRef          = useRef<HTMLButtonElement>(null)
+
+  // Close on outside click + ESC.
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (btnRef.current?.contains(target)) return
+      const inDropdown = (target as HTMLElement)?.closest?.('[data-tax-dropdown="' + msiId + '"]')
+      if (inDropdown) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown',   onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown',   onKey)
+    }
+  }, [open, msiId])
+
+  const toggle = () => {
+    if (!btnRef.current) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current.getBoundingClientRect()
+    setPos({ top: r.bottom + 4, left: r.left })
+    setOpen(true)
+  }
+
+  const label = saving
+    ? '…'
+    : effectiveRate != null && Number.isFinite(effectiveRate)
+      ? `${Number(effectiveRate).toFixed(0)}%`
+      : '—'
+  const title = effectiveRate != null
+    ? `${effectiveName || 'Tax'} · ${Number(effectiveRate).toFixed(2)}%${isOverride ? ' (override)' : ''}\nClick to change`
+    : 'No tax assigned · click to set an override'
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); toggle() }}
+        className={`shrink-0 w-9 text-right text-[10px] font-mono px-1 py-0.5 rounded transition-colors ${
+          isOverride
+            ? 'text-amber-800 bg-amber-100 hover:bg-amber-200'
+            : 'text-text-3 hover:bg-surface-2'
+        }`}
+        title={title}
+      >{label}</button>
+      {open && pos && createPortal(
+        <div
+          data-tax-dropdown={String(msiId)}
+          className="fixed bg-surface border border-border rounded-md shadow-lg z-[10000] min-w-[180px] py-1 text-xs"
+          style={{ top: pos.top, left: pos.left }}
+        >
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-text-3 font-semibold">Tax rate (this item)</div>
+          <button
+            type="button"
+            onClick={() => { onPick(null); setOpen(false) }}
+            className={`w-full text-left px-2 py-1.5 hover:bg-surface-2 ${!isOverride ? 'font-semibold text-accent' : 'text-text-1'}`}
+          >Use country default</button>
+          <div className="border-t border-border my-1" />
+          {taxRates.map(r => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => { onPick(r.id); setOpen(false) }}
+              className={`w-full text-left px-2 py-1.5 hover:bg-surface-2 flex items-center justify-between gap-2 ${
+                effectiveName === r.name && isOverride ? 'font-semibold text-accent' : 'text-text-1'
+              }`}
+            >
+              <span>{r.name}{r.is_default ? <span className="text-text-3 ml-1 text-[10px]">(default)</span> : null}</span>
+              <span className="font-mono text-text-2">{Number(r.rate).toFixed(2)}%</span>
+            </button>
+          ))}
+          {taxRates.length === 0 && (
+            <div className="px-2 py-1.5 text-text-3 italic">No tax rates configured for this market</div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
 
 // Inline price cell for the items list (BACK-2569). Each cell is a small
 // editable input that saves on blur when the value has changed. Shows an

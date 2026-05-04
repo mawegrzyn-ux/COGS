@@ -214,6 +214,34 @@ router.put('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── PATCH /menu-sales-items/:id/tax ──────────────────────────────────────────
+// BACK-2730 — per-msi tax-rate override. Body: { tax_rate_id: number | null }.
+// NULL clears the override and reverts to the country_level_tax → country
+// default fallback chain. The override applies to all price levels for this
+// item; per-level overrides on mcogs_menu_sales_item_prices keep their prior
+// behaviour and stack on top.
+router.patch('/:id/tax', async (req, res, next) => {
+  try {
+    const { tax_rate_id } = req.body || {};
+    const { rows: [old] } = await pool.query(
+      'SELECT * FROM mcogs_menu_sales_items WHERE id=$1', [req.params.id]
+    );
+    if (!old) return res.status(404).json({ error: { message: 'Menu sales item not found' } });
+    const { rows } = await pool.query(
+      `UPDATE mcogs_menu_sales_items SET tax_rate_id=$1 WHERE id=$2 RETURNING *`,
+      [tax_rate_id || null, req.params.id]
+    );
+    logAudit(pool, req, {
+      action:        'update',
+      entity_type:   'menu_sales_item',
+      entity_id:     rows[0].id,
+      entity_label:  `MSI #${rows[0].id} tax`,
+      field_changes: diffFields(old, rows[0], ['tax_rate_id']),
+    });
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
 // ─── DELETE /menu-sales-items/:id ─────────────────────────────────────────────
 router.delete('/:id', async (req, res, next) => {
   try {

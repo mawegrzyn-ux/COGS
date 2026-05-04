@@ -27,6 +27,12 @@ router.get('/', (req, res) => {
     return res.status(403).end();
   }
 
+  // BUG-1173 — files are content-addressed (timestamp + nanoid in the
+  // name) so they never change in place. A 1-year immutable cache header
+  // saves the conditional If-Modified-Since round-trip on every <img>
+  // render, which keeps the rate-limited surface tiny even before the
+  // skip rule in index.js kicks in.
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.sendFile(filePath, err => {
     if (err) res.status(404).end();
   });

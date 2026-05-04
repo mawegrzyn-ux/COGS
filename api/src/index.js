@@ -32,9 +32,22 @@ app.use(rateLimit({
   max: (req) => (req.headers.authorization?.startsWith('Bearer ') ? 10000 : 500),
   standardHeaders: true,
   legacyHeaders: false,
-  // Internal service-to-service calls (Pepper tool executor, etc.) bypass
-  // entirely — they already authenticate via INTERNAL_SERVICE_KEY.
-  skip: (req) => req.headers['x-internal-service'] != null,
+  // Skip rules:
+  //   1. Internal service-to-service calls (Pepper tool executor) — they
+  //      already authenticate via INTERNAL_SERVICE_KEY.
+  //   2. BUG-1173 — /api/media/img is a public image-serving endpoint hit
+  //      by every <img src> tag (no Auth0 token possible from <img>).
+  //      Browsing the Media Library or rendering a menu with many images
+  //      otherwise burns through the 500/15min unauthenticated cap and the
+  //      kiosk + menu builder start showing broken-image placeholders.
+  //      Filenames are random timestamp + nanoid so enumeration is not a
+  //      meaningful threat; the path-traversal guard in media-file.js is
+  //      the actual access control.
+  skip: (req) => (
+    req.headers['x-internal-service'] != null ||
+    req.path.startsWith('/api/media/img') ||
+    req.path.startsWith('/media/img')
+  ),
 }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
