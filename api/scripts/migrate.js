@@ -4479,6 +4479,20 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — fix 429 rate-limit on public image route'
    )`,
 
+  // ── Step 170ac: Flip BUG-1175 to resolved (tax-cell decimal display) ─────
+  `UPDATE mcogs_bugs SET status = 'resolved', updated_at = NOW()
+   WHERE key = 'BUG-1175' AND status <> 'resolved'`,
+
+  // ── Step 170ad: Changelog — May 04 — Tax cell display fix ────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Menu Builder — fix tax cell showing decimal not percent', '[
+     {"type":"fixed","description":"BUG-1175: TaxCell in the Menu Builder items list rendered the rate from mcogs_country_tax_rates as if it were already a percent, but the column stores decimal multipliers (0.05 = 5%, 0.20 = 20%). The cell button, the title hover, and the dropdown rates list were all off by 100x — a 5% rate showed as 0.05%, a 20% rate as 0.2%. New formatPct(rate, dp) helper multiplies by 100 and strips trailing zeros so 5.00% renders as 5%, 5.50% as 5.5%, 20.00% as 20%. Backend resolveItemTax already used the decimal correctly (sellGross / (1 + taxRate)) so no math was wrong — only the display."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Menu Builder — fix tax cell showing decimal not percent'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

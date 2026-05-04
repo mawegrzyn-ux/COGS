@@ -129,7 +129,10 @@ interface CountryPriceLevel {
   // operator has not assigned a tax rate to this level for the country.
   tax_rate_id?:   number | null
   tax_rate_name?: string | null
-  tax_rate?:      number | null   // e.g. 20 means 20%, stored NUMERIC(8,4)
+  // Stored as a decimal multiplier in mcogs_country_tax_rates.rate
+  // (NUMERIC(8,4)) — e.g. 0.05 means 5%, 0.20 means 20%. Always
+  // multiply by 100 before display.
+  tax_rate?:      number | null
 }
 
 // TaxRate interface removed in BACK-2569 — inline price cells are tax-rate-
@@ -1526,13 +1529,22 @@ function TaxCell({
     setOpen(true)
   }
 
+  // Rates are stored as decimal multipliers (0.05 = 5%, 0.20 = 20%).
+  // Multiply by 100 for the on-screen percentage. Strip trailing zeros so
+  // 5.00% renders as 5%, 5.50% as 5.5%, 20.00% as 20%.
+  const formatPct = (rate: number, dp = 2) => {
+    const v = Number(rate) * 100
+    const s = v.toFixed(dp)
+    // Drop trailing zeros and a dangling decimal point for compactness.
+    return s.replace(/\.?0+$/, '')
+  }
   const label = saving
     ? '…'
     : effectiveRate != null && Number.isFinite(effectiveRate)
-      ? `${Number(effectiveRate).toFixed(0)}%`
+      ? `${formatPct(effectiveRate, 1)}%`
       : '—'
   const title = effectiveRate != null
-    ? `${effectiveName || 'Tax'} · ${Number(effectiveRate).toFixed(2)}%${isOverride ? ' (override)' : ''}\nClick to change`
+    ? `${effectiveName || 'Tax'} · ${formatPct(effectiveRate, 2)}%${isOverride ? ' (override)' : ''}\nClick to change`
     : 'No tax assigned · click to set an override'
 
   return (
@@ -1571,7 +1583,7 @@ function TaxCell({
               }`}
             >
               <span>{r.name}{r.is_default ? <span className="text-text-3 ml-1 text-[10px]">(default)</span> : null}</span>
-              <span className="font-mono text-text-2">{Number(r.rate).toFixed(2)}%</span>
+              <span className="font-mono text-text-2">{formatPct(r.rate, 2)}%</span>
             </button>
           ))}
           {taxRates.length === 0 && (
