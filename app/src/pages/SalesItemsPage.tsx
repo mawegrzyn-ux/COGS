@@ -36,6 +36,8 @@ interface ComboStepOption {
   ingredient_id: number | null; ingredient_name?: string; ingredient_unit_abbr?: string
   sales_item_id: number | null; sales_item_name?: string; sales_item_type?: string
   manual_cost: number | null; price_addon: number; qty: number; sort_order: number
+  // BACK-2729 — kiosk customise tile image. Optional; null when unset.
+  image_url?: string | null
   modifier_groups?: { modifier_group_id: number; name: string }[]
 }
 interface ComboStep {
@@ -2082,6 +2084,14 @@ export default function SalesItemsPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* BACK-2729 — image shown on the kiosk customise tile. */}
+                      <ImageUpload
+                        label="Image (kiosk tile)"
+                        value={cpOptForm.image_url ?? null}
+                        onChange={url => setCpOptForm(f => f ? { ...f, image_url: url } : f)}
+                        formKey="combo_step_option"
+                      />
 
                     </>)}{/* end details tab */}
                       {comboPanelOptTab === 'modifiers' && (

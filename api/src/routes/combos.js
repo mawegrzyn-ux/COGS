@@ -173,11 +173,12 @@ router.post('/:id/duplicate', async (req, res, next) => {
         const { rows: [newOpt] } = await client.query(
           `INSERT INTO mcogs_combo_step_options
              (combo_step_id, name, item_type, recipe_id, ingredient_id, sales_item_id,
-              manual_cost, price_addon, qty, sort_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+              manual_cost, price_addon, qty, sort_order, image_url)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
           [newStep.id, opt.name, opt.item_type,
            opt.recipe_id || null, opt.ingredient_id || null, opt.sales_item_id || null,
-           opt.manual_cost || null, opt.price_addon || 0, opt.qty ?? 1, opt.sort_order || 0]
+           opt.manual_cost || null, opt.price_addon || 0, opt.qty ?? 1, opt.sort_order || 0,
+           opt.image_url || null]
         );
 
         // Copy modifier group assignments
@@ -315,15 +316,16 @@ router.post('/:id/steps/:sid/duplicate', async (req, res, next) => {
 
 router.post('/:id/steps/:sid/options', async (req, res, next) => {
   try {
-    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order, image_url } = req.body;
     if (!name || !item_type) return res.status(400).json({ error: { message: 'name and item_type are required' } });
     const { rows } = await pool.query(
       `INSERT INTO mcogs_combo_step_options
-         (combo_step_id, name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+         (combo_step_id, name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [req.params.sid, name.trim(), display_name || null, item_type,
        recipe_id || null, ingredient_id || null, sales_item_id || null,
-       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0]
+       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0,
+       image_url || null]
     );
     logAudit(pool, req, { action: 'create', entity_type: 'combo_step_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], modifier_groups: [] });
@@ -332,14 +334,16 @@ router.post('/:id/steps/:sid/options', async (req, res, next) => {
 
 router.put('/:id/steps/:sid/options/:oid', async (req, res, next) => {
   try {
-    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order } = req.body;
+    const { name, display_name, item_type, recipe_id, ingredient_id, sales_item_id, manual_cost, price_addon, qty, sort_order, image_url } = req.body;
     const { rows } = await pool.query(
       `UPDATE mcogs_combo_step_options
        SET name=$1, display_name=$2, item_type=$3, recipe_id=$4, ingredient_id=$5, sales_item_id=$6,
-           manual_cost=$7, price_addon=$8, qty=$9, sort_order=$10
-       WHERE id=$11 AND combo_step_id=$12 RETURNING *`,
+           manual_cost=$7, price_addon=$8, qty=$9, sort_order=$10, image_url=$11
+       WHERE id=$12 AND combo_step_id=$13 RETURNING *`,
       [name?.trim(), display_name || null, item_type, recipe_id || null, ingredient_id || null, sales_item_id || null,
-       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0, req.params.oid, req.params.sid]
+       manual_cost || null, price_addon || 0, qty ?? 1, sort_order || 0,
+       image_url || null,
+       req.params.oid, req.params.sid]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
     logAudit(pool, req, { action: 'update', entity_type: 'combo_step_option', entity_id: rows[0].id, entity_label: rows[0].name });

@@ -414,6 +414,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
   const { rows: opts } = await pool.query(
     `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type,
             cso.recipe_id, cso.ingredient_id, cso.manual_cost, cso.price_addon,
+            cso.image_url,
             r.yield_qty AS recipe_yield_qty
      FROM   mcogs_combo_step_options cso
      LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
@@ -537,6 +538,9 @@ async function loadComboStructure(comboId, msiId, costCtx) {
       id: o.id, name: o.name, display_name: o.display_name || null, item_type: o.item_type,
       price_addon: Number(o.price_addon || 0),
       cost: computeOptCost(o),
+      // BACK-2729 — kiosk renders combo step option tiles with images
+      // when present. Same payload shape as modifier options.
+      image_url: o.image_url || null,
       prices: priceMap[o.id] || {},
       modifier_groups: optModMap[o.id] || [],
     });

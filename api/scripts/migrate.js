@@ -4339,6 +4339,14 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — TIFF upload support'
    )`,
 
+  // ── Step 171pre: BACK-2729 — image_url on combo step options ─────────────
+  // Modifier options (mcogs_modifier_options) already have image_url for
+  // kiosk tile thumbnails. Combo step options are the other kind of
+  // customisation tile the customer sees during ordering — they should
+  // carry images on the same terms. Single nullable TEXT column; OK
+  // to leave NULL for existing rows.
+  `ALTER TABLE mcogs_combo_step_options ADD COLUMN IF NOT EXISTS image_url TEXT`,
+
   // ── Step 171: BACK-2728 — kiosk_orders table (offline-resilient PWA queue) ─
   // Records every order placed via the kiosk PWA, queued client-side in
   // IndexedDB while offline and replayed when the network is back.
@@ -4402,6 +4410,22 @@ const migrations = [
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-04' AND title = 'Kiosk PWA — offline-resilient with IndexedDB order queue'
+   )`,
+
+  // ── Step 170w: Flip BACK-2729 to done (kiosk combo step option images) ───
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2729' AND status <> 'done'`,
+
+  // ── Step 170x: Changelog — May 04 — Kiosk combo step option images ───────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Kiosk — combo step option tiles now render images', '[
+     {"type":"added","description":"BACK-2729: Combo step options gain an image_url TEXT column on mcogs_combo_step_options. Modifier options already carried image_url end-to-end (BACK-2717), but combo step option tiles in the kiosk customise flow rendered as text-only initials because the column did not exist. Migration is additive — existing rows stay NULL and unchanged."},
+     {"type":"changed","description":"combos.js POST /:id/steps/:sid/options + PUT /:id/steps/:sid/options/:oid + the duplicate-combo INSERT all accept image_url and persist it. menu-sales-items.js loadComboStructure SELECTs cso.image_url and forwards it as image_url on every option in the /sub-prices response — same payload shape as modifier options."},
+     {"type":"added","description":"SalesItems combo step option editor (right-side panel under the Combos tab) gains an ImageUpload labelled Image (kiosk tile). Persisted via the existing {...cpOptForm} spread on save — no extra wiring needed. Kiosk ComboOption type extends with image_url; the combo-step render path now passes imageUrl=opt.image_url to OptionTile which already renders an aspect-square thumbnail above the label."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Kiosk — combo step option tiles now render images'
    )`,
 
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────

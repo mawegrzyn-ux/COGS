@@ -64,6 +64,9 @@ interface ComboOption {
   id: number; name: string; display_name: string | null
   item_type: string
   prices: Record<number, number>
+  // BACK-2729 — kiosk customise-tile thumbnail. Same column added to
+  // mcogs_combo_step_options as mcogs_modifier_options.image_url already had.
+  image_url?: string | null
   modifier_groups?: ModGroup[]
 }
 interface ModGroup {
@@ -1242,6 +1245,7 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
                     addon={addon}
                     sym={sym}
                     selected={selected}
+                    imageUrl={opt.image_url}
                     onTap={() => toggleStepOpt(currentStep.id, opt.id, currentStep.max_select)}
                   />
                 )
