@@ -4339,6 +4339,37 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — TIFF upload support'
    )`,
 
+  // ── Step 171: BACK-2728 — kiosk_orders table (offline-resilient PWA queue) ─
+  // Records every order placed via the kiosk PWA, queued client-side in
+  // IndexedDB while offline and replayed when the network is back.
+  // order_uuid is client-generated so the drain is idempotent — the same
+  // queued order can be retried any number of times without creating
+  // duplicate rows.
+  `CREATE TABLE IF NOT EXISTS mcogs_kiosk_orders (
+    id                SERIAL PRIMARY KEY,
+    order_uuid        TEXT UNIQUE NOT NULL,
+    menu_id           INTEGER REFERENCES mcogs_menus(id) ON DELETE SET NULL,
+    country_id        INTEGER REFERENCES mcogs_countries(id) ON DELETE SET NULL,
+    price_level_id    INTEGER REFERENCES mcogs_price_levels(id) ON DELETE SET NULL,
+    order_type        TEXT,
+    payment_method    TEXT,
+    currency_code     VARCHAR(10),
+    currency_symbol   VARCHAR(8),
+    subtotal          NUMERIC(12,4) NOT NULL DEFAULT 0,
+    tax               NUMERIC(12,4) NOT NULL DEFAULT 0,
+    total             NUMERIC(12,4) NOT NULL DEFAULT 0,
+    items             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    placed_at_client  TIMESTAMPTZ,
+    placed_at_server  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    source            TEXT NOT NULL DEFAULT 'kiosk_pwa',
+    user_sub          TEXT,
+    user_email        TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_kiosk_orders_menu      ON mcogs_kiosk_orders(menu_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_kiosk_orders_placed    ON mcogs_kiosk_orders(placed_at_server DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_kiosk_orders_uuid      ON mcogs_kiosk_orders(order_uuid)`,
+
   // ── Step 170s: Flip BACK-2717 to done (kiosk loads product + mod images) ─
   `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
    WHERE key = 'BACK-2717' AND status <> 'done'`,
@@ -4352,6 +4383,25 @@ const migrations = [
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-04' AND title = 'Kiosk mockup — load product and modifier images'
+   )`,
+
+  // ── Step 170u: Flip BACK-2728 to done (kiosk PWA + IDB queue) ────────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2728' AND status <> 'done'`,
+
+  // ── Step 170v: Changelog — May 04 — Kiosk offline-resilient PWA ──────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Kiosk PWA — offline-resilient with IndexedDB order queue', '[
+     {"type":"added","description":"BACK-2728: Kiosk now installs as a PWA. New kiosk-manifest.webmanifest (fullscreen + portrait, scope=/kiosk) is swapped onto the document while the kiosk page is mounted, and a new kiosk-sw.js service worker registers on mount. The SW precaches the SPA shell so a cold-start offline reload still loads the kiosk UI, network-first-with-cache-fallback for menu data (/menus, /price-levels, /cogs/menu-sales/*, /menu-sales-items/*/sub-prices, /allergens/menu/*) so a network blip mid-shift never breaks browsing or customising, and cache-first-with-background-refresh for image URLs (/api/media/img, /uploads, *.png, *.jpg, *.webp, *.gif, *.svg, *.tiff). Cache versioning baked in — bump CACHE_VERSION on deploys that change behaviour and the activate handler prunes the stale caches."},
+     {"type":"added","description":"New mcogs_kiosk_orders table records every confirmed kiosk order (menu_id, country_id, price_level_id, order_type, payment_method, currency, subtotal, tax, total, full items JSONB, placed_at_client, placed_at_server, source kiosk_pwa, optional user_sub + user_email). UNIQUE(order_uuid) — the client generates a UUID at Pay time so the server-side INSERT can ON CONFLICT DO NOTHING, making the drain idempotent: replaying a queued order any number of times always results in exactly one row."},
+     {"type":"added","description":"New POST /api/kiosk-orders endpoint accepts the order payload + order_uuid, INSERTs ON CONFLICT DO NOTHING, returns either {order, duplicate:false} on first acceptance or {order, duplicate:true} on a retried drain. Every accepted order is logged to mcogs_audit_log under entity_type=kiosk_order. New GET /api/kiosk-orders for back-of-house reconciliation (last 100 orders, filterable by menu_id + since)."},
+     {"type":"added","description":"New IndexedDB queue (lib/kioskOfflineQueue.ts) — single object store keyed on order_uuid, status index over queued/syncing/failed/synced. Methods: enqueueOrder, listPending, countPending, markSyncing, markSynced, markFailed, pruneSynced. New drainer (lib/kioskOrderDrainer.ts) iterates pending rows, POSTs each to /api/kiosk-orders with the bearer token from useAuth0().getAccessTokenSilently, marks the row synced/failed, and bails early on Network errors so a long offline pause does not burn through the queue. Drains run on app mount, on every online event, on a 30s safety-net interval, and immediately after each enqueue."},
+     {"type":"added","description":"Top-right ConnectivityPill renders only when something is worth telling the operator: amber Offline + queue depth when navigator.onLine is false, green spinner Syncing N when a drain is in flight, green dot N orders queued when online with a non-empty queue. Renders nothing during the normal online-with-empty-queue state to keep the canvas clean. Pay flow now generates an order_uuid (crypto.randomUUID), captures subtotal/tax/total + all cart line selections into the payload, writes to IDB, then fires a fire-and-forget drain. The customer-facing receipt id ORD-XXXXXX is derived from the first 6 chars of the uuid so a printed receipt matches the eventual server row."},
+     {"type":"changed","description":"GET /cogs/menu-sales/:menu_id response — kiosk now reads currency_code in addition to currency_symbol so kiosk_orders rows record the ISO code for back-of-house reports. The currency_code field was already on the response; the kiosk just was not capturing it."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Kiosk PWA — offline-resilient with IndexedDB order queue'
    )`,
 
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────

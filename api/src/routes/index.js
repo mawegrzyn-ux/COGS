@@ -93,6 +93,11 @@ router.use('/menu-sales-items',   ...can('menus', 'read'),       write('menus'),
 // ── COGS calculation (read-only, called by Menus page + Pepper tools) ──────────
 router.use('/cogs',               auth,                                               require('./cogs').router);
 
+// ── Kiosk PWA order receiver (BACK-2728) ───────────────────────────────────────
+// POSTed by the offline-resilient kiosk drainer. Auth-gated like the rest of
+// the kiosk page; idempotent on order_uuid so retries are safe.
+router.use('/kiosk-orders',       auth,                                               require('./kiosk-orders'));
+
 // ── Allergens ──────────────────────────────────────────────────────────────────
 router.use('/allergens',          ...can('allergens', 'read'),   write('allergens'),   require('./allergens'));
 

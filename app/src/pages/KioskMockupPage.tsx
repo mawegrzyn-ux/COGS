@@ -25,7 +25,10 @@
 // =============================================================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useAuth0 } from '@auth0/auth0-react'
 import { useApi } from '../hooks/useApi'
+import { enqueueOrder, countPending } from '../lib/kioskOfflineQueue'
+import { drainKioskQueue, onDrainerEvent } from '../lib/kioskOrderDrainer'
 
 /* ── types — match POS mockup so we share the data shape ───────────────────── */
 
@@ -185,6 +188,7 @@ type Phase = 'setup' | 'order-type' | 'browse' | 'customise' | 'payment' | 'rece
 
 export default function KioskMockupPage() {
   const api = useApi()
+  const { getAccessTokenSilently } = useAuth0()
 
   /* setup state */
   const [menus,           setMenus]            = useState<Menu[]>([])
@@ -192,10 +196,18 @@ export default function KioskMockupPage() {
   const [selectedMenuId,  setSelectedMenuId]   = useState<number | null>(null)
   const [phase,           setPhase]            = useState<Phase>('setup')
 
+  /* BACK-2728 — offline-resilient PWA: connectivity, drainer, queue depth */
+  const [online,          setOnline]           = useState<boolean>(typeof navigator === 'undefined' ? true : navigator.onLine)
+  const [queueDepth,      setQueueDepth]       = useState<number>(0)
+  const [draining,        setDraining]         = useState<boolean>(false)
+
   /* live menu data */
   const [menuItems,       setMenuItems]        = useState<CogsItem[]>([])
   const [allergenMap,     setAllergenMap]      = useState<Record<number, boolean>>({})
   const [currencySymbol,  setCurrencySymbol]   = useState('$')
+  // BACK-2728 — kept on the order payload alongside the symbol so the
+  // back-of-house reconciliation report can show ISO currency codes.
+  const [currencyCode,    setCurrencyCode]     = useState('')
   const [loading,         setLoading]          = useState(false)
 
   /* customer flow */
@@ -221,6 +233,87 @@ export default function KioskMockupPage() {
   }, [api])
 
   useEffect(() => { loadInit() }, [loadInit])
+
+  /* ── BACK-2728: PWA offline resilience ────────────────────────────────────
+   * - Register the kiosk service worker (scoped to /kiosk) so menu data,
+   *   images, and the SPA shell stay served from cache when the network
+   *   drops.
+   * - Swap the document manifest to /kiosk-manifest.webmanifest so an
+   *   "Add to Home Screen" install launches into the kiosk standalone.
+   * - Track navigator.onLine + queue depth for the connectivity pill.
+   * - Drain the IndexedDB order queue on mount, on every online event,
+   *   and every 30s as a safety net.
+   */
+  useEffect(() => {
+    // Register SW. Vite serves /public/* at the root, so /kiosk-sw.js is
+    // available at https://<host>/kiosk-sw.js with no build step.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/kiosk-sw.js', { scope: '/kiosk' })
+        .catch(() => { /* SW registration is best-effort; the page works without it */ })
+    }
+    // Swap the manifest link to the kiosk-specific one.
+    let link = document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null
+    let createdLink = false
+    if (!link) {
+      link = document.createElement('link')
+      link.rel = 'manifest'
+      document.head.appendChild(link)
+      createdLink = true
+    }
+    const original = link.href
+    link.href = '/kiosk-manifest.webmanifest'
+
+    return () => {
+      if (createdLink) {
+        link?.parentNode?.removeChild(link)
+      } else if (link) {
+        link.href = original
+      }
+    }
+  }, [])
+
+  // Connectivity tracking + drainer trigger.
+  useEffect(() => {
+    const onOnline  = () => {
+      setOnline(true)
+      // Grace period — the radio is up but the network may still be
+      // settling. 500ms is enough for DNS/Auth0 to be reachable.
+      setTimeout(() => {
+        drainKioskQueue(getAccessTokenSilently).catch(() => { /* surfaced via listener */ })
+      }, 500)
+    }
+    const onOffline = () => setOnline(false)
+    window.addEventListener('online',  onOnline)
+    window.addEventListener('offline', onOffline)
+
+    // Initial queue-depth read + drain attempt.
+    countPending().then(setQueueDepth).catch(() => { /* IDB unavailable */ })
+    if (navigator.onLine) {
+      drainKioskQueue(getAccessTokenSilently).catch(() => {})
+    }
+
+    // Listen for drainer progress so the header pill flips to a spinner
+    // while a drain is in flight and the queue depth updates after.
+    const off = onDrainerEvent((info) => {
+      setDraining(info.running)
+      setQueueDepth(info.pending)
+    })
+
+    // Safety-net interval — every 30s while we believe we're online.
+    // (Online events can be missed by some browsers / kiosk hardware.)
+    const iv = window.setInterval(() => {
+      if (navigator.onLine) drainKioskQueue(getAccessTokenSilently).catch(() => {})
+      countPending().then(setQueueDepth).catch(() => {})
+    }, 30_000)
+
+    return () => {
+      window.removeEventListener('online',  onOnline)
+      window.removeEventListener('offline', onOffline)
+      window.clearInterval(iv)
+      off()
+    }
+  }, [getAccessTokenSilently])
 
   /* ── refilter levels by the selected menu's country ─────────────────────── */
   const selectedMenuCountryId = menus.find(m => m.id === selectedMenuId)?.country_id ?? null
@@ -249,6 +342,7 @@ export default function KioskMockupPage() {
       ])
       setMenuItems(data?.items || [])
       setCurrencySymbol(data?.currency_symbol || '$')
+      setCurrencyCode(data?.currency_code || '')
 
       // Allergen lookup: any item with at least one regulated allergen OR any
       // allergen_notes field set is flagged for the badge. We don't render the
@@ -513,15 +607,74 @@ export default function KioskMockupPage() {
     setPayMethod(method)
     setPaying(true)
     setPhase('payment')
-    // Simulate processing
+    // Simulate processing — same delay we always had so the customer sees
+    // a believable card / cash flow before the receipt screen.
     await new Promise(r => setTimeout(r, method === 'card' ? 1800 : 1200))
     setPaying(false)
+
+    // BACK-2728 — every confirmed order is enqueued in IndexedDB before we
+    // show the receipt. The drainer will POST it to /api/kiosk-orders the
+    // moment the network is reachable. Idempotent on order_uuid so a retry
+    // after a crash never produces a duplicate.
+    const orderUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+    const placedAtClient = new Date()
+    const subtotal       = cart.reduce((sum, l) => sum + (l.total / (1 + (l.taxRate || 0))) * l.qty, 0)
+    const tax            = cart.reduce((sum, l) => sum + l.total * (l.taxRate || 0) / (1 + (l.taxRate || 0)) * l.qty, 0)
+    const orderTypeName  = levels.find(l => l.id === priceLevelId)?.name || null
+
+    const payload = {
+      order_uuid:        orderUuid,
+      menu_id:           selectedMenuId,
+      country_id:        selectedMenuCountryId,
+      price_level_id:    priceLevelId,
+      order_type:        orderTypeName,
+      payment_method:    method,
+      currency_code:     currencyCode,
+      currency_symbol:   currencySymbol,
+      subtotal:          Math.round(subtotal * 10000) / 10000,
+      tax:               Math.round(tax      * 10000) / 10000,
+      total:             Math.round(cartTotal * 10000) / 10000,
+      // Strip the rehydration fields from cart lines so the persisted
+      // payload is small + stable. The receipt + back-of-house reports
+      // only need names + prices + selections.
+      items: cart.map(l => ({
+        menu_item_id: l.menu_item_id,
+        name:         l.name,
+        qty:          l.qty,
+        base_price:   l.basePrice,
+        unit_total:   l.total,
+        line_total:   Math.round(l.total * l.qty * 10000) / 10000,
+        tax_rate:     l.taxRate,
+        selections:   l.selections.map(s => ({ name: s.name, price_addon: s.priceAddon })),
+      })),
+      placed_at_client:  placedAtClient.toISOString(),
+    }
+
+    try {
+      await enqueueOrder(orderUuid, payload as Record<string, unknown>)
+      // Update the visible queue depth pill straight away so the customer
+      // (and the operator behind them) sees the order persisted locally
+      // even before the drainer reports back.
+      countPending().then(setQueueDepth).catch(() => {})
+      // Fire-and-forget drain — drains immediately if online, otherwise
+      // becomes a no-op until the online event fires.
+      drainKioskQueue(getAccessTokenSilently).catch(() => {})
+    } catch {
+      // IndexedDB failure (private mode, quota, browser without IDB) —
+      // we still surface the receipt so the customer can hand the cup
+      // back to the till; the order won't sync but the UX doesn't lock up.
+    }
+
     setReceipt({
-      id:     `ORD-${Date.now().toString(36).toUpperCase().slice(-6)}`,
+      // Customer-facing short id derived from the uuid so a reprinted
+      // receipt matches the row eventually inserted server-side.
+      id:     `ORD-${orderUuid.slice(0, 6).toUpperCase()}`,
       lines:  cart,
       total:  cartTotal,
       method,
-      ts:     new Date(),
+      ts:     placedAtClient,
     })
     setPhase('receipt')
   }
@@ -556,6 +709,13 @@ export default function KioskMockupPage() {
         title="Back to setup (admin)"
         onClick={backToSetup}
       ><BackChevron /></button>
+
+      {/* BACK-2728 — connectivity pill. Tucked top-right, only visible
+          when something is worth telling the operator: offline, an order
+          is mid-sync, or the queue still has unsynced items. Stays out of
+          the way during the normal online-with-empty-queue case. */}
+      <ConnectivityPill online={online} draining={draining} queueDepth={queueDepth} />
+
 
       {phase === 'order-type' && (
         <OrderTypeScreen
@@ -1265,6 +1425,64 @@ function OptionTile({ name, addon, sym, selected, onTap, imageUrl }: {
         )}
       </div>
     </button>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   BACK-2728 — Connectivity pill (top-right)
+   ════════════════════════════════════════════════════════════════════════════
+   Three states, in priority order:
+     - draining (online + queue mid-sync)  → green spinner pill
+     - offline                             → amber "Offline" pill, queue depth
+     - online + queue depth > 0            → green dot, "Syncing N orders"
+     - online + queue empty                → renders nothing (clean canvas)
+*/
+function ConnectivityPill({ online, draining, queueDepth }: {
+  online: boolean; draining: boolean; queueDepth: number
+}) {
+  // Online + nothing to do — stay out of the operator's eyeline.
+  if (online && !draining && queueDepth === 0) return null
+
+  let body: React.ReactNode
+  let bgClass: string
+  if (!online) {
+    bgClass = 'bg-amber-100 text-amber-900 border-amber-300'
+    body = (
+      <>
+        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" aria-hidden />
+        <span className="font-semibold">Offline</span>
+        {queueDepth > 0 && (
+          <span className="text-amber-800 text-[11px] font-medium">· {queueDepth} order{queueDepth === 1 ? '' : 's'} queued</span>
+        )}
+      </>
+    )
+  } else if (draining) {
+    bgClass = 'bg-emerald-50 text-emerald-900 border-emerald-200'
+    body = (
+      <>
+        <svg className="w-3.5 h-3.5 animate-spin text-emerald-600" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+          <path fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+        </svg>
+        <span className="font-semibold">Syncing{queueDepth > 0 ? ` ${queueDepth}` : ''}</span>
+      </>
+    )
+  } else {
+    bgClass = 'bg-emerald-50 text-emerald-900 border-emerald-200'
+    body = (
+      <>
+        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" aria-hidden />
+        <span className="font-semibold">{queueDepth} order{queueDepth === 1 ? '' : 's'} queued</span>
+      </>
+    )
+  }
+
+  return (
+    <div
+      className={`absolute top-4 right-4 z-50 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs shadow-sm ${bgClass}`}
+      role="status"
+      aria-live="polite"
+    >{body}</div>
   )
 }
 
