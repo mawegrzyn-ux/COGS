@@ -4339,6 +4339,21 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Media Library — TIFF upload support'
    )`,
 
+  // ── Step 170s: Flip BACK-2717 to done (kiosk loads product + mod images) ─
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2717' AND status <> 'done'`,
+
+  // ── Step 170t: Changelog — May 04 — Kiosk product + modifier images ──────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Kiosk mockup — load product and modifier images', '[
+     {"type":"fixed","description":"BACK-2717: Kiosk product tiles + modifier option tiles never rendered images even when sales items / modifier options had image_url assigned. Two regressions: (1) GET /cogs/menu-sales/:menu_id was SELECTing si.image_url + si.description but dropping both on the way out; the response shape now includes image_url and description on every item. (2) GET /menu-sales-items/:id/sub-prices was not SELECTing mcogs_modifier_options.image_url in either the SI-level loadModifierGroupsForItem path or the combo step option nested loadComboStructure path. Added mo.image_url to both queries and forwarded to the per-option response payload."},
+     {"type":"changed","description":"Kiosk OptionTile component now accepts an imageUrl prop. When set, the tile renders an aspect-square thumbnail above the name; otherwise it falls back to the existing text-only layout. ModOption interface gained image_url. Both modifier prompt screens (per-step modifier groups and option-level modifier groups inside combo flows) pass mo.image_url through. Combo step option image_url is out of scope — mcogs_combo_step_options has no image_url column yet."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Kiosk mockup — load product and modifier images'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

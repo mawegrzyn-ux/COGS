@@ -1406,6 +1406,11 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         display_name:       display,
         recipe_name:        display,
         category:           item.category || '',
+        // BACK-2717 — kiosk product tiles need the sales item's image
+        // and description; both columns are already SELECTed but were
+        // dropped on the way out.
+        image_url:          item.image_url   || null,
+        description:        item.description || null,
         qty,
         base_unit_abbr:     item.base_unit_abbr || '',
         cost_per_portion:   cpp,

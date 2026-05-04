@@ -73,6 +73,7 @@ interface ModOption {
   id: number; name: string; display_name: string | null
   item_type: string
   prices: Record<number, number>
+  image_url?: string | null
 }
 
 // One line in the basket. Modifiers are flat; displayLines preserves the
@@ -1114,6 +1115,7 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
                     addon={addon}
                     sym={sym}
                     selected={selected}
+                    imageUrl={mo.image_url}
                     onTap={() => toggleModOpt(key, mo.id, currentOptMg.group.max_select)}
                   />
                 )
@@ -1144,6 +1146,7 @@ function CustomiseScreen({ walker, setWalker, priceLevelId, sym, onCommit, onCan
                     addon={addon}
                     sym={sym}
                     selected={selected}
+                    imageUrl={mo.image_url}
                     onTap={() => toggleModOpt(key, mo.id, currentModGrp.max_select)}
                   />
                 )
@@ -1231,25 +1234,36 @@ function canAdvance(w: Walker): boolean {
   return true
 }
 
-function OptionTile({ name, addon, sym, selected, onTap }: {
+function OptionTile({ name, addon, sym, selected, onTap, imageUrl }: {
   name: string; addon: number; sym: string; selected: boolean; onTap: () => void
+  // BACK-2717 — modifier / step options can carry an image_url. When set,
+  // the tile shows a square thumbnail above the label. Falls back to the
+  // existing text-only layout when null/undefined.
+  imageUrl?: string | null
 }) {
   return (
     <button
       onClick={onTap}
-      className={`min-h-[110px] rounded-2xl border-2 p-4 text-left transition-all ${
+      className={`min-h-[110px] rounded-2xl border-2 text-left transition-all overflow-hidden flex flex-col ${
         selected
           ? 'border-accent bg-emerald-50 ring-4 ring-emerald-100'
           : 'border-gray-200 bg-white hover:border-emerald-300'
       }`}
     >
-      <div className="font-bold text-gray-900 text-lg leading-tight">{name}</div>
-      {addon > 0 && (
-        <div className="text-sm text-gray-500 mt-1">+ {formatMoney(addon, sym)}</div>
+      {imageUrl && (
+        <div className="aspect-square w-full bg-gradient-to-br from-emerald-100 to-emerald-50 overflow-hidden">
+          <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+        </div>
       )}
-      {selected && (
-        <div className="text-xs text-accent font-semibold mt-2">✓ Selected</div>
-      )}
+      <div className="p-4 flex-1">
+        <div className="font-bold text-gray-900 text-lg leading-tight">{name}</div>
+        {addon > 0 && (
+          <div className="text-sm text-gray-500 mt-1">+ {formatMoney(addon, sym)}</div>
+        )}
+        {selected && (
+          <div className="text-xs text-accent font-semibold mt-2">✓ Selected</div>
+        )}
+      </div>
     </button>
   )
 }

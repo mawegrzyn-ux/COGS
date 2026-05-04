@@ -325,6 +325,7 @@ async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
   const { rows: optRows } = await pool.query(
     `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
             mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty, mo.price_addon,
+            mo.image_url,
             r.yield_qty AS recipe_yield_qty
      FROM   mcogs_modifier_options mo
      LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
@@ -377,6 +378,8 @@ async function loadModifierGroupsForItem(salesItemId, msiId, costCtx) {
       item_type: o.item_type, qty: Number(o.qty || 1),
       price_addon: Number(o.price_addon || 0),
       cost,
+      // BACK-2717 — kiosk renders modifier option tiles with images.
+      image_url: o.image_url || null,
       prices: priceMap[o.id] || {},
     });
   }
@@ -453,6 +456,7 @@ async function loadComboStructure(comboId, msiId, costCtx) {
       const { rows: modOptRows } = await pool.query(
         `SELECT mo.id, mo.modifier_group_id, mo.name, mo.display_name, mo.item_type,
                 mo.recipe_id, mo.ingredient_id, mo.manual_cost, mo.qty, mo.price_addon,
+                mo.image_url,
                 r.yield_qty AS recipe_yield_qty
          FROM   mcogs_modifier_options mo
          LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
@@ -506,6 +510,9 @@ async function loadComboStructure(comboId, msiId, costCtx) {
           item_type: o.item_type, qty: Number(o.qty || 1),
           price_addon: Number(o.price_addon || 0),
           cost: computeModCost(o, M),
+          // BACK-2717 — same as the SI-level modifier path: include image_url
+          // so the kiosk can render tile thumbnails for these options too.
+          image_url: o.image_url || null,
           prices: modPriceMap[o.id] || {},
         }));
         const costs = groupOpts.map(o => o.cost || 0);
