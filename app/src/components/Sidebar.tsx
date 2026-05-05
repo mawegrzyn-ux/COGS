@@ -18,9 +18,15 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/dashboard',      label: 'Dashboard',      labelKey: 'dashboard',      feature: 'dashboard',  icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
   { path: '/inventory',      label: 'Inventory',      labelKey: 'inventory',      feature: 'inventory',  icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
   { path: '/recipes',        label: 'Recipes',        labelKey: 'recipes',        feature: 'recipes',    icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
-  { path: '/sales-items',    label: 'Sales Items',    labelKey: 'sales_items',    feature: 'menus',      icon: 'M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z' },
-  { path: '/menus',          label: 'Menus',          labelKey: 'menus',          feature: 'menus',      icon: 'M4 6h16M4 10h16M4 14h16M4 18h16' },
-  { path: '/menu-builder',   label: 'Menu Builder',   labelKey: 'menu_builder',   feature: 'menus',      icon: 'M12 4v16m8-8H4' },
+  // BACK-2793 — Sales Items + Menu Builder consolidated into a single
+  // Menu Entry page with four tabs (Items / Combos / Modifiers / Menu
+  // Builder). The old /sales-items and /menu-builder URLs redirect into
+  // the right tab so existing bookmarks keep working.
+  { path: '/menu-entry',     label: 'Menu Entry',     labelKey: 'menu_entry',     feature: 'menus',      icon: 'M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z' },
+  // The Menus page (Menu Engineer / Shared Links / Menu Builder grid) is
+  // renamed to Menu Engineer in the sidebar — the URL stays /menus to
+  // preserve shared-link compatibility.
+  { path: '/menus',          label: 'Menu Engineer',  labelKey: 'menu_engineer',  feature: 'menus',      icon: 'M4 6h16M4 10h16M4 14h16M4 18h16' },
   null, // ── divider ────────────────────────────────────────────────────────
   { path: '/allergens',      label: 'Allergens',      labelKey: 'allergens',      feature: 'allergens',  flag: 'allergens',     icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
   { path: '/haccp',          label: 'HACCP',          labelKey: 'haccp',          feature: 'haccp',      flag: 'haccp',         icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },

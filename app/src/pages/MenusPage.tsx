@@ -641,9 +641,9 @@ export default function MenusPage() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title="Menu Builder"
-        subtitle="Build menus, set sell prices and see live COGS% per dish."
-        tutorialPrompt="Give me an overview of the Menu Builder section. What are the three tabs — Menus, Menu Engineer, and Shared Links — and what is each one for?"
+        title="Menu Engineer"
+        subtitle="Run scenarios, share menus for review, and analyse COGS% across markets and price levels."
+        tutorialPrompt="Give me an overview of the Menu Engineer section. What are the three tabs — Menus, Menu Engineer, and Shared Links — and what is each one for?"
         action={
           activeTab === 'builder'
             ? <button className="btn btn-primary" onClick={() => setMenuModal('new')}>+ New Menu</button>

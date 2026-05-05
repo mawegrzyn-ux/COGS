@@ -4537,6 +4537,23 @@ const migrations = [
      WHERE version = '2026-05-05' AND title = 'Menu Builder — collapsible category buckets'
    )`,
 
+  // ── Step 170ak: Flip BACK-2793 to done (Menu Entry consolidation) ────────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2793' AND status <> 'done'`,
+
+  // ── Step 170al: Changelog — May 05 — Menu Entry + Menu Engineer rename ───
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-05', 'Navigation — Menu Entry consolidates catalog + builder; Menus renamed to Menu Engineer', '[
+     {"type":"added","description":"BACK-2793: New /menu-entry page with four top-level tabs — Items, Combos, Modifiers, Menu Builder. Tabs 1-3 reuse SalesItemsPage in embedded mode (new optional embeddedTab + hideHeader props sync activeTab and skip the internal title + tab bar so theres only one tab strip on screen). Tab 4 mounts MenuBuilderPage as-is. All four tabs stay mounted once visited (display:none for inactive) so per-tab state, scroll position, and dirty edits survive a tab switch — initial mount is lazy so the first paint is fast. URL ?tab= drives the initial tab and persists across reloads via localStorage(menu-entry-active-tab)."},
+     {"type":"changed","description":"BACK-2793: Sidebar trades Sales Items + Menu Builder for a single Menu Entry link. The old /sales-items and /menu-builder URLs redirect to /menu-entry?tab=items and ?tab=menu-builder respectively, so existing bookmarks land on the right tab without breaking. Net effect: same surfaces, fewer sidebar slots, fewer page transitions when bouncing between catalog editing and menu assembly."},
+     {"type":"changed","description":"BACK-2793: The old Menus page (with the Menu Engineer / Shared Links / Builder Grid sub-tabs) is renamed Menu Engineer in both the sidebar and the page header. The URL keeps /menus to preserve shared-link compatibility — /menu-engineer redirects to /menus. The MenusPage subtitle also updates to reflect the engineering / scenario / sharing focus."},
+     {"type":"added","description":"BACK-2793: New i18n keys nav.menu_entry + nav.menu_engineer in en.ts. Other locales fall back through the existing Sidebar fallback to the English label until they get translated explicitly."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-05' AND title = 'Navigation — Menu Entry consolidates catalog + builder; Menus renamed to Menu Engineer'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

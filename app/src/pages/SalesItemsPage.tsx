@@ -306,9 +306,25 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
 }
 
 // ── Main SalesItemsPage ────────────────────────────────────────────────────────
-export default function SalesItemsPage() {
+// BACK-2793 — when SalesItemsPage is embedded inside MenuEntryPage the
+// parent owns the top-level tab bar, so we accept an external override of
+// activeTab and a flag to hide the page header (title + tab bar).
+export default function SalesItemsPage({
+  embeddedTab,
+  hideHeader,
+}: {
+  embeddedTab?: 'items' | 'combos' | 'modifiers'
+  hideHeader?: boolean
+} = {}) {
   const api = useApi()
-  const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>('items')
+  const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>(embeddedTab ?? 'items')
+  // Keep internal state in lockstep with the external override when the
+  // parent flips its top tab. Local setActiveTab calls still work for
+  // single-page mode and deep links.
+  useEffect(() => {
+    if (embeddedTab && embeddedTab !== activeTab) setActiveTab(embeddedTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embeddedTab])
   const [searchParams, setSearchParams] = useSearchParams()
 
   // ── Items-tab view mode — 'list' = existing dense table, 'excel' = editable
@@ -1042,13 +1058,41 @@ export default function SalesItemsPage() {
   return (
     <div className="flex flex-col h-full">
       <ReturnToMenuBuilderBanner />
-      {/* Header */}
-      <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Sales Items</h1>
-            <p className="text-sm text-gray-500 mt-0.5">POS catalog — recipes, ingredients, manual items, and combos</p>
+      {/* Header — hidden when embedded inside MenuEntryPage (parent owns
+          the title + tab bar). The contextual + New button is moved to a
+          slim action strip below so it stays accessible in both modes. */}
+      {!hideHeader && (
+        <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Sales Items</h1>
+              <p className="text-sm text-gray-500 mt-0.5">POS catalog — recipes, ingredients, manual items, and combos</p>
+            </div>
+            {activeTab === 'items' && (
+              <button className="btn btn-primary" onClick={() => { setNewComboMode(false); setSiModal('new') }}>+ New Sales Item</button>
+            )}
+            {activeTab === 'combos' && (
+              <button className="btn btn-primary" onClick={() => setComboModal('new')}>+ New Combo</button>
+            )}
+            {activeTab === 'modifiers' && (
+              <button className="btn btn-primary" onClick={() => setShowNewMgModal(true)}>+ New Modifier Group</button>
+            )}
           </div>
+          <div className="flex gap-1">
+            {(['items', 'combos', 'modifiers'] as const).map(t => (
+              <button key={t} onClick={() => setActiveTab(t)}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                {t === 'items' ? 'Sales Items' : t === 'combos' ? 'Combos' : 'Modifiers'}
+                {t === 'items' && nonComboItems.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{nonComboItems.length}</span>}
+                {t === 'combos' && combos.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{combos.length}</span>}
+                {t === 'modifiers' && modifierGroups.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{modifierGroups.length}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {hideHeader && (
+        <div className="flex items-center justify-end px-6 py-2 border-b border-gray-200 bg-white">
           {activeTab === 'items' && (
             <button className="btn btn-primary" onClick={() => { setNewComboMode(false); setSiModal('new') }}>+ New Sales Item</button>
           )}
@@ -1059,18 +1103,7 @@ export default function SalesItemsPage() {
             <button className="btn btn-primary" onClick={() => setShowNewMgModal(true)}>+ New Modifier Group</button>
           )}
         </div>
-        <div className="flex gap-1">
-          {(['items', 'combos', 'modifiers'] as const).map(t => (
-            <button key={t} onClick={() => setActiveTab(t)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-              {t === 'items' ? 'Sales Items' : t === 'combos' ? 'Combos' : 'Modifiers'}
-              {t === 'items' && nonComboItems.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{nonComboItems.length}</span>}
-              {t === 'combos' && combos.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{combos.length}</span>}
-              {t === 'modifiers' && modifierGroups.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{modifierGroups.length}</span>}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* ── ITEMS TAB ─────────────────────────────────────────────────────────── */}
       {activeTab === 'items' && (

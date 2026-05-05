@@ -45,6 +45,9 @@ export default {
     sales_items: 'Sales Items',
     menus: 'Menus',
     menu_builder: 'Menu Builder',
+    // BACK-2793 — new sidebar entries.
+    menu_entry: 'Menu Entry',
+    menu_engineer: 'Menu Engineer',
     allergens: 'Allergens',
     haccp: 'HACCP',
     audits: 'Audits',
