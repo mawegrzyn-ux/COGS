@@ -78,7 +78,9 @@ router.get('/', async (req, res, next) => {
               si.name      AS sales_item_name,
               si.item_type,
               si.image_url AS si_image_url,
+              si.category_id AS sales_item_category_id,
               cat.name     AS category,
+              cat.id       AS category_id,
               (SELECT COUNT(*)::int FROM mcogs_sales_item_modifier_groups WHERE sales_item_id = si.id) AS modifier_group_count
        FROM   mcogs_menu_sales_items msi
        JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id

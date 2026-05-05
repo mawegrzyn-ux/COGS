@@ -45,6 +45,7 @@ interface MenuSalesItem {
   item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
   si_image_url: string | null
   category: string | null
+  category_id?: number | null    // resolved sales-item category id
   prices?: MenuItemPrice[]       // story 6 — already in the GET response
   has_price_override?: boolean
   modifier_group_count?: number  // BACK-2573 — surfaced via the GET join
@@ -331,6 +332,11 @@ export default function MenuBuilderPage() {
   // BACK-2572 — drag-drop reorder state.
   const [dragId,    setDragId]    = useState<number | null>(null)
   const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // BACK-2770 — when group-by-category is on the user can also drop directly
+  // on a category header to land at the end of that category. Stored as
+  // either a category_id (number, or null for Uncategorised) plus its
+  // displayed name so the optimistic local update can rename the row.
+  const [dragOverCat, setDragOverCat] = useState<{ id: number | null; name: string | null } | null>(null)
   // BACK-2638 — per-item cost (cost_per_portion in market currency) keyed by
   // menu_sales_item_id. Populated from /api/cogs/menu-sales when the menu
   // loads + after every items reload (so a price/recipe change refreshes).
@@ -626,24 +632,75 @@ export default function MenuBuilderPage() {
     }
   }, [api, loadSubPrices])
 
-  // BACK-2572 — drag-drop reorder. Persist via POST /menu-sales-items/reorder
-  // (transactional sort_order update). Optimistic local reorder + reload on
-  // failure. Disabled while group-by-category is on (sort within category is
-  // a separate follow-up).
-  const reorderItems = useCallback(async (sourceId: number, targetId: number) => {
-    if (!selectedMenu || sourceId === targetId) return
+  // BACK-2572 + BACK-2770 — drag-drop reorder, with cross-category support
+  // when groupByCategory is on. Target shapes:
+  //   { msiId }                       drop on a row → place adjacent
+  //   { categoryId: number | null }   drop on a category header → place at
+  //                                   end of that category (null = Uncategorised)
+  // If the source's category differs from the target's, the source's
+  // sales_item.category_id is updated server-side too (POST /sales-items/
+  // bulk/category — already exists, batch-friendly), then the global
+  // sort_order is rewritten via POST /menu-sales-items/reorder. Optimistic
+  // local update + rollback on failure.
+  const reorderItems = useCallback(async (
+    sourceId: number,
+    target: { msiId?: number; categoryId?: number | null; categoryName?: string | null },
+  ) => {
+    if (!selectedMenu) return
     const before = items
+    const source = items.find(i => i.id === sourceId)
+    if (!source) return
+
+    // Resolve the destination category + insertion index.
+    let newCategoryId: number | null | undefined
+    let newCategoryName: string | null | undefined
+    let toIdx = -1
+    if (target.msiId != null) {
+      if (target.msiId === sourceId) return
+      const targetItem = items.find(i => i.id === target.msiId)
+      if (!targetItem) return
+      newCategoryId   = targetItem.category_id ?? null
+      newCategoryName = targetItem.category ?? null
+      toIdx = items.findIndex(i => i.id === target.msiId)
+    } else {
+      newCategoryId   = target.categoryId ?? null
+      newCategoryName = target.categoryName ?? null
+      // Find the last item in the destination category and place after it;
+      // if the category is empty (no items yet), place at the end.
+      const lastIdx = items
+        .map((it, idx) => ({ it, idx }))
+        .filter(({ it }) => (it.category_id ?? null) === (newCategoryId ?? null))
+        .map(({ idx }) => idx)
+        .pop() ?? items.length - 1
+      toIdx = lastIdx + 1   // insert after
+    }
+
+    const categoryChanged = (source.category_id ?? null) !== (newCategoryId ?? null)
+    if (!categoryChanged && target.msiId === undefined) return    // no-op
+
+    // Optimistic local reorder + (if needed) category rename.
     const reordered = (() => {
       const arr = [...items]
       const fromIdx = arr.findIndex(i => i.id === sourceId)
-      const toIdx   = arr.findIndex(i => i.id === targetId)
-      if (fromIdx < 0 || toIdx < 0) return arr
+      if (fromIdx < 0) return arr
+      // splice out, then insert at adjusted toIdx (account for removal shift)
       const [moved] = arr.splice(fromIdx, 1)
-      arr.splice(toIdx, 0, moved)
+      const adjustedTo = toIdx > fromIdx ? toIdx - 1 : toIdx
+      const updated = categoryChanged
+        ? { ...moved, category_id: newCategoryId ?? null, category: newCategoryName ?? null }
+        : moved
+      arr.splice(Math.max(0, Math.min(adjustedTo, arr.length)), 0, updated)
       return arr.map((it, idx) => ({ ...it, sort_order: idx }))
     })()
     setItems(reordered)
+
     try {
+      if (categoryChanged) {
+        await api.post('/sales-items/bulk/category', {
+          item_ids:    [source.sales_item_id],
+          category_id: newCategoryId,
+        })
+      }
       await api.post('/menu-sales-items/reorder', {
         menu_id: selectedMenu.id,
         order:   reordered.map(i => i.id),
@@ -862,16 +919,25 @@ export default function MenuBuilderPage() {
                   onRemove={(it) => removeItem(it)}
                   onToggleExpand={toggleExpand}
                   onSaveOptionPrice={saveOptionPrice}
+                  dragOverCat={dragOverCat}
                   onDragStart={(id) => setDragId(id)}
-                  onDragOver={(e, id) => { e.preventDefault(); setDragOverId(id) }}
+                  onDragOver={(e, id) => { e.preventDefault(); setDragOverId(id); setDragOverCat(null) }}
                   onDragLeave={() => setDragOverId(null)}
+                  onDragOverCategory={(e, id, name) => { e.preventDefault(); setDragOverCat({ id, name }); setDragOverId(null) }}
+                  onDragLeaveCategory={() => setDragOverCat(null)}
                   onDrop={() => {
-                    if (dragId !== null && dragOverId !== null && dragId !== dragOverId) {
-                      reorderItems(dragId, dragOverId)
+                    if (dragId !== null) {
+                      // BACK-2770 — prefer a row drop when both targets fired
+                      // (mouseover on a row inside a category bucket).
+                      if (dragOverId !== null && dragOverId !== dragId) {
+                        reorderItems(dragId, { msiId: dragOverId })
+                      } else if (dragOverCat) {
+                        reorderItems(dragId, { categoryId: dragOverCat.id, categoryName: dragOverCat.name })
+                      }
                     }
-                    setDragId(null); setDragOverId(null)
+                    setDragId(null); setDragOverId(null); setDragOverCat(null)
                   }}
-                  onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                  onDragEnd={() => { setDragId(null); setDragOverId(null); setDragOverCat(null) }}
                 />
               )}
             </div>
@@ -976,20 +1042,22 @@ export default function MenuBuilderPage() {
   )
 }
 
-// ── Items list (BACK-2569 / 2571 / 2572) ───────────────────────────────────
+// ── Items list (BACK-2569 / 2571 / 2572 / 2731) ────────────────────────────
 // Pulls flat-vs-grouped rendering, drag-drop sort, and the inline price
-// columns into one component. Drag-drop is disabled while group-by-category
-// is on (in-group reorder is a follow-up).
+// columns into one component. Drag-drop works in both flat and grouped
+// modes; in grouped mode dropping on a row in another category (or on a
+// category header) also moves the underlying sales item into that
+// category server-side via POST /sales-items/bulk/category.
 
 function ItemsList({
   items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
-  dragId, dragOverId,
+  dragId, dragOverId, dragOverCat,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
   expandedInnerKeys, onToggleInnerKey,
   costByMsi, currencySymbol,
   taxRates, savingTaxCells, onSaveTaxOverride,
   onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
-  onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
+  onDragStart, onDragOver, onDragLeave, onDragOverCategory, onDragLeaveCategory, onDrop, onDragEnd,
 }: {
   items: MenuSalesItem[]
   enabledPriceLevels: CountryPriceLevel[]
@@ -998,6 +1066,8 @@ function ItemsList({
   savingPriceCells: Set<string>
   dragId: number | null
   dragOverId: number | null
+  // BACK-2770 — drop-on-category-header target.
+  dragOverCat: { id: number | null; name: string | null } | null
   expandedRows: Set<number>
   subPricesById: Record<number, SubPricesResp>
   subPricesLoading: Set<number>
@@ -1021,24 +1091,34 @@ function ItemsList({
   onDragStart: (id: number) => void
   onDragOver: (e: React.DragEvent, id: number) => void
   onDragLeave: () => void
+  // BACK-2770 — category-header drop zone callbacks.
+  onDragOverCategory: (e: React.DragEvent, categoryId: number | null, categoryName: string | null) => void
+  onDragLeaveCategory: () => void
   onDrop: () => void
   onDragEnd: () => void
 }) {
-  const draggable = !groupByCategory  // disabled in grouped mode
+  // BACK-2770 — drag is now enabled in both flat and grouped modes. In
+  // grouped mode, dropping on a row in another category also moves the
+  // sales item into that category server-side.
+  const draggable = true
 
-  // BACK-2571 — bucket items by category. Uncategorised pinned to the top.
+  // BACK-2571 + BACK-2770 — bucket items by category. Uncategorised pinned
+  // to the top. Each entry is { name, id, rows } so the drop handler can
+  // resolve the destination category id when the user drops on a header.
   const groups = useMemo(() => {
-    const buckets = new Map<string, MenuSalesItem[]>()
+    const buckets = new Map<string, { id: number | null; rows: MenuSalesItem[] }>()
     for (const it of items) {
-      const key = (it.category || '').trim() || 'Uncategorised'
-      if (!buckets.has(key)) buckets.set(key, [])
-      buckets.get(key)!.push(it)
+      const name = (it.category || '').trim() || 'Uncategorised'
+      const id   = it.category_id ?? null
+      if (!buckets.has(name)) buckets.set(name, { id, rows: [] })
+      buckets.get(name)!.rows.push(it)
     }
     return Array.from(buckets.entries())
-      .sort(([a], [b]) => {
-        if (a === 'Uncategorised') return -1
-        if (b === 'Uncategorised') return 1
-        return a.localeCompare(b, undefined, { sensitivity: 'base' })
+      .map(([name, v]) => ({ name, id: v.id, rows: v.rows }))
+      .sort((a, b) => {
+        if (a.name === 'Uncategorised') return -1
+        if (b.name === 'Uncategorised') return 1
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
       })
   }, [items])
 
@@ -1228,16 +1308,32 @@ function ItemsList({
       )}
 
       {groupByCategory ? (
-        groups.map(([category, rows]) => (
-          <div key={category}>
-            <div className="px-4 py-1.5 bg-surface-2/70 border-b border-border text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1]">
-              {category} <span className="ml-1 font-mono text-text-3">({rows.length})</span>
+        groups.map(({ name, id, rows }) => {
+          const isCatDropOver = !!dragOverCat && dragOverCat.id === id && dragId !== null
+          return (
+            <div key={name}>
+              <div
+                onDragOver={(e) => onDragOverCategory(e, id, name === 'Uncategorised' ? null : name)}
+                onDragLeave={onDragLeaveCategory}
+                onDrop={onDrop}
+                className={`px-4 py-1.5 border-b text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1] transition-colors ${
+                  isCatDropOver
+                    ? 'bg-accent-dim border-accent border-b-2'
+                    : 'bg-surface-2/70 border-border'
+                }`}
+                title={dragId !== null ? 'Drop here to move into this category' : undefined}
+              >
+                {name} <span className="ml-1 font-mono text-text-3">({rows.length})</span>
+                {isCatDropOver && (
+                  <span className="ml-2 text-accent normal-case font-medium">↓ drop here</span>
+                )}
+              </div>
+              <ul className="divide-y divide-border">
+                {rows.map(renderRow)}
+              </ul>
             </div>
-            <ul className="divide-y divide-border">
-              {rows.map(renderRow)}
-            </ul>
-          </div>
-        ))
+          )
+        })
       ) : (
         <ul className="divide-y divide-border">
           {items.map(renderRow)}

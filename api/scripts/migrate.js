@@ -4493,6 +4493,21 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Menu Builder — fix tax cell showing decimal not percent'
    )`,
 
+  // ── Step 170ae: Flip BACK-2770 to done (drag-drop + cross-category) ──────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2770' AND status <> 'done'`,
+
+  // ── Step 170af: Changelog — May 04 — Drag-drop + cross-category move ─────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-04', 'Menu Builder — drag-drop sort works while grouped + cross-category move', '[
+     {"type":"changed","description":"BACK-2770: Drag-drop in the items list previously bailed out when Group by category was checked. It now works in both flat and grouped modes. Within a category, drag reorders normally via POST /menu-sales-items/reorder. Drop on a row in another category — or directly on a category header — and the underlying sales items category_id flips server-side via POST /sales-items/bulk/category before the reorder fires, so the moved row lands in its new bucket. Optimistic local update + rollback on failure. Category headers get a drop zone with a visible drop here indicator on hover."},
+     {"type":"changed","description":"GET /api/menu-sales-items?menu_id=X now also returns category_id alongside the joined category name so the menu builder can resolve the destination category id without a second lookup. The frontend MenuSalesItem type and the groups bucket structure both carry the id through to the cross-category drop handler."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-04' AND title = 'Menu Builder — drag-drop sort works while grouped + cross-category move'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[
