@@ -4508,6 +4508,35 @@ const migrations = [
      WHERE version = '2026-05-04' AND title = 'Menu Builder — drag-drop sort works while grouped + cross-category move'
    )`,
 
+  // ── Step 170ag: Flip BACK-2781 to done (cat sort_order + drag-drop) ──────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2781' AND status <> 'done'`,
+
+  // ── Step 170ah: Changelog — May 05 — Menu Builder category sort/drag ─────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-05', 'Menu Builder — category buckets follow Configuration sort_order + drag-drop headers', '[
+     {"type":"changed","description":"BACK-2781 (1/2): Menu Builder grouped mode previously sorted category buckets alphabetically. It now sorts by mcogs_categories.sort_order so it matches the order set in Configuration → Categories. Uncategorised stays pinned at the top, alphabetical tie-break for the rare case where multiple categories share a sort_order. GET /api/menu-sales-items?menu_id=X gains a category_sort_order field on each row so the front-end can sort buckets without an extra round-trip."},
+     {"type":"added","description":"BACK-2781 (2/2): Each category header in the Menu Builder is now draggable. Grab the ⠿ handle on a header, drop on another header to reorder. Persists via the existing POST /api/categories/reorder which writes through to mcogs_categories.sort_order, so Configuration → Categories shows the same order. The full canonical for_sales_items category list is fetched once on mount; the menu builder splices the dragged category into the new position, renumbers sort_order across the whole set, and POSTs the lot transactionally. Optimistic local update + revert + reload on failure. Uncategorised has no real id so its header has no drag handle and stays anchored at the top."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-05' AND title = 'Menu Builder — category buckets follow Configuration sort_order + drag-drop headers'
+   )`,
+
+  // ── Step 170ai: Flip BACK-2782 to done (collapsible category buckets) ────
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2782' AND status <> 'done'`,
+
+  // ── Step 170aj: Changelog — May 05 — Collapsible category buckets ────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-05', 'Menu Builder — collapsible category buckets', '[
+     {"type":"added","description":"BACK-2782: Each category header in the Menu Builder items list (grouped mode) now has a ▼ / ▶ caret and the whole header is clickable to collapse / expand its bucket. State is per-browser, persisted to localStorage(menu-builder-collapsed-cats), defaults to all expanded. A small Collapse all / Expand all toolbar appears just above the first category header when there are 2+ buckets. The drag handle stops click propagation so dragging never accidentally toggles collapse, and the cross-category-drop + category-reorder gestures are unchanged."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-05' AND title = 'Menu Builder — collapsible category buckets'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

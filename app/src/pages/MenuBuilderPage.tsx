@@ -46,6 +46,9 @@ interface MenuSalesItem {
   si_image_url: string | null
   category: string | null
   category_id?: number | null    // resolved sales-item category id
+  // BACK-2781 — category sort_order from mcogs_categories. Drives the
+  // grouped-mode bucket order so it matches Configuration → Categories.
+  category_sort_order?: number | null
   prices?: MenuItemPrice[]       // story 6 — already in the GET response
   has_price_override?: boolean
   modifier_group_count?: number  // BACK-2573 — surfaced via the GET join
@@ -337,6 +340,38 @@ export default function MenuBuilderPage() {
   // either a category_id (number, or null for Uncategorised) plus its
   // displayed name so the optimistic local update can rename the row.
   const [dragOverCat, setDragOverCat] = useState<{ id: number | null; name: string | null } | null>(null)
+  // BACK-2781 — drag a category header → drop on another header to reorder
+  // the categories themselves (writes through to mcogs_categories.sort_order
+  // so Configuration → Categories sees the same order).
+  const [catDragId,     setCatDragId]     = useState<number | null>(null)
+  const [catDragOverId, setCatDragOverId] = useState<number | null>(null)
+  const [salesCategories, setSalesCategories] = useState<{ id: number; name: string; sort_order: number; group_id: number | null }[]>([])
+  // BACK-2782 — collapsed-category set keyed by displayed name (matches the
+  // bucket key in the grouped renderer). Persisted per-browser so the
+  // operator's collapse state sticks across reloads. Default = all expanded.
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('menu-builder-collapsed-cats')
+      if (!raw) return new Set()
+      const arr = JSON.parse(raw) as string[]
+      return new Set(Array.isArray(arr) ? arr : [])
+    } catch { return new Set() }
+  })
+  const toggleCatCollapsed = useCallback((name: string) => {
+    setCollapsedCats(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name); else next.add(name)
+      try { window.localStorage.setItem('menu-builder-collapsed-cats', JSON.stringify([...next])) } catch { /* quota */ }
+      return next
+    })
+  }, [])
+  const setAllCatsCollapsed = useCallback((collapsed: boolean, names: string[]) => {
+    setCollapsedCats(_prev => {
+      const next = collapsed ? new Set(names) : new Set<string>()
+      try { window.localStorage.setItem('menu-builder-collapsed-cats', JSON.stringify([...next])) } catch { /* quota */ }
+      return next
+    })
+  }, [])
   // BACK-2638 — per-item cost (cost_per_portion in market currency) keyed by
   // menu_sales_item_id. Populated from /api/cogs/menu-sales when the menu
   // loads + after every items reload (so a price/recipe change refreshes).
@@ -531,6 +566,68 @@ export default function MenuBuilderPage() {
       .then((d: TaxRateOption[]) => setTaxRates(d || []))
       .catch(() => setTaxRates([]))
   }, [api, selectedMenu])
+
+  // BACK-2781 — load the for_sales_items category set once so drag-drop
+  // category-header reordering has the canonical full ordering to splice
+  // into (the menu builder only renders categories that have items, so we
+  // can't derive the full set from `items` alone).
+  const loadSalesCategories = useCallback(async () => {
+    try {
+      const d = await api.get('/categories?for_sales_items=true') as Array<{ id: number; name: string; sort_order: number; group_id: number | null }>
+      setSalesCategories((d || []).map(c => ({
+        id:         c.id,
+        name:       c.name,
+        sort_order: Number(c.sort_order ?? 0),
+        group_id:   c.group_id ?? null,
+      })))
+    } catch { /* non-fatal */ }
+  }, [api])
+  useEffect(() => { loadSalesCategories() }, [loadSalesCategories])
+
+  // BACK-2781 — reorder categories. dragId + targetId are mcogs_category ids.
+  // Splice dragId before targetId in the canonical sales-categories list,
+  // renumber sort_order 0..N-1 across the whole set, persist via the
+  // existing POST /categories/reorder, then refetch the menu items so the
+  // bucket order picks up the new sort_order on the next render.
+  const reorderCategories = useCallback(async (sourceCatId: number, targetCatId: number) => {
+    if (sourceCatId === targetCatId) return
+    if (!salesCategories.length) return
+    // Sort the canonical set by current sort_order (alphabetical tie-break)
+    // so the splice math is predictable regardless of insertion order.
+    const ordered = [...salesCategories].sort((a, b) =>
+      a.sort_order - b.sort_order || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    )
+    const fromIdx = ordered.findIndex(c => c.id === sourceCatId)
+    const toIdx   = ordered.findIndex(c => c.id === targetCatId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const [moved] = ordered.splice(fromIdx, 1)
+    const insertAt = toIdx > fromIdx ? toIdx - 1 : toIdx
+    ordered.splice(insertAt, 0, moved)
+    const renumbered = ordered.map((c, idx) => ({ ...c, sort_order: idx }))
+
+    // Optimistic local update — items[].category_sort_order is mirrored
+    // from the renumbered set so the bucket order updates on the next render
+    // without waiting for a refetch.
+    const sortByCat = new Map(renumbered.map(c => [c.id, c.sort_order]))
+    setSalesCategories(renumbered)
+    setItems(prev => prev.map(it => it.category_id != null
+      ? { ...it, category_sort_order: sortByCat.get(it.category_id) ?? it.category_sort_order ?? 0 }
+      : it))
+
+    try {
+      await api.post('/categories/reorder', renumbered.map(c => ({
+        id:         c.id,
+        group_id:   c.group_id,
+        sort_order: c.sort_order,
+      })))
+    } catch (err: unknown) {
+      // Revert + reload from server on failure so the UI doesn't drift.
+      const msg = (err as { message?: string })?.message || 'Failed to reorder categories'
+      setToast({ message: msg, type: 'error' })
+      loadSalesCategories()
+      if (selectedMenu) loadItems(selectedMenu.id)
+    }
+  }, [api, salesCategories, selectedMenu, loadItems, loadSalesCategories])
 
   // BACK-2730 — set or clear the tax override on a menu_sales_item. NULL
   // clears it; the row falls back to country_level_tax / country default.
@@ -920,13 +1017,26 @@ export default function MenuBuilderPage() {
                   onToggleExpand={toggleExpand}
                   onSaveOptionPrice={saveOptionPrice}
                   dragOverCat={dragOverCat}
+                  catDragId={catDragId}
+                  catDragOverId={catDragOverId}
+                  collapsedCats={collapsedCats}
+                  onToggleCatCollapsed={toggleCatCollapsed}
+                  onSetAllCatsCollapsed={setAllCatsCollapsed}
                   onDragStart={(id) => setDragId(id)}
                   onDragOver={(e, id) => { e.preventDefault(); setDragOverId(id); setDragOverCat(null) }}
                   onDragLeave={() => setDragOverId(null)}
                   onDragOverCategory={(e, id, name) => { e.preventDefault(); setDragOverCat({ id, name }); setDragOverId(null) }}
                   onDragLeaveCategory={() => setDragOverCat(null)}
+                  onCatDragStart={(id) => { setCatDragId(id); setDragId(null) }}
+                  onCatDragOver={(e, id) => { e.preventDefault(); setCatDragOverId(id) }}
+                  onCatDragLeave={() => setCatDragOverId(null)}
                   onDrop={() => {
-                    if (dragId !== null) {
+                    // BACK-2781 — category drag wins when both row + category
+                    // drag could fire (you can only have one of them at a time
+                    // anyway, but the priority is explicit).
+                    if (catDragId != null && catDragOverId != null && catDragId !== catDragOverId) {
+                      reorderCategories(catDragId, catDragOverId)
+                    } else if (dragId !== null) {
                       // BACK-2770 — prefer a row drop when both targets fired
                       // (mouseover on a row inside a category bucket).
                       if (dragOverId !== null && dragOverId !== dragId) {
@@ -936,8 +1046,12 @@ export default function MenuBuilderPage() {
                       }
                     }
                     setDragId(null); setDragOverId(null); setDragOverCat(null)
+                    setCatDragId(null); setCatDragOverId(null)
                   }}
-                  onDragEnd={() => { setDragId(null); setDragOverId(null); setDragOverCat(null) }}
+                  onDragEnd={() => {
+                    setDragId(null); setDragOverId(null); setDragOverCat(null)
+                    setCatDragId(null); setCatDragOverId(null)
+                  }}
                 />
               )}
             </div>
@@ -1052,12 +1166,16 @@ export default function MenuBuilderPage() {
 function ItemsList({
   items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
   dragId, dragOverId, dragOverCat,
+  catDragId, catDragOverId,
+  collapsedCats, onToggleCatCollapsed, onSetAllCatsCollapsed,
   expandedRows, subPricesById, subPricesLoading, savingOptionCells,
   expandedInnerKeys, onToggleInnerKey,
   costByMsi, currencySymbol,
   taxRates, savingTaxCells, onSaveTaxOverride,
   onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
-  onDragStart, onDragOver, onDragLeave, onDragOverCategory, onDragLeaveCategory, onDrop, onDragEnd,
+  onDragStart, onDragOver, onDragLeave, onDragOverCategory, onDragLeaveCategory,
+  onCatDragStart, onCatDragOver, onCatDragLeave,
+  onDrop, onDragEnd,
 }: {
   items: MenuSalesItem[]
   enabledPriceLevels: CountryPriceLevel[]
@@ -1068,6 +1186,13 @@ function ItemsList({
   dragOverId: number | null
   // BACK-2770 — drop-on-category-header target.
   dragOverCat: { id: number | null; name: string | null } | null
+  // BACK-2781 — category-header drag (reorder categories themselves).
+  catDragId:     number | null
+  catDragOverId: number | null
+  // BACK-2782 — collapsible category buckets.
+  collapsedCats: Set<string>
+  onToggleCatCollapsed: (name: string) => void
+  onSetAllCatsCollapsed: (collapsed: boolean, names: string[]) => void
   expandedRows: Set<number>
   subPricesById: Record<number, SubPricesResp>
   subPricesLoading: Set<number>
@@ -1091,9 +1216,13 @@ function ItemsList({
   onDragStart: (id: number) => void
   onDragOver: (e: React.DragEvent, id: number) => void
   onDragLeave: () => void
-  // BACK-2770 — category-header drop zone callbacks.
+  // BACK-2770 — category-header drop zone callbacks (drop ITEM into category).
   onDragOverCategory: (e: React.DragEvent, categoryId: number | null, categoryName: string | null) => void
   onDragLeaveCategory: () => void
+  // BACK-2781 — category-header drag callbacks (drag the CATEGORY itself).
+  onCatDragStart:    (categoryId: number) => void
+  onCatDragOver:     (e: React.DragEvent, categoryId: number) => void
+  onCatDragLeave:    () => void
   onDrop: () => void
   onDragEnd: () => void
 }) {
@@ -1102,22 +1231,26 @@ function ItemsList({
   // sales item into that category server-side.
   const draggable = true
 
-  // BACK-2571 + BACK-2770 — bucket items by category. Uncategorised pinned
-  // to the top. Each entry is { name, id, rows } so the drop handler can
-  // resolve the destination category id when the user drops on a header.
+  // BACK-2571 + BACK-2770 + BACK-2781 — bucket items by category.
+  // Uncategorised pinned to the top. Categorised buckets follow the
+  // sort_order from Configuration → Categories so the menu builder and
+  // the catalog stay in lockstep. Alphabetical tie-break for the rare
+  // case where multiple categories share a sort_order.
   const groups = useMemo(() => {
-    const buckets = new Map<string, { id: number | null; rows: MenuSalesItem[] }>()
+    const buckets = new Map<string, { id: number | null; sortOrder: number; rows: MenuSalesItem[] }>()
     for (const it of items) {
       const name = (it.category || '').trim() || 'Uncategorised'
       const id   = it.category_id ?? null
-      if (!buckets.has(name)) buckets.set(name, { id, rows: [] })
+      const sortOrder = Number(it.category_sort_order ?? 0)
+      if (!buckets.has(name)) buckets.set(name, { id, sortOrder, rows: [] })
       buckets.get(name)!.rows.push(it)
     }
     return Array.from(buckets.entries())
-      .map(([name, v]) => ({ name, id: v.id, rows: v.rows }))
+      .map(([name, v]) => ({ name, id: v.id, sortOrder: v.sortOrder, rows: v.rows }))
       .sort((a, b) => {
         if (a.name === 'Uncategorised') return -1
         if (b.name === 'Uncategorised') return 1
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder
         return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
       })
   }, [items])
@@ -1308,32 +1441,105 @@ function ItemsList({
       )}
 
       {groupByCategory ? (
-        groups.map(({ name, id, rows }) => {
-          const isCatDropOver = !!dragOverCat && dragOverCat.id === id && dragId !== null
-          return (
-            <div key={name}>
-              <div
-                onDragOver={(e) => onDragOverCategory(e, id, name === 'Uncategorised' ? null : name)}
-                onDragLeave={onDragLeaveCategory}
-                onDrop={onDrop}
-                className={`px-4 py-1.5 border-b text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1] transition-colors ${
-                  isCatDropOver
-                    ? 'bg-accent-dim border-accent border-b-2'
-                    : 'bg-surface-2/70 border-border'
-                }`}
-                title={dragId !== null ? 'Drop here to move into this category' : undefined}
-              >
-                {name} <span className="ml-1 font-mono text-text-3">({rows.length})</span>
-                {isCatDropOver && (
-                  <span className="ml-2 text-accent normal-case font-medium">↓ drop here</span>
+        <>
+          {/* BACK-2782 — collapse-all / expand-all toolbar. Compact strip
+              right above the first category header. Only visible when there
+              is more than one category bucket. */}
+          {groups.length > 1 && (
+            <div className="flex items-center justify-end gap-3 px-4 py-1 border-b border-border bg-surface-2/30 text-[10px] uppercase tracking-wide text-text-3 font-semibold">
+              <button
+                type="button"
+                className="hover:text-accent transition-colors"
+                onClick={() => onSetAllCatsCollapsed(true, groups.map(g => g.name))}
+                title="Collapse every category"
+              >▶ collapse all</button>
+              <span className="text-border">·</span>
+              <button
+                type="button"
+                className="hover:text-accent transition-colors"
+                onClick={() => onSetAllCatsCollapsed(false, [])}
+                title="Expand every category"
+              >▼ expand all</button>
+            </div>
+          )}
+          {groups.map(({ name, id, rows }) => {
+            // Drop-target states. Two distinct gestures share the header:
+            //   • dragging an ITEM      → highlight as cross-category move target
+            //   • dragging a CATEGORY   → highlight as reorder target
+            const isItemDropOver = !!dragOverCat && dragOverCat.id === id && dragId !== null
+            const isCatDropOver  = catDragId !== null && catDragOverId === id && catDragId !== id && id != null
+            const isBeingCatDragged = catDragId === id
+            // Uncategorised has no real id, so it can't itself be reordered.
+            // Item drops onto it still work (clears the category override).
+            const headerDraggable = id != null
+            const isCollapsed = collapsedCats.has(name)
+            return (
+              <div key={name}>
+                <div
+                  onDragOver={(e) => {
+                    // Prefer category-drag handler when a category is being
+                    // dragged; otherwise treat as an item-drop target.
+                    if (catDragId !== null && id != null) onCatDragOver(e, id)
+                    else                                  onDragOverCategory(e, id, name === 'Uncategorised' ? null : name)
+                  }}
+                  onDragLeave={() => { catDragId !== null ? onCatDragLeave() : onDragLeaveCategory() }}
+                  onDrop={onDrop}
+                  // BACK-2782 — clicking the header (anywhere except the
+                  // drag handle / caret) toggles collapse. Drag handle stops
+                  // propagation so it doesn't trigger toggle on drag-start.
+                  onClick={() => onToggleCatCollapsed(name)}
+                  className={`px-4 py-1.5 border-b text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1] transition-colors flex items-center gap-2 cursor-pointer ${
+                    isItemDropOver || isCatDropOver
+                      ? 'bg-accent-dim border-accent border-b-2'
+                      : 'bg-surface-2/70 border-border hover:bg-surface-2'
+                  } ${isBeingCatDragged ? 'opacity-40' : ''}`}
+                  title={
+                    catDragId !== null && id != null
+                      ? 'Drop here to reorder categories'
+                      : dragId !== null
+                        ? 'Drop here to move into this category'
+                        : isCollapsed
+                          ? 'Click to expand'
+                          : 'Click to collapse'
+                  }
+                >
+                  {/* Category-drag handle. Uncategorised has no id, so the
+                      handle is a placeholder there. */}
+                  {headerDraggable ? (
+                    <span
+                      draggable
+                      onDragStart={(e) => { e.stopPropagation(); onCatDragStart(id!) }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0 text-text-3 hover:text-text-1 cursor-grab active:cursor-grabbing select-none"
+                      title="Drag to reorder this category"
+                    >⠿</span>
+                  ) : (
+                    <span className="shrink-0 w-3 opacity-40" />
+                  )}
+                  {/* BACK-2782 — collapse caret. Click anywhere on the header
+                      toggles, but the caret gives a clear affordance. */}
+                  <span className="shrink-0 text-text-3 select-none w-3 text-center">
+                    {isCollapsed ? '▶' : '▼'}
+                  </span>
+                  <span className="flex-1">
+                    {name} <span className="ml-1 font-mono text-text-3 normal-case">({rows.length})</span>
+                  </span>
+                  {isItemDropOver && (
+                    <span className="text-accent normal-case font-medium">↓ drop here</span>
+                  )}
+                  {isCatDropOver && (
+                    <span className="text-accent normal-case font-medium">↕ reorder</span>
+                  )}
+                </div>
+                {!isCollapsed && (
+                  <ul className="divide-y divide-border">
+                    {rows.map(renderRow)}
+                  </ul>
                 )}
               </div>
-              <ul className="divide-y divide-border">
-                {rows.map(renderRow)}
-              </ul>
-            </div>
-          )
-        })
+            )
+          })}
+        </>
       ) : (
         <ul className="divide-y divide-border">
           {items.map(renderRow)}
