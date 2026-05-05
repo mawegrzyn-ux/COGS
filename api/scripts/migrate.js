@@ -4570,6 +4570,21 @@ const migrations = [
      WHERE version = '2026-05-05' AND title = 'Combo cost respects sales_item step options + Shared grid tiles show images'
    )`,
 
+  // ── Step 170ao: Flip BACK-2814 to done (nested cost + aligned columns) ───
+  `UPDATE mcogs_backlog SET status = 'done', updated_at = NOW()
+   WHERE key = 'BACK-2814' AND status <> 'done'`,
+
+  // ── Step 170ap: Changelog — May 05 — Nested cost + column alignment ──────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-05', 'Menu Builder — combo / modifier options show cost + align columns with main row', '[
+     {"type":"changed","description":"BACK-2814: Expanded view rows for combo step options + modifier options previously rendered only an editable price cell at w-24, leaving the tax / cost columns blank and not aligned with the main item rows above. Now each nested level cell mirrors the main-row layout exactly: empty tax slot (w-9, since tax is set on the parent menu_sales_item not on individual options), editable price input (w-24), then a cost / COGS% stack (w-14) showing the per-option cost in market currency and a per-level COGS% computed from the cells effective sell value. Trailing w-20 + w-14 placeholders align with the Modifiers › / Remove columns. Group / step headers gain a cost summary suffix — avg ₹X · ₹min–₹max when options span a range, or cost ₹X when uniform — so the operator sees the cost shape of the group at a glance even when collapsed."},
+     {"type":"changed","description":"SubOption / SubComboOption types extended with cost?; SubModifierGroup / SubComboStep gain avg_cost / min_cost / max_cost (the backend already returned these fields). currencySymbol threaded from ItemsList through ExpandedItemContent down to NestedOption so cost cells use the same symbol as the main row. The renderPrice prop signature on NestedOption now returns { cell, value } so the component can compute COGS% per level without duplicating the override-resolution logic from the closure that built the PriceCell."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-05' AND title = 'Menu Builder — combo / modifier options show cost + align columns with main row'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

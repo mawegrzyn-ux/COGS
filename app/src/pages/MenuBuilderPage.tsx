@@ -80,6 +80,11 @@ interface SubModifierGroup {
   min_select: number
   max_select: number
   options: SubOption[]
+  // BACK-2814 — group-level cost summary (returned by the backend; used in
+  // the group header and to align with the main row's cost column).
+  avg_cost?: number
+  min_cost?: number
+  max_cost?: number
 }
 
 interface SubComboStep {
@@ -88,6 +93,9 @@ interface SubComboStep {
   min_select: number
   max_select: number
   options: SubComboOption[]
+  avg_cost?: number
+  min_cost?: number
+  max_cost?: number
 }
 
 interface SubOption {
@@ -97,6 +105,11 @@ interface SubOption {
   item_type: 'recipe' | 'ingredient' | 'manual'
   price_addon: number
   prices: Record<string, number>  // { [price_level_id]: sell_price }
+  // BACK-2814 — per-option cost in market currency × qty (already includes
+  // the recipe-multiplier scaling when the modifier-multiplier setting is
+  // on). Computed server-side in loadModifierGroupsForItem / loadComboStructure.
+  cost?: number
+  image_url?: string | null
 }
 
 interface SubComboOption {
@@ -107,6 +120,8 @@ interface SubComboOption {
   price_addon: number
   prices: Record<string, number>
   modifier_groups: SubModifierGroup[]
+  cost?: number
+  image_url?: string | null
 }
 
 interface MenuItemPrice {
@@ -1408,6 +1423,7 @@ function ItemsList({
                 expandedInnerKeys={expandedInnerKeys}
                 onToggleInnerKey={onToggleInnerKey}
                 onSaveOptionPrice={onSaveOptionPrice}
+                currencySymbol={currencySymbol}
                 onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
                 onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
               />
@@ -1559,6 +1575,7 @@ function ItemsList({
 
 function ExpandedItemContent({
   msiId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
+  currencySymbol,
   onOpenModifierGroup, onOpenComboStep,
 }: {
   msiId: number
@@ -1568,9 +1585,22 @@ function ExpandedItemContent({
   expandedInnerKeys: Set<string>
   onToggleInnerKey: (key: string) => void
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  // BACK-2814 — currency symbol so nested cost cells match the main-row format.
+  currencySymbol: string
   onOpenModifierGroup: (modifierGroupId: number) => void
   onOpenComboStep: (comboStepId: number) => void
 }) {
+  // BACK-2814 — small helper for the cost-summary suffix on a group/step
+  // header. Renders "avg ₹X · ₹min–₹max" when a meaningful range exists,
+  // or "cost ₹X" when there's only one option / all options share cost.
+  const fmtCostSummary = (avg?: number, min?: number, max?: number): string | null => {
+    if (avg == null || !Number.isFinite(avg)) return null
+    if (min != null && max != null && Number.isFinite(min) && Number.isFinite(max) && Math.abs(max - min) > 0.005) {
+      return `avg ${currencySymbol}${Number(avg).toFixed(2)} · ${currencySymbol}${Number(min).toFixed(2)}–${currencySymbol}${Number(max).toFixed(2)}`
+    }
+    return `cost ${currencySymbol}${Number(avg).toFixed(2)}`
+  }
+
   // Stable nested renderers — small helpers to keep the JSX tree readable.
   // BACK-2598 — modifier groups + combo steps are collapsed by default; the
   // user toggles each individually via the caret on the header.
@@ -1580,11 +1610,13 @@ function ExpandedItemContent({
     // is independent.
     const innerKey = parentKey ? `${msiId}:${parentKey}:${g.modifier_group_id}` : `${msiId}:mg:${g.modifier_group_id}`
     const open = expandedInnerKeys.has(innerKey)
+    const costSummary = fmtCostSummary(g.avg_cost, g.min_cost, g.max_cost)
+    const baseSubtitle = `Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`
     return (
       <NestedGroup
         key={g.modifier_group_id}
         title={g.name}
-        subtitle={`Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`}
+        subtitle={costSummary ? `${baseSubtitle} · ${costSummary}` : baseSubtitle}
         indentPx={indentPx}
         collapsed={!open}
         onToggleCollapse={() => onToggleInnerKey(innerKey)}
@@ -1596,25 +1628,29 @@ function ExpandedItemContent({
             title={o.display_name || o.name}
             subtitle={`+${o.price_addon.toFixed(2)} addon`}
             indentPx={indentPx + 16}
-          >
-            {enabledPriceLevels.map(lvl => {
+            cost={o.cost}
+            currencySymbol={currencySymbol}
+            enabledPriceLevels={enabledPriceLevels}
+            renderPriceCell={(lvl) => {
               const overrideKey = String(lvl.price_level_id)
               const override = o.prices[overrideKey]
               const value = override != null ? override : o.price_addon
               const isOverride = override != null
               const cellKey = `modifier:${msiId}:${o.id}:${lvl.price_level_id}`
-              return (
-                <PriceCell
-                  key={lvl.price_level_id}
-                  value={value}
-                  isOverride={isOverride}
-                  defaultPrice={o.price_addon}
-                  saving={savingOptionCells.has(cellKey)}
-                  onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
-                />
-              )
-            })}
-          </NestedOption>
+              return {
+                value,
+                cell: (
+                  <PriceCell
+                    value={value}
+                    isOverride={isOverride}
+                    defaultPrice={o.price_addon}
+                    saving={savingOptionCells.has(cellKey)}
+                    onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
+                  />
+                ),
+              }
+            }}
+          />
         ))}
       </NestedGroup>
     )
@@ -1629,6 +1665,7 @@ function ExpandedItemContent({
             // BACK-2598 — combo steps default collapsed.
             const stepKey = `${msiId}:cs:${step.id}`
             const stepOpen = expandedInnerKeys.has(stepKey)
+            const stepCostSummary = fmtCostSummary(step.avg_cost, step.min_cost, step.max_cost)
             return (
               <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
                 <div className="flex items-center" style={{ paddingLeft: 16 }}>
@@ -1646,7 +1683,10 @@ function ExpandedItemContent({
                   >
                     <span className="text-text-3">Step {idx + 1}</span>
                     <span className="text-accent">{step.name}</span>
-                    <span className="text-text-3 font-mono normal-case tracking-normal">· Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`} · {step.options.length} option{step.options.length === 1 ? '' : 's'}</span>
+                    <span className="text-text-3 font-mono normal-case tracking-normal">
+                      · Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`} · {step.options.length} option{step.options.length === 1 ? '' : 's'}
+                      {stepCostSummary ? ` · ${stepCostSummary}` : ''}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -1661,25 +1701,29 @@ function ExpandedItemContent({
                       title={o.display_name || o.name}
                       subtitle={`Combo option · +${o.price_addon.toFixed(2)} addon`}
                       indentPx={48}
-                    >
-                      {enabledPriceLevels.map(lvl => {
+                      cost={o.cost}
+                      currencySymbol={currencySymbol}
+                      enabledPriceLevels={enabledPriceLevels}
+                      renderPriceCell={(lvl) => {
                         const overrideKey = String(lvl.price_level_id)
                         const override = o.prices[overrideKey]
                         const value = override != null ? override : o.price_addon
                         const isOverride = override != null
                         const cellKey = `combo:${msiId}:${o.id}:${lvl.price_level_id}`
-                        return (
-                          <PriceCell
-                            key={lvl.price_level_id}
-                            value={value}
-                            isOverride={isOverride}
-                            defaultPrice={o.price_addon}
-                            saving={savingOptionCells.has(cellKey)}
-                            onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
-                          />
-                        )
-                      })}
-                    </NestedOption>
+                        return {
+                          value,
+                          cell: (
+                            <PriceCell
+                              value={value}
+                              isOverride={isOverride}
+                              defaultPrice={o.price_addon}
+                              saving={savingOptionCells.has(cellKey)}
+                              onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
+                            />
+                          ),
+                        }
+                      }}
+                    />
                     {/* Per-step-option modifier groups (BACK-2574) — collapsed by default */}
                     {o.modifier_groups.length > 0 && (
                       <div>
@@ -1760,23 +1804,63 @@ function NestedGroup({
 
 // Single nested option row — keeps the column alignment matching the parent
 // list (item info on the left, price-level cells on the right).
+// BACK-2814 — aligned nested option row. Mirrors the main-row level-cell
+// layout exactly so columns line up under the header: empty tax slot +
+// editable price + cost / COGS% stack per level, plus the trailing
+// w-20 / w-14 placeholders for the Modifiers ›/Remove columns. The cost
+// is per-option (single value), COGS% recomputes per-level from each
+// cell's effective sell price.
+//
+// renderPriceCell returns BOTH the JSX cell to render AND the numeric
+// effective sell value so this component can compute COGS% per level
+// without duplicating the override-resolution logic from the parent.
 function NestedOption({
-  title, subtitle, indentPx, children,
+  title, subtitle, indentPx, cost, currencySymbol, enabledPriceLevels, renderPriceCell,
 }: {
   title: string
   subtitle?: string
   indentPx: number
-  children: React.ReactNode
+  cost?: number
+  currencySymbol: string
+  enabledPriceLevels: CountryPriceLevel[]
+  renderPriceCell: (lvl: CountryPriceLevel) => { cell: React.ReactNode; value: number }
 }) {
+  const hasCost = cost != null && Number.isFinite(cost) && cost > 0
   return (
     <div className="flex items-center gap-3 py-1.5" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
       <div className="flex-1 min-w-0">
         <div className="text-xs text-text-1 truncate">{title}</div>
         {subtitle && <div className="text-[10px] text-text-3 truncate">{subtitle}</div>}
       </div>
-      {children}
-      <span className="shrink-0 w-20" />
-      <span className="shrink-0 w-14" />
+      {enabledPriceLevels.map((lvl, lvlIdx) => {
+        const { cell, value } = renderPriceCell(lvl)
+        const sell    = Number(value || 0)
+        const cogsPct = (hasCost && sell > 0) ? (Number(cost) / sell) * 100 : null
+        const altBg   = lvlIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/50'
+        return (
+          <div
+            key={lvl.price_level_id}
+            className={`shrink-0 flex items-center gap-1.5 px-1 py-0.5 rounded ${altBg} ${lvlIdx > 0 ? 'border-l border-border/60 ml-1' : ''}`}
+          >
+            {/* Tax slot is empty for nested options — tax is set on the
+                parent menu_sales_item, not on individual modifier / step
+                options. Width matches main row's TaxCell so columns
+                align under the header. */}
+            <span className="shrink-0 w-9" aria-hidden />
+            {cell}
+            <div className="shrink-0 w-14 text-right font-mono leading-tight">
+              <div className="text-[10px] text-text-2">
+                {hasCost ? `${currencySymbol}${Number(cost).toFixed(2)}` : '\u2014'}
+              </div>
+              {cogsPct != null && (
+                <div className="text-[9px] text-text-3">{cogsPct.toFixed(1)}%</div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+      <span className="shrink-0 w-20" aria-hidden />
+      <span className="shrink-0 w-14" aria-hidden />
     </div>
   )
 }
