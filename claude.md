@@ -529,6 +529,11 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 85 | `mcogs_qsc_audits` | 127 | Audit runs. key (AUD-1001+), audit_type (external/internal), location_id FK, template_id FK, question_version (pinned at start), auditor_sub/name, status, overall_score, overall_rating, auto_unacceptable, notes. |
 | 86 | `mcogs_qsc_responses` | 127 | One row per answered question per audit. status (compliant/not_compliant/not_observed/not_applicable/informational), is_repeat, points_deducted, comment, temperature_value/unit, product_name. UNIQUE(audit_id, question_code). |
 | 87 | `mcogs_qsc_response_photos` | 127 | 0..N photos per response (url + caption). |
+| 88 | `mcogs_kiosk_orders` | 171 | BACK-2728 — kiosk PWA order receiver. UNIQUE(order_uuid) so the IndexedDB drainer is idempotent on retries. JSONB items column, plus snapshot of menu/country/level/payment/totals at time of placement. |
+
+**Schema additions (this session, no new tables):**
+- `ALTER TABLE mcogs_combo_step_options ADD COLUMN image_url TEXT` (BACK-2729 — kiosk customise tile thumbnails)
+- `ALTER TABLE mcogs_menu_sales_items ADD COLUMN tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id)` (BACK-2730 — per-msi tax override; null falls back through `mcogs_country_level_tax → mcogs_country_tax_rates(is_default=TRUE)`)
 
 ### Key Schema Details
 
@@ -650,6 +655,9 @@ All routes registered in `api/src/routes/index.js`.
 | `GET/POST/PUT/DELETE /api/combo-templates` | `combo-templates.js` | ✅ Active — reusable combo templates |
 | `GET/POST/PUT/DELETE /api/modifier-groups` | `modifier-groups.js` | ✅ Active — modifier groups + options CRUD |
 | `GET/POST/PUT/DELETE /api/menu-sales-items` | `menu-sales-items.js` | ✅ Active — menu ↔ sales items link + per-menu prices |
+| `PATCH /api/menu-sales-items/:id/tax` | `menu-sales-items.js` | ✅ Active (BACK-2730) — set/clear per-msi tax override |
+| `POST /api/menu-sales-items/reorder` | `menu-sales-items.js` | ✅ Active (BACK-2572) — bulk reorder; cross-category moves combine with `POST /sales-items/bulk/category` (BACK-2770) |
+| `GET/POST /api/kiosk-orders` | `kiosk-orders.js` | ✅ Active (BACK-2728) — POST is idempotent on `order_uuid`; GET for back-of-house reconciliation. Auth-gated like the kiosk page itself. |
 | `GET /api/cogs` | `cogs.js` | ✅ Active |
 | `GET/POST/PUT/DELETE /api/allergens` | `allergens.js` | ✅ Active |
 | `PATCH /api/allergens/ingredient/:id/notes` | `allergens.js` | ✅ Active — saves allergen_notes to mcogs_ingredients |
@@ -793,8 +801,11 @@ Generic data grid with:
   /system         → SystemPage          (architecture, DB management, audit log)
   /inventory      �� InventoryPage
   /recipes        → RecipesPage
-  /sales-items    → SalesItemsPage
-  /menus          → MenusPage
+  /menu-entry     → MenuEntryPage         (BACK-2793 — 4-tab consolidation)
+  /sales-items    → redirects to /menu-entry?tab=items     (legacy)
+  /menu-builder   → redirects to /menu-entry?tab=menu-builder (legacy)
+  /menus          → MenusPage              (sidebar label "Menu Engineer")
+  /menu-engineer  → redirects to /menus    (URL alias)
   /allergens      → AllergenMatrixPage
   /haccp          → HACCPPage
   /audits                → AuditsPage            (QSC audit dashboard + list)
@@ -820,8 +831,8 @@ Generic data grid with:
 Dashboard          feature: dashboard
 Inventory          feature: inventory
 Recipes            feature: recipes
-Sales Items        feature: menus
-Menus              feature: menus
+Menu Entry         feature: menus  ← BACK-2793: tabs Items / Combos / Modifiers / Menu Builder
+Menu Engineer      feature: menus  ← was "Menus"; URL still /menus for shared-link compat
 ─────────────────
 Allergens          feature: allergens
 HACCP              feature: haccp
@@ -1027,9 +1038,24 @@ A global setting at `mcogs_settings.data.costing_method` (values: `'best'` defau
 - No schema change — setting is added to the existing `mcogs_settings.data` JSONB blob. Existing deployments default to `'best'` (matches historical behaviour); users opt in to `'average'` by saving the radio.
 - All existing callers (`cogs.js` internal routes, `scenarios.js`, `shared-pages.js`, tests) pick up the setting automatically — no signature changes.
 
-### ✅ Menus Page (`/menus`)
+### ✅ Menu Entry (`/menu-entry`) — BACK-2793
 
-Three tabs:
+Four-tab consolidation of the catalog + builder workflow. Replaces the old separate `/sales-items` and `/menu-builder` routes (which now redirect into the appropriate tab).
+
+| Tab | Component | Notes |
+|---|---|---|
+| **Items** | `SalesItemsPage embeddedTab="items" hideHeader` | POS catalog: recipes / ingredients / manual / combo wrappers |
+| **Combos** | `SalesItemsPage embeddedTab="combos" hideHeader` | Combo definitions (steps + step options) |
+| **Modifiers** | `SalesItemsPage embeddedTab="modifiers" hideHeader` | Modifier groups + their options |
+| **Menu Builder** | `MenuBuilderPage` | Drop sales items onto menus, set per-level prices |
+
+`SalesItemsPage` accepts `embeddedTab` + `hideHeader` props — when set, it syncs `activeTab` to the prop and skips its own title + tab bar so there's only one tab strip on screen. A slim action strip with the contextual `+ New X` button replaces the hidden header.
+
+**State preservation**: all four tabs stay mounted once visited (CSS `display: none` for inactive ones) so per-tab state, scroll position, and dirty edits survive a tab switch. Initial mount is lazy. URL `?tab=items|combos|modifiers|menu-builder` drives the initial tab + persists via `localStorage('menu-entry-active-tab')`.
+
+### ✅ Menu Engineer (`/menus`)
+
+Renamed from "Menus" in the sidebar (URL stays `/menus` for shared-link compatibility; `/menu-engineer` redirects in). Page header now reads "Menu Engineer". Same internal three-tab structure as before:
 
 1. **Menus (Menu Builder)** — create menus per country, add Sales Items with display name + sort order + sell prices per price level
 2. **Menu Engineer** (formerly "Scenario") — sales mix analysis and scenario planning per menu item
@@ -2931,7 +2957,9 @@ BACK-1420 through BACK-1424 are all marked `done` via migration step 123.
 
 ---
 
-*README last updated: April 2026 (session: Modifier multiplier feature + README rewrite. Smaller multi-feature drop. New BACK-2426 modifier multiplier — flag a recipe ingredient as the qty driver and modifier costs scale by that qty (Bone-In 6 with Bone-In Wing × 6 flagged → 6× sauce per portion). New mcogs_recipe_items.is_modifier_multiplier column + partial unique index (one flag per recipe, global rows only). resolveRecipeMultiplier helper exported from cogs.js; threaded through loadModifierCostAdders (multiplierForSi + multiplierForOption — different combo step options can carry different multipliers), calcComboCost (per-option recipe multiplier on the modifier blend), and the menu-sales-items /sub-prices endpoint (per-option cost + per-group avg/min/max all scale). PUT /recipes/:id/items/:itemId now accepts is_modifier_multiplier with single-flag-per-recipe enforcement in a transaction. Recipe ingredients table gains a × mod checkbox column on the global view (visibility now mirrors the “🌍 Global recipe” badge logic exactly — fix BUG-1042 where the column hid when Market/PL dropdowns were set even though the view was still global). Configuration → COGS Thresholds gains a Modifier Multiplier section with a single global toggle. Default off → existing menus see no change until BOTH the toggle and a per-recipe flag are set. README.md rewritten — was 3 lines of throwaway notes, now a proper repo landing page covering Pepper-centric AI workflow, operator + developer toolkits, feedback channels, architecture, getting-started, and pointers to CLAUDE.md / docs/. Migration steps 162b (schema), 164 (BUG-1042), 165 (BACK-2426 done), 166 (changelog). Migrations 430→435. DB tables unchanged at 87.)*
+*README last updated: May 5 2026 (session: huge multi-feature drop covering menu builder, kiosk PWA, media library, and a major navigation refactor. **Menu builder**: BACK-2638 cost column + per-level COGS%, BACK-2639 manual joins the picker pattern, BACK-2640 + Add new shortcut per picker → BACK-2652 seamless same-tab Create-and-return flow with sticky ReturnToMenuBuilderBanner across /recipes /inventory /sales-items, BACK-2651 cost+COGS% folded into the price cell, BACK-2673 tax + cost laid out beside the price, BACK-2730 per-msi tax override (new mcogs_menu_sales_items.tax_rate_id col, PATCH /:id/tax, country-default fallback in country-price-levels GET, alt-bg dividers between level cells, TaxCell with portal dropdown), BACK-2770 drag-drop while grouped + cross-category move via /sales-items/bulk/category, BACK-2781 buckets follow Configuration → Categories sort_order + drag-drop category headers persist via /categories/reorder, BACK-2782 collapsible category buckets with collapse-all/expand-all toolbar, BACK-2793 **Menu Entry consolidation** — new MenuEntryPage with 4 tabs (Items/Combos/Modifiers/Menu Builder), all four tabs stay mounted across switches for state preservation, lazy initial mount, sidebar trades Sales Items + Menu Builder for one Menu Entry entry, **Menus → Menu Engineer** rename in sidebar + page header (URL stays /menus). **Kiosk**: BACK-2717 modifier images, BACK-2729 combo step option images (new mcogs_combo_step_options.image_url col), BACK-2728 **offline-resilient PWA** — kiosk-sw.js (precache shell + network-first menu data + cache-first images), kiosk-manifest.webmanifest (fullscreen portrait), new mcogs_kiosk_orders table with UNIQUE(order_uuid) for idempotent retries, IndexedDB queue (lib/kioskOfflineQueue.ts) + drainer (lib/kioskOrderDrainer.ts) firing on mount/online/30s/post-enqueue, top-right ConnectivityPill (offline / syncing / queue depth). **Media library**: BACK-2684 preserve original filename on upload, BACK-2695 drag-resizable list view columns, BACK-2706 TIFF support (sharp transcodes original to JPEG), BUG-1173 429 fix (skip rate-limit for /api/media/img + 1y immutable Cache-Control). **Bug fixes**: BUG-1164 migration JSONB parse error, BUG-1175 tax cell decimal display (formatPct helper). 19 backlog tickets shipped + 4 bugs resolved in one session. New helper script: api/scripts/_validate-changelog.js — JS-eval-aware JSON validator that runs against every mcogs_changelog INSERT to catch the BUG-1164 class of errors before commit; 37 changelog entries parse cleanly. DB: 87 → 88 tables, +2 column ALTERs (image_url + tax_rate_id). Migration steps span 170c through 170al + 171 + 171pre + 171pre0.)*
+
+*README previous session: Modifier multiplier feature + README rewrite. Smaller multi-feature drop. New BACK-2426 modifier multiplier — flag a recipe ingredient as the qty driver and modifier costs scale by that qty (Bone-In 6 with Bone-In Wing × 6 flagged → 6× sauce per portion). New mcogs_recipe_items.is_modifier_multiplier column + partial unique index (one flag per recipe, global rows only). resolveRecipeMultiplier helper exported from cogs.js; threaded through loadModifierCostAdders (multiplierForSi + multiplierForOption — different combo step options can carry different multipliers), calcComboCost (per-option recipe multiplier on the modifier blend), and the menu-sales-items /sub-prices endpoint (per-option cost + per-group avg/min/max all scale). PUT /recipes/:id/items/:itemId now accepts is_modifier_multiplier with single-flag-per-recipe enforcement in a transaction. Recipe ingredients table gains a × mod checkbox column on the global view (visibility now mirrors the “🌍 Global recipe” badge logic exactly — fix BUG-1042 where the column hid when Market/PL dropdowns were set even though the view was still global). Configuration → COGS Thresholds gains a Modifier Multiplier section with a single global toggle. Default off → existing menus see no change until BOTH the toggle and a per-recipe flag are set. README.md rewritten — was 3 lines of throwaway notes, now a proper repo landing page covering Pepper-centric AI workflow, operator + developer toolkits, feedback channels, architecture, getting-started, and pointers to CLAUDE.md / docs/. Migration steps 162b (schema), 164 (BUG-1042), 165 (BACK-2426 done), 166 (changelog). Migrations 430→435. DB tables unchanged at 87.)*
 
 *README previous session: Kiosk mockup + map tooltip counts + Languages admin UI + kanban vertical sort. Big multi-feature drop. New self-service ordering kiosk at /kiosk — full-screen 9:16 portrait canvas scaled to viewport height (32-inch wall-mount form factor). Customer flow: order-type tile picker → browse with categories+products → customise screen with combo step walker / modifier prompts (incl. option-level modifier groups walked between combo steps via new "option-modifier" walker phase) → bottom-sheet basket modal (qty stepper + tap-line-to-edit) → pay-method picker (💳 Card 1.8s simulated, 💵 Cash 1.2s with deterministic dummy QR for till settlement) → receipt. Accessibility mode squashes height to 50vh keeping width. Backend: cogs.js /menu-sales SELECT augmented with si.image_url + si.description. Map tooltips now show menu/vendor/item rolled-up counts on both Mapbox + react-simple-maps widgets (counts derived from existing useDashboardData collections, RBAC-scoped automatically). New Configuration → Languages section — toggle is_active per language, set default, edit name/native, RTL flag, add/delete with system-language guards (delivers the missing UI half of BACK-1351 that was prematurely marked done in last session). Backlog kanban gains vertical sort within priority columns (drop on a sibling tile to insert above; persists via /backlog/reorder; same-priority drops silent). Hash-based section deep-linking for /system + /configuration so external links + Pepper navigate_to_page can drop the user on a specific section. navigate_to_page tool extended with optional section param + extended page enum to include pepper. Bug-fix wave: BUG-1034 Pepper missed BACK-#### lookups past LIMIT 50 (search now matches key), BUG-1035 step 160 JSONB rejected on escaped quotes (curly quotes throughout + node-eval JSON.parse validation in EOS), BUG-1036 Languages admin UI missing, BUG-1037 combo edit form raw URL input, BUG-1038 modifier indent in Menu Builder, BUG-1039 kiosk progress button hidden, BUG-1040 kiosk option-modifiers not walked, BUG-1041 kiosk accessibility shrank width too. CLAUDE.md gains "Standard Design Rules" section: drag-drop is the default for any orderable list (assume sort_order → DnD; arrows are keyboard fallback only); no native window.confirm / prompt / alert (use ui.tsx modals). EOS audit: BACK-1413 flipped to done after the map tooltip work landed. Migration steps 161-163. DB tables 87, migrations 426→430, tools count unchanged at 122.)*
 

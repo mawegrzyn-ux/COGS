@@ -4554,6 +4554,22 @@ const migrations = [
      WHERE version = '2026-05-05' AND title = 'Navigation — Menu Entry consolidates catalog + builder; Menus renamed to Menu Engineer'
    )`,
 
+  // ── Step 170am: Flip BUG-1180 + BUG-1181 to resolved ─────────────────────
+  `UPDATE mcogs_bugs SET status = 'resolved', updated_at = NOW()
+   WHERE key IN ('BUG-1180', 'BUG-1181') AND status <> 'resolved'`,
+
+  // ── Step 170an: Changelog — May 05 — Combo sales_item cost + grid image ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-05', 'Combo cost respects sales_item step options + Shared grid tiles show images', '[
+     {"type":"fixed","description":"BUG-1180: mcogs_combo_step_options.item_type accepts recipe / ingredient / manual / sales_item, but resolveOptionCost in cogs.js (and the parallel _optionUnitCost in menu-sales-items.js) only handled the first three — sales_item-typed step options fell through to return 0, so any combo containing a sales_item-linked option (e.g. Full Flavor Mix → Choose Fries → sales_item Loaded Fries) understated its true cost. The Menu Engineer breakdown showed extra charge against those options but never rolled them into the combo total. Both helpers now have a sales_item branch that routes through the linked sales items own item_type via new si_* JOIN columns (recipe / ingredient / manual). Combo-inside-combo (sales item with item_type=combo) deferred — conservatively returns 0 with a comment marking the gap."},
+     {"type":"changed","description":"BUG-1180: loadComboData (cogs.js) and loadComboStructure (menu-sales-items.js) SELECTs gain LEFT JOIN mcogs_sales_items si ON si.id = cso.sales_item_id (plus a second JOIN to mcogs_recipes for the wrapped recipes yield_qty). Recipe preload paths extended too — the cogs.js recipeIds gather + the menu-sales-items sub-prices recipe-id UNION both pull si.recipe_id when the step option is item_type=sales_item, so calcRecipeCost has the full ingredient tree available."},
+     {"type":"fixed","description":"BUG-1181: GET /api/public/share/:slug/data did not select si.image_url, so SharedItem on the front-end had no image_url to render. Grid-view tiles in SharedMenuPage showed only the name + cost + per-level prices. Now the response carries image_url on every item; the grid tile renders an aspect-square thumbnail at the top (or a soft initial-letter placeholder when no image is set) so all tiles line up at the same height regardless of source image ratio. Tile padding moved into a nested wrapper so the image goes edge-to-edge."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-05' AND title = 'Combo cost respects sales_item step options + Shared grid tiles show images'
+   )`,
+
   // ── Step 170j: Changelog — May 03 — Migration JSONB parse fix ────────────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-03', 'Deploy fix — migration step 170h JSONB parse', '[

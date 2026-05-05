@@ -850,6 +850,7 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
              si.ingredient_id,
              si.manual_cost,
              si.combo_id,
+             si.image_url   AS si_image_url,
              CASE WHEN si.item_type = 'combo'
                   THEN COALESCE(combo_cat.name, cat.name)
                   ELSE cat.name
@@ -1021,6 +1022,9 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         category:     item.category || '',
         cost:         cpp,
         modifier_cost_adder: modifierCostAdder,
+        // BUG-1181 — sales item image, used by the Grid view in
+        // SharedMenuPage to render a thumbnail above each tile.
+        image_url:    item.si_image_url || null,
         levels:       rowLevels,
       };
     }));

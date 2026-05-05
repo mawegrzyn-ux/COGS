@@ -46,6 +46,8 @@ interface SharedItem {
   // attached modifier groups (combo items receive the delta beyond avg×1
   // already embedded in `cost`).
   modifier_cost_adder?: number
+  // BUG-1181 — sales item image, rendered as the tile thumbnail in Grid view.
+  image_url?:   string | null
   levels:       Record<number, LevelEntry>
 }
 
@@ -1296,9 +1298,31 @@ export default function SharedMenuPage() {
                         {catItems.map(item => (
                           <div
                             key={item.menu_item_id}
-                            className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col gap-1.5 hover:border-emerald-200 transition-colors"
+                            className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col hover:border-emerald-200 transition-colors"
                             onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
                           >
+                            {/* BUG-1181 — Image thumbnail when a sales-item
+                                image is set. Aspect-square so all tiles in
+                                the grid line up regardless of source ratio.
+                                Falls back to a soft emerald-tinted placeholder
+                                so the tile height stays consistent. */}
+                            {item.image_url ? (
+                              <div className="aspect-square bg-gradient-to-br from-emerald-50 to-emerald-100 overflow-hidden">
+                                <img
+                                  src={item.image_url}
+                                  alt=""
+                                  loading="lazy"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+                                <span className="text-3xl font-bold text-gray-300 select-none">
+                                  {(item.display_name || '?').slice(0, 1).toUpperCase()}
+                                </span>
+                              </div>
+                            )}
+                            <div className="p-3 flex flex-col gap-1.5 flex-1">
                             {/* Item name */}
                             <button
                               className={`text-sm font-semibold text-gray-800 text-left leading-tight ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 transition-colors cursor-pointer' : 'cursor-default'}`}
@@ -1373,6 +1397,7 @@ export default function SharedMenuPage() {
                                 )
                               })}
                             </div>
+                            </div>{/* close p-3 padded body wrapper (BUG-1181) */}
                           </div>
                         ))}
                       </React.Fragment>

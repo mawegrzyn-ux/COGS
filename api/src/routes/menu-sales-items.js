@@ -13,6 +13,12 @@ const {
 // Resolve cost for one modifier/combo-step option in USD base.
 // Mirrors resolveOptionCost() in cogs.js but is duplicated here to avoid
 // exporting a private symbol. Returns cost per unit (qty applied by caller).
+//
+// BUG-1180 — sales_item branch: combo step options of item_type='sales_item'
+// link to mcogs_sales_items.id; the SELECT in loadComboStructure populates
+// si_* columns from a JOIN so we can resolve through the linked sales
+// item's own item_type without a second round-trip. Combo-inside-combo is
+// out of scope and conservatively returns 0.
 function _optionUnitCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
   const calcRecipeCost = require('./cogs').calcRecipeCost;
   if (opt.item_type === 'manual') return Number(opt.manual_cost || 0);
@@ -28,6 +34,29 @@ function _optionUnitCost(opt, countryId, quoteLookup, recipeItemsMap, variationM
       priceLevelId, plVariationMap, marketPlVariationMap
     );
     return cost;
+  }
+  if (opt.item_type === 'sales_item') {
+    const siType = opt.si_item_type;
+    const siQty  = Number(opt.si_qty || 1);
+    if (siType === 'manual') {
+      return Number(opt.si_manual_cost || 0) * siQty;
+    }
+    if (siType === 'ingredient' && opt.si_ingredient_id) {
+      const q = quoteLookup[opt.si_ingredient_id]?.[countryId];
+      return (q ? q.price_per_base_unit : 0) * siQty;
+    }
+    if (siType === 'recipe' && opt.si_recipe_id) {
+      const rItems = recipeItemsMap[opt.si_recipe_id] || [];
+      const { cost } = calcRecipeCost(
+        { id: opt.si_recipe_id, yield_qty: opt.si_recipe_yield_qty || 1 },
+        rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null,
+        priceLevelId, plVariationMap, marketPlVariationMap
+      );
+      return cost * siQty;
+    }
+    // siType === 'combo' deferred — would need recursion through another
+    // loadComboStructure / calcComboCost call.
+    return 0;
   }
   return 0;
 }
@@ -442,13 +471,26 @@ async function loadComboStructure(comboId, msiId, costCtx) {
   if (!steps.length) return [];
 
   const stepIds = steps.map(s => s.id);
+  // BUG-1180 — JOIN sales_items so step options of item_type=sales_item
+  // can resolve through their linked sales item's primitives (recipe /
+  // ingredient / manual). _optionUnitCost (in this file) and the cogs.js
+  // resolveOptionCost both consume the si_* fields populated below.
   const { rows: opts } = await pool.query(
     `SELECT cso.id, cso.combo_step_id, cso.name, cso.display_name, cso.item_type,
             cso.recipe_id, cso.ingredient_id, cso.manual_cost, cso.price_addon,
-            cso.image_url,
-            r.yield_qty AS recipe_yield_qty
+            cso.image_url, cso.sales_item_id,
+            r.yield_qty AS recipe_yield_qty,
+            si.item_type     AS si_item_type,
+            si.recipe_id     AS si_recipe_id,
+            si.ingredient_id AS si_ingredient_id,
+            si.manual_cost   AS si_manual_cost,
+            si.combo_id      AS si_combo_id,
+            si.qty           AS si_qty,
+            sr.yield_qty     AS si_recipe_yield_qty
      FROM   mcogs_combo_step_options cso
-     LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
+     LEFT JOIN mcogs_recipes      r  ON r.id  = cso.recipe_id
+     LEFT JOIN mcogs_sales_items  si ON si.id = cso.sales_item_id
+     LEFT JOIN mcogs_recipes      sr ON sr.id = si.recipe_id
      WHERE  cso.combo_step_id = ANY($1) ORDER BY cso.sort_order`, [stepIds]
   );
 
@@ -637,11 +679,20 @@ router.get('/:id/sub-prices', async (req, res, next) => {
             for (const r of rows) if (r.recipe_id) ids.add(r.recipe_id);
           }
           if (msi.item_type === 'combo' && msi.combo_id) {
+            // BUG-1180 — also pull recipe_ids from sales_item-typed step
+            // options (third UNION branch) so their recipes get preloaded.
             const { rows } = await pool.query(
               `SELECT DISTINCT cso.recipe_id
                FROM   mcogs_combo_step_options cso
                JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
                WHERE  cs.combo_id = $1 AND cso.recipe_id IS NOT NULL
+               UNION
+               SELECT DISTINCT si.recipe_id AS recipe_id
+               FROM   mcogs_combo_step_options cso
+               JOIN   mcogs_combo_steps  cs ON cs.id = cso.combo_step_id
+               JOIN   mcogs_sales_items  si ON si.id = cso.sales_item_id
+               WHERE  cs.combo_id = $1 AND cso.item_type = 'sales_item'
+                 AND  si.item_type = 'recipe' AND si.recipe_id IS NOT NULL
                UNION
                SELECT DISTINCT mo.recipe_id
                FROM   mcogs_modifier_options mo

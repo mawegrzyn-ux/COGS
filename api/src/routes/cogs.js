@@ -855,10 +855,24 @@ async function loadComboData(comboIds) {
   const stepIds = steps.map(s => s.id);
   const [optsResult, modsResult] = await Promise.all([
     pool.query(
+      // BUG-1180 — combo step options can also point at a sales_item (linked
+      // via cso.sales_item_id). Pull the linked sales item's resolved cost
+      // primitives so resolveOptionCost can route through si_* fields when
+      // cso.item_type === 'sales_item'. Recipe yield_qty also covers the
+      // case where the sales item itself wraps a recipe.
       `SELECT cso.*,
-              r.yield_qty AS recipe_yield_qty
+              r.yield_qty AS recipe_yield_qty,
+              si.item_type     AS si_item_type,
+              si.recipe_id     AS si_recipe_id,
+              si.ingredient_id AS si_ingredient_id,
+              si.manual_cost   AS si_manual_cost,
+              si.combo_id      AS si_combo_id,
+              si.qty           AS si_qty,
+              sr.yield_qty     AS si_recipe_yield_qty
        FROM   mcogs_combo_step_options cso
-       LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
+       LEFT JOIN mcogs_recipes      r  ON r.id  = cso.recipe_id
+       LEFT JOIN mcogs_sales_items  si ON si.id = cso.sales_item_id
+       LEFT JOIN mcogs_recipes      sr ON sr.id = si.recipe_id
        WHERE  cso.combo_step_id = ANY($1::int[])
        ORDER BY cso.combo_step_id, cso.sort_order`,
       [stepIds]
@@ -904,8 +918,17 @@ async function loadComboData(comboIds) {
 }
 
 /**
- * Resolve cost for a single option (recipe/ingredient/manual).
+ * Resolve cost for a single option (recipe/ingredient/manual/sales_item).
  * Returns cost in USD base (caller applies exchange rate).
+ *
+ * BUG-1180 — `sales_item` is a real combo-step-option type: it points at
+ * an existing mcogs_sales_items row via opt.sales_item_id. We resolve by
+ * inspecting the linked sales item's own item_type (carried as si_*
+ * columns from the loadComboData JOIN) and recursing through the same
+ * primitives. Sales items wrapping a combo are NOT recursed into here —
+ * combos-inside-combos would explode the cost-graph; we conservatively
+ * treat them as 0 and surface the gap in a comment so future work can
+ * add proper recursion if the use case appears.
  */
 function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
   if (opt.item_type === 'manual') {
@@ -923,6 +946,32 @@ function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variatio
       priceLevelId, plVariationMap, marketPlVariationMap
     );
     return cost;
+  }
+  if (opt.item_type === 'sales_item') {
+    // Route through the linked sales item's own item_type. The si_* fields
+    // are populated by loadComboData's JOIN; if the option was synthesised
+    // elsewhere without those fields it falls through to 0 (safe default).
+    const siType = opt.si_item_type;
+    const siQty  = Number(opt.si_qty || 1);
+    if (siType === 'manual') {
+      return Number(opt.si_manual_cost || 0) * siQty;
+    }
+    if (siType === 'ingredient' && opt.si_ingredient_id) {
+      const q = quoteLookup[opt.si_ingredient_id]?.[countryId];
+      return (q ? q.price_per_base_unit : 0) * siQty;
+    }
+    if (siType === 'recipe' && opt.si_recipe_id) {
+      const rItems = recipeItemsMap[opt.si_recipe_id] || [];
+      const { cost } = calcRecipeCost(
+        { id: opt.si_recipe_id, yield_qty: opt.si_recipe_yield_qty || 1 },
+        rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null,
+        priceLevelId, plVariationMap, marketPlVariationMap
+      );
+      return cost * siQty;
+    }
+    // siType === 'combo' would require nested combo recursion. Not
+    // supported here yet; treat as 0 and let the caller surface the gap.
+    return 0;
   }
   return 0;
 }
@@ -1239,11 +1288,16 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
       loadComboData(comboIds),
     ]);
 
-    // Collect all recipe IDs from combo options too
+    // Collect all recipe IDs from combo options too. BUG-1180 — sales_item-
+    // typed step options can wrap a recipe via si_recipe_id; preload that
+    // too or calcRecipeCost ends up with empty rItems and returns 0.
     for (const steps of Object.values(comboData)) {
       for (const step of steps) {
         for (const opt of step.options || []) {
           if (opt.item_type === 'recipe' && opt.recipe_id) recipeIds.push(Number(opt.recipe_id));
+          if (opt.item_type === 'sales_item' && opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+            recipeIds.push(Number(opt.si_recipe_id));
+          }
           for (const mo of opt.mod_options || []) {
             if (mo.item_type === 'recipe' && mo.recipe_id) recipeIds.push(Number(mo.recipe_id));
           }
