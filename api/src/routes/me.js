@@ -17,6 +17,7 @@ router.get('/', requireAuth, async (req, res) => {
   res.json({
     id:              req.user.id,
     sub:             req.user.sub,
+    auth_provider:   req.user.auth_provider || 'auth0', // BACK-2364
     email:           req.user.email,
     name:            req.user.name,
     picture:         req.user.picture,

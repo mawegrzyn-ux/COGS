@@ -18,7 +18,8 @@ router.get('/', auth, adminRead, async (req, res) => {
     // PostgreSQL versions).
     const usersResult = await pool.query(`
       SELECT u.id, u.auth0_sub, u.email, u.name, u.picture,
-             u.status, u.is_dev, u.ai_premium_access, u.created_at, u.last_login_at,
+             u.status, u.is_dev, u.ai_premium_access, u.auth_provider,
+             u.created_at, u.last_login_at,
              u.role_id, r.name AS role_name
       FROM   mcogs_users u
       LEFT JOIN mcogs_roles r ON r.id = u.role_id

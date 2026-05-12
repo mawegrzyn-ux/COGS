@@ -3359,6 +3359,8 @@ interface AppUser {
   role_name:     string | null
   is_dev:        boolean
   ai_premium_access: boolean
+  /** BACK-2364 — which IdP this user signed up through. Defaults to 'auth0' on legacy rows. */
+  auth_provider?: 'auth0' | 'cognito'
   scope: ScopeRow[]
   created_at:    string
   last_login_at: string | null
@@ -3586,6 +3588,12 @@ function UsersTab() {
 
   const pending = users.filter(u => u.status === 'pending')
 
+  // BACK-2364 — only show the IdP column once at least one user signed up via
+  // a non-Auth0 provider. Until Phase 2 of the Cognito work ships every user
+  // is 'auth0' and a column full of identical badges adds nothing.
+  const showIdpColumn = users.some(u => (u.auth_provider || 'auth0') !== 'auth0')
+  const colSpanEmpty  = (canWrite ? 6 : 5) + (showIdpColumn ? 1 : 0)
+
   // Search across name, email, role, scope_name + scope_type. Plain string
   // contains, case-insensitive — matches any column the user might be looking
   // at. Disabled status, market labels, and emails all searchable.
@@ -3644,6 +3652,7 @@ function UsersTab() {
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">User</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Status</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Role</th>
+              {showIdpColumn && <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">IdP</th>}
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Market scope</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Joined</th>
               {canWrite && <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-3">Actions</th>}
@@ -3651,7 +3660,7 @@ function UsersTab() {
           </thead>
           <tbody className="divide-y divide-border">
             {filteredUsers.length === 0 && (
-              <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-sm text-text-3">
+              <tr><td colSpan={colSpanEmpty} className="px-4 py-8 text-center text-sm text-text-3">
                 {users.length === 0 ? 'No users yet' : `No users match "${search}"`}
               </td></tr>
             )}
@@ -3678,6 +3687,22 @@ function UsersTab() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-text-2">{u.role_name || <span className="text-text-3 italic">None</span>}</td>
+                {showIdpColumn && (
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const provider = (u.auth_provider || 'auth0') as 'auth0' | 'cognito'
+                      const cls = provider === 'cognito'
+                        ? 'bg-orange-50 text-orange-700 border-orange-200'
+                        : 'bg-accent-dim text-accent border-accent/30'
+                      const label = provider === 'cognito' ? 'Cognito' : 'Auth0'
+                      return (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
+                          {label}
+                        </span>
+                      )
+                    })()}
+                  </td>
+                )}
                 <td className="px-4 py-3">
                   {(u.scope?.length ?? 0) === 0
                     ? <span className="text-xs text-text-3">All markets</span>

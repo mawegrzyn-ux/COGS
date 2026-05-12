@@ -1,6 +1,11 @@
 // =============================================================================
 // RBAC Auth Middleware
-// Uses Auth0 /userinfo to verify tokens and maps to local mcogs_users + roles
+// Uses Auth0 /userinfo to verify tokens and maps to local mcogs_users + roles.
+//
+// BACK-2364 — Phase 1 groundwork for AWS Cognito dual-auth. The data model
+// already tracks auth_provider per user, but only the Auth0 verification
+// path is wired up here. The Cognito branch hooks in at the marker in
+// requireAuth() once AWS provisioning is done. See docs/COGNITO_INTEGRATION.md.
 // =============================================================================
 
 const crypto = require('crypto');
@@ -88,7 +93,13 @@ function fetchUserInfo(token) {
 }
 
 // ── Load user from DB (or create pending on first login) ─────────────────────
-async function loadOrCreateUser(userInfo) {
+// BACK-2364 — accepts an optional provider (defaults to 'auth0'). When the
+// Cognito branch lands in requireAuth it will pass 'cognito' here so the new
+// row records which IdP minted the sub. Existing rows are not migrated — a
+// user's provider is fixed at signup. The auth0_sub column is reused for
+// Cognito subs (they're opaque strings, format-different from Auth0 subs so
+// no collision risk on UNIQUE(auth0_sub)). See docs/COGNITO_INTEGRATION.md §5.
+async function loadOrCreateUser(userInfo, provider = 'auth0') {
   const { sub, email, name, picture } = userInfo;
 
   // Check if this is the very first user ever (auto-bootstrap as admin)
@@ -117,14 +128,14 @@ async function loadOrCreateUser(userInfo) {
   const newRoleId  = isFirst ? (adminRole?.id || null) : null;
 
   const { rows: [newUser] } = await pool.query(
-    `INSERT INTO mcogs_users (auth0_sub, email, name, picture, role_id, status, last_login_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `INSERT INTO mcogs_users (auth0_sub, email, name, picture, role_id, status, auth_provider, last_login_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
      RETURNING *`,
-    [sub, email, name, picture, newRoleId, newStatus]
+    [sub, email, name, picture, newRoleId, newStatus, provider]
   );
 
   if (isFirst) {
-    console.log(`[auth] First user bootstrap: ${email} → Admin`);
+    console.log(`[auth] First user bootstrap: ${email} → Admin (provider=${provider})`);
   }
 
   return { ...newUser, role_name: isFirst ? 'Admin' : null };
@@ -266,6 +277,7 @@ async function requireAuth(req, res, next) {
     req.user = {
       id:              0,
       sub:             'internal',
+      auth_provider:   'internal', // BACK-2364 — keeps the field shape consistent
       email:           null,
       name:            'Internal Service',
       status:          'active',
@@ -288,6 +300,18 @@ async function requireAuth(req, res, next) {
   }
   const token = authHeader.slice(7);
 
+  // ── COGNITO HOOK ────────────────────────────────────────────────────────────
+  // BACK-2364 Phase 2 plugs in here. Pseudocode for the future branch:
+  //   if (looksLikeCognitoJwt(token)) {
+  //     const claims = await verifyCognitoToken(token);    // aws-jwt-verify
+  //     const userInfo = { sub: claims.sub, email: claims.email,
+  //                        name: claims.name, picture: null };
+  //     dbUser = await loadOrCreateUser(userInfo, 'cognito');
+  //     // ... continue with the same status / scope / language resolution
+  //   }
+  // Until then, every bearer is treated as an Auth0 access token.
+  // ───────────────────────────────────────────────────────────────────────────
+
   try {
     // Check cache first
     let userInfo = getCached(token);
@@ -295,11 +319,11 @@ async function requireAuth(req, res, next) {
 
     if (userInfo) {
       // Still need fresh DB data for status/role (but cache the userinfo)
-      dbUser = await loadOrCreateUser(userInfo);
+      dbUser = await loadOrCreateUser(userInfo, 'auth0');
     } else {
       userInfo = await fetchUserInfo(token);
       setCache(token, userInfo);
-      dbUser = await loadOrCreateUser(userInfo);
+      dbUser = await loadOrCreateUser(userInfo, 'auth0');
     }
 
     if (dbUser.status === 'pending') {
@@ -323,6 +347,7 @@ async function requireAuth(req, res, next) {
     req.user = {
       id:              dbUser.id,
       sub:             dbUser.auth0_sub,
+      auth_provider:   dbUser.auth_provider || 'auth0', // BACK-2364
       email:           dbUser.email,
       name:            dbUser.name,
       picture:         dbUser.picture,

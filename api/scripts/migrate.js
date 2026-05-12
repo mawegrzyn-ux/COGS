@@ -4594,6 +4594,46 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-03' AND title = 'Deploy fix — migration step 170h JSONB parse'
    )`,
+
+  // ── Step 172: BACK-2364 — auth_provider column on mcogs_users ────────────
+  // Phase 1 groundwork for AWS Cognito dual-auth. Existing rows backfill to
+  // 'auth0' via the column DEFAULT. CHECK constraint limits values to the
+  // two providers we plan to support; add more later by dropping + re-adding
+  // the constraint. Column name kept as auth0_sub even though it now also
+  // stores Cognito subs — rename would touch ~40 SQL files. See
+  // docs/COGNITO_INTEGRATION.md.
+  `ALTER TABLE mcogs_users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'auth0'`,
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (
+       SELECT 1 FROM information_schema.table_constraints
+       WHERE constraint_name = 'mcogs_users_auth_provider_check'
+     ) THEN
+       ALTER TABLE mcogs_users
+         ADD CONSTRAINT mcogs_users_auth_provider_check
+         CHECK (auth_provider IN ('auth0', 'cognito'));
+     END IF;
+   END $$`,
+  `CREATE INDEX IF NOT EXISTS idx_users_auth_provider ON mcogs_users(auth_provider)`,
+
+  // ── Step 172a: Flip BACK-2364 to in_progress ─────────────────────────────
+  // Phase 1 groundwork has landed (column + middleware + API + frontend).
+  // Phase 2 (Cognito verifier) and Phase 3 (frontend login switch) remain
+  // blocked on AWS provisioning, so the ticket stays open until those land.
+  `UPDATE mcogs_backlog SET status='in_progress', updated_at=NOW()
+   WHERE key = 'BACK-2364' AND status <> 'in_progress' AND status <> 'done'`,
+
+  // ── Step 172b: Changelog — May 12 — Cognito Phase 1 groundwork ───────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-12', 'AWS Cognito integration — Phase 1 groundwork (BACK-2364)', '[
+     {"type":"added","description":"BACK-2364 Phase 1: dual-auth groundwork landed without changing any auth behaviour. New mcogs_users.auth_provider column (VARCHAR(20) NOT NULL DEFAULT auth0) with a CHECK constraint limiting it to auth0 or cognito, plus idx_users_auth_provider. Existing rows backfill to auth0 via the DEFAULT. req.user.auth_provider now flows through the middleware. GET /api/me and GET /api/users return the field. MeUser and AppUser TypeScript types updated. Configuration → Users & Roles table gains an IdP column that only renders once a non-auth0 user exists, so existing single-IdP deployments see no UI change. Zero behaviour change for current users — Cognito verification path is not wired up yet (blocked on AWS provisioning)."},
+     {"type":"added","description":"docs/COGNITO_INTEGRATION.md — full plan covering the dual-auth strategy, the four-phase rollout (groundwork, verifier, frontend, optional migration tools), an AWS Cognito provisioning runbook (user pool config, app client, hosted UI, env vars), risk matrix, and rollback notes. Doc is the single source of truth until the integration ships."},
+     {"type":"changed","description":"BACK-2364 moved from backlog → in_progress. Phase 2 (Cognito JWKS verifier in requireAuth, env vars, aws-jwt-verify package) and Phase 3 (login UI with provider picker, oidc-client-ts session, refresh+logout flows) are queued behind AWS provisioning. Once the user pool exists those phases unblock."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-12' AND title = 'AWS Cognito integration — Phase 1 groundwork (BACK-2364)'
+   )`,
 ];
 
 async function runMigrations(pool) {

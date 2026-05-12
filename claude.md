@@ -426,6 +426,12 @@ Every push to `main` triggers `.github/workflows/deploy.yml` automatically.
 
 > **Auth0 requires HTTPS in production.** It will throw "must run on a secure origin" on plain HTTP. SSL (Let's Encrypt) must be configured before Auth0 works on the server.
 
+### Dual-auth groundwork (BACK-2364 — in progress)
+
+The data model + middleware support a second identity provider (AWS Cognito) alongside Auth0. Phase 1 has landed (column `mcogs_users.auth_provider`, exposed on `req.user`, surfaced via `/api/me` and `/api/users`, IdP column in the admin UI that hides itself until a non-Auth0 user exists). Phase 2 (Cognito JWKS verifier in `requireAuth`) and Phase 3 (frontend login picker) are blocked on AWS provisioning. Strategy is **dual-auth indefinitely** — each user is permanently tied to whichever IdP minted their sub.
+
+Full plan, AWS provisioning runbook, env vars, and rollback notes: [`docs/COGNITO_INTEGRATION.md`](./docs/COGNITO_INTEGRATION.md).
+
 ---
 
 ## 8. Database Schema
@@ -474,7 +480,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 | 30 | `mcogs_recipe_pl_variations` | 31-32 | Recipe price-level and market+PL variations |
 | 31 | `mcogs_roles` | 33 | RBAC roles (Admin/Operator/Viewer + custom). `is_system` protects built-in roles |
 | 32 | `mcogs_role_permissions` | 34 | Permission level per role per feature: `none` / `read` / `write`. UNIQUE(role_id, feature) |
-| 33 | `mcogs_users` | 35 | App users mapped from Auth0 sub. Stores status, role, `is_dev` flag, last login |
+| 33 | `mcogs_users` | 35 | App users mapped from Auth0/Cognito sub. Stores status, role, `is_dev` flag, last login, `auth_provider` (BACK-2364) |
 | 34 | `mcogs_user_brand_partners` | 36 | Market scope: which brand partners a user is allowed to see. Empty = unrestricted |
 | 35 | `mcogs_sales_items` | 39 | Sales item catalog (item_type: recipe/ingredient/manual/combo, category_id, image_url) |
 | 36 | `mcogs_sales_item_markets` | 40 | Per-item market visibility + `is_active` flag |
@@ -534,6 +540,7 @@ Safe to run multiple times (uses `CREATE TABLE IF NOT EXISTS`).
 **Schema additions (this session, no new tables):**
 - `ALTER TABLE mcogs_combo_step_options ADD COLUMN image_url TEXT` (BACK-2729 — kiosk customise tile thumbnails)
 - `ALTER TABLE mcogs_menu_sales_items ADD COLUMN tax_rate_id INTEGER REFERENCES mcogs_country_tax_rates(id)` (BACK-2730 — per-msi tax override; null falls back through `mcogs_country_level_tax → mcogs_country_tax_rates(is_default=TRUE)`)
+- `ALTER TABLE mcogs_users ADD COLUMN auth_provider VARCHAR(20) NOT NULL DEFAULT 'auth0'` + CHECK constraint allowing `'auth0' | 'cognito'` + `idx_users_auth_provider` (BACK-2364 — Phase 1 dual-auth groundwork; see [docs/COGNITO_INTEGRATION.md](./docs/COGNITO_INTEGRATION.md))
 
 ### Key Schema Details
 

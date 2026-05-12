@@ -16,9 +16,13 @@ export interface MarketAccess {
   permissions: Partial<Record<Feature, AccessLevel>>
 }
 
+export type AuthProvider = 'auth0' | 'cognito' | 'internal'
+
 export interface MeUser {
   id:              number
   sub:             string
+  /** BACK-2364 — which IdP minted this user's sub. Set once at signup, never changes. */
+  auth_provider?:  AuthProvider
   email:           string | null
   name:            string | null
   picture:         string | null
