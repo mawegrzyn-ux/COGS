@@ -19,7 +19,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Spinner, EmptyState, Field, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
+import { useMarket } from '../contexts/MarketContext'
+import { PageHeader, Spinner, EmptyState, Field, Modal, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
 import { setHandoff, type HandoffItemType } from '../lib/menuBuilderHandoff'
 
@@ -322,6 +323,56 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
   // Fullscreen Menu Builder — covers sidebar + top tab strip when active.
   // Esc and the toggle button both exit. Local state, not persisted.
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // Setting toggle from Configuration → COGS Calculation. When true, modifier
+  // group cost summaries multiply per-pick avg by min_select. Default false
+  // preserves the historical avg-only display.
+  const [modCostUsesMinSelect, setModCostUsesMinSelect] = useState(false)
+  useEffect(() => {
+    api.get('/settings')
+      .then((s: { modifier_cost_uses_min_select?: boolean }) => {
+        if (typeof s?.modifier_cost_uses_min_select === 'boolean') {
+          setModCostUsesMinSelect(s.modifier_cost_uses_min_select)
+        }
+      })
+      .catch(() => { /* default off */ })
+  }, [api])
+
+  // New Menu modal — quick-create without leaving the Menu Builder.
+  // Country list comes from MarketContext (RBAC-scoped to allowedCountries).
+  const { countries: allCountries, countryId: marketCountryId } = useMarket()
+  const [newMenuModal, setNewMenuModal] = useState(false)
+  const [newMenuName, setNewMenuName] = useState('')
+  const [newMenuCountryId, setNewMenuCountryId] = useState<number | null>(null)
+  const [newMenuDescription, setNewMenuDescription] = useState('')
+  const [creatingMenu, setCreatingMenu] = useState(false)
+  const openNewMenuModal = () => {
+    setNewMenuName('')
+    setNewMenuDescription('')
+    // Pre-select the active market when available; otherwise the first allowed country.
+    setNewMenuCountryId(marketCountryId ?? (allCountries[0]?.id ?? null))
+    setNewMenuModal(true)
+  }
+  const submitNewMenu = async () => {
+    const name = newMenuName.trim()
+    if (!name || !newMenuCountryId || creatingMenu) return
+    setCreatingMenu(true)
+    try {
+      const created = await api.post('/menus', {
+        name,
+        country_id: newMenuCountryId,
+        description: newMenuDescription.trim() || null,
+      }) as Menu
+      setMenus(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      setSelectedMenu(created)
+      setNewMenuModal(false)
+      setToast({ message: `Menu "${created.name}" created`, type: 'success' })
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to create menu'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setCreatingMenu(false)
+    }
+  }
   useEffect(() => {
     if (!isFullscreen) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsFullscreen(false) }
@@ -973,8 +1024,12 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
         <div className="flex-1 flex items-center justify-center"><Spinner /></div>
       ) : menus.length === 0 ? (
         <EmptyState
-          message="You have no menus yet. Create one on the Menus page first."
-          action={<a href="/menus" className="btn-primary">Open Menus</a>}
+          message="You have no menus yet."
+          action={
+            allCountries.length === 0
+              ? <a href="/configuration" className="btn-primary">Set up a market first</a>
+              : <button className="btn-primary" onClick={openNewMenuModal}>+ New Menu</button>
+          }
         />
       ) : (
         <div className="flex-1 flex overflow-hidden">
@@ -998,6 +1053,12 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
                   ))}
                 </select>
               </Field>
+              <button
+                className="btn-outline text-xs px-2.5 py-1.5 self-end"
+                onClick={openNewMenuModal}
+                disabled={allCountries.length === 0}
+                title={allCountries.length === 0 ? 'No markets configured — set one up in Configuration → Markets first' : 'Create a new menu without leaving this page'}
+              >+ New Menu</button>
               <div className="flex-1" />
               {/* BACK-2571 — group-by-category toggle */}
               <label className="flex items-center gap-1.5 text-xs text-text-2 cursor-pointer select-none mr-2">
@@ -1069,6 +1130,7 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
                   selectedMsiId={editingMsi?.id}
                   groupByCategory={groupByCategory}
                   savingPriceCells={savingPriceCells}
+                  modCostUsesMinSelect={modCostUsesMinSelect}
                   dragId={dragId}
                   dragOverId={dragOverId}
                   expandedRows={expandedRows}
@@ -1227,6 +1289,53 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
       )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* New Menu modal (quick-create without leaving the page) */}
+      {newMenuModal && (
+        <Modal title="Create a new menu" onClose={() => { if (!creatingMenu) setNewMenuModal(false) }}>
+          <div className="px-5 py-4 space-y-3">
+            <Field label="Name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={newMenuName}
+                onChange={e => setNewMenuName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && newMenuName.trim() && newMenuCountryId) submitNewMenu() }}
+                placeholder="e.g. India NME May 2026"
+              />
+            </Field>
+            <Field label="Market" required>
+              <select
+                className="input w-full"
+                value={newMenuCountryId ?? ''}
+                onChange={e => setNewMenuCountryId(Number(e.target.value) || null)}
+              >
+                <option value="" disabled>Pick a market…</option>
+                {allCountries.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Description">
+              <textarea
+                className="input w-full"
+                rows={2}
+                value={newMenuDescription}
+                onChange={e => setNewMenuDescription(e.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+          </div>
+          <div className="px-5 py-3 border-t border-border flex justify-end gap-2 bg-surface-2/40">
+            <button className="btn-ghost" onClick={() => setNewMenuModal(false)} disabled={creatingMenu}>Cancel</button>
+            <button
+              className="btn-primary"
+              onClick={submitNewMenu}
+              disabled={creatingMenu || !newMenuName.trim() || !newMenuCountryId}
+            >{creatingMenu ? 'Creating…' : 'Create menu'}</button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -1240,6 +1349,7 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
 
 function ItemsList({
   items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
+  modCostUsesMinSelect,
   dragId, dragOverId, dragOverCat,
   catDragId, catDragOverId,
   collapsedCats, onToggleCatCollapsed, onSetAllCatsCollapsed,
@@ -1257,6 +1367,10 @@ function ItemsList({
   selectedMsiId?: number
   groupByCategory: boolean
   savingPriceCells: Set<string>
+  // BACK-2839 — when true, modifier group cost summaries multiply per-pick
+  // avg by min_select (see Configuration → COGS Thresholds → "Modifier Cost ×
+  // Number of Choices").
+  modCostUsesMinSelect: boolean
   dragId: number | null
   dragOverId: number | null
   // BACK-2770 — drop-on-category-header target.
@@ -1485,6 +1599,7 @@ function ItemsList({
                 onToggleInnerKey={onToggleInnerKey}
                 onSaveOptionPrice={onSaveOptionPrice}
                 currencySymbol={currencySymbol}
+                modCostUsesMinSelect={modCostUsesMinSelect}
                 onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
                 onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
               />
@@ -1637,6 +1752,7 @@ function ItemsList({
 function ExpandedItemContent({
   msiId, salesItemId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
   currencySymbol,
+  modCostUsesMinSelect,
   onOpenModifierGroup, onOpenComboStep,
 }: {
   msiId: number
@@ -1651,6 +1767,8 @@ function ExpandedItemContent({
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
   // BACK-2814 — currency symbol so nested cost cells match the main-row format.
   currencySymbol: string
+  // BACK-2839 — multiply modifier group's per-pick avg by min_select when on.
+  modCostUsesMinSelect: boolean
   onOpenModifierGroup: (modifierGroupId: number) => void
   onOpenComboStep: (comboStepId: number) => void
 }) {
@@ -1735,7 +1853,15 @@ function ExpandedItemContent({
     // is independent.
     const innerKey = parentKey ? `${msiId}:${parentKey}:${g.modifier_group_id}` : `${msiId}:mg:${g.modifier_group_id}`
     const open = expandedInnerKeys.has(innerKey)
-    const costSummary = fmtCostSummary(g.avg_cost, g.min_cost, g.max_cost)
+    // BACK-2839 — multiply per-pick avg/min/max by min_select when the
+    // setting is on. Skipped (1×) when min_select=0 to avoid hiding optional
+    // groups entirely. Multiplying min and max by the same factor keeps the
+    // range readable.
+    const factor = modCostUsesMinSelect && g.min_select > 0 ? g.min_select : 1
+    const scaledAvg = g.avg_cost != null ? Number(g.avg_cost) * factor : undefined
+    const scaledMin = g.min_cost != null ? Number(g.min_cost) * factor : undefined
+    const scaledMax = g.max_cost != null ? Number(g.max_cost) * factor : undefined
+    const costSummary = fmtCostSummary(scaledAvg, scaledMin, scaledMax)
     const baseSubtitle = `Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`
     return (
       <NestedGroup

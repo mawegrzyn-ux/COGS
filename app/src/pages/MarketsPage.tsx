@@ -1999,7 +1999,7 @@ function MarketCard({
         </div>
 
         {/* Per-market COGS thresholds. NULL columns fall back to the global
-            defaults configured in Configuration → COGS Thresholds. Save on
+            defaults configured in Configuration → COGS Calculation. Save on
             blur so edits commit without a dedicated button. */}
         <MarketCogsThresholds market={market} onSave={onSetCogsThresholds} />
 
@@ -2132,7 +2132,7 @@ function MarketCogsThresholds({
         </span>
       </div>
       <p className="text-xs text-text-3 mb-2">
-        COGS % cells paint green ≤ Excellent, amber ≤ Acceptable, red above. Leave blank to inherit the global defaults (<span className="font-mono">Configuration → COGS Thresholds</span>).
+        COGS % cells paint green ≤ Excellent, amber ≤ Acceptable, red above. Leave blank to inherit the global defaults (<span className="font-mono">Configuration → COGS Calculation</span>).
       </p>
       <div className="flex items-end gap-3">
         <div className="flex-1">

@@ -966,7 +966,7 @@ export default function HelpPage() {
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
           The Configuration page (in the left sidebar) is a unified hub that covers all system-wide settings.
           It replaces the old separate Settings, Markets, Categories, and Import pages. Sections include:
-          Global Config, Location Structure, Categories, Base Units, Price Levels, Currency, COGS Thresholds,
+          Global Config, Location Structure, Categories, Base Units, Price Levels, Currency, COGS Calculation,
           Users &amp; Roles, Import, Media Library, and Stock Config.
         </p>
 
@@ -1035,9 +1035,11 @@ export default function HelpPage() {
           conversion across the app. Base currency is USD — all rates are stored as <em>units per 1 USD</em>.
         </p>
 
-        <H3 id="cogs-thresholds-tab">COGS Thresholds</H3>
+        <H3 id="cogs-thresholds-tab">COGS Calculation</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Set the target COGS% for colour-coding in the Menu Engineer. Three bands:
+          A single Configuration tab covering the COGS % thresholds, recipe costing method, modifier
+          multiplier, and modifier-cost-by-choices toggle. The thresholds set the target COGS% for
+          colour-coding in the Menu Engineer — three bands:
           <span className="text-green-700 font-semibold"> Excellent</span> (green ≤ target),{' '}
           <span className="text-amber-600 font-semibold">Acceptable</span> (amber, target+10%),{' '}
           <span className="text-red-600 font-semibold">Alert</span> (red, above acceptable). A typical
@@ -1054,7 +1056,7 @@ export default function HelpPage() {
           <li><strong>Market amalgamated quote</strong> — arithmetic mean of all active quotes in the market (FX-normalised per vendor). Blended view: useful when ingredients are sourced from multiple vendors and no single one is clearly preferred.</li>
         </ul>
         <p className="text-sm text-[#2D4A38] leading-relaxed mt-2">
-          Switch in <strong>Settings → COGS Thresholds</strong>. Change takes effect immediately — all COGS calculations
+          Switch in <strong>Configuration → COGS Calculation</strong>. Change takes effect immediately — all COGS calculations
           (recipe costs, menu COGS tiles, Menu Engineer, Pepper responses) respect it automatically.
         </p>
 

@@ -976,11 +976,11 @@ Default target COGS: stored in `mcogs_settings` as `cogs_thresholds.excellent` a
 
 Unified configuration hub that replaced the separate Settings, Markets, Categories, and Import pages. All legacy routes (`/settings`, `/markets`, `/countries`, `/locations`, `/categories`, `/import`) redirect here.
 
-**Sections:** Global Config | Location Structure | Categories | Base Units | Price Levels | Currency | COGS Thresholds | Users & Roles | Import | Media Library | Stock Config
+**Sections:** Global Config | Location Structure | Categories | Base Units | Price Levels | Currency | COGS Calculation | Users & Roles | Import | Media Library | Stock Config
 
 - Full CRUD for Units (`mcogs_units`) and Price Levels (`mcogs_price_levels`)
 - Exchange Rates syncs from Frankfurter API — no key needed
-- COGS Thresholds: configure green/amber/red target percentages
+- COGS Calculation: configure green/amber/red threshold percentages, recipe costing method (best vs market amalgamated), modifier multiplier, modifier-cost-by-choices toggle
 - Users & Roles: user management (approve/disable/role/dev flag), RBAC permission matrix
 - Import: AI-powered data import wizard (embedded from ImportPage)
 - Media Library: media library settings and category management
@@ -1041,7 +1041,7 @@ A global setting at `mcogs_settings.data.costing_method` (values: `'best'` defau
 
 - Implemented in [`api/src/routes/cogs.js`](api/src/routes/cogs.js) (`loadQuoteLookup(method?)`, `resolveCostingMethodFromSettings()`) and mirrored in [`api/src/helpers/effectivePrice.js`](api/src/helpers/effectivePrice.js) (`getEffectivePrice`, `getEffectivePricesBulk`, exports `COSTING_METHODS` + `resolveCostingMethodFromSettings`).
 - `loadQuoteLookup()` now returns `price_per_base_unit` already computed in SQL — the JS post-processing step that divided by vendor rate was removed, because `AVG(p/q/fx)` ≠ `AVG(p)/AVG(q)/AVG(fx)` and the SQL-side aggregation gives mathematically correct blended rates.
-- Exposed in the UI under **Settings → COGS Thresholds** as a new "Recipe Costing Method" section with two radio options and explanatory copy. Saved via the same PATCH to `/settings`.
+- Exposed in the UI under **Configuration → COGS Calculation** as a "Recipe Costing Method" section with two radio options and explanatory copy. Saved via the same PATCH to `/settings`.
 - No schema change — setting is added to the existing `mcogs_settings.data` JSONB blob. Existing deployments default to `'best'` (matches historical behaviour); users opt in to `'average'` by saving the radio.
 - All existing callers (`cogs.js` internal routes, `scenarios.js`, `shared-pages.js`, tests) pick up the setting automatically — no signature changes.
 

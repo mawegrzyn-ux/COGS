@@ -4678,6 +4678,38 @@ const migrations = [
      WHERE version = '2026-05-13' AND title = 'Sidebar — Menu Entry renamed to Menu Builder (BACK-2837 follow-up)'
    )`,
 
+  // ── Step 175w: Changelog — May 13 — Menu Builder + New Menu button ──────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — quick-create button for new menus', '[
+     {"type":"added","description":"Menu Builder toolbar gains a + New Menu button next to the Menu picker. Opens a small modal asking for name (required), market (defaults to the active Market Switcher selection, falls back to first allowed country), and an optional description. Posts to /api/menus, prepends the result to the local menus list, and auto-selects the new menu so you can immediately drop sales items onto it. Pepper toast confirms success. Country list comes from MarketContext so the picker respects RBAC scope; if no markets are configured the button is disabled with a tooltip directing the user to Configuration → Markets."},
+     {"type":"changed","description":"Empty state (zero menus) rewritten — instead of redirecting to the standalone Menus page it now offers the inline + New Menu button so first-time users can start a menu without leaving Menu Builder. If no markets exist either, the action button instead links to Configuration to set one up first."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — quick-create button for new menus'
+   )`,
+
+  // ── Step 175x: Changelog — May 13 — Rename COGS Thresholds tab ──────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Configuration tab renamed — COGS Thresholds → COGS Calculation', '[
+     {"type":"changed","description":"The Configuration tab previously titled COGS Thresholds is now COGS Calculation. The tab covers more than just thresholds — recipe costing method, modifier multiplier, and modifier-cost-by-choices all live here too — so the broader name fits better. Internal route id stays cogs-thresholds (and the SettingsPage internal tab id stays thresholds) so saved tab preferences in localStorage and deep links keep working. ConfigurationPage sidebar, SettingsPage tab label, the Pepper tutorial prompt, and prose references in MarketsPage and HelpPage all updated. The COGS % Thresholds heading inside the tab is unchanged — it still describes that specific sub-section."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Configuration tab renamed — COGS Thresholds → COGS Calculation'
+   )`,
+
+  // ── Step 175y: Changelog — May 13 — modifier cost × min_select toggle ─
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Modifier cost × Number of Choices — new Configuration → COGS Thresholds toggle', '[
+     {"type":"added","description":"New setting in Configuration → COGS Thresholds: Modifier Cost × Number of Choices. When ON, modifier group cost summaries (everywhere they are rendered) multiply the per-pick avg by the group min_select, so a CHOOSE 2 dips group shows cost ₹2.06 instead of avg ₹1.03. Min 1 / Max 1 stays at 1×, Min 2 / Max 2 becomes 2×, Min 1 / Max 2 stays at 1× (guaranteed minimum, not optimistic average of range). Default OFF — preserves the historical per-pick avg display."},
+     {"type":"added","description":"New setting key modifier_cost_uses_min_select on mcogs_settings.data (JSONB). Stored and read via the existing /settings PATCH endpoint — no schema migration needed. Frontend reads it in MenuBuilderPage on mount and threads it through ItemsList → ExpandedItemContent → renderModGroup where the scaled avg/min/max values feed into fmtCostSummary. Combo step cost calculation (the BUG-1186 fix) is unchanged — it always factors min_select since that is what determines the cost on a menu portion; the toggle only adjusts the cosmetic group-header summary."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Modifier cost × Number of Choices — new Configuration → COGS Thresholds toggle'
+   )`,
+
   // ── Step 175z: Changelog — May 13 — MB fullscreen + scroll preservation ─
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-13', 'Menu Builder — fullscreen toggle + scroll-preservation on save', '[

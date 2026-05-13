@@ -31,6 +31,10 @@ interface AppSettings {
   /** How the ingredient cost fallback is resolved when no preferred vendor is set for
    *  that ingredient+country. Preferred vendor quote ALWAYS wins. */
   costing_method?:  'best' | 'average'
+  /** When true, modifier group cost displays multiply the per-pick avg by the
+   *  group's min_select so the cost reflects the actual expected total cost
+   *  per portion. Default false — preserves the historical per-pick average. */
+  modifier_cost_uses_min_select?: boolean
 }
 
 type CostingMethod = 'best' | 'average'
@@ -43,7 +47,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'units':        'Base Units',
   'price-levels': 'Price Levels',
   'currency':     'Currency',
-  'thresholds':   'COGS Thresholds',
+  'thresholds':   'COGS Calculation',
   'test-data':    'Test Data',
   'ai':           'AI',
   'storage':      'Storage',
@@ -58,7 +62,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'units':        'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
   'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
   'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
-  'thresholds':   'What are COGS Thresholds and the Recipe Costing Method? Explain the green/amber/red target percentages (typical good ranges for a restaurant), and then explain the difference between the two costing methods — "Best price quote" (cheapest active quote) vs "Market amalgamated quote" (arithmetic mean of all active quotes in a market) — and when to pick each. Clarify that preferred vendor quotes always take priority regardless of method.',
+  'thresholds':   'What is the COGS Calculation tab? Explain the COGS % thresholds (green/amber/red — typical good ranges for a restaurant), the Recipe Costing Method (Best price quote vs Market amalgamated quote, and when to pick each), the Modifier Multiplier toggle (and the × mod ingredient flag on recipes), and the Modifier Cost × Number of Choices toggle. Clarify that preferred vendor quotes always take priority regardless of costing method.',
   'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
@@ -120,7 +124,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
       <PageHeader
         title="Settings"
         subtitle="Units, price levels, currency and more"
-        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Currency, COGS Thresholds, and AI — and which should I configure first when setting up a new account?"
+        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Currency, COGS Calculation, and AI — and which should I configure first when setting up a new account?"
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
@@ -876,6 +880,11 @@ function ThresholdsTab() {
   // / Shared view scale by the qty of an ingredient flagged as "× mod" on
   // the underlying recipe. Default off so existing menus don't shift.
   const [multiplierEnabled, setMultiplierEnabled] = useState(false)
+  // Modifier cost × min_select — when on, the modifier group cost summary
+  // is the per-pick avg multiplied by the group's min_select, reflecting
+  // the actual expected cost per portion. Default off — preserves the
+  // historical per-pick avg display.
+  const [modCostUsesMinSelect, setModCostUsesMinSelect] = useState(false)
 
   useEffect(() => {
     api.get('/settings')
@@ -890,6 +899,9 @@ function ThresholdsTab() {
         }
         if (typeof (s as any)?.modifier_multiplier_enabled === 'boolean') {
           setMultiplierEnabled((s as any).modifier_multiplier_enabled)
+        }
+        if (typeof s?.modifier_cost_uses_min_select === 'boolean') {
+          setModCostUsesMinSelect(s.modifier_cost_uses_min_select)
         }
       })
       .catch(() => {})
@@ -908,6 +920,7 @@ function ThresholdsTab() {
         target_cogs: targetCogs ? Number(targetCogs) : null,
         costing_method: costingMethod,
         modifier_multiplier_enabled: multiplierEnabled,
+        modifier_cost_uses_min_select: modCostUsesMinSelect,
       })
       setToast({ message: 'Saved', type: 'success' })
     } catch (err: any) {
@@ -1062,6 +1075,43 @@ function ThresholdsTab() {
             <p className="text-xs text-text-3 mt-0.5">
               Set the flag on individual recipe ingredient rows under <strong>Recipes → ingredient table → × mod</strong>.
               One flag per recipe. Items can also be marked while this toggle is off — they only take effect once it's on.
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* ── Modifier cost × number of choices ─────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Modifier Cost × Number of Choices</h2>
+        <p className="text-sm text-text-3">
+          By default the displayed cost of a modifier group is the per-pick <em>average</em> (e.g.
+          <strong> avg ₹1.03</strong> for a DIPS group with three options). When this toggle is on, the displayed
+          cost is multiplied by the group's <strong>Min select</strong> so it reflects the actual expected
+          cost per portion (e.g. <strong>₹2.06</strong> for a "choose 2" group).
+        </p>
+        <p className="text-xs text-text-3 mt-2">
+          Min 1 / Max 1 stays at 1×, Min 2 / Max 2 becomes 2×, Min 1 / Max 2 stays at 1× (we use the
+          guaranteed minimum, not an optimistic range). Affects modifier group and combo-step cost summaries
+          everywhere they're rendered (Menu Builder tab, Combos tab, Menu Engineer). Default off — turning
+          it on does not change stored prices or COGS calculations, only the displayed cost summary.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${modCostUsesMinSelect ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="checkbox"
+            checked={modCostUsesMinSelect}
+            onChange={e => setModCostUsesMinSelect(e.target.checked)}
+            className="mt-1 accent-[#146A34] cursor-pointer"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">
+              Multiply modifier group cost by Min select
+            </span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Headers in the Menu Builder / Combos / Menu Engineer change from "avg ₹X" to "cost ₹X" with the
+              total reflected. The detailed range "₹min–₹max" is preserved underneath when min ≠ max.
             </p>
           </div>
         </label>

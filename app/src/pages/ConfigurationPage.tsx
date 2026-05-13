@@ -41,7 +41,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'units',              icon: '📐', label: 'Base Units',          feature: 'settings'   },
   { id: 'price-levels',       icon: '💰', label: 'Price Levels',        feature: 'settings'   },
   { id: 'currency',           icon: '💱', label: 'Currency',            feature: 'settings'   },
-  { id: 'cogs-thresholds',    icon: '🎯', label: 'COGS Thresholds',     feature: 'settings'   },
+  { id: 'cogs-thresholds',    icon: '🎯', label: 'COGS Calculation',    feature: 'settings'   },
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
