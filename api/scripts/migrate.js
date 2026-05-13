@@ -4678,6 +4678,17 @@ const migrations = [
      WHERE version = '2026-05-13' AND title = 'Sidebar — Menu Entry renamed to Menu Builder (BACK-2837 follow-up)'
    )`,
 
+  // ── Step 175z: Changelog — May 13 — MB fullscreen + scroll preservation ─
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — fullscreen toggle + scroll-preservation on save', '[
+     {"type":"added","description":"Menu Builder gains a fullscreen toggle button (top-right of the Menu Builder toolbar, next to + Add Sales Item to Menu). Clicking it covers the sidebar and top tab strip with the Menu Builder content via position: fixed; inset: 0; z-index: 40. Esc exits, as does clicking the now-minimize icon. State is local — not persisted across reloads, since fullscreen is a transient working mode."},
+     {"type":"fixed","description":"Menu Builder items list no longer scrolls to the top when a modifier (or any save that calls loadItems) refreshes the list. Root cause: itemsLoading=true during a refetch was unmounting ItemsList and replacing it with a full-screen Spinner, which threw away the scroll containers DOM node. The spinner now only shows on the very first load (items.length === 0); during subsequent refetches a faint accent-coloured progress bar appears at the top of the list area while ItemsList stays mounted, so the parent scroll container keeps its scrollTop."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — fullscreen toggle + scroll-preservation on save'
+   )`,
+
   // ── Step 175: Changelog — May 13 — Menu Builder tab parity fixes ─────────
   // The original session interpreted BUG-1185 / BUG-1186 / BACK-2835 /
   // BACK-2836 as the Sales Items > Combos catalog tab and shipped those

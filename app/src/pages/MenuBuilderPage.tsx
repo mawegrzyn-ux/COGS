@@ -319,6 +319,15 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
   const [loading,      setLoading]      = useState(true)
   const [itemsLoading, setItemsLoading] = useState(false)
   const [toast,        setToast]        = useState<{ message: string; type?: 'success' | 'error' } | null>(null)
+  // Fullscreen Menu Builder — covers sidebar + top tab strip when active.
+  // Esc and the toggle button both exit. Local state, not persisted.
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  useEffect(() => {
+    if (!isFullscreen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isFullscreen])
 
   // Add-item side panel
   const [panelOpen,    setPanelOpen]    = useState(false)
@@ -945,7 +954,13 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
   }, [api, selectedMenu])
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className={`flex flex-col bg-surface ${
+        isFullscreen
+          ? 'fixed inset-0 z-40 h-screen w-screen'
+          : 'h-full'
+      }`}
+    >
       {!hideHeader && (
         <PageHeader
           title="Menu Builder"
@@ -998,19 +1013,56 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
                 onClick={() => { setEditTarget(null); setAddMode('search'); setPanelOpen(true) }}
                 disabled={!selectedMenu}
               >+ Add Sales Item to Menu</button>
+              {/* Fullscreen toggle — covers sidebar + tab strip. Esc also exits. */}
+              <button
+                className="ml-2 p-2 rounded text-text-3 hover:text-accent hover:bg-accent-dim transition-colors"
+                onClick={() => setIsFullscreen(v => !v)}
+                title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              >
+                {isFullscreen ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 3v3a2 2 0 01-2 2H3" />
+                    <path d="M21 8h-3a2 2 0 01-2-2V3" />
+                    <path d="M3 16h3a2 2 0 012 2v3" />
+                    <path d="M16 21v-3a2 2 0 012-2h3" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 8V5a2 2 0 012-2h3" />
+                    <path d="M16 3h3a2 2 0 012 2v3" />
+                    <path d="M21 16v3a2 2 0 01-2 2h-3" />
+                    <path d="M8 21H5a2 2 0 01-2-2v-3" />
+                  </svg>
+                )}
+              </button>
             </div>
 
-            {/* ── Items list ── */}
-            <div className="flex-1 overflow-y-auto bg-surface-2/40">
+            {/* ── Items list ──
+                Scroll position preservation: the scroll container stays
+                mounted, and the ItemsList is only replaced by the Spinner on
+                the *initial* load (items.length === 0). When the parent
+                refetches after a modifier save the list stays in the DOM, so
+                the scroll container's scrollTop is preserved naturally.
+                A faint top progress hint replaces the previous full-screen
+                spinner during refresh. */}
+            <div className="flex-1 overflow-y-auto bg-surface-2/40 relative">
               {!selectedMenu ? (
                 <div className="p-8 text-center text-text-3 text-sm">Pick a menu above.</div>
-              ) : itemsLoading ? (
+              ) : itemsLoading && items.length === 0 ? (
                 <div className="flex justify-center p-12"><Spinner /></div>
               ) : items.length === 0 ? (
                 <div className="p-8 text-center text-text-3 text-sm">
                   No items on this menu yet. Click <strong>+ Add Sales Item to Menu</strong> to start.
                 </div>
               ) : (
+                <>
+                  {itemsLoading && (
+                    <div
+                      className="absolute top-0 left-0 right-0 h-0.5 bg-accent/40 animate-pulse pointer-events-none z-10"
+                      title="Refreshing…"
+                    />
+                  )}
                 <ItemsList
                   items={items}
                   enabledPriceLevels={enabledPriceLevels}
@@ -1075,6 +1127,7 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
                     setCatDragId(null); setCatDragOverId(null)
                   }}
                 />
+                </>
               )}
             </div>
           </div>
