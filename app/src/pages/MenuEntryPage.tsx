@@ -91,14 +91,13 @@ export default function MenuEntryPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Top tab bar — owned by MenuEntryPage; SalesItemsPage's own header
-          is hidden when embedded so there's only one tab strip on screen. */}
+      {/* BACK-2837 — single "Menu Builder" title bar at the top, with the tab
+          selector tucked underneath. MenuBuilderPage now skips its own
+          internal PageHeader when embedded (hideHeader prop) so the title
+          isn't duplicated when the Menu Builder tab is active. */}
       <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
-        <div className="mb-3">
-          <h1 className="text-xl font-bold text-gray-900">Menu Entry</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Build sales items, combos, and modifiers — then drop them on a menu.</p>
-        </div>
-        <div className="flex gap-1">
+        <h1 className="text-xl font-bold text-gray-900">Menu Builder</h1>
+        <div className="flex gap-1 mt-3 -mb-px">
           {tabs.map(t => (
             <button
               key={t}
@@ -133,7 +132,7 @@ export default function MenuEntryPage() {
         )}
         {mounted.has('menu-builder') && (
           <div className={`absolute inset-0 ${activeTab === 'menu-builder' ? 'flex flex-col' : 'hidden'}`}>
-            <MenuBuilderPage />
+            <MenuBuilderPage hideHeader />
           </div>
         )}
       </div>

@@ -305,7 +305,10 @@ const TYPE_BADGE: Record<SalesItemType, { label: string; cls: string }> = {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
-export default function MenuBuilderPage() {
+// BACK-2837 — hideHeader skips the internal PageHeader when MenuBuilderPage
+// is mounted inside MenuEntryPage, which now owns the single "Menu Builder"
+// title at the top of the page.
+export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const api = useApi()
 
   const [menus,        setMenus]        = useState<Menu[]>([])
@@ -941,11 +944,13 @@ export default function MenuBuilderPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader
-        title="Menu Builder"
-        subtitle="Build menus end-to-end: search or create sales items inline, build combos, attach modifiers, set prices — all on one screen."
-        action={<PepperHelpButton prompt="How do I use the Menu Builder page?" />}
-      />
+      {!hideHeader && (
+        <PageHeader
+          title="Menu Builder"
+          subtitle="Build menus end-to-end: search or create sales items inline, build combos, attach modifiers, set prices — all on one screen."
+          action={<PepperHelpButton prompt="How do I use the Menu Builder page?" />}
+        />
+      )}
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center"><Spinner /></div>

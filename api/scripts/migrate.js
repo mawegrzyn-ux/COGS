@@ -4634,6 +4634,39 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-12' AND title = 'AWS Cognito integration — Phase 1 groundwork (BACK-2364)'
    )`,
+
+  // ── Step 173: Flip BUG-1185 + BUG-1186 to resolved, BACK-2835 + 2836 to done ─
+  `UPDATE mcogs_bugs SET status='resolved', updated_at=NOW()
+   WHERE key IN ('BUG-1185','BUG-1186') AND status <> 'resolved'`,
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key IN ('BACK-2835','BACK-2836') AND status <> 'done'`,
+
+  // ── Step 173a: Changelog — May 13 — Combos tab fixes + reorder + hierarchy ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder Combos tab — type selector, cost display, drag-drop, hierarchy', '[
+     {"type":"fixed","description":"BUG-1185: combo step option edit form now shows a prominent 4-button segmented Option Type control (Recipe / Ingredient / Manual / Sales Item) at the top of the form. Previously the type field was a small select dropdown beneath Name and Display Name, easy to miss when users could not see why their picker fields had not appeared. The segmented control is wrapped in an accent-tinted card with a one-line helper explaining where the cost comes from for each type. New options default to Recipe rather than Manual, since recipe-backed options are the common case. Switching type still clears recipe_id / ingredient_id / sales_item_id / manual_cost atomically."},
+     {"type":"fixed","description":"BUG-1186: combo step option rows in the Combos edit view now show per-option cost including the modifier adder. New endpoint GET /api/combos/:id/costs?country_id=X returns base_cost, modifier_adder, and total_cost per option in the active market currency. Frontend fetches alongside the combo detail, refetches on market switch, and renders a right-aligned cost cell with a (+sym 0.45 mod) suffix when a modifier group is attached. Modifier adder math mirrors loadModifierCostAdders — avg(option costs) × min_select per attached group."},
+     {"type":"added","description":"BACK-2835: native HTML5 drag-drop reorder for combo steps in the Combos edit tab. New endpoint POST /api/combos/:id/steps/reorder takes { order: [stepId, ...] } and updates sort_order in a single transaction. Each step row carries a grab handle, source dims to 40 percent opacity, drop target gets an accent ring. The existing arrow buttons stay as the keyboard accessibility fallback. Matches the same pattern as Categories drag-drop and backlog kanban."},
+     {"type":"changed","description":"BACK-2836: visual hierarchy improvements in the Combos edit view. Step containers gain a 4px left accent bar; the option list inside an expanded step now sits behind a vertical accent guideline and indents the options visibly. Step header background goes from bg-gray-50 to bg-gray-100 for stronger contrast against the white combo card. Each option row gets its own 2px left bar that switches to solid accent when the option is the active panel target."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder Combos tab — type selector, cost display, drag-drop, hierarchy'
+   )`,
+
+  // ── Step 174: Flip BACK-2837 to done (header dedup) ──────────────────────
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2837' AND status <> 'done'`,
+
+  // ── Step 174a: Changelog — May 13 — Menu Entry header cleanup ────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Entry page header cleanup — single Menu Builder title (BACK-2837)', '[
+     {"type":"changed","description":"BACK-2837: removed the duplicate header on /menu-entry. The outer MenuEntryPage previously rendered Menu Entry as the page title plus its own subtitle; when the user switched to the Menu Builder tab, MenuBuilderPage rendered ANOTHER PageHeader with title Menu Builder right underneath. Now there is one title bar — Menu Builder — owned by MenuEntryPage, with the tab strip (Items / Combos / Modifiers / Menu Builder) sitting directly below it. MenuBuilderPage gained a hideHeader prop (defaults to false for standalone routes that still mount it directly) so when MenuEntryPage embeds it the inner PageHeader is skipped. SalesItemsPage was already using the same hideHeader pattern; this lines MenuBuilderPage up with it."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Entry page header cleanup — single Menu Builder title (BACK-2837)'
+   )`,
 ];
 
 async function runMigrations(pool) {

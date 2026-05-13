@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
 import { Field, Spinner, Modal, Toast, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
@@ -317,6 +318,10 @@ export default function SalesItemsPage({
   hideHeader?: boolean
 } = {}) {
   const api = useApi()
+  // BUG-1186 — Combos tab cost display picks vendor pricing from the global
+  // market selector; if "All markets" is active we fall back to the first
+  // country at the API side.
+  const { countryId: marketCountryId } = useMarket()
   const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>(embeddedTab ?? 'items')
   // Keep internal state in lockstep with the external override when the
   // parent flips its top tab. Local setActiveTab calls still work for
@@ -669,6 +674,18 @@ export default function SalesItemsPage({
 
   const [duplicatingCombo, setDuplicatingCombo] = useState(false)
 
+  // BUG-1186 — per-option cost lookup keyed by combo_step_option_id.
+  // Refetched whenever the combo or market changes; null = not loaded yet.
+  type OptionCost = { base_cost: number; modifier_adder: number; total_cost: number }
+  const [comboOptionCosts, setComboOptionCosts] = useState<Record<number, OptionCost>>({})
+  const [comboCostCurrency, setComboCostCurrency] = useState<{ code: string; symbol: string } | null>(null)
+
+  // BACK-2835 — drag-drop step reorder state. dragStepId = the step currently
+  // being dragged; dropStepId = the hover target. Releasing fires the batch
+  // reorder API call.
+  const [dragStepId, setDragStepId] = useState<number | null>(null)
+  const [dropStepId, setDropStepId] = useState<number | null>(null)
+
   useEffect(() => {
     // Reset panel state whenever the selected combo changes
     setComboEditTarget(null)
@@ -676,6 +693,8 @@ export default function SalesItemsPage({
     setCpComboForm(null)
     setCpStepForm(null)
     setCpOptForm(null)
+    setComboOptionCosts({})
+    setComboCostCurrency(null)
     if (!selectedComboId) { setComboDetail(null); return }
     setComboDetailLoading(true)
     api.get(`/combos/${selectedComboId}`)
@@ -683,6 +702,33 @@ export default function SalesItemsPage({
       .catch(() => setComboDetail(null))
       .finally(() => setComboDetailLoading(false))
   }, [selectedComboId, api])
+
+  // BUG-1186 — fetch per-option costs once combo data is loaded. Refetches on
+  // market switch. Failures are silent — the cost cell falls back to "—".
+  useEffect(() => {
+    if (!selectedComboId) return
+    const qs = marketCountryId ? `?country_id=${marketCountryId}` : ''
+    api.get(`/combos/${selectedComboId}/costs${qs}`)
+      .then((r: { country: { code: string; symbol: string } | null; options: Record<number, OptionCost> }) => {
+        setComboOptionCosts(r.options || {})
+        setComboCostCurrency(r.country ? { code: r.country.code, symbol: r.country.symbol } : null)
+      })
+      .catch(() => { setComboOptionCosts({}); setComboCostCurrency(null) })
+  }, [selectedComboId, marketCountryId, comboDetail, api])
+
+  // BACK-2835 — batch step reorder. Optimistically updates local state, then
+  // POSTs; rolls back via a fresh fetch on error.
+  const persistStepReorder = useCallback(async (newSteps: ComboStep[]) => {
+    if (!selectedComboId) return
+    const updated = newSteps.map((s, i) => ({ ...s, sort_order: i }))
+    setComboDetail(d => d ? { ...d, steps: updated } : d)
+    try {
+      await api.post(`/combos/${selectedComboId}/steps/reorder`, { order: updated.map(s => s.id) })
+    } catch {
+      showToast('Failed to reorder steps')
+      reloadComboDetail()
+    }
+  }, [selectedComboId, api, /* showToast / reloadComboDetail defined later */])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const reloadComboDetail = useCallback(async () => {
     if (!selectedComboId) return
@@ -1769,10 +1815,41 @@ export default function SalesItemsPage({
                   </div>
                   {(comboDetail.steps || []).length === 0 && <p className="text-sm text-gray-400">No steps yet.</p>}
                   <div className="space-y-2">
-                    {(comboDetail.steps || []).map((step, stepIdx) => (
-                      <div key={step.id} className={`border rounded transition-colors ${comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id ? 'border-accent' : 'border-gray-200'}`}>
+                    {(comboDetail.steps || []).map((step, stepIdx) => {
+                      // BACK-2835 — drag-drop reorder. Uses native HTML5 DnD;
+                      // arrow buttons stay as keyboard fallback.
+                      const isDragging = dragStepId === step.id
+                      const isDropTarget = dropStepId === step.id && dragStepId !== null && dragStepId !== step.id
+                      const isPanelTarget = comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id
+                      return (
+                      <div
+                        key={step.id}
+                        draggable
+                        onDragStart={() => setDragStepId(step.id)}
+                        onDragOver={e => { e.preventDefault(); if (dragStepId !== null && dragStepId !== step.id) setDropStepId(step.id) }}
+                        onDragLeave={() => { if (dropStepId === step.id) setDropStepId(null) }}
+                        onDrop={e => {
+                          e.preventDefault()
+                          const fromId = dragStepId
+                          setDragStepId(null); setDropStepId(null)
+                          if (fromId == null || fromId === step.id || !comboDetail) return
+                          const steps = [...(comboDetail.steps || [])]
+                          const fromIdx = steps.findIndex(s => s.id === fromId)
+                          const toIdx   = steps.findIndex(s => s.id === step.id)
+                          if (fromIdx < 0 || toIdx < 0) return
+                          const [moved] = steps.splice(fromIdx, 1)
+                          steps.splice(toIdx, 0, moved)
+                          persistStepReorder(steps)
+                        }}
+                        onDragEnd={() => { setDragStepId(null); setDropStepId(null) }}
+                        className={`border-l-4 border rounded transition-all ${
+                          isPanelTarget ? 'border-l-accent border-accent' :
+                          isDropTarget  ? 'border-l-accent border-accent ring-2 ring-accent/30' :
+                                          'border-l-accent/40 border-gray-200'
+                        } ${isDragging ? 'opacity-40' : ''} bg-white`}
+                      >
                         {/* Step header row — click to expand + open step in side panel */}
-                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t"
+                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-100 hover:bg-gray-200 rounded-t"
                           onClick={() => {
                             if (expandedStep === step.id) {
                               setExpandedStep(null)
@@ -1785,6 +1862,12 @@ export default function SalesItemsPage({
                             }
                           }}>
                           <div className="flex items-center gap-2 flex-wrap">
+                            {/* BACK-2835 — drag handle */}
+                            <span
+                              className="text-gray-400 hover:text-accent cursor-grab active:cursor-grabbing select-none px-0.5"
+                              title="Drag to reorder"
+                              onClick={e => e.stopPropagation()}
+                            >⋮⋮</span>
                             <span className="text-xs text-gray-400">{expandedStep === step.id ? '▼' : '▶'}</span>
                             <span className="text-sm font-medium text-gray-800">{step.name}</span>
                             {step.display_name && <span className="text-xs text-gray-400 italic">"{step.display_name}"</span>}
@@ -1794,11 +1877,11 @@ export default function SalesItemsPage({
                             {step.allow_repeat && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded" title="Same option can be chosen multiple times">repeat ✓</span>}
                             {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                             <button className="text-xs text-accent hover:text-accent-dark px-1.5 py-0.5 rounded hover:bg-accent-dim transition-colors"
-                              onClick={e => { e.stopPropagation(); setExpandedStep(step.id); setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } }) }}>
+                              onClick={e => { e.stopPropagation(); setExpandedStep(step.id); setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'recipe', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } }) }}>
                               + Add Option
                             </button>
                           </div>
-                          {/* Step action icons — sort ↑↓, duplicate, trash */}
+                          {/* Step action icons — sort ↑↓ (keyboard fallback for drag-drop), duplicate, trash */}
                           <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
                             <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-30" title="Move up"
                               disabled={stepIdx === 0} onClick={() => reorderComboStep(stepIdx, 'up')}>
@@ -1825,10 +1908,14 @@ export default function SalesItemsPage({
 
                         {/* Options list */}
                         {expandedStep === step.id && (
-                          <div className="p-2 space-y-1">
+                          <div className="p-2 pl-6 space-y-1 border-l-2 border-l-accent/20 ml-2">
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet — click "+ Add Option" above.</p>}
-                            {(step.options || []).map(opt => (
-                              <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
+                            {(step.options || []).map(opt => {
+                              // BUG-1186 — pull pre-computed cost from /combos/:id/costs
+                              const cost = comboOptionCosts[opt.id]
+                              const sym  = comboCostCurrency?.symbol || '$'
+                              return (
+                              <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors border-l-2 ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40 border-l-accent' : 'hover:bg-gray-50 border-l-transparent'}`}
                                 onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
                                 <span className="font-medium text-gray-800 truncate">{opt.display_name || opt.name}</span>
                                 {opt.display_name && <span className="text-xs text-gray-400 italic shrink-0">({opt.name})</span>}
@@ -1849,7 +1936,6 @@ export default function SalesItemsPage({
                                     {opt.sales_item_type && <span className={`text-xs px-1 py-0.5 rounded ${TYPE_BADGE[opt.sales_item_type] || ''}`}>{TYPE_LABEL[opt.sales_item_type] || opt.sales_item_type}</span>}
                                   </span>
                                 )}
-                                {opt.item_type === 'manual' && opt.manual_cost != null && <span className="text-xs text-gray-400 shrink-0">${Number(opt.manual_cost).toFixed(4)}</span>}
                                 {(opt.modifier_groups || []).length > 0 && (
                                   <div className="flex flex-wrap gap-1 ml-1">
                                     {(opt.modifier_groups || []).map(mg => (
@@ -1857,7 +1943,17 @@ export default function SalesItemsPage({
                                     ))}
                                   </div>
                                 )}
-                                <div className="flex gap-1 shrink-0 ml-auto" onClick={e => e.stopPropagation()}>
+                                {/* BUG-1186 — cost display (base + modifier adder if present) */}
+                                {cost && (
+                                  <span className="text-xs text-gray-600 shrink-0 ml-auto font-mono"
+                                    title={`Base ${sym}${cost.base_cost.toFixed(4)}` + (cost.modifier_adder > 0 ? ` · Modifiers ${sym}${cost.modifier_adder.toFixed(4)}` : '')}>
+                                    {sym}{cost.total_cost.toFixed(2)}
+                                    {cost.modifier_adder > 0 && (
+                                      <span className="text-[10px] text-purple-600 ml-1">(+{sym}{cost.modifier_adder.toFixed(2)} mod)</span>
+                                    )}
+                                  </span>
+                                )}
+                                <div className="flex gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                                   <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
                                     title="Delete option" onClick={() => deleteOption(step.id, opt.id)}>
                                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1866,11 +1962,11 @@ export default function SalesItemsPage({
                                   </button>
                                 </div>
                               </div>
-                            ))}
+                            )})}
                           </div>
                         )}
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </section>
               </div>
@@ -2000,6 +2096,40 @@ export default function SalesItemsPage({
                   const filteredSis  = salesItems.filter(s => s.item_type !== 'combo' && s.name.toLowerCase().includes(cpOptSiSearch.toLowerCase())).slice(0, 50)
                   return (
                     <>{comboPanelOptTab === 'details' && (<>
+                      {/* BUG-1185 — option type selector. Moved to top of the
+                          form (it determines every downstream field) and
+                          rendered as a 4-button segmented control so it can't
+                          be missed. */}
+                      <div className="bg-accent-dim/30 border border-accent/30 rounded-lg p-2.5 -mx-1">
+                        <label className="text-xs font-semibold text-text-1 block mb-1.5">Option type *</label>
+                        <div className="grid grid-cols-4 gap-1">
+                          {(['recipe', 'ingredient', 'manual', 'sales_item'] as const).map(t => {
+                            const active = cpOptForm.item_type === t
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => {
+                                  if (active) return
+                                  setCpOptForm(f => f ? { ...f, item_type: t, recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null } : f)
+                                  setCpOptRecipeSearch(''); setCpOptIngSearch(''); setCpOptSiSearch('')
+                                }}
+                                className={`text-xs font-medium px-1 py-1.5 rounded transition-colors border ${
+                                  active
+                                    ? 'bg-accent text-white border-accent shadow-sm'
+                                    : 'bg-white text-text-2 border-border hover:border-accent hover:text-accent'
+                                }`}
+                              >{TYPE_LABEL[t]}</button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-[10px] text-text-3 mt-1.5">
+                          {cpOptForm.item_type === 'recipe'     && 'Cost resolves from the linked recipe\'s ingredients and yield.'}
+                          {cpOptForm.item_type === 'ingredient' && 'Cost resolves from the preferred vendor quote.'}
+                          {cpOptForm.item_type === 'manual'     && 'Cost is entered directly below.'}
+                          {cpOptForm.item_type === 'sales_item' && 'Inherits cost from the linked Sales Item.'}
+                        </p>
+                      </div>
                       <div>
                         <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
                         <input className="input w-full text-sm" value={cpOptForm.name}
@@ -2010,19 +2140,6 @@ export default function SalesItemsPage({
                         <input className="input w-full text-sm" placeholder="Leave blank to use name"
                           value={cpOptForm.display_name ?? ''}
                           onChange={e => setCpOptForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Type</label>
-                        <select className="input w-full text-sm" value={cpOptForm.item_type}
-                          onChange={e => {
-                            setCpOptForm(f => f ? { ...f, item_type: e.target.value as ComboStepOption['item_type'], recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null } : f)
-                            setCpOptRecipeSearch(''); setCpOptIngSearch(''); setCpOptSiSearch('')
-                          }}>
-                          <option value="manual">Manual cost</option>
-                          <option value="recipe">Recipe</option>
-                          <option value="ingredient">Ingredient</option>
-                          <option value="sales_item">Sales Item</option>
-                        </select>
                       </div>
 
                       {cpOptForm.item_type === 'recipe' && (
