@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
-import { useMarket } from '../contexts/MarketContext'
 import { Field, Spinner, Modal, Toast, CategoryPicker } from '../components/ui'
 import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
@@ -318,10 +317,6 @@ export default function SalesItemsPage({
   hideHeader?: boolean
 } = {}) {
   const api = useApi()
-  // BUG-1186 — Combos tab cost display picks vendor pricing from the global
-  // market selector; if "All markets" is active we fall back to the first
-  // country at the API side.
-  const { countryId: marketCountryId } = useMarket()
   const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>(embeddedTab ?? 'items')
   // Keep internal state in lockstep with the external override when the
   // parent flips its top tab. Local setActiveTab calls still work for
@@ -674,12 +669,6 @@ export default function SalesItemsPage({
 
   const [duplicatingCombo, setDuplicatingCombo] = useState(false)
 
-  // BUG-1186 — per-option cost lookup keyed by combo_step_option_id.
-  // Refetched whenever the combo or market changes; null = not loaded yet.
-  type OptionCost = { base_cost: number; modifier_adder: number; total_cost: number }
-  const [comboOptionCosts, setComboOptionCosts] = useState<Record<number, OptionCost>>({})
-  const [comboCostCurrency, setComboCostCurrency] = useState<{ code: string; symbol: string } | null>(null)
-
   // BACK-2835 — drag-drop step reorder state. dragStepId = the step currently
   // being dragged; dropStepId = the hover target. Releasing fires the batch
   // reorder API call.
@@ -693,8 +682,6 @@ export default function SalesItemsPage({
     setCpComboForm(null)
     setCpStepForm(null)
     setCpOptForm(null)
-    setComboOptionCosts({})
-    setComboCostCurrency(null)
     if (!selectedComboId) { setComboDetail(null); return }
     setComboDetailLoading(true)
     api.get(`/combos/${selectedComboId}`)
@@ -702,19 +689,11 @@ export default function SalesItemsPage({
       .catch(() => setComboDetail(null))
       .finally(() => setComboDetailLoading(false))
   }, [selectedComboId, api])
-
-  // BUG-1186 — fetch per-option costs once combo data is loaded. Refetches on
-  // market switch. Failures are silent — the cost cell falls back to "—".
-  useEffect(() => {
-    if (!selectedComboId) return
-    const qs = marketCountryId ? `?country_id=${marketCountryId}` : ''
-    api.get(`/combos/${selectedComboId}/costs${qs}`)
-      .then((r: { country: { code: string; symbol: string } | null; options: Record<number, OptionCost> }) => {
-        setComboOptionCosts(r.options || {})
-        setComboCostCurrency(r.country ? { code: r.country.code, symbol: r.country.symbol } : null)
-      })
-      .catch(() => { setComboOptionCosts({}); setComboCostCurrency(null) })
-  }, [selectedComboId, marketCountryId, comboDetail, api])
+  // Note: cost display in the Combos catalog tab was removed (replaced
+  // BUG-1186's per-option cost cell). The cost was computed by a parallel
+  // engine in /combos/:id/costs that diverged from calcComboCost for
+  // sales-item-wrapped recipes (over-multiplied by si_qty). Operators see
+  // the authoritative cost in the Menu Builder tab + Menu Engineer.
 
   // BACK-2835 — batch step reorder. Optimistically updates local state, then
   // POSTs; rolls back via a fresh fetch on error.
@@ -1910,11 +1889,7 @@ export default function SalesItemsPage({
                         {expandedStep === step.id && (
                           <div className="p-2 pl-6 space-y-1 border-l-2 border-l-accent/20 ml-2">
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet — click "+ Add Option" above.</p>}
-                            {(step.options || []).map(opt => {
-                              // BUG-1186 — pull pre-computed cost from /combos/:id/costs
-                              const cost = comboOptionCosts[opt.id]
-                              const sym  = comboCostCurrency?.symbol || '$'
-                              return (
+                            {(step.options || []).map(opt => (
                               <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors border-l-2 ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40 border-l-accent' : 'hover:bg-gray-50 border-l-transparent'}`}
                                 onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
                                 <span className="font-medium text-gray-800 truncate">{opt.display_name || opt.name}</span>
@@ -1943,17 +1918,11 @@ export default function SalesItemsPage({
                                     ))}
                                   </div>
                                 )}
-                                {/* BUG-1186 — cost display (base + modifier adder if present) */}
-                                {cost && (
-                                  <span className="text-xs text-gray-600 shrink-0 ml-auto font-mono"
-                                    title={`Base ${sym}${cost.base_cost.toFixed(4)}` + (cost.modifier_adder > 0 ? ` · Modifiers ${sym}${cost.modifier_adder.toFixed(4)}` : '')}>
-                                    {sym}{cost.total_cost.toFixed(2)}
-                                    {cost.modifier_adder > 0 && (
-                                      <span className="text-[10px] text-purple-600 ml-1">(+{sym}{cost.modifier_adder.toFixed(2)} mod)</span>
-                                    )}
-                                  </span>
-                                )}
-                                <div className="flex gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                {/* Cost display removed — the catalog Combos tab is not menu-scoped
+                                    and the parallel /combos/:id/costs engine over-multiplied
+                                    sales-item-wrapped recipes by si_qty. See Menu Builder tab
+                                    for authoritative cost. */}
+                                <div className="flex gap-1 shrink-0 ml-auto" onClick={e => e.stopPropagation()}>
                                   <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
                                     title="Delete option" onClick={() => deleteOption(step.id, opt.id)}>
                                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1962,7 +1931,7 @@ export default function SalesItemsPage({
                                   </button>
                                 </div>
                               </div>
-                            )})}
+                            ))}
                           </div>
                         )}
                       </div>

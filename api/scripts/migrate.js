@@ -4684,6 +4684,40 @@ const migrations = [
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2569' AND status <> 'done'`,
 
+  // ── Step 175q: Changelog — Menu Builder rendering parity with Combos tab ─
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — combo steps + nested modifier groups now use the same card style as the Combos catalog tab', '[
+     {"type":"changed","description":"Combo step rows in the Menu Builder expanded view now render as rounded cards with a gray header, an accent-bar on the left, and pill-badge metadata (min N, max N, N options, cost summary) instead of dot-separated text. Matches the Combos catalog tab visual language so operators dont have to translate between two styles."},
+     {"type":"changed","description":"Modifier groups attached to combo step options (and top-level modifier groups on non-combo sales items) now render in the same card style — rounded purple-tinted card with pill badges. NestedGroup component refactored to take structured props (minSelect, maxSelect, optionsCount, costSummary) instead of a single subtitle string. Visual hierarchy reads clearly: white sales item row > gray combo step card > purple-tinted modifier group card > option rows."},
+     {"type":"changed","description":"Sales item rows in the Menu Builder list now show a full-word type pill (Recipe / Ingredient / Manual / Combo) on the title row instead of a single-letter colored avatar. The mod-count badge is also promoted to a pill on the title row. Subline is simplified to just the category (qty appears only when not 1). Type colours unchanged so the visual cues operators already know carry over."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — combo steps + nested modifier groups now use the same card style as the Combos catalog tab'
+   )`,
+
+  // ── Step 175r: Changelog — Remove cost display from Combos catalog tab ──
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Combos catalog tab — cost cell removed (was over-multiplied by si_qty for sales-item-wrapped recipes)', '[
+     {"type":"removed","description":"The per-option cost cell on the Combos catalog tab in SalesItemsPage has been removed. The cell pulled from a separate GET /combos/:id/costs endpoint that used a parallel _optionUnitCost engine, which over-multiplied sales-item-wrapped recipe options by si_qty — Boneless (6 pieces) read as ~₹2064 instead of ~₹344. The catalog tab is not menu-scoped (no market context, no variations, no PL overrides) and operators see authoritative cost in the Menu Builder tab and Menu Engineer, so duplicating the calc here was net negative. Also removed comboOptionCosts + comboCostCurrency state, the useMarket() import, and the per-option fetch effect — fewer requests on every combo selection."},
+     {"type":"changed","description":"Backend GET /api/combos/:id/costs endpoint kept (no callers in-tree but other tools may depend on it). Will be deprecated separately if it stays unused."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Combos catalog tab — cost cell removed (was over-multiplied by si_qty for sales-item-wrapped recipes)'
+   )`,
+
+  // ── Step 175s: Changelog — Menu Builder row + button polish ─────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — sales item row contrast + Modifiers / Edit / Remove restyled as buttons', '[
+     {"type":"changed","description":"Sales item rows in the Menu Builder list now have a clearer hierarchy: base rows sit on bg-surface (white) against the bg-surface-2/40 list background, separated by a thin border-b border-border/40. Selected rows bump to bg-accent-dim with a 4px left accent bar, an inset accent ring, and a subtle shadow so the active row reads at a glance. Hover state lifts to bg-surface-2."},
+     {"type":"changed","description":"Modifiers / Remove buttons on sales item rows and Edit pills on combo-step / modifier-group headers now look like proper buttons — rounded border, white background, accent-coloured border + text, hover bumps to accent-dim. Previously they read as tiny text links and got missed. Modifiers gets the primary outline-button treatment; Remove uses neutral border that turns red on hover; Edit pills are compact 10px badges with the same shape so the visual language is consistent across the page."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — sales item row contrast + Modifiers / Edit / Remove restyled as buttons'
+   )`,
+
   // ── Step 175t: BACK-2904 — Pepper anti-hallucination rules ──────────────
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2904' AND status <> 'done'`,

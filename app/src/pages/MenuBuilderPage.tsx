@@ -1461,10 +1461,10 @@ function ItemsList({
           onDragLeave={draggable ? onDragLeave : undefined}
           onDrop={draggable ? onDrop : undefined}
           onClick={() => onOpenDetails(it)}
-          className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer ${
-            selected     ? 'bg-accent-dim/50 border-l-2 border-accent' :
-            isDropOver   ? 'bg-accent-dim/30 border-t-2 border-accent' :
-                           'hover:bg-surface-2/60 border-l-2 border-transparent'
+          className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer border-b border-border/40 ${
+            selected     ? 'bg-accent-dim border-l-4 border-l-accent ring-1 ring-inset ring-accent/30 shadow-sm' :
+            isDropOver   ? 'bg-accent-dim/40 border-t-2 border-accent' :
+                           'bg-surface hover:bg-surface-2 border-l-2 border-l-transparent'
           } ${isDragging ? 'opacity-40' : ''}`}
         >
           {/* Drag handle (BACK-2611) — only this element starts a drag */}
@@ -1493,11 +1493,6 @@ function ItemsList({
             <span className="shrink-0 w-4" />
           )}
 
-          <span
-            className={`shrink-0 w-6 h-6 rounded text-[11px] font-bold flex items-center justify-center ${TYPE_BADGE[it.item_type].cls}`}
-            title={TYPE_LABELS[it.item_type]}
-          >{TYPE_BADGE[it.item_type].label}</span>
-
           {it.si_image_url ? (
             <img src={it.si_image_url} alt="" className="shrink-0 w-10 h-10 rounded object-cover border border-border" />
           ) : (
@@ -1505,11 +1500,22 @@ function ItemsList({
           )}
 
           <div className="flex-1 min-w-0">
-            <div className="font-semibold text-sm text-text-1 truncate">{it.sales_item_name}</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-sm text-text-1 truncate">{it.sales_item_name}</span>
+              {/* Full-word type pill — clearer than the single-letter avatar. */}
+              <span
+                className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded uppercase tracking-wide ${TYPE_BADGE[it.item_type].cls}`}
+                title={TYPE_LABELS[it.item_type]}
+              >{TYPE_LABELS[it.item_type]}</span>
+              {(it.modifier_group_count ?? 0) > 0 && (
+                <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">
+                  {it.modifier_group_count} mod{it.modifier_group_count === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
             <div className="text-xs text-text-3 truncate">
-              {it.category || 'Uncategorised'} · {TYPE_LABELS[it.item_type]}
+              {it.category || 'Uncategorised'}
               {it.qty !== 1 ? ` · qty ${it.qty}` : ''}
-              {(it.modifier_group_count ?? 0) > 0 && <> · {it.modifier_group_count} mod{it.modifier_group_count === 1 ? '' : 's'}</>}
             </div>
           </div>
 
@@ -1571,13 +1577,17 @@ function ItemsList({
           })}
 
           <button
-            className={`shrink-0 w-20 text-xs px-2 py-1 rounded transition-colors text-right ${selected ? 'bg-accent text-white' : 'text-accent hover:bg-accent-dim/40'}`}
+            className={`shrink-0 text-xs px-2.5 py-1 rounded-md border font-medium transition-colors ${
+              selected
+                ? 'bg-accent text-white border-accent shadow-sm'
+                : 'bg-white text-accent border-accent/40 hover:bg-accent-dim hover:border-accent'
+            }`}
             onClick={(e) => { e.stopPropagation(); onOpenModifiers(it) }}
             title="Open modifiers"
           >Modifiers ›</button>
 
           <button
-            className="shrink-0 w-14 text-text-3 hover:text-red-600 text-xs text-right"
+            className="shrink-0 text-xs px-2.5 py-1 rounded-md border border-border bg-white text-text-3 hover:border-red-300 hover:bg-red-50 hover:text-red-600 transition-colors"
             onClick={(e) => { e.stopPropagation(); onRemove(it) }}
             title="Remove from menu (does not delete the sales item)"
           >Remove</button>
@@ -1862,12 +1872,14 @@ function ExpandedItemContent({
     const scaledMin = g.min_cost != null ? Number(g.min_cost) * factor : undefined
     const scaledMax = g.max_cost != null ? Number(g.max_cost) * factor : undefined
     const costSummary = fmtCostSummary(scaledAvg, scaledMin, scaledMax)
-    const baseSubtitle = `Pick ${g.min_select === g.max_select ? g.min_select : `${g.min_select}–${g.max_select}`} · ${g.options.length} option${g.options.length === 1 ? '' : 's'}`
     return (
       <NestedGroup
         key={g.modifier_group_id}
         title={g.name}
-        subtitle={costSummary ? `${baseSubtitle} · ${costSummary}` : baseSubtitle}
+        minSelect={g.min_select}
+        maxSelect={g.max_select}
+        optionsCount={g.options.length}
+        costSummary={costSummary}
         indentPx={indentPx}
         collapsed={!open}
         onToggleCollapse={() => onToggleInnerKey(innerKey)}
@@ -1944,40 +1956,41 @@ function ExpandedItemContent({
                   persistStepOrder(ids)
                 }}
                 onDragEnd={() => { setDragStepId(null); setDropStepId(null) }}
-                className={`border-l-4 border-b border-border/40 last:border-b-0 py-1 transition-all ${
-                  isDropTarget ? 'border-l-accent ring-1 ring-accent/30 bg-accent-dim/10' :
-                                 'border-l-accent/40'
-                } ${isDragging ? 'opacity-40' : ''}`}
+                className={`mb-1.5 mx-2 rounded border-l-4 border transition-all ${
+                  isDropTarget ? 'border-l-accent border-accent ring-1 ring-accent/30' :
+                                 'border-l-accent/40 border-border'
+                } ${isDragging ? 'opacity-40' : ''} bg-white`}
               >
-                <div className="flex items-center" style={{ paddingLeft: 12 }}>
+                {/* Step header — matches the Combos catalog tab card style:
+                    rounded gray header, drag handle, expand caret, name +
+                    pill-badge metadata (min/max/options/cost), Edit pill. */}
+                <div
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t flex-wrap"
+                  onClick={() => onToggleInnerKey(stepKey)}
+                >
                   {/* BACK-2835 — drag handle */}
                   <span
-                    className="shrink-0 text-text-3 hover:text-accent cursor-grab active:cursor-grabbing select-none pr-1 text-[12px] leading-none"
+                    className="shrink-0 text-text-3 hover:text-accent cursor-grab active:cursor-grabbing select-none text-[12px] leading-none"
                     title="Drag to reorder step"
                     onMouseDown={e => e.stopPropagation()}
                   >⋮⋮</span>
+                  <span className="shrink-0 text-text-3 text-[10px] w-3 text-center">
+                    {stepOpen ? '▼' : '▶'}
+                  </span>
+                  <span className="text-xs font-mono text-text-3 shrink-0">Step {idx + 1}</span>
+                  <span className="text-sm font-medium text-text-1">{step.name}</span>
+                  <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Min choices">min {step.min_select ?? 1}</span>
+                  <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Max choices">max {step.max_select ?? 1}</span>
+                  <span className="text-xs bg-gray-100 text-text-3 px-1.5 py-0.5 rounded shrink-0">
+                    {step.options.length} option{step.options.length === 1 ? '' : 's'}
+                  </span>
+                  {stepCostSummary && (
+                    <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded shrink-0 font-mono">{stepCostSummary}</span>
+                  )}
+                  <div className="flex-1" />
                   <button
                     type="button"
-                    className="shrink-0 w-5 h-5 flex items-center justify-center text-text-3 hover:text-text-1 text-[10px]"
-                    onClick={() => onToggleInnerKey(stepKey)}
-                    title={stepOpen ? 'Collapse step' : 'Expand step'}
-                  >{stepOpen ? '▼' : '▶'}</button>
-                  <button
-                    type="button"
-                    className="flex-1 flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors text-left"
-                    onClick={() => onToggleInnerKey(stepKey)}
-                    title={stepOpen ? 'Collapse step' : 'Expand step'}
-                  >
-                    <span className="text-text-3">Step {idx + 1}</span>
-                    <span className="text-accent">{step.name}</span>
-                    <span className="text-text-3 font-mono normal-case tracking-normal">
-                      · Pick {step.min_select === step.max_select ? step.min_select : `${step.min_select}–${step.max_select}`} · {step.options.length} option{step.options.length === 1 ? '' : 's'}
-                      {stepCostSummary ? ` · ${stepCostSummary}` : ''}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="shrink-0 text-accent text-[10px] hover:underline px-2"
+                    className="shrink-0 text-accent text-[10px] font-medium px-2 py-0.5 rounded border border-accent/40 bg-white hover:bg-accent-dim hover:border-accent transition-colors"
                     onClick={(e) => { e.stopPropagation(); onOpenComboStep(step.id) }}
                     title="Edit step (settings + options)"
                   >Edit ›</button>
@@ -2042,49 +2055,64 @@ function ExpandedItemContent({
 // Section header for a modifier group inside the expanded view. The caret on
 // the left toggles collapse (BACK-2598); the Edit › pill on the right routes
 // to the group editor in the side panel (BACK-2587).
+// Card-style modifier group header that matches the combo-step look — same
+// rounded card, gray header, accent-bar on the left, pill-badge metadata
+// (min/max/options/cost) instead of "·"-separated text. Used both for
+// top-level modifier groups on non-combo items AND modifier groups attached
+// to combo step options, so the visual language is consistent across the
+// entire expanded view.
 function NestedGroup({
-  title, subtitle, indentPx, collapsed, onToggleCollapse, onEdit, children,
+  title, minSelect, maxSelect, optionsCount, costSummary,
+  indentPx, collapsed, onToggleCollapse, onEdit, children,
 }: {
   title: string
-  subtitle?: string
+  minSelect: number
+  maxSelect: number
+  optionsCount: number
+  costSummary: string | null
   indentPx: number
   collapsed?: boolean
   onToggleCollapse?: () => void
   onEdit?: () => void
   children: React.ReactNode
 }) {
+  // Slightly different accent shade for modifier groups vs combo steps so
+  // the two hierarchical levels read distinctly — purple-tinted left bar.
   return (
-    <div>
-      <div className="flex items-center" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
-        {onToggleCollapse ? (
-          <button
-            type="button"
-            className="shrink-0 w-5 h-5 flex items-center justify-center text-text-3 hover:text-text-1 text-[10px]"
-            onClick={onToggleCollapse}
-            title={collapsed ? 'Expand' : 'Collapse'}
-          >{collapsed ? '▶' : '▼'}</button>
-        ) : (
-          <span className="shrink-0 w-5" />
-        )}
-        <button
-          type="button"
-          className="flex-1 flex items-center gap-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-text-2 hover:bg-accent-dim/30 transition-colors text-left"
+    <div style={{ paddingLeft: indentPx, paddingRight: 8 }}>
+      <div className="mb-1.5 rounded border-l-4 border border-l-purple-300 border-border bg-white">
+        <div
+          className="flex items-center gap-2 px-3 py-2 cursor-pointer bg-purple-50/50 hover:bg-purple-50 rounded-t flex-wrap"
           onClick={onToggleCollapse}
-          disabled={!onToggleCollapse}
         >
-          <span>{title}</span>
-          {subtitle && <span className="text-text-3 font-normal normal-case tracking-normal">· {subtitle}</span>}
-        </button>
-        {onEdit && (
-          <button
-            type="button"
-            className="shrink-0 text-accent text-[10px] hover:underline px-2"
-            onClick={(e) => { e.stopPropagation(); onEdit() }}
-            title="Edit group (settings + options)"
-          >Edit ›</button>
-        )}
+          {onToggleCollapse ? (
+            <span className="shrink-0 text-text-3 text-[10px] w-3 text-center">
+              {collapsed ? '▶' : '▼'}
+            </span>
+          ) : (
+            <span className="shrink-0 w-3" />
+          )}
+          <span className="text-sm font-medium text-text-1">{title}</span>
+          <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Min selections">min {minSelect}</span>
+          <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Max selections">max {maxSelect}</span>
+          <span className="text-xs bg-gray-100 text-text-3 px-1.5 py-0.5 rounded shrink-0">
+            {optionsCount} option{optionsCount === 1 ? '' : 's'}
+          </span>
+          {costSummary && (
+            <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded shrink-0 font-mono">{costSummary}</span>
+          )}
+          <div className="flex-1" />
+          {onEdit && (
+            <button
+              type="button"
+              className="shrink-0 text-accent text-[10px] font-medium px-2 py-0.5 rounded border border-accent/40 bg-white hover:bg-accent-dim hover:border-accent transition-colors"
+              onClick={(e) => { e.stopPropagation(); onEdit() }}
+              title="Edit group (settings + options)"
+            >Edit ›</button>
+          )}
+        </div>
+        {children}
       </div>
-      {children}
     </div>
   )
 }
