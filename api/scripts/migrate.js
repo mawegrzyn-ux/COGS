@@ -4684,6 +4684,22 @@ const migrations = [
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2569' AND status <> 'done'`,
 
+  // ── Step 175t: BACK-2904 — Pepper anti-hallucination rules ──────────────
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2904' AND status <> 'done'`,
+
+  // ── Step 175ts: Changelog — Anti-hallucination rules ────────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Pepper anti-hallucination — seven hard accuracy rules in system prompt (BACK-2904)', '[
+     {"type":"added","description":"BACK-2904: expanded the CRITICAL ACCURACY RULES section in buildSystemPrompt (api/src/routes/ai-chat.js) from 3 UI-naming rules to 7 numbered hard rules: (1) never quote numbers without a tool result this session, (2) never reference entities (BACK-####/BUG-####/recipe/ingredient/menu/vendor/sales-item) by name unless loaded via a tool, (3) say so when a list is truncated, (4) never claim an action without a successful tool call, (5) cite the tool used for every concrete claim, (6) defer to tools over training data for dates/status/versions, (7) never invent UI elements. Each rule has concrete examples + a graceful fallback (call a tool, or say I have not checked) so Pepper has a clear out instead of guessing."},
+     {"type":"added","description":"Prompt header now opens with a short reminder pointing readers at the accuracy rules: You are talking to real restaurant operators who make food-cost decisions on real money based on what you tell them. Confident wrong answers cost them money. Read the CRITICAL ACCURACY RULES section below — those rules are non-negotiable and override every other directive. This puts the rules top-of-mind before language / memory / operator-directive blocks are processed."},
+     {"type":"changed","description":"Rules are positioned above the operator-set pepper_directives block, and the directives block has long said they override your default behaviour where they conflict, except for safety-critical rules below (accuracy, write-confirmation, RBAC). The expanded rules now make accuracy a genuine non-negotiable safety lane that admins can layer policy on top of but cannot weaken or remove. CLAUDE.md gains a new section (Anti-Hallucination Rules) under section 14 with the full rule table + a note on where to add Rule 8+ in future."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Pepper anti-hallucination — seven hard accuracy rules in system prompt (BACK-2904)'
+   )`,
+
   // ── Step 175u: EOS retro-filed tickets (BACK-2878 → BACK-2883 + BUG-1191) ─
   // The work below shipped during the 2026-05-13 session without a
   // pre-filed ticket. Retro-filing keeps the audit trail complete. Live

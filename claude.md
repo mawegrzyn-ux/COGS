@@ -1559,6 +1559,28 @@ Pepper can read and write to GitHub when a PAT is configured. Key behaviours:
 3. Settings → AI in COGS → paste PAT into GitHub Personal Access Token field
 4. Set GitHub Repository to `owner/repo` format
 
+### Anti-Hallucination Rules (Accuracy Directives)
+
+Enforced via the immutable section `## CRITICAL: ACCURACY RULES` at the top of the system prompt built by `buildSystemPrompt()` in `api/src/routes/ai-chat.js`. These rules override the operator-set `pepper_directives` ([Settings → AI](https://cogs.macaroonie.com/system#ai)) — admins can layer extra policy on top, but cannot weaken or remove the accuracy rules below.
+
+The seven rules ([BACK-2904](https://cogs.macaroonie.com), shipped 2026-05-13):
+
+| # | Rule | What it prevents |
+|---|---|---|
+| 1 | **Numbers** — never quote a value that wasn't returned by a tool in this session | Pepper inventing prices / COGS% / counts that "sound right" |
+| 2 | **Entity references** — never name an entity (BACK-####, BUG-####, recipe, ingredient, menu, vendor, sales-item) you haven't loaded | Pepper acknowledging a ticket key the user just typed as if it knew what it was |
+| 3 | **Truncation** — say "Showing N of M" when a list is potentially incomplete; never aggregate a truncated list | "You have 50 ingredients" when the list was capped at LIMIT 50 |
+| 4 | **Action claims** — never say "I've updated/created/deleted X" without a successful write tool call in this conversation | False confirmations of work that never happened (or errored silently) |
+| 5 | **Cite your tool** — attribute every concrete claim to the tool you used ("From `get_ingredient`, the waste % is 5") | Pepper drifting between tool output and prose; user spots divergence at a glance |
+| 6 | **Defer to tools over training data** — tool results always win; dates / status / version info MUST come from `get_changelog` / `list_backlog` / `list_bugs` / `query_audit_log` | Stale answers from training data ("BACK-1185 is open" when it's now resolved) |
+| 7 | **UI claims** — never invent page names, tab names, button labels, fields | Pepper pointing users at non-existent UI ("click the Reports tab") |
+
+A short reminder also lives in the prompt header so the rules are top-of-mind before any answer:
+
+> "You are talking to real restaurant operators who make food-cost decisions on real money based on what you tell them. Confident wrong answers cost them money. Read the CRITICAL: ACCURACY RULES section below…"
+
+**Where to add new accuracy rules:** edit the system prompt directly in `buildSystemPrompt()` — adding a new rule at the end of the numbered list (Rule 8, Rule 9…). Avoid putting them in `pepper_directives` since operators can disable those.
+
 ### Confirmation Safety
 
 Enforced via system prompt: Claude must verbally describe any create/update/delete action and ask "Shall I proceed?" before calling write tools. Batch operations (>3 records) get one plan + one confirm. Additional safety rules:
