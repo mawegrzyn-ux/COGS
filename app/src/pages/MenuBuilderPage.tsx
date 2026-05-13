@@ -3861,11 +3861,21 @@ function ComboStepOptionEditor({
         />
         <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
       </div>
-      {option.item_type === 'recipe' && (
+      {option.item_type === 'recipe' && (() => {
+        // Resolve display name from the loaded recipes list. While the list
+        // is still null (initial fetch), fall back to "Recipe #N" so the
+        // input isn't empty — but once recipes load the name takes over.
+        const linkedRecipe = option.recipe_id != null
+          ? (recipes || []).find(r => r.id === option.recipe_id)
+          : null
+        const displayValue = option.recipe_id
+          ? (linkedRecipe?.name ?? (recipes ? `Recipe #${option.recipe_id}` : '…'))
+          : recipeSearch
+        return (
         <div>
           <input
             className="input w-full text-xs"
-            value={option.recipe_id ? `Recipe #${option.recipe_id}` : recipeSearch}
+            value={displayValue}
             onChange={(e) => setRecipeSearch(e.target.value)}
             onFocus={() => { if (option.recipe_id) onChange({ recipe_id: null }); setRecipeSearch('') }}
             placeholder="Search recipe…"
@@ -3883,12 +3893,20 @@ function ComboStepOptionEditor({
             </div>
           )}
         </div>
-      )}
-      {option.item_type === 'ingredient' && (
+        )
+      })()}
+      {option.item_type === 'ingredient' && (() => {
+        const linkedIng = option.ingredient_id != null
+          ? (ingredients || []).find(i => i.id === option.ingredient_id)
+          : null
+        const displayValue = option.ingredient_id
+          ? (linkedIng?.name ?? (ingredients ? `Ingredient #${option.ingredient_id}` : '…'))
+          : ingredientSearch
+        return (
         <div>
           <input
             className="input w-full text-xs"
-            value={option.ingredient_id ? `Ingredient #${option.ingredient_id}` : ingredientSearch}
+            value={displayValue}
             onChange={(e) => setIngredientSearch(e.target.value)}
             onFocus={() => { if (option.ingredient_id) onChange({ ingredient_id: null }); setIngredientSearch('') }}
             placeholder="Search ingredient…"
@@ -3906,12 +3924,20 @@ function ComboStepOptionEditor({
             </div>
           )}
         </div>
-      )}
-      {option.item_type === 'sales_item' && (
+        )
+      })()}
+      {option.item_type === 'sales_item' && (() => {
+        const linkedSi = option.sales_item_id != null
+          ? (salesItems || []).find(s => s.id === option.sales_item_id)
+          : null
+        const displayValue = option.sales_item_id
+          ? (linkedSi?.name ?? (salesItems ? `Sales Item #${option.sales_item_id}` : '…'))
+          : salesItemSearch
+        return (
         <div>
           <input
             className="input w-full text-xs"
-            value={option.sales_item_id ? `Sales Item #${option.sales_item_id}` : salesItemSearch}
+            value={displayValue}
             onChange={(e) => setSalesItemSearch(e.target.value)}
             onFocus={() => { if (option.sales_item_id) onChange({ sales_item_id: null }); setSalesItemSearch('') }}
             placeholder="Search sales item…"
@@ -3929,7 +3955,8 @@ function ComboStepOptionEditor({
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
       {option.item_type === 'manual' && (
         <input
           className="input w-full text-xs font-mono"
