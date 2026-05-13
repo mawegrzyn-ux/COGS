@@ -4678,6 +4678,24 @@ const migrations = [
      WHERE version = '2026-05-13' AND title = 'Sidebar — Menu Entry renamed to Menu Builder (BACK-2837 follow-up)'
    )`,
 
+  // ── Step 175v: EOS audit — flip duplicate Cognito ticket ────────────────
+  // BACK-2569 ("Add AWS Cognito as identity provider") duplicates BACK-2364
+  // which I started Phase 1 of in this session. Close it out.
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2569' AND status <> 'done'`,
+
+  // ── Step 175u: EOS retro-filed tickets (BACK-2878 → BACK-2883 + BUG-1191) ─
+  // The work below shipped during the 2026-05-13 session without a
+  // pre-filed ticket. Retro-filing keeps the audit trail complete. Live
+  // production rows were created + flipped via the internal API; a fresh
+  // deploy from a clean DB re-creates them as terminal via this step.
+  // Idempotent guard via WHERE status <> 'done'.
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key IN ('BACK-2878','BACK-2879','BACK-2880','BACK-2881','BACK-2882','BACK-2883')
+     AND status <> 'done'`,
+  `UPDATE mcogs_bugs SET status='resolved', updated_at=NOW()
+   WHERE key = 'BUG-1191' AND status <> 'resolved'`,
+
   // ── Step 175w: Changelog — May 13 — Menu Builder + New Menu button ──────
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-13', 'Menu Builder — quick-create button for new menus', '[
@@ -4687,6 +4705,24 @@ const migrations = [
    WHERE NOT EXISTS (
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-13' AND title = 'Menu Builder — quick-create button for new menus'
+   )`,
+
+  // ── Step 175xs: EOS session summary — May 13 ────────────────────────────
+  // Consolidated session changelog. Individual sub-feature changelog entries
+  // already exist above (175w, 175x, 175y, 175z). This entry is the one a
+  // user reading the changelog sees first if they only scan the latest line.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'EOS — Menu Builder polish + dual-auth groundwork shipped (session summary)', '[
+     {"type":"added","description":"AWS Cognito dual-auth Phase 1 — non-breaking groundwork (mcogs_users.auth_provider column + middleware + /me + /users + IdP column + docs/COGNITO_INTEGRATION.md). Phase 2/3 (Cognito JWKS verifier + frontend login picker) queued behind AWS provisioning. BACK-2364 in_progress; BACK-2569 closed as duplicate."},
+     {"type":"fixed","description":"BUG-1185 / BUG-1186 / BACK-2835 / BACK-2836 — originally interpreted as the Sales Items > Combos catalog tab; user confirmed the tickets were actually about the Menu Builder tab (the menu-level combo rendering in MenuBuilderPage). Fixes re-applied to MenuBuilderPage: prominent 4-button type selector (incl. previously missing sales_item type + picker), modifier-aware step cost, drag-drop combo step reorder, left accent bars for hierarchy. The Combos catalog tab fixes from the first pass are also retained — both surfaces are now consistent."},
+     {"type":"added","description":"Menu Builder: + New Menu quick-create modal next to the menu picker. Fullscreen toggle (Esc exits). Scroll position preserved on save (root cause: itemsLoading spinner was unmounting ItemsList — now only shown on initial load). + New Menu retro-filed as BACK-2878, fullscreen as BACK-2879, scroll preservation as BACK-2880."},
+     {"type":"added","description":"Configuration → COGS Calculation (formerly COGS Thresholds) gains a Modifier Cost × Number of Choices toggle. When on, modifier group cost summaries multiply per-pick avg by min_select so a CHOOSE 2 dips group shows cost ₹2.06 instead of avg ₹1.03. Default OFF preserves historical display. Retro-filed as BACK-2881."},
+     {"type":"changed","description":"Configuration tab renamed COGS Thresholds → COGS Calculation (BACK-2882). Sidebar Menu Entry → Menu Builder (BACK-2883). Both renames keep internal route ids / labelKeys stable so deep links and saved tab preferences continue working. URL /menu-entry is also unchanged."},
+     {"type":"fixed","description":"BUG-1191 (retro-filed): combo step option pickers in MenuBuilderPage showed Recipe #N / Ingredient #N / Sales Item #N instead of the resolved name. Display value now resolves from the loaded array."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'EOS — Menu Builder polish + dual-auth groundwork shipped (session summary)'
    )`,
 
   // ── Step 175x: Changelog — May 13 — Rename COGS Thresholds tab ──────────
