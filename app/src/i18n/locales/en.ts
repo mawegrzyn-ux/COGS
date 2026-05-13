@@ -45,8 +45,9 @@ export default {
     sales_items: 'Sales Items',
     menus: 'Menus',
     menu_builder: 'Menu Builder',
-    // BACK-2793 — new sidebar entries.
-    menu_entry: 'Menu Entry',
+    // BACK-2793 — new sidebar entries. BACK-2837 renamed to "Menu Builder";
+    // labelKey stays menu_entry so existing translations don't break.
+    menu_entry: 'Menu Builder',
     menu_engineer: 'Menu Engineer',
     allergens: 'Allergens',
     haccp: 'HACCP',

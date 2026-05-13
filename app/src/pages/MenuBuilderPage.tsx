@@ -116,7 +116,9 @@ interface SubComboOption {
   id: number              // combo_step_option_id
   name: string
   display_name: string | null
-  item_type: 'recipe' | 'ingredient' | 'manual'
+  // BUG-1185 follow-up — sales_item is a valid option type; the editor in
+  // MenuBuilderPage now exposes it, and the backend has long accepted it.
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
   price_addon: number
   prices: Record<string, number>
   modifier_groups: SubModifierGroup[]
@@ -1422,6 +1424,7 @@ function ItemsList({
             ) : sub ? (
               <ExpandedItemContent
                 msiId={it.id}
+                salesItemId={it.sales_item_id}
                 sub={sub}
                 enabledPriceLevels={enabledPriceLevels}
                 savingOptionCells={savingOptionCells}
@@ -1579,11 +1582,14 @@ function ItemsList({
 // endpoint. Indented to make the hierarchy visually obvious.
 
 function ExpandedItemContent({
-  msiId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
+  msiId, salesItemId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
   currencySymbol,
   onOpenModifierGroup, onOpenComboStep,
 }: {
   msiId: number
+  // BACK-2835 — needed for the combo step reorder API call (msi → sales_item
+  // → combo_id chain). Fetched lazily on first drop and cached locally.
+  salesItemId: number
   sub: SubPricesResp
   enabledPriceLevels: CountryPriceLevel[]
   savingOptionCells: Set<string>
@@ -1595,6 +1601,67 @@ function ExpandedItemContent({
   onOpenModifierGroup: (modifierGroupId: number) => void
   onOpenComboStep: (comboStepId: number) => void
 }) {
+  const api = useApi()
+
+  // BACK-2835 — local step-order override applied to sub.combo_steps when
+  // the user drag-drops steps. Null = use server order. The actual rendering
+  // sorts by this when present.
+  const [stepOrderOverride, setStepOrderOverride] = useState<number[] | null>(null)
+  const [dragStepId, setDragStepId]   = useState<number | null>(null)
+  const [dropStepId, setDropStepId]   = useState<number | null>(null)
+  // Cache the combo_id so we don't re-fetch /sales-items/:id on every drop.
+  const comboIdRef = useRef<number | null>(null)
+
+  const orderedSteps = useMemo(() => {
+    if (!stepOrderOverride) return sub.combo_steps
+    const byId = new Map(sub.combo_steps.map(s => [s.id, s]))
+    const out: SubComboStep[] = []
+    for (const id of stepOrderOverride) {
+      const s = byId.get(id)
+      if (s) { out.push(s); byId.delete(id) }
+    }
+    // Any steps that weren't in the override (defensive) get appended in their
+    // original order at the end.
+    for (const s of sub.combo_steps) if (byId.has(s.id)) out.push(s)
+    return out
+  }, [sub.combo_steps, stepOrderOverride])
+
+  const persistStepOrder = async (newOrder: number[]) => {
+    setStepOrderOverride(newOrder)
+    try {
+      let comboId = comboIdRef.current
+      if (comboId == null) {
+        const si = await api.get(`/sales-items/${salesItemId}`) as { combo_id: number | null }
+        comboId = si.combo_id
+        comboIdRef.current = comboId
+      }
+      if (!comboId) throw new Error('No combo_id')
+      await api.post(`/combos/${comboId}/steps/reorder`, { order: newOrder })
+    } catch {
+      // Roll back to server order on failure
+      setStepOrderOverride(null)
+    }
+  }
+
+  // BUG-1186 — compute the modifier adder per combo option so the step's
+  // displayed cost summary includes the cost of attached modifier groups
+  // (avg × min_select), not just the base option cost. Mirrors what
+  // loadModifierCostAdders on the backend does for menu-item-level totals.
+  const stepTotalsWithMods = (step: SubComboStep): { avg: number; min: number; max: number } => {
+    const optTotals = (step.options || []).map(o => {
+      const base = Number(o.cost ?? 0)
+      const adder = (o.modifier_groups || []).reduce((s, g) => {
+        const ga = Number(g.avg_cost ?? 0)
+        return s + ga * Number(g.min_select || 0)
+      }, 0)
+      return base + adder
+    })
+    if (!optTotals.length) {
+      return { avg: Number(step.avg_cost ?? 0), min: Number(step.min_cost ?? 0), max: Number(step.max_cost ?? 0) }
+    }
+    const avg = optTotals.reduce((a, b) => a + b, 0) / optTotals.length
+    return { avg, min: Math.min(...optTotals), max: Math.max(...optTotals) }
+  }
   // BACK-2814 — small helper for the cost-summary suffix on a group/step
   // header. Renders "avg ₹X · ₹min–₹max" when a meaningful range exists,
   // or "cost ₹X" when there's only one option / all options share cost.
@@ -1663,17 +1730,53 @@ function ExpandedItemContent({
 
   return (
     <div className="py-2">
-      {/* Combo structure (BACK-2574) — only rendered for combo items */}
-      {sub.item_type === 'combo' && sub.combo_steps.length > 0 && (
+      {/* Combo structure (BACK-2574) — only rendered for combo items.
+          BACK-2835 adds drag-drop reorder; BACK-2836 adds the left accent
+          bar for hierarchy; BUG-1186 widens the cost summary to include
+          the modifier adder. */}
+      {sub.item_type === 'combo' && orderedSteps.length > 0 && (
         <div>
-          {sub.combo_steps.map((step, idx) => {
+          {orderedSteps.map((step, idx) => {
             // BACK-2598 — combo steps default collapsed.
             const stepKey = `${msiId}:cs:${step.id}`
             const stepOpen = expandedInnerKeys.has(stepKey)
-            const stepCostSummary = fmtCostSummary(step.avg_cost, step.min_cost, step.max_cost)
+            const totals = stepTotalsWithMods(step)
+            const stepCostSummary = fmtCostSummary(totals.avg, totals.min, totals.max)
+            const isDragging   = dragStepId === step.id
+            const isDropTarget = dropStepId === step.id && dragStepId !== null && dragStepId !== step.id
             return (
-              <div key={step.id} className="border-b border-border/40 last:border-b-0 py-1">
-                <div className="flex items-center" style={{ paddingLeft: 16 }}>
+              <div
+                key={step.id}
+                draggable
+                onDragStart={() => setDragStepId(step.id)}
+                onDragOver={e => { e.preventDefault(); if (dragStepId !== null && dragStepId !== step.id) setDropStepId(step.id) }}
+                onDragLeave={() => { if (dropStepId === step.id) setDropStepId(null) }}
+                onDrop={e => {
+                  e.preventDefault()
+                  const fromId = dragStepId
+                  setDragStepId(null); setDropStepId(null)
+                  if (fromId == null || fromId === step.id) return
+                  const ids = orderedSteps.map(s => s.id)
+                  const fromIdx = ids.indexOf(fromId)
+                  const toIdx   = ids.indexOf(step.id)
+                  if (fromIdx < 0 || toIdx < 0) return
+                  const [moved] = ids.splice(fromIdx, 1)
+                  ids.splice(toIdx, 0, moved)
+                  persistStepOrder(ids)
+                }}
+                onDragEnd={() => { setDragStepId(null); setDropStepId(null) }}
+                className={`border-l-4 border-b border-border/40 last:border-b-0 py-1 transition-all ${
+                  isDropTarget ? 'border-l-accent ring-1 ring-accent/30 bg-accent-dim/10' :
+                                 'border-l-accent/40'
+                } ${isDragging ? 'opacity-40' : ''}`}
+              >
+                <div className="flex items-center" style={{ paddingLeft: 12 }}>
+                  {/* BACK-2835 — drag handle */}
+                  <span
+                    className="shrink-0 text-text-3 hover:text-accent cursor-grab active:cursor-grabbing select-none pr-1 text-[12px] leading-none"
+                    title="Drag to reorder step"
+                    onMouseDown={e => e.stopPropagation()}
+                  >⋮⋮</span>
                   <button
                     type="button"
                     className="shrink-0 w-5 h-5 flex items-center justify-center text-text-3 hover:text-text-1 text-[10px]"
@@ -3400,7 +3503,10 @@ interface FullComboStepOption {
   combo_step_id: number
   name: string
   display_name: string | null
-  item_type: 'recipe' | 'ingredient' | 'manual'
+  // BUG-1185 — 'sales_item' is a real combo step option type (see
+  // mcogs_combo_step_options.item_type CHECK constraint). The MenuBuilder
+  // editor now surfaces it as a fourth picker.
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
   recipe_id: number | null
   ingredient_id: number | null
   sales_item_id: number | null
@@ -3443,6 +3549,8 @@ function ComboStepEditorPanel({
   const [loading, setLoading] = useState(true)
   const [recipes, setRecipes] = useState<RecipeRow[] | null>(null)
   const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  // BUG-1185 — sales_item type option needs a picker too. Lazy-loaded.
+  const [salesItems, setSalesItems] = useState<SalesItemRow[] | null>(null)
   const [dragId, setDragId] = useState<number | null>(null)
   const [dragOverId, setDragOverId] = useState<number | null>(null)
   const [savingOpts, setSavingOpts] = useState<Set<number>>(new Set())
@@ -3469,7 +3577,8 @@ function ComboStepEditorPanel({
   useEffect(() => {
     if (recipes === null)     api.get('/recipes').then((d: RecipeRow[]) => setRecipes(d || [])).catch(() => setRecipes([]))
     if (ingredients === null) api.get('/ingredients').then((d: IngredientRow[]) => setIngredients(d || [])).catch(() => setIngredients([]))
-  }, [api, recipes, ingredients])
+    if (salesItems === null)  api.get('/sales-items').then((d: SalesItemRow[]) => setSalesItems(d || [])).catch(() => setSalesItems([]))
+  }, [api, recipes, ingredients, salesItems])
 
   const saveStepSettings = async (patch: Partial<FullComboStep>) => {
     if (!step || !comboId) return
@@ -3652,6 +3761,7 @@ function ComboStepEditorPanel({
                         option={o}
                         recipes={recipes}
                         ingredients={ingredients}
+                        salesItems={salesItems}
                         onChange={(patch) => saveOption(o, patch)}
                         onDelete={() => deleteOption(o)}
                       />
@@ -3668,16 +3778,18 @@ function ComboStepEditorPanel({
 }
 
 function ComboStepOptionEditor({
-  option, recipes, ingredients, onChange, onDelete,
+  option, recipes, ingredients, salesItems, onChange, onDelete,
 }: {
   option: FullComboStepOption
   recipes: RecipeRow[] | null
   ingredients: IngredientRow[] | null
+  salesItems: SalesItemRow[] | null
   onChange: (patch: Partial<FullComboStepOption>) => void | Promise<void>
   onDelete: () => void
 }) {
   const [recipeSearch, setRecipeSearch] = useState('')
   const [ingredientSearch, setIngredientSearch] = useState('')
+  const [salesItemSearch, setSalesItemSearch] = useState('')
 
   const filteredRecipes = useMemo(() => {
     const q = recipeSearch.trim().toLowerCase()
@@ -3687,9 +3799,58 @@ function ComboStepOptionEditor({
     const q = ingredientSearch.trim().toLowerCase()
     return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
   }, [ingredients, ingredientSearch])
+  const filteredSalesItems = useMemo(() => {
+    const q = salesItemSearch.trim().toLowerCase()
+    // Combos linked back through a sales item are excluded — would create a
+    // cycle and the cost engine currently treats combo-wrapped sales items
+    // as zero anyway (see resolveOptionCost in cogs.js).
+    return (salesItems || []).filter(s => s.item_type !== 'combo' && (!q || s.name.toLowerCase().includes(q))).slice(0, 12)
+  }, [salesItems, salesItemSearch])
+
+  // BUG-1185 — type selector promoted to a 4-button segmented control at the
+  // top of the form, with 'sales_item' surfaced as a real option (it was
+  // missing entirely from this editor even though the data model has long
+  // supported it).
+  const TYPES = ['recipe', 'ingredient', 'manual', 'sales_item'] as const
+  const TYPE_LABEL: Record<typeof TYPES[number], string> = {
+    recipe: 'Recipe', ingredient: 'Ingredient', manual: 'Manual', sales_item: 'Sales Item',
+  }
+  const switchType = (t: typeof TYPES[number]) => {
+    if (option.item_type === t) return
+    onChange({
+      item_type: t,
+      recipe_id: null,
+      ingredient_id: null,
+      sales_item_id: null,
+      manual_cost: t === 'manual' ? 0 : null,
+    })
+    setRecipeSearch(''); setIngredientSearch(''); setSalesItemSearch('')
+  }
 
   return (
     <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      {/* BUG-1185 — prominent type selector first */}
+      <div className="bg-accent-dim/30 border border-accent/30 rounded p-1.5 -mx-0.5">
+        <div className="text-[10px] font-semibold text-text-1 mb-1 uppercase tracking-wide">Option type</div>
+        <div className="grid grid-cols-4 gap-1">
+          {TYPES.map(t => {
+            const active = option.item_type === t
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => switchType(t)}
+                className={`text-[10px] font-medium px-1 py-1 rounded transition-colors border ${
+                  active
+                    ? 'bg-accent text-white border-accent'
+                    : 'bg-white text-text-2 border-border hover:border-accent hover:text-accent'
+                }`}
+              >{TYPE_LABEL[t]}</button>
+            )
+          })}
+        </div>
+      </div>
+
       <div className="flex items-center gap-2">
         <span className="text-text-3 text-xs">⠿</span>
         <input
@@ -3699,15 +3860,6 @@ function ComboStepOptionEditor({
           placeholder="Option name"
         />
         <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
-      </div>
-      <div className="flex items-center gap-3 text-[11px] text-text-2">
-        {(['recipe','ingredient','manual'] as const).map(t => (
-          <label key={t} className="flex items-center gap-1 cursor-pointer">
-            <input type="radio" name={`cs-opt-type-${option.id}`} checked={option.item_type === t}
-              onChange={() => onChange({ item_type: t, recipe_id: null, ingredient_id: null, manual_cost: t === 'manual' ? 0 : null })} />
-            <span className="capitalize">{t}</span>
-          </label>
-        ))}
       </div>
       {option.item_type === 'recipe' && (
         <div>
@@ -3750,6 +3902,29 @@ function ComboStepOptionEditor({
                   className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
                   onClick={() => { onChange({ ingredient_id: i.id, name: option.name || i.name }); setIngredientSearch('') }}
                 >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {option.item_type === 'sales_item' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.sales_item_id ? `Sales Item #${option.sales_item_id}` : salesItemSearch}
+            onChange={(e) => setSalesItemSearch(e.target.value)}
+            onFocus={() => { if (option.sales_item_id) onChange({ sales_item_id: null }); setSalesItemSearch('') }}
+            placeholder="Search sales item…"
+          />
+          {!option.sales_item_id && salesItemSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredSalesItems.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredSalesItems.map(s => (
+                <button key={s.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ sales_item_id: s.id, name: option.name || s.name }); setSalesItemSearch('') }}
+                >{s.name} <span className="text-text-3">· {s.item_type}</span></button>
               ))}
             </div>
           )}

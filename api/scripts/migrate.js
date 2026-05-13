@@ -4667,6 +4667,35 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-13' AND title = 'Menu Entry page header cleanup — single Menu Builder title (BACK-2837)'
    )`,
+
+  // ── Step 174b: Changelog — May 13 — Sidebar label rename ─────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Sidebar — Menu Entry renamed to Menu Builder (BACK-2837 follow-up)', '[
+     {"type":"changed","description":"BACK-2837 follow-up: the sidebar still showed Menu Entry while the page title was Menu Builder, leaving a visible mismatch. Sidebar label updated to Menu Builder. The i18n key menu_entry now resolves to Menu Builder in en.ts; the other 8 locales never had a translation for this key and were already falling back to en, so they pick up the new label automatically. URL /menu-entry is unchanged so existing bookmarks and the BACK-2793 redirects continue to work."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Sidebar — Menu Entry renamed to Menu Builder (BACK-2837 follow-up)'
+   )`,
+
+  // ── Step 175: Changelog — May 13 — Menu Builder tab parity fixes ─────────
+  // The original session interpreted BUG-1185 / BUG-1186 / BACK-2835 /
+  // BACK-2836 as the Sales Items > Combos catalog tab and shipped those
+  // fixes there. The user confirmed the tickets were actually about the
+  // Menu Builder tab inside Menu Builder (the menu-level rendering of
+  // combo steps + options). This step records the second-pass work that
+  // extends the same fixes into MenuBuilderPage.tsx.
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder tab — same combo improvements applied here too (BUG-1185/1186, BACK-2835/2836 follow-up)', '[
+     {"type":"fixed","description":"BUG-1186 (Menu Builder tab): the step cost summary (cost ₹X · range) now includes the modifier cost adder. Previously the displayed step cost came straight from step.avg_cost returned by /menu-sales-items/:id/sub-prices, which excluded modifier groups attached to step options. Step 3 of a combo with no base-option cost but a CHOOSE 2 dips modifier group at avg ₹1.03 was showing ₹0.00; it now shows ₹2.06. The math runs client-side, summing avg(option costs) plus per-attached-group (avg × min_select), to match what loadModifierCostAdders does on the backend for menu-item-level totals."},
+     {"type":"fixed","description":"BUG-1185 (Menu Builder tab): the combo step option editor in the Menu Builder side panel previously offered only 3 type radios (recipe / ingredient / manual) — the sales_item type was missing entirely even though the data model and backend have long supported it. Editor now renders a 4-button segmented control at the top (Recipe / Ingredient / Manual / Sales Item) with the accent-tinted card style used elsewhere. A sales-item picker (search-as-you-type) appears when the type is set to sales_item, mirroring the recipe + ingredient pickers. Switching type still clears recipe_id / ingredient_id / sales_item_id / manual_cost atomically. ComboStepEditorPanel now pre-loads /sales-items alongside /recipes and /ingredients so the picker is instant. The FullComboStepOption and SubComboOption TypeScript types were extended with sales_item in the item_type union."},
+     {"type":"added","description":"BACK-2835 (Menu Builder tab): combo steps inside a menu row are now drag-droppable. Each step gets a grab handle (⋮⋮); source dims to 40% opacity, drop target gets an accent ring + tinted background. Order persists via the same POST /api/combos/:id/steps/reorder endpoint added earlier. Step ordering is held in a local override inside ExpandedItemContent so the reorder is instant and rolls back to server order on API failure. comboId is resolved lazily on first drop (via /sales-items/:id) and cached for subsequent drops."},
+     {"type":"changed","description":"BACK-2836 (Menu Builder tab): step rows in the menu-level combo view gained a 4px left accent bar (border-l-4 border-l-accent/40) for hierarchy. The bar switches to solid accent + accent ring + accent-dim background tint when a step is the drag drop target. Same accent-bar pattern previously applied in the Combos catalog tab — now consistent across both surfaces."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder tab — same combo improvements applied here too (BUG-1185/1186, BACK-2835/2836 follow-up)'
+   )`,
 ];
 
 async function runMigrations(pool) {

@@ -838,7 +838,7 @@ Generic data grid with:
 Dashboard          feature: dashboard
 Inventory          feature: inventory
 Recipes            feature: recipes
-Menu Entry         feature: menus  ← BACK-2793: tabs Items / Combos / Modifiers / Menu Builder
+Menu Builder       feature: menus  ← BACK-2793: tabs Items / Combos / Modifiers / Menu Builder. URL still /menu-entry; sidebar + page title renamed from "Menu Entry" in BACK-2837
 Menu Engineer      feature: menus  ← was "Menus"; URL still /menus for shared-link compat
 ─────────────────
 Allergens          feature: allergens
