@@ -1620,6 +1620,195 @@ function RecipeUnquotedIngredients() {
   )
 }
 
+// ── Menu Quote Coverage widget (BACK-2926) ────────────────────────────────────
+//
+// Per-sales-item quote coverage for one menu. Pick a menu in the dropdown;
+// each row shows a sales item's % of ingredients with an active quote in the
+// menu's market. Manual items are excluded (no ingredients to check). Expand
+// a row to see the names of the missing ingredients. Selection persists in
+// localStorage so a reload lands on the same menu.
+
+interface CoverageItem {
+  menu_sales_item_id: number
+  sales_item_id: number
+  sales_item_name: string
+  item_type: 'recipe' | 'ingredient' | 'combo'
+  total_ingredients: number
+  quoted_ingredients: number
+  coverage_pct: number | null
+  missing_ingredient_names: string[]
+}
+
+interface CoverageResp {
+  menu: { id: number; name: string; country_id: number }
+  items: CoverageItem[]
+  overall: { total_ingredients: number; quoted_ingredients: number; coverage_pct: number | null }
+}
+
+const COVERAGE_TYPE_PILL: Record<CoverageItem['item_type'], string> = {
+  recipe:     'bg-emerald-100 text-emerald-700',
+  ingredient: 'bg-sky-100      text-sky-700',
+  combo:      'bg-violet-100   text-violet-700',
+}
+
+const COVERAGE_STORAGE_KEY = 'cogs-menu-coverage-menu-id'
+
+function MenuCoverage() {
+  const api = useApi()
+  const { menus } = useDashboardData()
+  const [menuId, setMenuId] = useState<number | null>(() => {
+    try {
+      const stored = localStorage.getItem(COVERAGE_STORAGE_KEY)
+      if (stored) {
+        const n = Number(stored)
+        if (Number.isFinite(n)) return n
+      }
+    } catch { /* ignore */ }
+    return null
+  })
+  const [resp, setResp] = useState<CoverageResp | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+
+  // Auto-pick first menu when no stored choice + menus list loads
+  useEffect(() => {
+    if (menuId == null && menus.length > 0) {
+      setMenuId(menus[0].id)
+    }
+  }, [menuId, menus])
+
+  // Persist menu choice
+  useEffect(() => {
+    if (menuId != null) {
+      try { localStorage.setItem(COVERAGE_STORAGE_KEY, String(menuId)) } catch { /* ignore */ }
+    }
+  }, [menuId])
+
+  // Fetch coverage when menu changes
+  useEffect(() => {
+    if (menuId == null) { setResp(null); return }
+    let cancelled = false
+    setLoading(true); setError(null)
+    api.get(`/cogs/menu-coverage/${menuId}`)
+      .then((data: CoverageResp) => { if (!cancelled) setResp(data) })
+      .catch((err: { message?: string }) => { if (!cancelled) setError(err?.message || 'Failed to load coverage') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [api, menuId])
+
+  const toggleExpand = (id: number) => {
+    setExpanded(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  const overallPct = resp?.overall.coverage_pct
+  const overallColor = overallPct == null
+    ? 'bg-surface-2 text-text-3'
+    : overallPct >= 95 ? 'bg-emerald-100 text-emerald-700'
+    : overallPct >= 75 ? 'bg-amber-100   text-amber-700'
+                       : 'bg-red-100     text-red-700'
+
+  return (
+    <div className="card p-5 h-full flex flex-col">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+        <SectionHeader title="Menu Quote Coverage" />
+        <div className="flex items-center gap-2">
+          {resp && overallPct != null && (
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${overallColor}`} title="Menu-wide average">
+              {overallPct.toFixed(1)}% overall
+            </span>
+          )}
+          <select
+            className="input text-xs py-1 max-w-[220px]"
+            value={menuId ?? ''}
+            onChange={e => setMenuId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="" disabled>Pick a menu…</option>
+            {menus.map(m => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2 flex-1">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
+      ) : error ? (
+        <div className="text-red-500 text-sm">{error}</div>
+      ) : !resp ? (
+        <EmptyState message="Pick a menu to see coverage." />
+      ) : resp.items.length === 0 ? (
+        <EmptyState message="No applicable items on this menu (only manual items, or empty)." />
+      ) : (
+        <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-1">
+          {resp.items.map(it => {
+            const pct = it.coverage_pct
+            const isExp = expanded.has(it.menu_sales_item_id)
+            const missingCount = it.total_ingredients - it.quoted_ingredients
+            const barColor = pct == null
+              ? 'bg-surface-2'
+              : pct >= 95 ? 'bg-emerald-400'
+              : pct >= 75 ? 'bg-amber-400'
+                          : 'bg-red-400'
+            return (
+              <div key={it.menu_sales_item_id} className="rounded border border-border bg-white">
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/60 transition-colors text-left"
+                  onClick={() => missingCount > 0 && toggleExpand(it.menu_sales_item_id)}
+                  disabled={missingCount === 0}
+                  title={missingCount === 0 ? 'No missing quotes' : (isExp ? 'Hide missing' : 'Show missing')}
+                >
+                  <span className={`shrink-0 w-3 text-[10px] text-text-3 ${missingCount === 0 ? 'invisible' : ''}`}>
+                    {isExp ? '▼' : '▶'}
+                  </span>
+                  <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide ${COVERAGE_TYPE_PILL[it.item_type]}`}>
+                    {it.item_type}
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-sm text-text-1 font-medium">{it.sales_item_name}</span>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <div className="w-20 h-1.5 bg-surface-2 rounded-full overflow-hidden" title={pct == null ? 'No ingredients' : `${pct.toFixed(1)}% covered`}>
+                      <div
+                        className={`h-full ${barColor} transition-all`}
+                        style={{ width: pct == null ? '0%' : `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono text-text-2 w-12 text-right">
+                      {pct == null ? '—' : `${pct.toFixed(0)}%`}
+                    </span>
+                    <span className="text-xs font-mono text-text-3 w-14 text-right">
+                      {it.quoted_ingredients}/{it.total_ingredients}
+                    </span>
+                  </div>
+                </button>
+                {isExp && it.missing_ingredient_names.length > 0 && (
+                  <div className="px-2.5 pb-2 pt-1 border-t border-border/60 bg-surface-2/40">
+                    <div className="text-[10px] uppercase tracking-wide text-text-3 font-semibold mb-1">
+                      Missing quotes ({it.missing_ingredient_names.length})
+                    </div>
+                    <ul className="text-xs text-text-2 space-y-0.5">
+                      {it.missing_ingredient_names.map(name => (
+                        <li key={name} className="flex items-start gap-1.5">
+                          <span className="text-amber-500 shrink-0">⚠</span>
+                          <span className="truncate">{name}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Integration Status widget ────────────────────────────────────────────────
 // Wraps IntegrationStatusList with a card chrome + width-based column pick.
 // The widget can sit at any size (sm / md / lg / xl) and any row-span (1 / 2 /
@@ -1690,5 +1879,6 @@ export const WIDGET_COMPONENTS: Record<WidgetId, () => ReactElement> = {
   'new-price-quote':   NewPriceQuoteWidget,
   'country-region-map': CountryRegionMapWidget,
   'recipe-unquoted-ingredients': RecipeUnquotedIngredients,
+  'menu-coverage':              MenuCoverage,
   'integration-status':         IntegrationStatusWidget,
 }

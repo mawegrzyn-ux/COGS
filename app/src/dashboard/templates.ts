@@ -31,6 +31,13 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 
   'recipe-unquoted-ingredients': { id: 'recipe-unquoted-ingredients', label: 'Unquoted Ingredients in Recipes', description: 'Ingredients that appear in at least one recipe but have no active price quote. Optional menu filter narrows the list to recipes used by a specific menu.', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
 
+  // BACK-2926 — Per-sales-item quote coverage report. Picks a menu, walks each
+  // non-manual sales item's ingredient tree (recipe items + sub-recipes for
+  // recipe-backed items; combo step options for combos; the direct ingredient
+  // for ingredient-backed items), and shows what % of those ingredients have
+  // an active quote in the menu's market. Expand a row to see the missing list.
+  'menu-coverage':     { id: 'menu-coverage',     label: 'Menu Quote Coverage', description: 'Per-sales-item % coverage of recipe ingredients with active quotes in the menu’s market. Manual items excluded; modifier groups excluded for v1.', defaultSize: 'md', allowedSizes: ['md', 'lg', 'xl'], marketScoped: false, defaultRowSpan: 2, allowedRowSpans: [1, 2, 3] },
+
   // Integration health — pings Anthropic / Voyage / Brave / GitHub / Jira /
   // Mapbox / OpenAI every minute (server-side cached) and shows a green/red
   // dot per integration. Fully flexible: 1 / 2 / 3 / 4 columns × 1 / 2 / 3

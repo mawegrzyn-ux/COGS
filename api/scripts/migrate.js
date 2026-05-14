@@ -4684,6 +4684,22 @@ const migrations = [
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2569' AND status <> 'done'`,
 
+  // ── Step 175p: BACK-2926 — Menu Quote Coverage dashboard widget ──────────
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2926' AND status <> 'done'`,
+
+  // ── Step 175ps: Changelog — Menu Quote Coverage widget ──────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Dashboard widget — Menu Quote Coverage (BACK-2926)', '[
+     {"type":"added","description":"New dashboard widget menu-coverage. Picks a menu (persisted to localStorage) and shows per-sales-item % of ingredients with an active price quote in the menus market. Each row has a coverage bar, a quoted/total fraction, and a type pill (Recipe / Ingredient / Combo). Expand a row to see the names of the missing-quote ingredients. Header shows the menu-wide overall % colour-coded green/amber/red (>=95 / >=75 / <75)."},
+     {"type":"added","description":"Backend GET /api/cogs/menu-coverage/:menu_id. For each non-manual sales item on the menu it walks the ingredient tree: type=recipe → recipe items with sub-recipe recursion (cycle-guarded); type=combo → combo step options (recipe / ingredient / sales_item-wrapping-recipe one level deep); type=ingredient → the single ingredient. Modifier groups are NOT counted in v1 — they are optional add-ons, not part of the base recipe. Coverage uses the menus country_id against loadQuoteLookup (existence check only — does not care which costing method is active). Returns { menu, items: [...], overall: {...} }."},
+     {"type":"added","description":"WidgetId, registry meta, and template entries added for menu-coverage. Default md / 2-row tall, allowed sizes md/lg/xl. Not market-scoped on the widget level (the menu picker already implies the market via menu.country_id). Operators can add it to any of the three shipped templates via the Customise panel."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Dashboard widget — Menu Quote Coverage (BACK-2926)'
+   )`,
+
   // ── Step 175q: Changelog — Menu Builder rendering parity with Combos tab ─
   `INSERT INTO mcogs_changelog (version, title, entries)
    SELECT '2026-05-13', 'Menu Builder — combo steps + nested modifier groups now use the same card style as the Combos catalog tab', '[

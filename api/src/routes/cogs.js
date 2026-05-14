@@ -1522,4 +1522,203 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /cogs/menu-coverage/:menu_id  (BACK-2926 — Dashboard Menu Coverage widget)
+//
+//  Per-sales-item quote coverage report for one menu. For each non-manual
+//  sales item, walks its ingredient tree (recipe items + sub-recipes for
+//  recipe-backed items, combo step options for combos, the direct ingredient
+//  for ingredient-backed items) and reports how many of those ingredients
+//  have an active price quote in the menu's market.
+//
+//  Manual sales items are excluded entirely — they have no ingredients to
+//  check, so they'd skew the overall %. Modifier groups attached to sales
+//  items / combo step options are also excluded for v1: they're optional
+//  add-ons, not part of the base item's recipe.
+//
+//  Response:
+//    {
+//      menu:   { id, name, country_id },
+//      items:  [
+//        { menu_sales_item_id, sales_item_id, sales_item_name, item_type,
+//          total_ingredients, quoted_ingredients, coverage_pct,
+//          missing_ingredient_names: [...] },
+//        ...
+//      ],
+//      overall: { total_ingredients, quoted_ingredients, coverage_pct }
+//    }
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/menu-coverage/:menu_id', async (req, res, next) => {
+  try {
+    const menuId = Number(req.params.menu_id);
+    if (!Number.isFinite(menuId)) return res.status(400).json({ error: { message: 'menu_id must be numeric' } });
+
+    // Menu lookup (need country_id for the quote check)
+    const { rows: [menu] } = await pool.query(
+      'SELECT id, name, country_id FROM mcogs_menus WHERE id = $1', [menuId]
+    );
+    if (!menu) return res.status(404).json({ error: { message: 'Menu not found' } });
+    const countryId = menu.country_id;
+
+    // All sales items on the menu — exclude manual at the query level.
+    const { rows: msis } = await pool.query(`
+      SELECT msi.id          AS msi_id,
+             msi.sales_item_id,
+             msi.sort_order,
+             si.name         AS sales_item_name,
+             si.item_type,
+             si.recipe_id,
+             si.ingredient_id,
+             si.combo_id
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+      WHERE  msi.menu_id = $1
+        AND  si.item_type <> 'manual'
+      ORDER  BY msi.sort_order, msi.id
+    `, [menuId]);
+
+    // Collect top-level recipe + combo ids.
+    const topRecipeIds = new Set();
+    const comboIds     = new Set();
+    for (const m of msis) {
+      if (m.item_type === 'recipe' && m.recipe_id) topRecipeIds.add(m.recipe_id);
+      if (m.item_type === 'combo'  && m.combo_id)  comboIds.add(m.combo_id);
+    }
+
+    // Cost method doesn't affect coverage — coverage cares about quote
+    // EXISTENCE, not which quote wins the pricing race. Pass 'best' which is
+    // the cheapest path (no AVG aggregation, fastest query).
+    const [quoteLookup, recipeItemsMap, comboData] = await Promise.all([
+      loadQuoteLookup('best'),
+      topRecipeIds.size ? loadAllRecipeItemsDeep([...topRecipeIds]) : Promise.resolve({}),
+      comboIds.size     ? loadComboData([...comboIds])              : Promise.resolve({}),
+    ]);
+
+    // Combo step options can reference recipes too (and sales_item-typed
+    // options can wrap a recipe). Pull those in so collectFromRecipe sees
+    // their items.
+    const comboRecipeIds = new Set();
+    for (const steps of Object.values(comboData)) {
+      for (const step of steps) {
+        for (const opt of step.options || []) {
+          if (opt.item_type === 'recipe' && opt.recipe_id) comboRecipeIds.add(opt.recipe_id);
+          if (opt.item_type === 'sales_item' && opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+            comboRecipeIds.add(opt.si_recipe_id);
+          }
+        }
+      }
+    }
+    const missingFromMap = [...comboRecipeIds].filter(id => !recipeItemsMap[id]);
+    if (missingFromMap.length) {
+      const extra = await loadAllRecipeItemsDeep(missingFromMap);
+      for (const [k, v] of Object.entries(extra)) {
+        if (!recipeItemsMap[k]) recipeItemsMap[k] = v;
+      }
+    }
+
+    // Walk a recipe's items recursively, returning the Set of ingredient_ids
+    // it references. Cycle guard prevents infinite loops if a sub-recipe ever
+    // points back at an ancestor.
+    function collectFromRecipe(recipeId, visited = new Set()) {
+      const out = new Set();
+      if (!recipeId || visited.has(recipeId)) return out;
+      visited.add(recipeId);
+      const items = recipeItemsMap[recipeId] || [];
+      for (const it of items) {
+        if (it.item_type === 'ingredient' && it.ingredient_id) {
+          out.add(it.ingredient_id);
+        } else if (it.item_type === 'recipe' && it.recipe_item_id) {
+          for (const id of collectFromRecipe(it.recipe_item_id, visited)) out.add(id);
+        }
+      }
+      return out;
+    }
+
+    function collectFromSalesItem(m) {
+      const out = new Set();
+      if (m.item_type === 'ingredient' && m.ingredient_id) {
+        out.add(m.ingredient_id);
+      } else if (m.item_type === 'recipe' && m.recipe_id) {
+        for (const id of collectFromRecipe(m.recipe_id)) out.add(id);
+      } else if (m.item_type === 'combo' && m.combo_id) {
+        const steps = comboData[m.combo_id] || [];
+        for (const step of steps) {
+          for (const opt of step.options || []) {
+            if (opt.item_type === 'ingredient' && opt.ingredient_id) {
+              out.add(opt.ingredient_id);
+            } else if (opt.item_type === 'recipe' && opt.recipe_id) {
+              for (const id of collectFromRecipe(opt.recipe_id)) out.add(id);
+            } else if (opt.item_type === 'sales_item') {
+              // Recurse through the linked sales item one level (combo→sales_item→combo
+              // is not supported — too easy to explode).
+              if (opt.si_item_type === 'ingredient' && opt.si_ingredient_id) {
+                out.add(opt.si_ingredient_id);
+              } else if (opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+                for (const id of collectFromRecipe(opt.si_recipe_id)) out.add(id);
+              }
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    // Compute coverage per item.
+    const items = [];
+    const missingIds = new Set();
+    let allTotal = 0, allQuoted = 0;
+
+    for (const m of msis) {
+      const ids = collectFromSalesItem(m);
+      const total = ids.size;
+      let quoted = 0;
+      const itemMissing = [];
+      for (const id of ids) {
+        const q = quoteLookup[id]?.[countryId];
+        if (q) quoted++;
+        else { itemMissing.push(id); missingIds.add(id); }
+      }
+      allTotal  += total;
+      allQuoted += quoted;
+      items.push({
+        menu_sales_item_id: m.msi_id,
+        sales_item_id:      m.sales_item_id,
+        sales_item_name:    m.sales_item_name,
+        item_type:          m.item_type,
+        total_ingredients:  total,
+        quoted_ingredients: quoted,
+        coverage_pct:       total === 0 ? null : Math.round((quoted / total) * 1000) / 10,
+        _missing_ids:       itemMissing,
+      });
+    }
+
+    // Resolve names for the missing list in one batch query.
+    const nameMap = {};
+    if (missingIds.size) {
+      const { rows } = await pool.query(
+        'SELECT id, name FROM mcogs_ingredients WHERE id = ANY($1::int[])',
+        [[...missingIds]]
+      );
+      for (const r of rows) nameMap[r.id] = r.name;
+    }
+    for (const it of items) {
+      it.missing_ingredient_names = it._missing_ids
+        .map(id => nameMap[id] || `Ingredient #${id}`)
+        .sort((a, b) => a.localeCompare(b));
+      delete it._missing_ids;
+    }
+
+    res.json({
+      menu:    { id: menu.id, name: menu.name, country_id: menu.country_id },
+      items,
+      overall: {
+        total_ingredients:  allTotal,
+        quoted_ingredients: allQuoted,
+        coverage_pct:       allTotal === 0 ? null : Math.round((allQuoted / allTotal) * 1000) / 10,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
 module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax, loadModifierCostAdders, resolveRecipeMultiplier };
