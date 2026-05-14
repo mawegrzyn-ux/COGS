@@ -1,14 +1,15 @@
 // =============================================================================
-// MenuEntryPage — BACK-2793
+// MenuEntryPage — BACK-2793 (BACK-2938 reordered + renamed tab)
 //
 // Combines the Sales Items catalog (3 sub-tabs: Items / Combos / Modifiers)
 // and the Menu Builder into one page with four top-level tabs:
 //
-//   1. Items       — POS catalog: recipes / ingredients / manual / combo wrappers
-//   2. Combos      — combo definitions (steps + step options)
-//   3. Modifiers   — modifier groups + their options
-//   4. Menu Builder — drop sales items onto a menu, set per-level prices,
-//                     attach modifier groups, etc.
+//   1. Builder     — drop sales items onto a menu, set per-level prices,
+//                     attach modifier groups, etc. (MenuBuilderPage). DEFAULT
+//                     landing tab — most sessions start here.
+//   2. Items       — POS catalog: recipes / ingredients / manual / combo wrappers
+//   3. Combos      — combo definitions (steps + step options)
+//   4. Modifiers   — modifier groups + their options
 //
 // Why one page: the four tabs are the catalog-side workflow for any menu
 // project — operators bounce between them often, and previously had to use
@@ -17,8 +18,8 @@
 // modifier group, now I want to drop it onto a sales item, then onto a
 // menu"), and frees a sidebar slot.
 //
-// Tabs 1-3 reuse SalesItemsPage in embedded mode (controlled `embeddedTab`
-// prop + hidden internal header). Tab 4 mounts MenuBuilderPage as-is.
+// Tabs 2-4 reuse SalesItemsPage in embedded mode (controlled `embeddedTab`
+// prop + hidden internal header). Tab 1 (Builder) mounts MenuBuilderPage as-is.
 //
 // We KEEP all four tabs mounted at once (display:none for the inactive
 // ones) so per-tab state — selected item, scroll position, dirty edits —
@@ -33,11 +34,16 @@ import MenuBuilderPage from './MenuBuilderPage'
 
 type EntryTab = 'items' | 'combos' | 'modifiers' | 'menu-builder'
 
+// BACK-2938 — tab labels + ordering. 'menu-builder' is the primary action
+// tab (drop items onto a menu, set prices); the other three are the catalog
+// it draws from. We surface 'Builder' first + as the default landing tab
+// because that's where most sessions start. Internal tab id stays
+// 'menu-builder' so localStorage values + deep links keep working.
 const TAB_LABELS: Record<EntryTab, string> = {
+  'menu-builder':'Builder',
   items:         'Items',
   combos:        'Combos',
   modifiers:     'Modifiers',
-  'menu-builder':'Menu Builder',
 }
 
 const STORAGE_KEY = 'menu-entry-active-tab'
@@ -49,7 +55,7 @@ function readInitialTab(): EntryTab {
       return stored as EntryTab
     }
   } catch { /* localStorage unavailable */ }
-  return 'items'
+  return 'menu-builder'
 }
 
 export default function MenuEntryPage() {
@@ -85,7 +91,7 @@ export default function MenuEntryPage() {
   }, [activeTab])
 
   const tabs: EntryTab[] = useMemo(
-    () => ['items', 'combos', 'modifiers', 'menu-builder'],
+    () => ['menu-builder', 'items', 'combos', 'modifiers'],
     []
   )
 

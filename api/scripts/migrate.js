@@ -4684,6 +4684,37 @@ const migrations = [
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2569' AND status <> 'done'`,
 
+  // ── Step 175n: BACK-2938 — Builder tab rename + reorder ─────────────────
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2938' AND status <> 'done'`,
+
+  // ── Step 175ns: Changelog — Builder tab rename + reorder ────────────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — Menu Builder tab renamed to Builder + moved to front (BACK-2938)', '[
+     {"type":"changed","description":"Inside MenuEntryPage the menu-builder tab is renamed from Menu Builder to Builder and moved to the front of the tab list. New order is Builder / Items / Combos / Modifiers. The Builder tab is now also the default landing tab when there is no localStorage preference or URL ?tab= override. Most sessions start in Builder (drop items onto a menu, set prices), so landing there saves a click."},
+     {"type":"changed","description":"Internal tab id menu-builder is unchanged. Existing localStorage values + deep links (?tab=menu-builder, ?tab=items, etc.) keep working. The page title Menu Builder (the outer MenuEntryPage header from BACK-2837) is unchanged."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — Menu Builder tab renamed to Builder + moved to front (BACK-2938)'
+   )`,
+
+  // ── Step 175o: BACK-2937 — Menu Builder inline Add/Remove step ──────────
+  `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
+   WHERE key = 'BACK-2937' AND status <> 'done'`,
+
+  // ── Step 175os: Changelog — Menu Builder inline Add/Remove step ─────────
+  `INSERT INTO mcogs_changelog (version, title, entries)
+   SELECT '2026-05-13', 'Menu Builder — inline Add Step + Remove Step on combos (BACK-2937)', '[
+     {"type":"added","description":"+ Add step dashed-outline button below the combo step list in the Menu Builder expanded view. Calls POST /combos/:id/steps with name New step + sensible defaults (min 1 / max 1 / no repeat / no auto-select), then auto-opens the step in the Edit panel so the operator can rename + tweak. comboId is lazy-fetched via the existing comboIdRef cache, so a flurry of adds doesnt hit /sales-items/:id every time."},
+     {"type":"added","description":"Remove button on each step header, sitting right next to Edit ›. Red-outline pill style. Confirms via window.confirm (matches existing pattern in the catalog Combos tab + the rest of MenuBuilderPage — flagged for ConfirmDialog migration as part of the standard design-rules cleanup). After delete the parent re-fetches sub-prices so the structure refreshes without a page reload."},
+     {"type":"added","description":"Empty-combo state (zero steps) shows the + Add step button along with a hint — This combo has no steps yet — add one to start building. The combo wrapper is now always rendered for combo-typed sales items, so an operator can add the first step from the Menu Builder rather than having to bounce to the Combos catalog tab. Prop wiring: new onReloadSubPrices callback threaded MenuBuilderPage → ItemsList → ExpandedItemContent."}
+   ]'::jsonb
+   WHERE NOT EXISTS (
+     SELECT 1 FROM mcogs_changelog
+     WHERE version = '2026-05-13' AND title = 'Menu Builder — inline Add Step + Remove Step on combos (BACK-2937)'
+   )`,
+
   // ── Step 175p: BACK-2926 — Menu Quote Coverage dashboard widget ──────────
   `UPDATE mcogs_backlog SET status='done', updated_at=NOW()
    WHERE key = 'BACK-2926' AND status <> 'done'`,

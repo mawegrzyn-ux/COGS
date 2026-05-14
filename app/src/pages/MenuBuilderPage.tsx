@@ -1131,6 +1131,7 @@ export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: b
                   groupByCategory={groupByCategory}
                   savingPriceCells={savingPriceCells}
                   modCostUsesMinSelect={modCostUsesMinSelect}
+                  onReloadSubPrices={loadSubPrices}
                   dragId={dragId}
                   dragOverId={dragOverId}
                   expandedRows={expandedRows}
@@ -1358,6 +1359,7 @@ function ItemsList({
   costByMsi, currencySymbol,
   taxRates, savingTaxCells, onSaveTaxOverride,
   onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
+  onReloadSubPrices,
   onDragStart, onDragOver, onDragLeave, onDragOverCategory, onDragLeaveCategory,
   onCatDragStart, onCatDragOver, onCatDragLeave,
   onDrop, onDragEnd,
@@ -1402,6 +1404,9 @@ function ItemsList({
   onRemove: (it: MenuSalesItem) => void
   onToggleExpand: (msiId: number) => void
   onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  // BACK-2937 — triggered by add/remove step actions inside the expanded
+  // combo view so the sub-prices payload re-fetches after a structural change.
+  onReloadSubPrices: (msiId: number) => Promise<void> | void
   onDragStart: (id: number) => void
   onDragOver: (e: React.DragEvent, id: number) => void
   onDragLeave: () => void
@@ -1612,6 +1617,7 @@ function ItemsList({
                 modCostUsesMinSelect={modCostUsesMinSelect}
                 onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
                 onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
+                onReloadSubPrices={() => onReloadSubPrices(it.id)}
               />
             ) : (
               <div className="px-12 py-3 text-xs text-text-3 italic">Failed to load sub-prices.</div>
@@ -1764,6 +1770,7 @@ function ExpandedItemContent({
   currencySymbol,
   modCostUsesMinSelect,
   onOpenModifierGroup, onOpenComboStep,
+  onReloadSubPrices,
 }: {
   msiId: number
   // BACK-2835 — needed for the combo step reorder API call (msi → sales_item
@@ -1781,6 +1788,9 @@ function ExpandedItemContent({
   modCostUsesMinSelect: boolean
   onOpenModifierGroup: (modifierGroupId: number) => void
   onOpenComboStep: (comboStepId: number) => void
+  // BACK-2937 — re-fetches sub-prices after add/remove step actions so the
+  // expanded combo view reflects the new structure without a page reload.
+  onReloadSubPrices: () => Promise<void> | void
 }) {
   const api = useApi()
 
@@ -1821,6 +1831,59 @@ function ExpandedItemContent({
     } catch {
       // Roll back to server order on failure
       setStepOrderOverride(null)
+    }
+  }
+
+  // BACK-2937 — resolve combo_id once + cache. Shared by add/remove step
+  // handlers below. Same lazy-fetch pattern as persistStepOrder.
+  const resolveComboId = async (): Promise<number | null> => {
+    if (comboIdRef.current != null) return comboIdRef.current
+    try {
+      const si = await api.get(`/sales-items/${salesItemId}`) as { combo_id: number | null }
+      comboIdRef.current = si.combo_id
+      return si.combo_id
+    } catch { return null }
+  }
+
+  const [addingStep, setAddingStep] = useState(false)
+  const handleAddStep = async () => {
+    if (addingStep) return
+    setAddingStep(true)
+    try {
+      const comboId = await resolveComboId()
+      if (!comboId) throw new Error('Could not resolve combo id')
+      const created = await api.post(`/combos/${comboId}/steps`, {
+        name: 'New step',
+        sort_order: sub.combo_steps.length,
+        min_select: 1,
+        max_select: 1,
+        allow_repeat: false,
+        auto_select: false,
+      }) as { id: number }
+      await onReloadSubPrices()
+      // Pop the edit panel open so the operator can rename + tweak right away.
+      onOpenComboStep(created.id)
+    } catch (err: unknown) {
+      // Toast is owned by the parent — silently fail here; the parent's
+      // existing error handling on api.* covers most issues.
+      console.error('[add-step]', err)
+    } finally {
+      setAddingStep(false)
+    }
+  }
+
+  const handleRemoveStep = async (stepId: number) => {
+    // window.confirm matches the existing pattern in this file + the
+    // Combos catalog tab. Tracked for ConfirmDialog migration in the
+    // standard design-rules cleanup follow-up.
+    if (!window.confirm('Delete this step and all its options from this combo? This affects every menu the combo is used on.')) return
+    try {
+      const comboId = await resolveComboId()
+      if (!comboId) throw new Error('Could not resolve combo id')
+      await api.delete(`/combos/${comboId}/steps/${stepId}`)
+      await onReloadSubPrices()
+    } catch (err: unknown) {
+      console.error('[remove-step]', err)
     }
   }
 
@@ -1924,8 +1987,10 @@ function ExpandedItemContent({
       {/* Combo structure (BACK-2574) — only rendered for combo items.
           BACK-2835 adds drag-drop reorder; BACK-2836 adds the left accent
           bar for hierarchy; BUG-1186 widens the cost summary to include
-          the modifier adder. */}
-      {sub.item_type === 'combo' && orderedSteps.length > 0 && (
+          the modifier adder. BACK-2937 adds inline add/remove step controls
+          + always shows the wrapper for combo items so the user can add a
+          first step from an empty combo. */}
+      {sub.item_type === 'combo' && (
         <div>
           {orderedSteps.map((step, idx) => {
             // BACK-2598 — combo steps default collapsed.
@@ -1994,6 +2059,12 @@ function ExpandedItemContent({
                     onClick={(e) => { e.stopPropagation(); onOpenComboStep(step.id) }}
                     title="Edit step (settings + options)"
                   >Edit ›</button>
+                  <button
+                    type="button"
+                    className="shrink-0 text-red-500 text-[10px] font-medium px-2 py-0.5 rounded border border-red-300 bg-white hover:bg-red-50 hover:border-red-400 hover:text-red-700 transition-colors ml-1"
+                    onClick={(e) => { e.stopPropagation(); handleRemoveStep(step.id) }}
+                    title="Delete this step (affects every menu using this combo)"
+                  >Remove</button>
                 </div>
                 {stepOpen && step.options.map(o => (
                   <div key={o.id}>
@@ -2035,6 +2106,23 @@ function ExpandedItemContent({
               </div>
             )
           })}
+          {/* BACK-2937 — Add Step button. Always shown on combo items, so an
+              operator can add a first step to an empty combo without leaving
+              the Menu Builder. */}
+          <div className="px-2 pt-1 pb-2">
+            <button
+              type="button"
+              disabled={addingStep}
+              className="text-[11px] font-medium px-2.5 py-1 rounded border border-dashed border-accent/50 text-accent hover:bg-accent-dim hover:border-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleAddStep}
+              title="Add a new step to this combo (affects every menu using it)"
+            >{addingStep ? 'Adding…' : '+ Add step'}</button>
+            {orderedSteps.length === 0 && (
+              <span className="ml-2 text-[10px] text-text-3 italic">
+                This combo has no steps yet — add one to start building.
+              </span>
+            )}
+          </div>
         </div>
       )}
 
