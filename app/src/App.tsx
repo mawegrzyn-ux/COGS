@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage            from './pages/LoginPage'
@@ -7,16 +8,37 @@ import LoadingScreen        from './components/LoadingScreen'
 import InventoryPage        from './pages/InventoryPage'
 import RecipesPage          from './pages/RecipesPage'
 import MenusPage            from './pages/MenusPage'
-import SalesItemsPage       from './pages/SalesItemsPage'
+// BACK-2793 — SalesItemsPage + MenuBuilderPage are no longer routed
+// directly from App.tsx; MenuEntryPage embeds both. Old URLs redirect
+// through MenuEntry.
+import MenuEntryPage        from './pages/MenuEntryPage'
 import AllergenMatrixPage   from './pages/AllergenMatrixPage'
 import HACCPPage            from './pages/HACCPPage'
+import StockManagerPage     from './pages/StockManagerPage'
+// BugsBacklogPage is now embedded in SystemPage — import removed from here
 import HelpPage             from './pages/HelpPage'
+import MediaLibraryPage     from './pages/MediaLibraryPage'
 import ConfigurationPage    from './pages/ConfigurationPage'
 import SystemPage           from './pages/SystemPage'
+import PosTesterPage        from './pages/PosTesterPage'
+// QSC Audits — lazy-loaded to keep the main bundle small.
+// These pages pull in the full 150-question bank + runner/report UI; they
+// only matter to users who have `audits:read` access.
+const AuditsPage          = lazy(() => import('./pages/audits/AuditsPage'))
+const AuditRunnerPage     = lazy(() => import('./pages/audits/AuditRunnerPage'))
+const AuditReportPage     = lazy(() => import('./pages/audits/AuditReportPage'))
+const AuditTemplatesPage  = lazy(() => import('./pages/audits/AuditTemplatesPage'))
 import SharedMenuPage       from './pages/SharedMenuPage'
+import WidgetPopoutPage     from './pages/WidgetPopoutPage'
+import PepperPage           from './pages/PepperPage'
+import KioskMockupPage      from './pages/KioskMockupPage'
 import PendingPage          from './pages/PendingPage'
 import PermissionsProvider  from './components/PermissionsProvider'
 import { usePermissions }   from './hooks/usePermissions'
+import { MarketProvider }   from './contexts/MarketContext'
+import { LanguageProvider } from './contexts/LanguageContext'
+import { CurrencyProvider } from './contexts/CurrencyContext'
+import { FeatureFlagsProvider, useFeatureFlags } from './contexts/FeatureFlagsContext'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth0()
@@ -29,6 +51,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// Redirect to /dashboard if a feature flag is disabled. Used to hide
+// whole modules (Stock Manager, HACCP, Allergens) from users without
+// changing RBAC. Waits for flags to load to avoid flash-of-redirect.
+function FeatureRoute({ flag, children }: { flag: keyof import('./contexts/FeatureFlagsContext').FeatureFlags; children: React.ReactNode }) {
+  const { flags, loading } = useFeatureFlags()
+  if (loading) return <LoadingScreen />
+  if (!flags[flag]) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   const { isLoading } = useAuth0()
   if (isLoading) return <LoadingScreen />
@@ -36,6 +68,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <PermissionsProvider>
+        <FeatureFlagsProvider>
+        <LanguageProvider>
+        <MarketProvider>
+        <CurrencyProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
 
@@ -56,19 +92,68 @@ export default function App() {
             <Route path="categories"    element={<Navigate to="/configuration" replace />} />
             <Route path="inventory"     element={<InventoryPage />} />
             <Route path="recipes"       element={<RecipesPage />} />
-            <Route path="sales-items"   element={<SalesItemsPage />} />
+            {/* BACK-2793 — Menu Entry consolidates Sales Items + Menu Builder
+                into one page with four tabs. The old paths still work but
+                redirect through MenuEntry so legacy bookmarks land on the
+                expected tab. */}
+            <Route path="menu-entry"    element={<MenuEntryPage />} />
+            <Route path="sales-items"   element={<Navigate to="/menu-entry?tab=items" replace />} />
+            <Route path="menu-builder"  element={<Navigate to="/menu-entry?tab=menu-builder" replace />} />
+            {/* Legacy menus path renamed to Menu Engineer in the sidebar.
+                The URL keeps /menus for back-compat with shared links and
+                deep links into the Menu Engineer / Shared Links tabs. */}
             <Route path="menus"         element={<MenusPage />} />
-            <Route path="allergens"     element={<AllergenMatrixPage />} />
-            <Route path="haccp"         element={<HACCPPage />} />
+            <Route path="menu-engineer" element={<Navigate to="/menus" replace />} />
+            <Route path="allergens"     element={<FeatureRoute flag="allergens"><AllergenMatrixPage /></FeatureRoute>} />
+            <Route path="haccp"         element={<FeatureRoute flag="haccp"><HACCPPage /></FeatureRoute>} />
+            <Route path="audits"               element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditsPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/templates"     element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditTemplatesPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/run"       element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditRunnerPage /></Suspense></FeatureRoute>} />
+            <Route path="audits/:id/report"    element={<FeatureRoute flag="audits"><Suspense fallback={<LoadingScreen />}><AuditReportPage /></Suspense></FeatureRoute>} />
+            <Route path="stock-manager" element={<FeatureRoute flag="stock_manager"><StockManagerPage /></FeatureRoute>} />
+            <Route path="bugs-backlog" element={<Navigate to="/system" replace />} />
+            <Route path="media"         element={<MediaLibraryPage />} />
             <Route path="help"          element={<HelpPage />} />
+            <Route path="pos-tester"   element={<PosTesterPage />} />
             <Route path="import"        element={<Navigate to="/configuration" replace />} />
           </Route>
+
+          {/* Protected but outside the AppLayout shell — the widget popout is
+              launched via window.open() and needs just the widget, not the
+              sidebar / Pepper dock. Still requires auth + active user status. */}
+          <Route path="/widget/:widgetId" element={
+            <ProtectedRoute>
+              <WidgetPopoutPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Standalone Pepper chat — full-viewport PWA-installable at /pepper.
+              Auth-gated like the rest of the app; rendered outside AppLayout
+              so phone + tablet users get edge-to-edge chat with no sidebar. */}
+          <Route path="/pepper" element={
+            <ProtectedRoute>
+              <PepperPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Self-service ordering kiosk mockup — 9:16 portrait canvas scaled
+              to viewport height. Rendered outside AppLayout so it takes the
+              full viewport. Auth-gated (admin / staff facing for now). */}
+          <Route path="/kiosk" element={
+            <ProtectedRoute>
+              <KioskMockupPage />
+            </ProtectedRoute>
+          } />
 
           {/* Public shared pages — no auth, outside RBAC */}
           <Route path="/share/:slug" element={<SharedMenuPage />} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </CurrencyProvider>
+        </MarketProvider>
+        </LanguageProvider>
+        </FeatureFlagsProvider>
       </PermissionsProvider>
     </BrowserRouter>
   )

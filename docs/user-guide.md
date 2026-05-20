@@ -688,6 +688,133 @@ The Report tab generates a summary of all equipment records, temperature logs, a
 
 ---
 
+## QSC Audits
+
+The Audits page at `/audits` is a **Quality, Service, Cleanliness audit tool** built around the Wingstop QSC framework. It supports two modes sharing the same 150-question bank:
+
+- **External audit** — a formal scheduled evaluation (e.g. quarterly, by a third-party assessor). Every scored question must be answered before the audit can be finalized. Produces the audit of record.
+- **Internal audit** — an ad-hoc self-check a manager or GM runs any time. Can use a named template (e.g. "Line Check", "Walk-in & Cold Hold") or the full question bank. Partial completion is allowed — unanswered items record as *Not Observed*.
+
+Internal audits never replace the external score of record and are tagged with an `Internal` badge throughout the UI.
+
+### Audits Dashboard
+
+- **Stat cards** — In progress · Completed · Auto-unacceptable · Average score (across completed).
+- **Filters** — type (external/internal) and status (in progress/completed).
+- **Audit list** — key (AUD-1001+), type, location, auditor, start/complete dates, score, rating. Click **Resume** to continue an in-progress audit or **Report** to view a finalized one.
+- **+ Start audit** (top right, requires `audits:write`) — opens the start modal.
+
+### Starting an Audit
+
+In the start modal:
+
+1. **Audit type** — External (formal) or Internal (ad-hoc).
+2. **Location** — required. Every audit is bound to exactly one location.
+3. **Template** (internal only) — optional. Pick one of the 7 seeded system templates (Line Check Peak, Walk-in & Cold Hold, Personal Hygiene, Expiration Date Sweep, Cleaning & Sanitizer, Opening Checklist, Front-of-House) or leave empty for the full question bank.
+4. **Auditor name** — free text for external evaluators who aren't COGS users (e.g. "Steritech — Jane Doe").
+
+Clicking **Start audit** creates an `AUD-xxxx` key and jumps straight into the runner.
+
+### Running an Audit
+
+The runner opens at `/audits/:id/run` and has two panes:
+
+- **Left sidebar (question nav)** — all in-scope questions grouped by Department → Category. Each question shows a coloured dot indicating its response state (green = compliant, red = not compliant, amber = not observed, slate = N/A, blue = informational, grey = unanswered). Click any row to jump there.
+- **Main pane (active question)** — everything for the current question.
+
+**Top of the main pane:**
+
+- **Code** (e.g. `A101`) and **Risk level chip** — coloured by priority: red (Critical First Priority), orange (First Priority), amber (Second Priority), slate (Third Priority), blue (Information Only).
+- **Points** available, and **repeat points** (deducted if NC on the previous external audit at this location).
+- **AUTO-UNACCEPT** badge if this question is one of the 6 auto-unacceptable triggers (A105 walk-in cooler, A127 sanitizer, A139 sewage, A141 potable water, A143 rodents/roaches, OF101).
+- **Photo required** badge if the policy text mandates a photo.
+
+**Policy text** — collapsible (click "▸ Show policy / scoring guidance"). Contains the verbatim Wingstop scoring guidance for this question.
+
+**Status buttons** — Compliant · Not Compliant · Not Observed · N/A. One click saves instantly (auto-save).
+
+**When you mark Not Compliant:**
+- A **Repeat finding** checkbox appears. If the location had this same code NC on the previous external audit, the checkbox is pre-suggested with a small hint.
+- **Comment** becomes strongly recommended (required at finalize time for NC items).
+- Photos are encouraged; required for questions with the photo badge.
+
+**Temperature entry** — shown automatically for ~23 temperature-related questions. Enter the value and unit (°F/°C); validation ranges come from the policy text.
+
+**Product name** — free text for cold-hold and expiration questions (e.g. "Classic chicken", "Ranch dip"). Keeps non-compliance comments scoped to a specific product.
+
+**Photos** — click **+ Attach photo** to upload a 5 MB max image. Uses the standard media upload (local disk or S3 depending on config). Hover a photo thumbnail to show the delete × button.
+
+**Cross-references** — when a question's policy mentions another code, the code appears as a tappable chip at the bottom. Click to jump to that question.
+
+**Prev / Next** — navigate sequentially through the question list.
+
+**Notes** — top-right button opens an overall notes modal for the audit (not tied to a specific question).
+
+**Cancel** — top-right button. Responses are kept but the audit is marked cancelled and cannot be resumed.
+
+**Finalize** (top-right primary) — only enabled for external audits when all scored questions are answered. On click:
+- The scoring engine runs: 100 points − all deductions.
+- Auto-unacceptable check: any NC on a trigger code forces the overall rating to `Unacceptable`.
+- Rating bands: ≥ 90 → **Acceptable**, 70–89.9 → **Needs Improvement**, < 70 → **Unacceptable**.
+- The audit is locked (status → completed, `completed_at` stamped). Responses become read-only. Redirects to the report view.
+
+### Audit Report
+
+The report page at `/audits/:id/report` renders the scored report and exports:
+
+- **Summary banner** — overall score (to 1 decimal place), rating badge (green/amber/red), start/complete timestamps. Auto-unacceptable callout appears prominently if triggered. Auditor notes block below.
+- **Critical findings** — Critical First Priority items that were NC, displayed first with full detail.
+- **Summary by department** — points available, deducted, NC count, compliant count, Not Observed, N/A per department (Food Safety / Brand Standards).
+- **Summary by category** — same breakdown per category (Temperature Control, Food Handling, etc.).
+- **All non-compliant items** — every NC with photos, comment, points deducted, risk chip, and cross-references, grouped visually.
+- **Repeat findings** — items that were NC on both the previous external audit and this one, highlighted in amber.
+- **Informational observations** — items recorded against the 10 Information-Only codes (no points impact).
+
+**Export options:**
+
+- **Export CSV** — one row per response, ready for spreadsheet analysis or ingestion into another tool.
+- **Print / PDF** — uses `window.print()` with a custom stylesheet (clean single-column layout, no nav/header chrome). Use your browser's print dialog to save as PDF.
+
+### Templates
+
+Accessible via `/audits/templates` (or **Templates** button in the Audits header):
+
+- **System templates** — 7 shipped with the product, marked with a `System` badge. These cannot be deleted; only developers can edit them.
+- **Custom templates** — create your own. Admin/Operator can create, edit, and delete custom templates.
+- **Editor** — filterable question picker with department dropdown and search box. Check questions to include them; selected count shown in the header.
+
+### RBAC and Global Switch
+
+- **Feature**: `audits` — Admin/Operator get `write`, Viewer gets `read`.
+- **Feature**: `audits_admin` — Admin only (used to gate question-bank editing).
+- **Global switch**: Configuration → Global Config → Feature Toggles → **QSC Audits**. Turn off to hide the entire module from everyone; `/audits/*` routes redirect to the dashboard.
+
+### Auditing Pepper
+
+Pepper can query audit data through these tools:
+
+- **list_audits** — filter by type/status/location, returns a concise list.
+- **get_audit_report** — full scored report for a specific audit (by id or AUD-xxxx key).
+- **list_qsc_questions** — query the question bank by department / category / risk level / text search.
+- **get_qsc_question** — full details for a single code including policy text and cross-references.
+- **list_audit_templates** — all templates with their code lists.
+- **get_audit_nc_trends** — aggregates the most frequently failed codes across all (or filtered) completed audits — useful for remediation priorities.
+- **get_location_audit_history** — timeline of audits for one location (audit list + running average score).
+
+Ask Pepper things like "How did audit AUD-1002 score?", "Which QSC codes fail most often in completed audits?", "Show me all Critical First Priority questions", or "What's the audit history for our London Victoria location?".
+
+### Known Limitations (v1)
+
+Tracked in `BACK-1500` for v2:
+
+- Runner is online-only (no offline service worker yet). If wifi drops mid-audit, unsaved fields may not persist.
+- PDF export uses `window.print()`. For branded PDFs the v2 plan adds server-side Puppeteer rendering.
+- Escalation emails for imminent health hazards (A139 sewage, A141 potable water, A143 rodents) are not yet wired up — the events are logged now, email integration comes in v2.
+- Question-bank editing is admin-gated at the API level but has no dedicated UI yet — use `PUT /api/qsc/questions/:code` directly for ad-hoc fixes.
+- Per-location RBAC scope (restricting which users see which locations) isn't implemented — today users filter by country via brand partners, not per-location.
+
+---
+
 ## Import
 
 The Import page at `/import` provides an AI-powered data import wizard that accepts spreadsheet files and extracts structured data into COGS Manager. Use it to bulk-load ingredients, vendors, price quotes, recipes, and menus from existing spreadsheets.
@@ -980,6 +1107,14 @@ Pepper has 87 tools covering every data operation in the app.
 |---|---|
 | export_to_excel | Generates a multi-sheet .xlsx workbook (ingredients, price quotes, recipes, menus, or a full export) filtered to your market scope. Triggers an automatic browser download. |
 
+**Memory (3 tools):**
+
+| Tool | What it does |
+|---|---|
+| save_memory_note | Saves a pinned note that persists across sessions (e.g. "remember that I prefer GBP") |
+| list_memory_notes | Lists all pinned notes for the current user |
+| delete_memory_note | Deletes a specific note by ID (e.g. "forget the note about GBP") |
+
 ### Safety Rules for Write Operations
 
 Pepper always confirms before making any change to your data:
@@ -1023,18 +1158,34 @@ If no Voyage AI key is configured in Settings → AI, the system falls back to k
 
 ## System
 
-The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Database, Test Data, Architecture, API Reference, Security, Troubleshooting, and Domain Migration. Most sections are documentation; three (AI, Database, Test Data) embed live controls from the Settings page.
+The **System** page at `/system` is the administrative and operational hub. Its left sidebar groups several sections — AI, Bugs & Backlog, Audit Log, Database, Test Data, Architecture, API Reference, Security, Troubleshooting, Domain Migration, POS Mockup, and CLAUDE.md. Most sections are documentation; some embed live controls.
 
-Two sections are permission-gated:
+Three sections are permission-gated:
 
-- **Database** requires `settings:write` (admin). It is marked with an amber **ADMIN** badge in the sidebar. This section controls which PostgreSQL instance the API talks to and is admin-only because switching databases affects every user on the system.
-- **Test Data** requires the **developer flag** (`is_dev` on `mcogs_users`). It is marked with a purple **DEV** badge. This section exposes destructive seed/clear actions that wipe operational data, so it's restricted to users with dev access. An Admin toggles the `is_dev` flag per-user from Settings → Users via the `</>` button.
+- **Audit Log** requires `settings:write` (admin). Marked with an amber **ADMIN** badge.
+- **Database** requires `settings:write` (admin). Marked with an amber **ADMIN** badge. This section controls which PostgreSQL instance the API talks to and is admin-only because switching databases affects every user on the system.
+- **Test Data** requires the **developer flag** (`is_dev` on `mcogs_users`). Marked with a purple **DEV** badge. This section exposes destructive seed/clear actions that wipe operational data, so it's restricted to users with dev access.
+- **CLAUDE.md** requires the **developer flag**. Marked with a purple **DEV** badge. Shows the raw project documentation.
 
 Users who don't meet a section's gate simply don't see the entry in the sidebar. If a user loses permission mid-session (e.g. their role changes or their dev flag is revoked) they are automatically bounced back to AI, and a fallback "Admin access required" or "Developer access required" message is shown as defence-in-depth if they somehow route into the section directly.
 
 ### AI Section
 
 Embeds the Settings → AI tab inside the System layout. Shows the same Anthropic/Voyage/Brave/Concise Mode/Monthly Token Allowance/Claude Code fields as Settings → AI. Changes made here persist to the same backend and affect Pepper immediately.
+
+### Bugs & Backlog Section
+
+Two-tab interface for tracking bugs and feature backlog items. Previously a standalone page at `/bugs-backlog`, now embedded in the System page. The old URL redirects here automatically.
+
+**Bugs tab** — CRUD for bug reports with auto-generated key (BUG-1001+), summary, priority (highest/high/medium/low/lowest), severity (critical/major/minor/trivial), status (open/in_progress/resolved/closed/wont_fix), page reference, steps to reproduce, and resolution notes. Anyone can create bugs; only developers can change status.
+
+**Backlog tab** — CRUD for feature requests with auto-generated key (BACK-1001+), summary, item type (story/task/epic/improvement), priority, status (backlog/todo/in_progress/in_review/done/wont_do), story points, and acceptance criteria. Admins have write access; operators and viewers have read access. Only developers can change status.
+
+**Pepper integration** — The AI assistant can query and create bugs/backlog items via chat. Status changes through Pepper respect the same RBAC rules: `bugs:write` / `backlog:write` permission required, plus the developer flag.
+
+### Audit Log Section (admin only)
+
+Central audit trail viewer with filters (entity type, action, user, date range) and expandable rows showing field-level change history (old → new values with colour coding).
 
 ### Database Section (admin only)
 
@@ -1141,6 +1292,193 @@ Typical targets: QSR 28–32%, casual dining 30–35%, fine dining 35–40%. Del
 
 ---
 
+## Stock Manager
+
+The Stock Manager module provides full inventory management across your locations. Access it from the sidebar at `/stock-manager` (requires the Stock Manager permission).
+
+### Stores
+
+Stores are physical stock-holding areas within your locations — for example, Main Kitchen, Bar, Walk-in Fridge, or Dry Store. Each store belongs to a location.
+
+When creating a store, tick **"Location is the store"** if the location itself is the only stock-holding area (no sub-stores needed). This creates a 1:1 mapping between the location and the store.
+
+Manage stores from the **Stores** tab. Each store shows its location, type, and whether it is active.
+
+### Stock Overview
+
+The **Overview** tab is the stock dashboard. It shows:
+
+| Section | What it displays |
+|---|---|
+| KPI cards | Total items in stock, low stock alerts, out of stock count, active stores |
+| Stock levels grid | Current quantity on hand per ingredient per store, with min/max thresholds |
+| Status badges | **OK** (green) — above minimum; **Low** (amber) — below minimum threshold; **Out** (red) — zero or below |
+| Recent movements | The last 20 stock changes across all stores |
+
+Stock levels are updated automatically by purchase order receiving, waste logging, transfers, and stocktake approvals. Every change is recorded in the stock movements ledger for full traceability.
+
+### Purchase Orders
+
+Create purchase orders for your vendors from the **Purchase Orders** tab.
+
+**Creating a PO:**
+
+1. Click **"+ New PO"** and select a vendor. Optionally select a default store for line items.
+2. Add ingredients — the system automatically looks up the active price quote from that vendor via the quote lookup.
+3. If a quote exists: price, purchase unit, and base unit conversion are auto-populated from the quote.
+4. If no quote exists: an amber warning shows the ingredient's base unit. Enter the price and unit details manually. Optionally tick **"Save as price quote"** to create a new quote from this line item's data.
+5. Each line item can have its own store (defaults to the PO-level store if set).
+6. Submit the PO when ready — status changes from **Draft** to **Submitted**.
+
+**PO status flow:** Draft → Submitted → Partial (some items received) → Received (all items received) or Cancelled.
+
+### Goods In (Receiving)
+
+Record deliveries from the **Goods In** tab.
+
+1. Create a **GRN** (Goods Received Note) — optionally link it to a purchase order to auto-populate the expected items and quantities.
+2. Enter received quantities for each item (pre-filled from the PO if linked).
+3. **Confirm** the GRN — stock levels are updated automatically, and the linked PO status updates to Partial or Received based on quantities received.
+
+### Invoices
+
+Track vendor invoices from the **Invoices** tab.
+
+- Create an invoice from a confirmed GRN (items are auto-copied) or create a standalone invoice.
+- Add line items with quantities, unit prices, and descriptions.
+- **Status flow:** Draft → Pending → Approved → Paid (or Disputed at any stage).
+- Issue **credit notes** against invoices when needed — for returns, overcharges, or damaged goods.
+
+### Waste
+
+Log waste events from the **Waste** tab.
+
+- **Bulk entry mode:** add multiple waste items in one go — select ingredient, enter quantity, choose a reason code, and add optional notes.
+- Stock levels are automatically decremented when waste is logged.
+- **Reason codes** are configurable: Expired, Damaged, Spillage, Over-production, Quality Issue, Staff Meal, Other.
+- View waste history and summary filtered by date range.
+
+### Stock Transfers
+
+Move stock between stores from the **Transfers** tab. Transfers use a two-step process:
+
+1. **Create** a transfer — select source and destination stores, add items with quantities.
+2. **Dispatch** — deducts stock from the source store. Status changes to Dispatched.
+3. **Confirm** — adds stock to the destination store. You can record actual received quantities if they differ from the dispatched amounts.
+4. **Cancel** — if the transfer has been dispatched, cancelling it reverses the deduction from the source store.
+
+### Stocktake
+
+Conduct inventory counts from the **Stocktake** tab. Two count types are supported:
+
+| Type | How it works |
+|---|---|
+| **Full count** | Start a stocktake, click **"Populate All"** to load every ingredient with stock in that store, then enter counted quantities for each item. |
+| **Spot check** | Start a spot check, then add only the specific ingredients you want to count. |
+
+**Stocktake workflow:**
+
+1. Create a stocktake (full or spot check) for a store.
+2. Enter counted quantities for each item.
+3. **Complete** the stocktake — the system calculates variances (expected quantity vs counted quantity) for each item.
+4. **Approve** the stocktake — stock levels are adjusted to match the counted quantities. Variances are recorded in the stock movements ledger.
+
+---
+
+## Audit Log
+
+The **Audit Log** is available under System → Audit Log (admin only, requires `settings:read` permission). It provides a central trail of all data changes across the system.
+
+Every create, update, delete, and status change is recorded with:
+
+| Field | What it captures |
+|---|---|
+| User | Name and email of the person who made the change |
+| Action | Create, Update, Delete, or Status Change |
+| Entity | The type (e.g. purchase_order, ingredient, recipe) and its ID and label |
+| Changes | Field-level diffs showing old value and new value for each changed field |
+| Context | Source (manual, import, AI), related entities (linked POs, GRNs, stores) |
+| Timestamp | When the change occurred |
+
+**Filtering the audit log:**
+
+Use the filter controls at the top of the page to narrow results by user, action type, entity type, date range, or search by entity label. Click any row to expand it and see the full change details including field-level diffs.
+
+**Routes with audit logging:** Purchase Orders, Goods Received, Stocktakes, Waste, Stock Levels, Ingredients, Recipes, and Price Quotes all write to the audit log on every data mutation.
+
+---
+
+## POS Mockup
+
+The POS Mockup is a functional point-of-sale simulator for testing menu structure, combos, modifiers, and pricing flow. It does not save any transactions to the database — it is purely for menu validation and staff training.
+
+**Access:** System → POS Mockup (requires `settings:read` or `menus:read` permission).
+
+### Layout
+
+The screen is divided into three panels:
+
+| Panel | Purpose |
+|---|---|
+| **Current Check** (left) | Running order with line items, modifiers as indented sub-lines, qty +/- buttons, remove button, subtotal, tax, and total |
+| **Menu Grid** (centre) | Category tabs across the top, item tiles below. Each tile shows name, price, and type badge (recipe/combo/manual) |
+| **Order Flow** (right) | Activated when a combo or item with modifiers is selected. Shows step-by-step options and modifier groups |
+
+### How to Use
+
+1. Select a menu from the dropdown in the header bar. Choose a price level (Dine In / Takeout / Delivery).
+2. Click a category tab to filter items. Click an item tile to add it to the check.
+3. For combos: the Order Flow panel walks through each step. Select options, then click "Next Step" or "Add to Order" when all required steps are complete. Single-choice steps auto-advance.
+4. For items with modifiers: required modifier groups appear inline (if auto_show is enabled) or behind a "Customise" button. Select options respecting min/max rules.
+5. Modifier groups with repeat selection enabled show +/- stepper buttons instead of checkboxes.
+6. Adjust quantities on the check with +/- buttons. Remove items with the X button.
+7. Click **PAY** to close the check and see a mock receipt styled like a thermal printer printout. Click "Print" to use the browser print dialog, or "New Order" to start fresh.
+
+### Fullscreen Mode
+
+Click the expand button in the header to enter fullscreen mode. The sidebar and app header are hidden, giving you the full browser window. Press ESC or click the collapse button to exit.
+
+---
+
+## Smart Scenario
+
+The Smart Scenario tool uses AI to propose price or cost changes across your menu items in the Menu Engineer.
+
+### How to Use
+
+1. Open a menu in the **Menu Engineer** tab.
+2. Click the brain icon button in the toolbar.
+3. Type a natural language prompt describing what you want. Examples:
+   - "Increase all prices by 5%"
+   - "Set food cost target to 30% and adjust prices accordingly"
+   - "Reduce costs on all wing items by 10%"
+4. The AI analyses your menu data and returns a table of proposed changes.
+5. Review each proposal in the confirmation modal. Each row shows the item name, the field being changed (price or cost), old value, new value, and the change amount.
+6. Use the checkboxes to select which proposals to apply. Click "Apply Selected" to update the scenario grid.
+7. The changes are applied as scenario overrides only — they do not affect your live menu prices until you use "Push Prices".
+
+---
+
+## CalcInput (Math Expressions in Number Fields)
+
+Several number input fields in the application support inline math expressions. Instead of typing a final number, you can type a calculation and the system evaluates it for you.
+
+**Supported operators:** `+`, `-`, `*`, `/`, and parentheses `()`.
+
+**Where it works:**
+- Purchase Order item form: quantity and unit price fields
+- Inventory page: prep-to-base conversion and waste percentage fields
+
+**How to use:**
+
+1. Click into a supported number field.
+2. Type a math expression, for example `500 * 1.2` or `(100 + 50) / 3`.
+3. A preview tooltip appears below the field showing the calculated result.
+4. Press Enter or Tab to accept the result — the field updates to the evaluated number.
+5. If the expression is invalid, the preview shows an error and the field retains its previous value.
+
+---
+
 ## Troubleshooting
 
 **Recipe shows £0 COGS or zero cost per portion**
@@ -1179,6 +1517,20 @@ The import engine auto-resolved an unrecognised unit string to a base unit. Chec
 
 The Frankfurter API is a free external service (api.frankfurter.app) that requires no API key. If the sync fails, check your server's outbound internet access. You can also set exchange rates manually in Markets.
 
+---
+
+## Pepper Memory
+
+Pepper now remembers things across sessions. You can tell Pepper to remember facts, preferences, or instructions:
+
+- **"Remember that I always want UK prices in GBP"** — saves a pinned note
+- **"What do you remember?"** — shows all saved notes
+- **"Forget the note about GBP"** — removes a specific note
+
+Pinned notes are loaded into every conversation, so Pepper always has your preferences available. You can also view and manage your notes via the API at `/api/memory/notes`.
+
+Your user profile (preferred name, primary markets, response preferences) is also loaded into each session and can be updated at `/api/memory/profile`.
+
 **Menu tiles on the Dashboard show no COGS%**
 
 COGS data for menu tiles loads in the background. If it does not appear after a few seconds, the most likely cause is missing preferred vendor quotes for the recipes in those menus. Check the Missing Quotes panel.
@@ -1197,4 +1549,4 @@ A menu filter may be active in the toolbar. Check for a selected menu in the "Fi
 
 ---
 
-*User guide last updated: April 2026*
+*User guide last updated: April 2026 (POS Mockup, Smart Scenario, CalcInput, Pepper Memory sections added; Stock Manager and Audit Log from previous session)*

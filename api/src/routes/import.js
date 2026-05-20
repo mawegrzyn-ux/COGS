@@ -876,6 +876,58 @@ router.post('/from-text', async (req, res) => {
   }
 });
 
+// ── GET /jobs — list staged / recent import jobs ─────────────────────────────
+// Must be declared BEFORE /:id so Express routes 'jobs' to this handler rather
+// than treating it as a job ID and throwing on the integer cast.
+//
+// Query params:
+//   ?status=staging,ready  comma-separated list of statuses (default: all non-terminal)
+//   ?limit=20              max rows (default 20, max 100)
+//   ?mine=1                filter to jobs staged by the current user (matched by email)
+router.get('/jobs', async (req, res) => {
+  try {
+    const allowed = ['staging', 'ready', 'importing', 'done', 'failed'];
+    const statuses = (req.query.status ? String(req.query.status).split(',') : ['staging', 'ready', 'failed'])
+      .map(s => s.trim())
+      .filter(s => allowed.includes(s));
+    if (!statuses.length) return res.json([]);
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const mine  = String(req.query.mine || '').toLowerCase() === '1' || String(req.query.mine || '').toLowerCase() === 'true';
+    const userEmail = req.user?.email || null;
+
+    const params = [statuses, limit];
+    let where = `status = ANY($1::text[])`;
+    if (mine && userEmail) {
+      params.push(userEmail);
+      where += ` AND user_email = $${params.length}`;
+    }
+
+    const { rows } = await pool.query(`
+      SELECT id,
+             user_email,
+             source_file,
+             status,
+             created_at,
+             updated_at,
+             -- Summary counts without returning the full staged_data blob
+             COALESCE(jsonb_array_length(staged_data -> 'ingredients'),  0) AS ingredient_count,
+             COALESCE(jsonb_array_length(staged_data -> 'vendors'),      0) AS vendor_count,
+             COALESCE(jsonb_array_length(staged_data -> 'price_quotes'), 0) AS quote_count,
+             COALESCE(jsonb_array_length(staged_data -> 'recipes'),      0) AS recipe_count,
+             COALESCE(jsonb_array_length(staged_data -> 'menus'),        0) AS menu_count
+      FROM   mcogs_import_jobs
+      WHERE  ${where}
+      ORDER  BY created_at DESC
+      LIMIT  $2
+    `, params);
+    res.json(rows);
+  } catch (err) {
+    console.error('[import/jobs]', err);
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
 // ── GET /:id ──────────────────────────────────────────────────────────────────
 
 router.get('/:id', async (req, res) => {

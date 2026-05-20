@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ── shared row fetch ──────────────────────────────────────────────────────────
 async function getMenuItemRow(id) {
@@ -70,6 +71,7 @@ router.post('/', async (req, res) => {
       tax_rate_id || null,
       image_url?.trim() || null,
     ]);
+    logAudit(pool, req, { action: 'create', entity_type: 'menu_item', entity_id: row.id, entity_label: row.display_name || `Item #${row.id}` });
     res.status(201).json(await getMenuItemRow(row.id));
   } catch (err) {
     console.error(err);
@@ -81,6 +83,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { item_type = 'recipe', recipe_id, ingredient_id, display_name, qty = 1, sell_price = 0, tax_rate_id, image_url } = req.body;
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_items WHERE id=$1', [req.params.id]);
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_menu_items
       SET    item_type=$1, recipe_id=$2, ingredient_id=$3,
@@ -99,6 +102,7 @@ router.put('/:id', async (req, res) => {
       req.params.id,
     ]);
     if (!row) return res.status(404).json({ error: { message: 'Menu item not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'menu_item', entity_id: row.id, entity_label: row.display_name || `Item #${row.id}`, field_changes: diffFields(old, row, ['display_name', 'recipe_id', 'ingredient_id', 'item_type', 'qty']) });
     res.json(await getMenuItemRow(row.id));
   } catch (err) {
     console.error(err);
@@ -125,10 +129,12 @@ router.post('/:id/sell-price', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const client = await pool.connect();
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_items WHERE id=$1', [req.params.id]);
     await client.query('BEGIN');
     await client.query(`DELETE FROM mcogs_menu_item_prices WHERE menu_item_id = $1`, [req.params.id]);
     await client.query(`DELETE FROM mcogs_menu_items        WHERE id = $1`,           [req.params.id]);
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'delete', entity_type: 'menu_item', entity_id: old?.id, entity_label: old?.display_name || `Item #${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     await client.query('ROLLBACK');

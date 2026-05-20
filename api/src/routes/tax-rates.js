@@ -1,5 +1,6 @@
 const router  = require('express').Router();
 const pool = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /tax-rates  (?country_id=X optional)
 router.get('/', async (req, res) => {
@@ -37,6 +38,7 @@ router.post('/', async (req, res) => {
        VALUES ($1, $2, $3, $4) RETURNING *`,
       [country_id, name.trim(), rate, isDefault]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'tax_rate', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -52,11 +54,13 @@ router.put('/:id', async (req, res) => {
   if (Number(rate) < 0)
     return res.status(400).json({ error: { message: 'rate must be 0 or greater' } });
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_country_tax_rates WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_country_tax_rates SET name=$1, rate=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
       [name.trim(), rate, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'tax_rate', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'rate', 'is_default']) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -82,6 +86,7 @@ router.patch('/:id/set-default', async (req, res) => {
     );
     await client.query('COMMIT');
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'tax_rate', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: { is_default: { old: false, new: true } } });
     res.json(rows[0]);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -95,10 +100,12 @@ router.patch('/:id/set-default', async (req, res) => {
 // DELETE /tax-rates/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_country_tax_rates WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_country_tax_rates WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'tax_rate', entity_id: old?.id, entity_label: old?.name });
     res.status(204).send();
   } catch (err) {
     console.error(err);

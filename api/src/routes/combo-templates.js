@@ -8,6 +8,7 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // ─── GET /combo-templates ─────────────────────────────────────────────────────
 
@@ -121,6 +122,7 @@ router.post('/', async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'combo_template', entity_id: tmpl.id, entity_label: tmpl.name, context: { source_combo_id: combo_id, step_count: stepCount } });
     res.status(201).json({ ...tmpl, step_count: stepCount });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -182,6 +184,7 @@ router.post('/:id/apply', async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'update', entity_type: 'combo_template', entity_id: Number(req.params.id), entity_label: `applied to combo:${combo_id}`, context: { combo_id } });
     res.json({ applied: true });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -195,10 +198,12 @@ router.post('/:id/apply', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
+    const { rows: old } = await pool.query(`SELECT id, name FROM mcogs_combo_templates WHERE id = $1`, [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_combo_templates WHERE id = $1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Template not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'combo_template', entity_id: Number(req.params.id), entity_label: old[0]?.name || `id:${req.params.id}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

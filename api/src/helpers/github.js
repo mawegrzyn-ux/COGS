@@ -183,4 +183,107 @@ async function getPRDiff({ repo: repoStr, pr_number } = {}) {
   return diff;
 }
 
-module.exports = { listFiles, readFile, searchCode, createOrUpdateFile, createBranch, listPRs, createPR, getPRDiff };
+// ── Dispatch a workflow (workflow_dispatch event) ─────────────────────────────
+// workflow_id can be the filename (e.g. "test.yml") or numeric id.
+async function dispatchWorkflow({ repo: repoStr, workflow_id, ref = 'main', inputs } = {}) {
+  if (!workflow_id) throw new Error('workflow_id is required');
+  const { owner, repo } = getRepo(repoStr);
+  const body = { ref };
+  if (inputs) body.inputs = inputs;
+  // 204 No Content on success — ghFetch will return '' which is fine.
+  await ghFetch(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/dispatches`, {
+    method: 'POST',
+    body:   JSON.stringify(body),
+  });
+  return { dispatched: true, ref, workflow_id };
+}
+
+// ── List workflow runs (optionally filtered by workflow) ─────────────────────
+async function listWorkflowRuns({ repo: repoStr, workflow_id, per_page = 10, branch } = {}) {
+  const { owner, repo } = getRepo(repoStr);
+  const p = workflow_id
+    ? `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflow_id)}/runs`
+    : `/repos/${owner}/${repo}/actions/runs`;
+  const qs = new URLSearchParams({ per_page: String(Math.min(per_page, 30)) });
+  if (branch) qs.set('branch', branch);
+  const data = await ghFetch(`${p}?${qs}`);
+  return (data.workflow_runs || []).map(r => ({
+    id:           r.id,
+    name:         r.name,
+    display_title:r.display_title,
+    status:       r.status,        // queued | in_progress | completed
+    conclusion:   r.conclusion,    // success | failure | cancelled | skipped | null (while running)
+    event:        r.event,
+    head_branch:  r.head_branch,
+    head_sha:     r.head_sha,
+    actor:        r.actor?.login,
+    run_number:   r.run_number,
+    run_attempt:  r.run_attempt,
+    created_at:   r.created_at,
+    updated_at:   r.updated_at,
+    run_started_at: r.run_started_at,
+    html_url:     r.html_url,
+  }));
+}
+
+// ── Get a single workflow run ─────────────────────────────────────────────────
+async function getWorkflowRun({ repo: repoStr, run_id } = {}) {
+  if (!run_id) throw new Error('run_id is required');
+  const { owner, repo } = getRepo(repoStr);
+  const r = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${run_id}`);
+  return {
+    id:           r.id,
+    name:         r.name,
+    display_title:r.display_title,
+    status:       r.status,
+    conclusion:   r.conclusion,
+    event:        r.event,
+    head_branch:  r.head_branch,
+    head_sha:     r.head_sha,
+    actor:        r.actor?.login,
+    run_number:   r.run_number,
+    run_attempt:  r.run_attempt,
+    created_at:   r.created_at,
+    updated_at:   r.updated_at,
+    run_started_at: r.run_started_at,
+    html_url:     r.html_url,
+  };
+}
+
+// ── List jobs for a run ───────────────────────────────────────────────────────
+async function listWorkflowRunJobs({ repo: repoStr, run_id } = {}) {
+  if (!run_id) throw new Error('run_id is required');
+  const { owner, repo } = getRepo(repoStr);
+  const data = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${run_id}/jobs?per_page=30`);
+  return (data.jobs || []).map(j => ({
+    id:         j.id,
+    name:       j.name,
+    status:     j.status,
+    conclusion: j.conclusion,
+    started_at: j.started_at,
+    completed_at: j.completed_at,
+    html_url:   j.html_url,
+  }));
+}
+
+// ── List artifacts for a run ─────────────────────────────────────────────────
+async function listRunArtifacts({ repo: repoStr, run_id } = {}) {
+  if (!run_id) throw new Error('run_id is required');
+  const { owner, repo } = getRepo(repoStr);
+  const data = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${run_id}/artifacts?per_page=30`);
+  return (data.artifacts || []).map(a => ({
+    id:           a.id,
+    name:         a.name,
+    size_in_bytes:a.size_in_bytes,
+    expired:      a.expired,
+    created_at:   a.created_at,
+    // Note: archive_download_url requires auth; surface the run URL instead so
+    // users can download via the GitHub UI.
+    archive_download_url: a.archive_download_url,
+  }));
+}
+
+module.exports = {
+  listFiles, readFile, searchCode, createOrUpdateFile, createBranch, listPRs, createPR, getPRDiff,
+  dispatchWorkflow, listWorkflowRuns, getWorkflowRun, listWorkflowRunJobs, listRunArtifacts,
+};

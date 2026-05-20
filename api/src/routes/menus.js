@@ -1,15 +1,24 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // GET /menus
 router.get('/', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mName = lang ? `COALESCE(m.translations->$1->>'name', m.name)` : `m.name`;
+    const mDesc = lang ? `COALESCE(m.translations->$1->>'description', m.description)` : `m.description`;
     const { rows } = await pool.query(`
-      SELECT m.*, c.name AS country_name
+      SELECT m.id, ${mName} AS name, ${mDesc} AS description,
+             m.country_id, m.created_at, m.updated_at, m.translations,
+             c.name AS country_name,
+             c.currency_code, c.currency_symbol
       FROM   mcogs_menus m
       LEFT JOIN mcogs_countries c ON c.id = m.country_id
-      ORDER BY m.name ASC
-    `);
+      ORDER BY name ASC
+    `, lang ? [lang] : []);
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -20,13 +29,19 @@ router.get('/', async (req, res) => {
 // GET /menus/:id
 router.get('/:id', async (req, res) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mName = lang ? `COALESCE(m.translations->$2->>'name', m.name)` : `m.name`;
+    const mDesc = lang ? `COALESCE(m.translations->$2->>'description', m.description)` : `m.description`;
     const { rows: [row] } = await pool.query(`
-      SELECT m.*, c.name AS country_name
+      SELECT m.id, ${mName} AS name, ${mDesc} AS description,
+             m.country_id, m.created_at, m.updated_at, m.translations,
+             c.name AS country_name
       FROM   mcogs_menus m
       LEFT JOIN mcogs_countries c ON c.id = m.country_id
       WHERE  m.id = $1
-    `, [req.params.id]);
+    `, lang ? [req.params.id, lang] : [req.params.id]);
     if (!row) return res.status(404).json({ error: { message: 'Menu not found' } });
+    setContentLanguage(res, req);
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -45,6 +60,7 @@ router.post('/', async (req, res) => {
       VALUES ($1, $2, $3)
       RETURNING *
     `, [name.trim(), country_id, description?.trim() || null]);
+    logAudit(pool, req, { action: 'create', entity_type: 'menu', entity_id: row.id, entity_label: row.name });
     res.status(201).json(row);
   } catch (err) {
     console.error(err);
@@ -58,6 +74,7 @@ router.put('/:id', async (req, res) => {
   if (!name?.trim())  return res.status(400).json({ error: { message: 'name is required' } });
   if (!country_id)    return res.status(400).json({ error: { message: 'country_id is required' } });
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menus WHERE id=$1', [req.params.id]);
     const { rows: [row] } = await pool.query(`
       UPDATE mcogs_menus
       SET    name=$1, country_id=$2, description=$3
@@ -65,6 +82,7 @@ router.put('/:id', async (req, res) => {
       RETURNING *
     `, [name.trim(), country_id, description?.trim() || null, req.params.id]);
     if (!row) return res.status(404).json({ error: { message: 'Menu not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'menu', entity_id: row.id, entity_label: row.name, field_changes: diffFields(old, row, ['name', 'country_id', 'description']) });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -76,6 +94,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const client = await pool.connect();
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menus WHERE id=$1', [req.params.id]);
     await client.query('BEGIN');
     // Delete level prices for items on this menu
     await client.query(`
@@ -87,6 +106,7 @@ router.delete('/:id', async (req, res) => {
     await client.query(`DELETE FROM mcogs_menu_items  WHERE menu_id = $1`, [req.params.id]);
     await client.query(`DELETE FROM mcogs_menus       WHERE id = $1`,      [req.params.id]);
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'delete', entity_type: 'menu', entity_id: old?.id, entity_label: old?.name });
     res.status(204).end();
   } catch (err) {
     await client.query('ROLLBACK');

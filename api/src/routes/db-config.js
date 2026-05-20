@@ -20,6 +20,7 @@ const pool          = require('../db/pool');
 const configStore   = require('../config-store');
 const { buildPoolConfigFromStored, describeTarget } = require('../db/config');
 const dataMigrator  = require('../db/data-migrator');
+const { logAudit }  = require('../helpers/audit');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,7 @@ router.put('/', async (req, res) => {
 
     await configStore.setDbConnection(payload, actorOf(req));
     const saved = await configStore.getDbConnectionMasked();
+    logAudit(pool, req, { action: 'update', entity_type: 'db_config', entity_id: 1, entity_label: 'database config', context: { mode: payload.mode || 'local' } });
     res.json({
       saved,
       restart_required: true,
@@ -197,7 +199,8 @@ router.put('/', async (req, res) => {
 // ── POST /api/db-config/restart ───────────────────────────────────────────────
 // Graceful exit. PM2 (production) or nodemon (dev) restarts the process and
 // the new pool picks up the saved config via the startup sequence.
-router.post('/restart', (_req, res) => {
+router.post('/restart', (req, res) => {
+  logAudit(pool, req, { action: 'update', entity_type: 'db_config', entity_id: 1, entity_label: 'database config', context: { action: 'restart' } });
   res.json({ restarting: true });
   // Small delay so the response flushes before we exit.
   setTimeout(() => {
@@ -210,9 +213,10 @@ router.post('/restart', (_req, res) => {
 // Runs the mcogs_* schema migrations against the currently-active pool. Safe
 // to run multiple times (CREATE TABLE IF NOT EXISTS). Intended to be called
 // right after switching to a fresh remote DB.
-router.post('/migrate', async (_req, res) => {
+router.post('/migrate', async (req, res) => {
   try {
     const applied = await runSchemaMigrationsOn(pool);
+    logAudit(pool, req, { action: 'update', entity_type: 'db_config', entity_id: 1, entity_label: 'database config', context: { action: 'migrate', applied } });
     res.json({ ok: true, applied });
   } catch (err) {
     console.error('[db-config] migrate failed:', err);
@@ -328,6 +332,7 @@ router.post('/migrate-data', async (req, res) => {
     await configStore.setDbConnection(payload, actorOf(req));
     const saved = await configStore.getDbConnectionMasked();
 
+    logAudit(pool, req, { action: 'update', entity_type: 'db_config', entity_id: 1, entity_label: 'database config', context: { action: 'migrate_data', tables_copied: result.order?.length || 0 } });
     res.json({
       ok: true,
       schema_applied,

@@ -18,6 +18,10 @@ export function useApi() {
     } catch {
       // No audience configured — skip auth header (dev mode)
     }
+    // Inject the user's preferred language. Server chain:
+    //   X-Language > user profile preferred_language > country default > 'en'
+    const lang = localStorage.getItem('mcogs-language')
+    if (lang && lang !== 'en') headers['X-Language'] = lang
     const res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
@@ -30,10 +34,10 @@ export function useApi() {
   }, [getAccessTokenSilently])
 
   return useMemo(() => ({
-    get:    (path: string)                => request('GET',    path),
-    post:   (path: string, body: unknown) => request('POST',   path, body),
-    put:    (path: string, body: unknown) => request('PUT',    path, body),
-    patch:  (path: string, body: unknown) => request('PATCH',  path, body),
-    delete: (path: string)               => request('DELETE', path),
+    get:    <T = any>(path: string)                => request('GET',    path)        as Promise<T>,
+    post:   <T = any>(path: string, body?: unknown) => request('POST',   path, body) as Promise<T>,
+    put:    <T = any>(path: string, body?: unknown) => request('PUT',    path, body) as Promise<T>,
+    patch:  <T = any>(path: string, body?: unknown) => request('PATCH',  path, body) as Promise<T>,
+    delete: <T = any>(path: string)                => request('DELETE', path)        as Promise<T>,
   }), [request])
 }

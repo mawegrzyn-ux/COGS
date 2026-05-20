@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // ── GET /allergens — all 14 reference allergens ───────────────────────────────
 router.get('/', async (req, res) => {
@@ -94,6 +95,7 @@ router.put('/ingredient/:id', async (req, res) => {
       ORDER BY a.sort_order ASC
     `, [ingredientId]);
 
+    logAudit(pool, req, { action: 'update', entity_type: 'allergen_profile', entity_id: ingredientId, entity_label: `Ingredient #${ingredientId}`, context: { allergen_count: allergens.length } });
     res.json(rows);
   } catch (err) {
     await client.query('ROLLBACK');

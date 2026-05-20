@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /preferred-vendors?ingredient_id=&country_id=
 router.get('/', async (req, res) => {
@@ -60,6 +61,7 @@ router.post('/', async (req, res) => {
       DO UPDATE SET vendor_id=$3, quote_id=$4, updated_at=NOW()
       RETURNING *
     `, [ingredient_id, country_id, vendor_id, quote_id]);
+    logAudit(pool, req, { action: 'create', entity_type: 'preferred_vendor', entity_id: rows[0].id, entity_label: `ingredient:${ingredient_id} country:${country_id}` });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -74,6 +76,7 @@ router.delete('/:id', async (req, res) => {
       `DELETE FROM mcogs_ingredient_preferred_vendor WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'preferred_vendor', entity_id: Number(req.params.id), entity_label: `id:${req.params.id}` });
     res.status(204).send();
   } catch (err) {
     console.error(err);
@@ -89,6 +92,7 @@ router.delete('/by-ingredient/:ingredient_id/country/:country_id', async (req, r
        WHERE ingredient_id=$1 AND country_id=$2`,
       [req.params.ingredient_id, req.params.country_id]
     );
+    logAudit(pool, req, { action: 'delete', entity_type: 'preferred_vendor', entity_id: null, entity_label: `ingredient:${req.params.ingredient_id} country:${req.params.country_id}` });
     res.status(204).send();
   } catch (err) {
     console.error(err);

@@ -1,11 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
-import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
+import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 import { useSortFilter } from '../hooks/useSortFilter'
 import { ColumnHeader } from '../components/ColumnHeader'
 import { DataGrid, GridToggleButton } from '../components/DataGrid'
 import type { GridColumn, GridOption } from '../components/DataGrid'
 import ImageUpload from '../components/ImageUpload'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,11 +116,14 @@ type ToastState = { message: string; type: 'success' | 'error' }
 
 export default function InventoryPage() {
   const api = useApi()
+  // Default to the Ingredients tab — that's the primary "inventory" data
+  // and what new users expect to see first when they click Inventory in the
+  // sidebar. Returning users still get their last-viewed tab via localStorage.
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem('inventory-tab') as Tab | null
     return (saved && ['ingredients', 'quotes', 'vendors'].includes(saved))
       ? saved
-      : 'quotes'
+      : 'ingredients'
   })
 
   const [ingredientCount, setIngredientCount] = useState<number>(0)
@@ -123,6 +131,66 @@ export default function InventoryPage() {
   const [vendorCount,     setVendorCount]     = useState<number>(0)
   const [countryCount,    setCountryCount]    = useState<number>(0)
   const [initialQuoteIngId, setInitialQuoteIngId] = useState<number | undefined>(undefined)
+  // Set when the user clicks "+ Quote" on an ingredient row — switches to
+  // the Quotes tab AND tells PriceQuotesTab to immediately open the Add
+  // Quote modal pre-filled with that ingredient. Cleared after consumption
+  // so a tab re-mount doesn't re-open the modal.
+  const [autoOpenAddIngId, setAutoOpenAddIngId] = useState<number | undefined>(undefined)
+  // BACK-2615 — deep-link an ingredient via ?ingredient_id=X. Switches to
+  // the Ingredients tab and opens the edit modal for that ingredient on
+  // first load. Cleared after consumption.
+  const [autoOpenEditIngId, setAutoOpenEditIngId] = useState<number | undefined>(undefined)
+  // BACK-2652 — when arriving from Menu Builder via ?new=1, switch to the
+  // Ingredients tab and open the create modal automatically. Single-shot.
+  const [autoOpenNewIng, setAutoOpenNewIng] = useState(false)
+  // Sticky flag — once a + Quote auto-open has been triggered we keep
+  // PriceQuotesTab mounted (hidden) for the rest of the page lifetime.
+  // Without this, the wrapper unmounts the moment onAutoOpenConsumed clears
+  // autoOpenAddIngId, taking the freshly-opened modal with it.
+  const [quoteTabMounted, setQuoteTabMounted] = useState(false)
+
+  // ?addQuote=<ingId> deep-link — opens the Add Quote modal pre-filled with
+  // that ingredient. Used by the dashboard widgets (Missing Quotes, Unquoted
+  // in Recipes) so the user lands here in the Ingredients tab and the modal
+  // appears over it. Param is consumed once and cleared so reloading the URL
+  // doesn't re-open the modal.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const raw = searchParams.get('addQuote')
+    if (!raw) return
+    const id = parseInt(raw, 10)
+    if (Number.isFinite(id) && id > 0) setAutoOpenAddIngId(id)
+    const next = new URLSearchParams(searchParams)
+    next.delete('addQuote')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // BACK-2615 — ?ingredient_id=<id> deep-link from Menu Builder quick-edit.
+  useEffect(() => {
+    const raw = searchParams.get('ingredient_id')
+    if (!raw) return
+    const id = parseInt(raw, 10)
+    if (Number.isFinite(id) && id > 0) {
+      setAutoOpenEditIngId(id)
+      setTab('ingredients')
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('ingredient_id')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  // BACK-2652 — ?new=1 from Menu Builder + active handoff → open the new
+  // ingredient modal on the Ingredients tab. The handoff guard makes a stray
+  // ?new=1 from elsewhere a no-op so the user isn't surprised.
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return
+    if (!getHandoff()) return
+    setTab('ingredients')
+    setAutoOpenNewIng(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   // Single lightweight stats call for header badges — avoids full-table fetches just for counts
   useEffect(() => {
@@ -149,6 +217,7 @@ export default function InventoryPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <ReturnToMenuBuilderBanner />
       <PageHeader
         title="Inventory"
         subtitle={
@@ -191,9 +260,39 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col">
-        {tab === 'ingredients'   && <IngredientsTab onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }} />}
-        {tab === 'quotes'        && <PriceQuotesTab initialIngredientId={initialQuoteIngId} />}
+        {tab === 'ingredients'   && <IngredientsTab
+          onViewQuotes={id => { setInitialQuoteIngId(id); setTab('quotes'); localStorage.setItem('inventory-tab', 'quotes') }}
+          onAddQuote={id => {
+            // BACK-1961: don't switch tab — just trigger the Add Quote modal
+            // via the always-mounted PriceQuotesTab below. The modal uses
+            // createPortal to <body> so it renders over whatever tab is active.
+            // Set the sticky-mount flag first so the wrapper doesn't unmount
+            // immediately when PriceQuotesTab calls onAutoOpenConsumed.
+            setQuoteTabMounted(true)
+            setAutoOpenAddIngId(id)
+          }}
+          autoOpenEditIngredientId={autoOpenEditIngId}
+          onAutoOpenEditConsumed={() => setAutoOpenEditIngId(undefined)}
+          autoOpenNew={autoOpenNewIng}
+          onAutoOpenNewConsumed={() => setAutoOpenNewIng(false)}
+        />}
         {tab === 'vendors'       && <div className="flex-1 overflow-y-auto p-6"><VendorsTab onCountChange={setVendorCount} /></div>}
+
+        {/* PriceQuotesTab is always mounted when (a) the user is on the quotes
+            tab, OR (b) someone elsewhere triggered an Add Quote modal that
+            this tab owns. In case (b), the tab body is hidden but the
+            portal-based Modal renders normally. Once mounted via (b) we keep
+            it mounted (quoteTabMounted is sticky) so the modal doesn't
+            disappear when onAutoOpenConsumed clears autoOpenAddIngId. */}
+        {(tab === 'quotes' || quoteTabMounted) && (
+          <div className={tab === 'quotes' ? 'flex-1 overflow-hidden flex flex-col' : 'sr-only'} aria-hidden={tab !== 'quotes'}>
+            <PriceQuotesTab
+              initialIngredientId={initialQuoteIngId}
+              autoOpenAddIngredientId={autoOpenAddIngId}
+              onAutoOpenConsumed={() => setAutoOpenAddIngId(undefined)}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -341,6 +440,19 @@ function VendorsTab({ onCountChange }: { onCountChange: (n: number) => void }) {
           <Field label="Notes">
             <textarea className="input w-full" rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional notes…" />
           </Field>
+
+          {/* Translations — only shown for existing vendors */}
+          {modal !== 'new' && typeof modal === 'object' && modal?.id != null && (
+            <div className="mt-3">
+              <TranslationEditor
+                entityType="vendor"
+                entityId={modal.id}
+                fields={['name', 'notes']}
+                compact
+              />
+            </div>
+          )}
+
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setModal(null)}>Cancel</button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Vendor'}</button>
@@ -523,7 +635,20 @@ function QuoteHoverPopover({ ing, onViewQuotes }: {
 
 // ── Ingredients Tab ───────────────────────────────────────────────────────────
 
-function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void }) {
+function IngredientsTab({ onViewQuotes, onAddQuote, autoOpenEditIngredientId, onAutoOpenEditConsumed, autoOpenNew, onAutoOpenNewConsumed }: {
+  onViewQuotes?: (id: number) => void
+  /** Switch to the Quotes tab AND auto-open the Add Quote modal pre-filled
+   *  with this ingredient. Triggered by the per-row `+ Quote` button. */
+  onAddQuote?:   (id: number) => void
+  /** BACK-2615 — auto-open the edit modal for this ingredient on first
+   *  load. Used by Menu Builder's quick-edit modal "Open in Inventory" link. */
+  autoOpenEditIngredientId?: number
+  onAutoOpenEditConsumed?: () => void
+  /** BACK-2652 — auto-open the create-ingredient modal on mount. Used when
+   *  the user came from Menu Builder via the "+ Add new" picker shortcut. */
+  autoOpenNew?: boolean
+  onAutoOpenNewConsumed?: () => void
+}) {
   const api = useApi()
 
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -531,7 +656,15 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [dbCategories, setDbCategories] = useState<{id: number; name: string}[]>([])
   const [loading,      setLoading]      = useState(true)
   const [search,       setSearch]       = useState('')
-  const [gridMode,     setGridMode]     = useState(false)
+  // Default to grid view — denser, easier to scan. Persisted per-browser so the
+  // user's last choice sticks across reloads.
+  const [gridMode,     setGridMode]     = useState<boolean>(() => {
+    const v = localStorage.getItem('inventory-ingredients-view')
+    return v === null ? true : v === 'grid'
+  })
+  useEffect(() => {
+    localStorage.setItem('inventory-ingredients-view', gridMode ? 'grid' : 'list')
+  }, [gridMode])
   const [modal,        setModal]        = useState<Ingredient | 'new' | null>(null)
   const [confirmDelete,setConfirmDelete]= useState<Ingredient | null>(null)
   const [toast,        setToast]        = useState<ToastState | null>(null)
@@ -558,14 +691,31 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   const [selectedIngId,  setSelectedIngId]  = useState<number | null>(null)
 
   // Phase 4 — allergen & nutrition state
-  type IngModalTab = 'details' | 'allergens' | 'nutrition'
+  type IngModalTab = 'details' | 'allergens' | 'nutrition' | 'translations'
   const [ingModalTab,    setIngModalTab]    = useState<IngModalTab>('details')
+  // Feature flags — hide allergens / nutrition tabs when their global flag is off (BUG-1093).
+  const { flags: featureFlags } = useFeatureFlags()
+  const visibleIngTabs = useMemo(() => {
+    const tabs: IngModalTab[] = ['details']
+    if (featureFlags.allergens) tabs.push('allergens')
+    if (featureFlags.nutrition) tabs.push('nutrition')
+    tabs.push('translations')
+    return tabs
+  }, [featureFlags.allergens, featureFlags.nutrition])
+  // If the active tab gets hidden by a flag flip, snap back to details.
+  useEffect(() => {
+    if (!visibleIngTabs.includes(ingModalTab)) setIngModalTab('details')
+  }, [visibleIngTabs, ingModalTab])
   const [allAllergens,   setAllAllergens]   = useState<Allergen[]>([])
   const [ingAllergens,   setIngAllergens]   = useState<IngAllergen[]>([])
   const [savingAllergens,setSavingAllergens]= useState(false)
   const blankNutForm: Record<string, string> = { energy_kcal: '', protein_g: '', carbs_g: '', fat_g: '', fibre_g: '', sugar_g: '', salt_g: '' }
   const [nutForm,      setNutForm]      = useState<Record<string, string>>(blankNutForm)
   const [nutSearch,    setNutSearch]    = useState('')
+
+  // Base unit change warning (edit only — not shown during create)
+  const [baseUnitWarning, setBaseUnitWarning] = useState<{ newValue: string; unitName: string } | null>(null)
+  const originalBaseUnitRef = useRef<string>('')
   const [nutResults,   setNutResults]   = useState<any[]>([])
   const [nutLoading,   setNutLoading]   = useState(false)
   const [savingNut,    setSavingNut]    = useState(false)
@@ -605,6 +755,32 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   useEffect(() => {
     api.get('/allergens').then((d: Allergen[]) => setAllAllergens(d || [])).catch(() => {})
   }, [api])
+
+  // BACK-2615 — open edit modal for the ingredient passed via ?ingredient_id=
+  // once the catalog is loaded. Single-shot — onAutoOpenEditConsumed clears
+  // the page-level state so a tab re-mount does not re-open the modal.
+  const autoOpenAppliedRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!autoOpenEditIngredientId || autoOpenAppliedRef.current === autoOpenEditIngredientId) return
+    if (!ingredients.length) return
+    const target = ingredients.find(i => i.id === autoOpenEditIngredientId)
+    if (target) {
+      autoOpenAppliedRef.current = autoOpenEditIngredientId
+      openEdit(target)
+      setSelectedIngId(target.id)
+      onAutoOpenEditConsumed?.()
+    }
+  }, [autoOpenEditIngredientId, ingredients, onAutoOpenEditConsumed])
+
+  // BACK-2652 — open the create modal on mount when the parent passes the
+  // single-shot autoOpenNew flag (set by InventoryPage when ?new=1 fires).
+  const autoOpenNewAppliedRef = useRef(false)
+  useEffect(() => {
+    if (!autoOpenNew || autoOpenNewAppliedRef.current) return
+    autoOpenNewAppliedRef.current = true
+    openAdd()
+    onAutoOpenNewConsumed?.()
+  }, [autoOpenNew, onAutoOpenNewConsumed])
 
   useEffect(() => {
     api.get('/allergens/ingredients').then((rows: { ingredient_id: number; code: string; status: string }[]) => {
@@ -769,6 +945,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
   function openEdit(i: Ingredient) {
     setModal(i)
     setIngModalTab('details')
+    originalBaseUnitRef.current = i.base_unit_id ? String(i.base_unit_id) : ''
     setForm({
       name: i.name, category_id: i.category_id ? String(i.category_id) : '',
       base_unit_id: i.base_unit_id ? String(i.base_unit_id) : '',
@@ -838,6 +1015,17 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
           showToast('Ingredient and quote added')
         } else {
           showToast('Ingredient added')
+        }
+        // BACK-2652 — if the user came from Menu Builder, signal the new
+        // ingredient to the ReturnToMenuBuilderBanner so it flips into the
+        // "+ Add to menu" state.
+        if (newIng?.id && getHandoff()?.item_type === 'ingredient') {
+          setPendingAttach({
+            type: 'ingredient',
+            id: newIng.id,
+            name: newIng.name || form.name.trim(),
+            category_id: newIng.category_id ?? (Number(form.category_id) || null),
+          })
         }
       } else if (modal != null) {
         await api.put(`/ingredients/${(modal as Ingredient).id}`, payload)
@@ -1011,6 +1199,15 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             }}
             onEdit={openEdit}
             onDelete={ing => setConfirmDelete(ing)}
+            renderActions={onAddQuote ? (ing => (
+              <button
+                className="text-xs px-2 py-0.5 rounded border border-accent/40 text-accent hover:bg-accent-dim transition-colors whitespace-nowrap"
+                title="Add a price quote for this ingredient"
+                onClick={() => onAddQuote(ing.id)}
+              >
+                + Quote
+              </button>
+            )) : undefined}
             showToast={showToast}
             hintRight="Tab from last cell saves row · Esc reverts"
           />
@@ -1038,9 +1235,9 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                       <ColumnHeader<Ingredient> label="Prep Unit"  field="default_prep_unit"               sortField={sortField} sortDir={sortDir} onSort={setSort} />
                       <ColumnHeader<Ingredient> label="Conv."      field="default_prep_to_base_conversion" sortField={sortField} sortDir={sortDir} onSort={setSort} />
                       <ColumnHeader<Ingredient> label="Waste %"    field="waste_pct"                       sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-3">Allergens</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-3 sticky top-0 z-10 bg-surface-2">Allergens</th>
                       <ColumnHeader<Ingredient> label="Quotes"     field="active_quote_count"              sortField={sortField} sortDir={sortDir} onSort={setSort} />
-                      <th className="w-20" />
+                      <th className="w-20 sticky top-0 z-10 bg-surface-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -1081,9 +1278,19 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                           <QuoteHoverPopover ing={ing} onViewQuotes={onViewQuotes} />
                         </td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                          <div className="flex gap-2 justify-end">
+                          <div className="flex gap-2 justify-end items-center">
+                            {onAddQuote && (
+                              <button
+                                className="text-xs px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent-dim transition-colors whitespace-nowrap"
+                                title="Add a price quote for this ingredient"
+                                onClick={() => onAddQuote(ing.id)}
+                              >
+                                + Quote
+                              </button>
+                            )}
                             <button
                               className="w-7 h-7 flex items-center justify-center rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              title="Delete ingredient"
                               onClick={() => setConfirmDelete(ing)}
                             >
                               <TrashIcon size={12} />
@@ -1131,9 +1338,9 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                       </svg>
                     </button>
                   </div>
-                  {/* Panel tabs */}
+                  {/* Panel tabs — allergens / nutrition hidden when their feature flag is off (BUG-1093) */}
                   <div className="flex gap-0 border-b border-border px-3 pt-1 shrink-0">
-                    {(['details', 'allergens', 'nutrition'] as const).map(t => (
+                    {visibleIngTabs.map(t => (
                       <button
                         key={t}
                         onClick={() => setIngModalTab(t)}
@@ -1152,10 +1359,17 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                         </Field>
                         <div className="grid grid-cols-2 gap-4">
                           <Field label="Category">
-                            <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-                              <option value="">No category…</option>
-                              {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                            </select>
+                            <CategoryPicker
+                              value={form.category_id}
+                              onChange={v => setForm(f => ({ ...f, category_id: v }))}
+                              categories={categories}
+                              scope="for_ingredients"
+                              onCategoryCreated={cat => setDbCategories(prev =>
+                                [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                              )}
+                              apiPost={(p, b) => api.post(p, b)}
+                              placeholder="No category…"
+                            />
                           </Field>
                           <Field label="Base Unit" required error={errors.base_unit_id}>
                             <select className="select w-full" value={form.base_unit_id} onChange={e => {
@@ -1163,12 +1377,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                               setForm(f => ({
                                 ...f,
                                 base_unit_id: e.target.value,
-                                ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
-                                  ? { default_prep_unit: selectedUnit.default_recipe_unit }
-                                  : {}),
-                                ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
-                                  ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
-                                  : {}),
+                                // Always update prep unit and conversion from the new unit's defaults
+                                default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                                default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                                  ? String(selectedUnit.default_recipe_unit_conversion)
+                                  : '1',
                               }))
                             }}>
                               <option value="">Select unit…</option>
@@ -1190,14 +1403,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                               <input className="input w-full" value={form.default_prep_unit} onChange={e => setForm(f => ({ ...f, default_prep_unit: e.target.value }))} placeholder="e.g. g, slice, cup" />
                             </Field>
                             <Field label="Conversion to Base Unit">
-                              <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                              <CalcInput className="input w-full font-mono" value={form.default_prep_to_base_conversion} placeholder="e.g. 1/1000" onChange={v => setForm(f => ({ ...f, default_prep_to_base_conversion: v }))} />
                               <p className="text-xs text-text-3 mt-1">{convHint()}</p>
                             </Field>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <Field label="Waste %">
-                            <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                            <CalcInput className="input w-full font-mono" value={form.waste_pct} placeholder="0" onChange={v => setForm(f => ({ ...f, waste_pct: v }))} />
                           </Field>
                           <Field label="Notes">
                             <input className="input w-full" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional…" />
@@ -1207,10 +1420,11 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                           label="Image"
                           value={form.image_url || null}
                           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+                          formKey="ingredient"
                         />
                       </>
                     )}
-                    {ingModalTab === 'allergens' && (
+                    {ingModalTab === 'allergens' && featureFlags.allergens && (
                       <AllergenTabContent
                         allAllergens={allAllergens}
                         ingAllergens={ingAllergens}
@@ -1220,7 +1434,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                         onClose={() => { setSelectedIngId(null); setModal(null) }}
                       />
                     )}
-                    {ingModalTab === 'nutrition' && (
+                    {ingModalTab === 'nutrition' && featureFlags.nutrition && (
                       <NutritionTabContent
                         nutForm={nutForm}
                         setNutForm={setNutForm}
@@ -1235,6 +1449,13 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                         saving={savingNut}
                         onClose={() => { setSelectedIngId(null); setModal(null) }}
                         ingredientName={ing.name}
+                      />
+                    )}
+                    {ingModalTab === 'translations' && (
+                      <TranslationEditor
+                        entityType="ingredient"
+                        entityId={selectedIngId}
+                        fields={['name', 'notes']}
                       />
                     )}
                   </div>
@@ -1267,23 +1488,36 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
             </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Category">
-                <select className="select w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-                  <option value="">No category…</option>
-                  {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                </select>
+                <CategoryPicker
+                  value={form.category_id}
+                  onChange={v => setForm(f => ({ ...f, category_id: v }))}
+                  categories={categories}
+                  scope="for_ingredients"
+                  onCategoryCreated={cat => setDbCategories(prev =>
+                    [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                  )}
+                  apiPost={(p, b) => api.post(p, b)}
+                  placeholder="No category…"
+                />
               </Field>
               <Field label="Base Unit" required error={errors.base_unit_id}>
                 <select className="select w-full" value={form.base_unit_id} onChange={e => {
-                  const selectedUnit = units.find(u => u.id === Number(e.target.value))
+                  const newVal = e.target.value
+                  const selectedUnit = units.find(u => u.id === Number(newVal))
+
+                  // Show warning if changing from an existing base unit (not initial selection)
+                  if (originalBaseUnitRef.current && newVal !== originalBaseUnitRef.current) {
+                    setBaseUnitWarning({ newValue: newVal, unitName: selectedUnit ? `${selectedUnit.name} (${selectedUnit.abbreviation})` : newVal })
+                    return // Don't apply yet — wait for user confirmation
+                  }
+
                   setForm(f => ({
                     ...f,
-                    base_unit_id: e.target.value,
-                    ...(selectedUnit?.default_recipe_unit && !f.default_prep_unit
-                      ? { default_prep_unit: selectedUnit.default_recipe_unit }
-                      : {}),
-                    ...(selectedUnit?.default_recipe_unit_conversion && !f.default_prep_to_base_conversion
-                      ? { default_prep_to_base_conversion: String(selectedUnit.default_recipe_unit_conversion) }
-                      : {}),
+                    base_unit_id: newVal,
+                    default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                    default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                      ? String(selectedUnit.default_recipe_unit_conversion)
+                      : '1',
                   }))
                 }}>
                   <option value="">Select unit…</option>
@@ -1306,14 +1540,14 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                   <p className="text-xs text-text-3 mt-1">Auto-filled from base unit if blank.</p>
                 </Field>
                 <Field label="Conversion to Base Unit">
-                  <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.default_prep_to_base_conversion} onChange={e => setForm(f => ({ ...f, default_prep_to_base_conversion: e.target.value }))} />
+                  <CalcInput className="input w-full font-mono" value={form.default_prep_to_base_conversion} placeholder="e.g. 1/1000" onChange={v => setForm(f => ({ ...f, default_prep_to_base_conversion: v }))} />
                   <p className="text-xs text-text-3 mt-1">{convHint()}</p>
                 </Field>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Waste %">
-                <input className="input w-full font-mono" type="number" min="0" max="99" step="0.5" value={form.waste_pct} onChange={e => setForm(f => ({ ...f, waste_pct: e.target.value }))} placeholder="0" />
+                <CalcInput className="input w-full font-mono" value={form.waste_pct} placeholder="0" onChange={v => setForm(f => ({ ...f, waste_pct: v }))} />
                 <p className="text-xs text-text-3 mt-1">Added to cost calculations.</p>
               </Field>
               <Field label="Notes">
@@ -1324,6 +1558,7 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
               label="Image"
               value={form.image_url || null}
               onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+              formKey="ingredient"
             />
             {!withQuote && (
               <p className="text-xs text-text-3 bg-surface-2 rounded-lg px-3 py-2 mt-2">
@@ -1349,10 +1584,10 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Purchase Price" required error={quoteErrors.purchase_price}>
-                    <input className="input w-full font-mono" type="number" min="0" step="0.01" value={quoteForm.purchase_price} onChange={e => setQuoteForm(f => ({ ...f, purchase_price: e.target.value }))} placeholder="0.00" />
+                    <CalcInput className="input w-full font-mono" value={quoteForm.purchase_price} onChange={v => setQuoteForm(f => ({ ...f, purchase_price: v }))} placeholder="0.00" />
                   </Field>
                   <Field label={`Qty in ${units.find(u => u.id === Number(form.base_unit_id))?.abbreviation || 'base units'}`} required error={quoteErrors.qty_in_base_units}>
-                    <input className="input w-full font-mono" type="number" min="0.000001" step="0.001" value={quoteForm.qty_in_base_units} onChange={e => setQuoteForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                    <CalcInput className="input w-full font-mono" value={quoteForm.qty_in_base_units} onChange={v => setQuoteForm(f => ({ ...f, qty_in_base_units: v }))} />
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1389,6 +1624,43 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+
+      {/* Base unit change warning modal (edit only) */}
+      {baseUnitWarning && (
+        <Modal title="Change Base Unit?" onClose={() => setBaseUnitWarning(null)} width="max-w-md">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <span className="text-amber-600 text-lg">&#9888;</span>
+              <p className="text-sm text-amber-800">
+                Changing the base unit has a <strong>significant impact</strong> on recipe calculations and price quote conversions.
+              </p>
+            </div>
+            <p className="text-sm text-text-2">
+              All existing price quotes and recipe quantities for this ingredient are expressed in the current base unit.
+              Switching to <strong>{baseUnitWarning.unitName}</strong> will not automatically recalculate those values.
+            </p>
+            <p className="text-sm text-text-2">
+              We recommend asking <strong>Pepper</strong> to review the impact before proceeding — right-click any field and choose "Ask Pepper" or open the AI chat.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-ghost text-sm" onClick={() => setBaseUnitWarning(null)}>Cancel</button>
+              <button className="btn-primary text-sm bg-amber-600 hover:bg-amber-700 border-amber-600" onClick={() => {
+                const selectedUnit = units.find(u => u.id === Number(baseUnitWarning.newValue))
+                setForm(f => ({
+                  ...f,
+                  base_unit_id: baseUnitWarning.newValue,
+                  default_prep_unit: selectedUnit?.default_recipe_unit || f.default_prep_unit || '',
+                  default_prep_to_base_conversion: selectedUnit?.default_recipe_unit_conversion != null
+                    ? String(selectedUnit.default_recipe_unit_conversion)
+                    : '1',
+                }))
+                setBaseUnitWarning(null)
+              }}>Change Base Unit</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   )
@@ -1396,7 +1668,16 @@ function IngredientsTab({ onViewQuotes }: { onViewQuotes?: (id: number) => void 
 
 // ── Price Quotes Tab ──────────────────────────────────────────────────────────
 
-function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number }) {
+export function PriceQuotesTab({ initialIngredientId, autoOpenAddIngredientId, onAutoOpenConsumed }: {
+  initialIngredientId?:     number
+  /** When set, the tab opens the Add Quote modal immediately with this
+   *  ingredient pre-selected. Triggered by the per-row "+ Quote" button on
+   *  the Ingredients tab — saves a click. */
+  autoOpenAddIngredientId?: number
+  /** Called after the auto-open has run so the parent can clear the signal
+   *  and we don't re-open every time this component re-mounts. */
+  onAutoOpenConsumed?:      () => void
+}) {
   const api = useApi()
 
   const [quotes,        setQuotes]       = useState<Quote[]>([])
@@ -1405,7 +1686,14 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
   const [countries,     setCountries]    = useState<Country[]>([])
   const [loading,          setLoading]         = useState(true)
   const [search,           setSearch]          = useState('')
-  const [gridMode,         setGridMode]        = useState(false)
+  // Default to grid view (same as Ingredients tab) and persist the choice.
+  const [gridMode,         setGridMode]        = useState<boolean>(() => {
+    const v = localStorage.getItem('inventory-quotes-view')
+    return v === null ? true : v === 'grid'
+  })
+  useEffect(() => {
+    localStorage.setItem('inventory-quotes-view', gridMode ? 'grid' : 'list')
+  }, [gridMode])
   const [modal,            setModal]           = useState<Quote | 'new' | null>(null)
   const [confirmDelete,    setConfirmDelete]   = useState<Quote | null>(null)
   const [toast,            setToast]           = useState<ToastState | null>(null)
@@ -1653,6 +1941,21 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
 
   function openAdd() { setModal('new'); setForm(blankForm); setErrors({}) }
 
+  // Auto-open the Add Quote modal pre-filled with a specific ingredient.
+  // Triggered by the "+ Quote" button on the Ingredients tab — Inventory
+  // page passes the id via `autoOpenAddIngredientId`. We only fire it once
+  // (the parent clears its signal via `onAutoOpenConsumed`). Wait until
+  // ingredients load so the form's combobox can render the selected name
+  // immediately.
+  useEffect(() => {
+    if (autoOpenAddIngredientId == null) return
+    if (loading) return
+    setModal('new')
+    setForm({ ...blankForm, ingredient_id: String(autoOpenAddIngredientId) })
+    setErrors({})
+    onAutoOpenConsumed?.()
+  }, [autoOpenAddIngredientId, loading]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function openEdit(q: Quote) {
     setModal(q)
     setForm({
@@ -1854,15 +2157,15 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-200 border-b border-gray-300">
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Ingredient</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Category</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Base Unit</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Vendor</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide">Purchase Unit</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-36">Conv. to Base</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28">Price</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide">Per Base Unit</th>
-                    <th className="w-20" />
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Ingredient</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Category</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Base Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Vendor</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Purchase Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-36 sticky top-0 z-10 bg-gray-200">Conv. to Base</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-text-2 uppercase tracking-wide w-28 sticky top-0 z-10 bg-gray-200">Price</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-text-2 uppercase tracking-wide sticky top-0 z-10 bg-gray-200">Per Base Unit</th>
+                    <th className="w-20 sticky top-0 z-10 bg-gray-200" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1901,11 +2204,10 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                         </td>
                         <td className="px-4 py-2">
                           <div className="flex items-center gap-1.5">
-                            <input
+                            <CalcInput
                               className="input font-mono text-sm py-1.5 w-20"
-                              type="number" min="0.000001" step="0.000001"
                               value={f.qty_in_base_units}
-                              onChange={e => setMissingField(ing.id, 'qty_in_base_units', e.target.value)}
+                              onChange={v => setMissingField(ing.id, 'qty_in_base_units', v)}
                             />
                             {ing.base_unit_abbr && (
                               <span className="text-xs text-text-3 font-mono whitespace-nowrap">{ing.base_unit_abbr}</span>
@@ -1913,11 +2215,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                           </div>
                         </td>
                         <td className="px-4 py-2">
-                          <input
+                          <CalcInput
                             className="input w-full font-mono text-sm py-1.5"
-                            type="number" min="0" step="0.01" placeholder="0.00"
+                            placeholder="0.00"
                             value={f.purchase_price}
-                            onChange={e => setMissingField(ing.id, 'purchase_price', e.target.value)}
+                            onChange={v => setMissingField(ing.id, 'purchase_price', v)}
                           />
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono">
@@ -2018,7 +2320,7 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                       <ColumnHeader<Quote> label="Per Base Unit" field="price_per_base_unit" sortField={sortField} sortDir={sortDir} onSort={setSort} align="right" />
                       <ColumnHeader<Quote> label="Status"        field="is_active"           sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={statusFilterOptions}    filterValues={getFilter('is_active')} onFilter={v => setFilter('is_active', v)} />
                       <ColumnHeader<Quote> label="Preferred"     field="is_preferred"        sortField={sortField} sortDir={sortDir} onSort={setSort} filterOptions={preferredFilterOptions}  filterValues={getFilter('is_preferred')} onFilter={v => setFilter('is_preferred', v)} />
-                      <th className="w-16" />
+                      <th className="w-16 sticky top-0 z-10 bg-surface-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -2139,11 +2441,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                           <input className="input w-full" value={form.purchase_unit} onChange={e => setForm(f => ({ ...f, purchase_unit: e.target.value }))} placeholder="e.g. Case 12×1kg" />
                         </Field>
                         <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol})` : ''}`} required error={errors.purchase_price}>
-                          <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
+                          <CalcInput className="input w-full font-mono" placeholder="0.00" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} />
                         </Field>
                       </div>
                       <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
-                        <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+                        <CalcInput className="input w-full font-mono" value={form.qty_in_base_units} onChange={v => setForm(f => ({ ...f, qty_in_base_units: v }))} />
                       </Field>
                     </div>
                     {pricePerBaseUnit && selectedVendor && selectedIngredient && (
@@ -2216,11 +2518,11 @@ function PriceQuotesTab({ initialIngredientId }: { initialIngredientId?: number 
                 <p className="text-xs text-text-3 mt-1">Free-text label for your reference.</p>
               </Field>
               <Field label={`Purchase Price${selectedVendor ? ` (${selectedVendor.currency_symbol} ${selectedVendor.currency_code})` : ''}`} required error={errors.purchase_price}>
-                <input className="input w-full font-mono" type="number" min="0" step="0.01" placeholder="0.00" value={form.purchase_price} onChange={e => setForm(f => ({ ...f, purchase_price: e.target.value }))} />
+                <CalcInput className="input w-full font-mono" placeholder="0.00" value={form.purchase_price} onChange={v => setForm(f => ({ ...f, purchase_price: v }))} />
               </Field>
             </div>
             <Field label={`Base Unit Qty${selectedIngredient?.base_unit_abbr ? ` (${selectedIngredient.base_unit_abbr})` : ''}`} required error={errors.qty_in_base_units}>
-              <input className="input w-full font-mono" type="number" min="0.000001" step="0.000001" value={form.qty_in_base_units} onChange={e => setForm(f => ({ ...f, qty_in_base_units: e.target.value }))} />
+              <CalcInput className="input w-full font-mono" value={form.qty_in_base_units} onChange={v => setForm(f => ({ ...f, qty_in_base_units: v }))} />
               <p className="text-xs text-text-3 mt-1">Total base units in this purchase. e.g. a case of 12×1kg bags = 12.</p>
             </Field>
           </div>
@@ -2540,14 +2842,11 @@ function NutritionTabContent({ nutForm, setNutForm, nutSearch, nutResults, nutLo
       <div className="grid grid-cols-2 gap-3 mb-4">
         {nutFields.map(f => (
           <Field key={f.key} label={`${f.label} (${f.unit} / 100g)`}>
-            <input
+            <CalcInput
               className="input w-full font-mono"
-              type="number"
-              min="0"
-              step="0.01"
               placeholder="—"
               value={nutForm[f.key] ?? ''}
-              onChange={e => setNutForm({ ...nutForm, [f.key]: e.target.value })}
+              onChange={v => setNutForm({ ...nutForm, [f.key]: v })}
             />
           </Field>
         ))}

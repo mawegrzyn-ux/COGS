@@ -2,11 +2,12 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, requirePermission } = require('../middleware/auth');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 const auth  = requireAuth;
 const admin = requirePermission('users', 'write');
 
-const FEATURES = ['dashboard','inventory','recipes','menus','allergens','haccp','markets','categories','settings','import','ai_chat','users'];
+const FEATURES = ['dashboard','inventory','recipes','menus','allergens','haccp','markets','categories','settings','import','ai_chat','users','stock_overview','stock_purchase_orders','stock_goods_in','stock_invoices','stock_waste','stock_transfers','stock_stocktake'];
 
 // GET /api/roles — list all roles with their permissions
 router.get('/', auth, requirePermission('users', 'read'), async (req, res) => {
@@ -62,6 +63,7 @@ router.post('/', auth, admin, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'create', entity_type: 'role', entity_id: role.id, entity_label: role.name });
     res.status(201).json({ ...role, permissions: { ...sourcePerms } });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -119,6 +121,7 @@ router.put('/:id', auth, admin, async (req, res) => {
     const { rows: perms }     = await pool.query('SELECT feature, access FROM mcogs_role_permissions WHERE role_id = $1', [id]);
     const permMap = {};
     for (const p of perms) permMap[p.feature] = p.access;
+    logAudit(pool, req, { action: 'update', entity_type: 'role', entity_id: Number(id), entity_label: updated?.name, field_changes: diffFields(role, updated, ['name', 'description']) });
     res.json({ ...updated, permissions: permMap });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -135,6 +138,7 @@ router.delete('/:id', auth, admin, async (req, res) => {
     if (!role) return res.status(404).json({ error: { message: 'Role not found' } });
     if (role.is_system) return res.status(400).json({ error: { message: 'Cannot delete a system role' } });
     await pool.query('DELETE FROM mcogs_roles WHERE id = $1', [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'role', entity_id: role.id, entity_label: role.name });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: { message: err.message } });

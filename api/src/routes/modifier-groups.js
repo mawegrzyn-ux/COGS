@@ -3,16 +3,25 @@
 // =============================================================================
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
+const { setContentLanguage } = require('../helpers/translate');
 
 // ─── GET /modifier-groups ─────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mgName = lang ? `COALESCE(mg.translations->$1->>'name', mg.name)` : `mg.name`;
+    const mgDesc = lang ? `COALESCE(mg.translations->$1->>'description', mg.description)` : `mg.description`;
     const { rows } = await pool.query(
-      `SELECT mg.*,
+      `SELECT mg.id, ${mgName} AS name, mg.display_name, ${mgDesc} AS description,
+              mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show,
+              mg.translations, mg.created_at, mg.updated_at,
               (SELECT COUNT(*) FROM mcogs_modifier_options WHERE modifier_group_id = mg.id) AS option_count
        FROM   mcogs_modifier_groups mg
-       ORDER BY mg.name`
+       ORDER BY name`,
+      lang ? [lang] : []
     );
+    setContentLanguage(res, req);
     res.json(rows);
   } catch (err) { next(err); }
 });
@@ -20,17 +29,30 @@ router.get('/', async (req, res, next) => {
 // ─── GET /modifier-groups/:id ─────────────────────────────────────────────────
 router.get('/:id', async (req, res, next) => {
   try {
+    const lang = req.language && req.language !== 'en' ? req.language : null;
+    const mgName = lang ? `COALESCE(mg.translations->$2->>'name', mg.name)` : `mg.name`;
+    const mgDesc = lang ? `COALESCE(mg.translations->$2->>'description', mg.description)` : `mg.description`;
+    const moName = lang ? `COALESCE(mo.translations->$2->>'name', mo.name)` : `mo.name`;
+    const rName  = lang ? `COALESCE(r.translations->$2->>'name', r.name)` : `r.name`;
+    const iName  = lang ? `COALESCE(ing.translations->$2->>'name', ing.name)` : `ing.name`;
+
     const { rows: groups } = await pool.query(
-      'SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]
+      `SELECT mg.id, ${mgName} AS name, mg.display_name, ${mgDesc} AS description,
+              mg.min_select, mg.max_select, mg.allow_repeat_selection, mg.default_auto_show,
+              mg.translations, mg.created_at, mg.updated_at
+       FROM mcogs_modifier_groups mg WHERE mg.id=$1`,
+      lang ? [req.params.id, lang] : [req.params.id]
     );
     if (!groups.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
 
     const { rows: options } = await pool.query(
-      `SELECT mo.*,
-              r.name           AS recipe_name,
+      `SELECT mo.id, ${moName} AS name,
+              mo.modifier_group_id, mo.item_type, mo.recipe_id, mo.ingredient_id, mo.manual_cost,
+              mo.price_addon, mo.qty, mo.sort_order, mo.translations,
+              ${rName}         AS recipe_name,
               r.yield_qty      AS recipe_yield_qty,
               u_r.abbreviation AS recipe_yield_unit_abbr,
-              ing.name         AS ingredient_name,
+              ${iName}         AS ingredient_name,
               u_i.abbreviation AS ingredient_unit_abbr
        FROM   mcogs_modifier_options mo
        LEFT JOIN mcogs_recipes     r   ON r.id   = mo.recipe_id
@@ -38,8 +60,9 @@ router.get('/:id', async (req, res, next) => {
        LEFT JOIN mcogs_ingredients ing ON ing.id = mo.ingredient_id
        LEFT JOIN mcogs_units       u_i ON u_i.id = ing.base_unit_id
        WHERE  mo.modifier_group_id=$1 ORDER BY mo.sort_order, mo.id`,
-      [req.params.id]
+      lang ? [req.params.id, lang] : [req.params.id]
     );
+    setContentLanguage(res, req);
     res.json({ ...groups[0], options });
   } catch (err) { next(err); }
 });
@@ -47,13 +70,14 @@ router.get('/:id', async (req, res, next) => {
 // ─── POST /modifier-groups ────────────────────────────────────────────────────
 router.post('/', async (req, res, next) => {
   try {
-    const { name, display_name, description, min_select, max_select } = req.body;
+    const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
     if (!name) return res.status(400).json({ error: { message: 'name is required' } });
     const { rows } = await pool.query(
-      `INSERT INTO mcogs_modifier_groups (name, display_name, description, min_select, max_select)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1]
+      `INSERT INTO mcogs_modifier_groups (name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [name.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'modifier_group', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json({ ...rows[0], options: [] });
   } catch (err) { next(err); }
 });
@@ -61,13 +85,18 @@ router.post('/', async (req, res, next) => {
 // ─── PUT /modifier-groups/:id ─────────────────────────────────────────────────
 router.put('/:id', async (req, res, next) => {
   try {
-    const { name, display_name, description, min_select, max_select } = req.body;
+    const { name, display_name, description, min_select, max_select, allow_repeat_selection, default_auto_show } = req.body;
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     const { rows } = await pool.query(
-      `UPDATE mcogs_modifier_groups SET name=$1, display_name=$2, description=$3, min_select=$4, max_select=$5
-       WHERE id=$6 RETURNING *`,
-      [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, req.params.id]
+      `UPDATE mcogs_modifier_groups
+          SET name=$1, display_name=$2, description=$3, min_select=$4,
+              max_select=$5, allow_repeat_selection=$6, default_auto_show=$7,
+              updated_at = NOW()
+        WHERE id=$8 RETURNING *`,
+      [name?.trim(), display_name || null, description || null, min_select ?? 0, max_select ?? 1, allow_repeat_selection ?? false, default_auto_show ?? true, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Modifier group not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'modifier_group', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(old, rows[0], ['name', 'min_select', 'max_select', 'allow_repeat_selection', 'default_auto_show']) });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -108,8 +137,10 @@ router.delete('/:id', async (req, res, next) => {
     await pool.query('DELETE FROM mcogs_sales_item_modifier_groups WHERE modifier_group_id=$1', [req.params.id]);
     await pool.query('DELETE FROM mcogs_combo_step_option_modifier_groups WHERE modifier_group_id=$1', [req.params.id]);
 
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query('DELETE FROM mcogs_modifier_groups WHERE id=$1', [req.params.id]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Modifier group not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'modifier_group', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });
@@ -127,9 +158,9 @@ router.post('/:id/duplicate', async (req, res, next) => {
     if (!src.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: { message: 'Modifier group not found' } }); }
 
     const { rows: newGroup } = await client.query(
-      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [`${src[0].name} (copy)`, src[0].description, src[0].min_select, src[0].max_select]
+      `INSERT INTO mcogs_modifier_groups (name, description, min_select, max_select, allow_repeat_selection, default_auto_show)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [`${src[0].name} (copy)`, src[0].description, src[0].min_select, src[0].max_select, src[0].allow_repeat_selection ?? false, src[0].default_auto_show ?? true]
     );
     const newId = newGroup[0].id;
 
@@ -192,6 +223,7 @@ router.post('/:id/options', async (req, res, next) => {
       [req.params.id, name.trim(), display_name || null, item_type,
        recipe_id || null, ingredient_id || null, manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1, image_url || null]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'modifier_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -207,6 +239,7 @@ router.put('/:id/options/:oid', async (req, res, next) => {
        manual_cost || null, price_addon || 0, sort_order || 0, qty ?? 1, image_url || null, req.params.oid, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'modifier_option', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -218,8 +251,37 @@ router.delete('/:id/options/:oid', async (req, res, next) => {
       [req.params.oid, req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Option not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'modifier_option', entity_id: Number(req.params.oid), entity_label: `Option #${req.params.oid}` });
     res.json({ deleted: true });
   } catch (err) { next(err); }
+});
+
+// ─── POST /modifier-groups/:id/options/reorder ───────────────────────────────
+// BACK-2585 — drag-drop reorder. Body: { order: [option_id, ...] }
+// Updates sort_order in a single transaction so a partial failure does not
+// leave the list in an inconsistent state.
+router.post('/:id/options/reorder', async (req, res, next) => {
+  const { order } = req.body;
+  if (!Array.isArray(order) || order.length === 0) {
+    return res.status(400).json({ error: { message: 'order must be a non-empty array of option ids' } });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < order.length; i++) {
+      await client.query(
+        `UPDATE mcogs_modifier_options SET sort_order = $1 WHERE id = $2 AND modifier_group_id = $3`,
+        [i, order[i], req.params.id]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, count: order.length });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
 });
 
 module.exports = router;

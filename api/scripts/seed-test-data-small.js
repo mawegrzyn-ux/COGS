@@ -522,15 +522,55 @@ async function clearData(client) {
   // Clear all operational / COGS data in dependency-safe order.
   // CASCADE automatically truncates any referencing tables not listed here.
   //
-  // Tables intentionally preserved (not truncated):
-  //   mcogs_allergens          — FIC 1169 reference data seeded by migration
-  //   mcogs_roles, mcogs_role_permissions — RBAC reference data seeded by migration
-  //   mcogs_users, mcogs_user_brand_partners — auth data (would break login)
-  //   mcogs_ai_chat_log        — AI assistant history
-  //   mcogs_feedback           — user-submitted bug/feature reports
-  //   mcogs_import_jobs        — import staging data
+  // Tables intentionally preserved (not truncated). Kept in sync with
+  // seed-test-data.js — see that file for the full rationale.
+  //
+  //   mcogs_allergens / mcogs_roles / mcogs_role_permissions  — reference data
+  //   mcogs_users / mcogs_user_scope                          — auth data
+  //   mcogs_ai_chat_log / mcogs_feedback / mcogs_import_jobs  — history / staging
+  //   mcogs_audit_log / mcogs_user_notes / mcogs_user_profiles — compliance / memory
+  //   mcogs_settings / mcogs_changelog                        — global config + history
+  //   mcogs_languages / mcogs_regions                         — migration-seeded catalogs
+  //   mcogs_qsc_questions / mcogs_qsc_templates               — QSC reference data
+  //
+  // mcogs_qsc_audits and children are cascade-truncated via mcogs_locations.
   await client.query(`
     TRUNCATE TABLE
+      -- FAQ knowledge base
+      mcogs_faq,
+      -- AI memory consolidation
+      mcogs_memory_monthly,
+      mcogs_memory_daily,
+      -- Doc library
+      mcogs_docs,
+      mcogs_doc_categories,
+      -- Media library
+      mcogs_media_items,
+      mcogs_media_categories,
+      -- Bug tracker + backlog (comments reference these)
+      mcogs_item_comments,
+      mcogs_backlog,
+      mcogs_bugs,
+      -- Stock Manager supply chain
+      mcogs_stocktake_items,
+      mcogs_stocktakes,
+      mcogs_stock_transfer_items,
+      mcogs_stock_transfers,
+      mcogs_waste_log,
+      mcogs_waste_reason_codes,
+      mcogs_credit_note_items,
+      mcogs_credit_notes,
+      mcogs_invoice_items,
+      mcogs_invoices,
+      mcogs_goods_received_items,
+      mcogs_goods_received,
+      mcogs_order_template_items,
+      mcogs_order_templates,
+      mcogs_purchase_order_items,
+      mcogs_purchase_orders,
+      mcogs_stock_movements,
+      mcogs_stock_levels,
+      mcogs_stores,
       -- Shared pages & changes (reference menus + scenarios)
       mcogs_shared_page_changes,
       mcogs_shared_pages,

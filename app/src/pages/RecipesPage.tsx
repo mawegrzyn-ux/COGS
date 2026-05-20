@@ -1,9 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { useCogsThresholds } from '../hooks/useCogsThresholds'
-import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, Badge } from '../components/ui'
+import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, CalcInput, CategoryPicker } from '../components/ui'
 import ImageUpload from '../components/ImageUpload'
+import TranslationEditor from '../components/TranslationEditor'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
+import { useFeatureFlags } from '../contexts/FeatureFlagsContext'
+import { useCurrency } from '../contexts/CurrencyContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -19,10 +24,17 @@ interface RecipeItem {
   prep_qty:               number
   prep_unit:              string | null
   prep_to_base_conversion:number
+  // When true, this item's prep_qty becomes the multiplier applied to every
+  // modifier-option cost on sales items / combo step options that use this
+  // recipe (e.g. Bone-In 6 with Bone-In Wing flagged at 6 → 6× sauce per
+  // portion). Single-flag-per-recipe enforced server-side. Honoured only
+  // when the global modifier_multiplier_enabled setting is on.
+  is_modifier_multiplier?: boolean
   ingredient_name?:       string
   base_unit_abbr?:        string
   sub_recipe_name?:       string
   sub_recipe_yield_qty?:  number
+  sub_recipe_yield_unit?: string | null
   waste_pct?:             number
   cost?:                  number | null
   quote_is_preferred?:    boolean | null
@@ -134,12 +146,27 @@ interface SimpleMenu {
 const fmt     = (n: number | string | null | undefined, dp = 3) => Number(n ?? 0).toFixed(dp)
 const fmtCost = (n: number | string | null | undefined) => Number(n ?? 0).toFixed(2)
 
+// Display qty with at most 3 decimals AND strip trailing zeros
+// (4000.00000000 → "4000", 1.5 → "1.5", 0.001 → "0.001"). DB keeps full
+// precision; only the displayed string is trimmed.
+const fmtQty = (n: number | string | null | undefined): string => {
+  const num = Number(n ?? 0)
+  if (!isFinite(num)) return ''
+  return parseFloat(num.toFixed(3)).toString()
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RecipesPage() {
   const api            = useApi()
   const cogsThresholds = useCogsThresholds()
   const navigate       = useNavigate()
+  // BACK-2615 — deep-link a specific recipe via ?recipe_id=X. Used by Menu
+  // Builder's quick-edit modal "Open in Recipes" link.
+  const [searchParams] = useSearchParams()
+  const deepLinkRecipeId = searchParams.get('recipe_id')
+  const { flags }      = useFeatureFlags()
+  const variationsEnabled = flags.variations
 
   const [recipes,      setRecipes]      = useState<Recipe[]>([])
   const [ingredients,  setIngredients]  = useState<Ingredient[]>([])
@@ -149,7 +176,7 @@ export default function RecipesPage() {
   const [selected,     setSelected]     = useState<RecipeDetail | null>(null)
   const [loadingDetail,setLoadingDetail]= useState(false)
   const [selectedCountryId, setSelectedCountryId] = useState<number | '' | 'GLOBAL'>('')
-  const [selectedCurrencyCode, setSelectedCurrencyCode] = useState<string>('')
+  const { currencyCode: selectedCurrencyCode } = useCurrency()
   const [countries, setCountries] = useState<Country[]>([])
 
   // modals
@@ -164,8 +191,37 @@ export default function RecipesPage() {
   const [itemModalForVariation, setItemModalForVariation] = useState<number | null>(null) // variation_id when adding to a variation
   const [itemModalForPlVariation, setItemModalForPlVariation] = useState<number | null>(null) // pl_variation_id when adding to a PL variation
   const [itemModalForMarketPlVariation, setItemModalForMarketPlVariation] = useState<number | null>(null) // market_pl_variation_id when adding to a market+PL variation
-  const [variantMode, setVariantMode] = useState<'market' | 'price-level' | 'market-pl'>('market')
   const [showComparison,        setShowComparison]        = useState(false)
+
+  // Inline-edit state for recipe header (name / yield qty / yield unit)
+  const [editingHeaderField, setEditingHeaderField] = useState<'name' | 'yield_qty' | 'yield_unit' | null>(null)
+  const [headerDraft, setHeaderDraft] = useState('')
+  const [showImageModal, setShowImageModal] = useState(false)
+
+  // Inline-edit state for notes (recipe description)
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notesDraft, setNotesDraft] = useState('')
+
+  // Copy-ingredients-from-recipe modal
+  const [showCopyModal, setShowCopyModal] = useState(false)
+
+  // Duplicate-recipe modal — when set, holds the proposed name (defaults to
+  // "<original name> (Copy)"). Submitting POSTs to /recipes/:id/duplicate and
+  // navigates the detail panel to the new recipe.
+  const [duplicateDraft, setDuplicateDraft] = useState<string | null>(null)
+  const [duplicating, setDuplicating] = useState(false)
+  // When ticked, the duplicate flow also creates a sales item linked to the
+  // new recipe so it can be added to a menu without a separate trip to the
+  // Sales Items page. Defaults true — most duplicates are made specifically
+  // to put on a menu with a tweaked variant.
+  const [duplicateAlsoSalesItem, setDuplicateAlsoSalesItem] = useState(true)
+
+  // Create-variation modal — replaces native window.confirm/prompt dialogs
+  type CreateVariationCtx =
+    | { kind: 'market';    countryId: number }
+    | { kind: 'pl';        priceLevelId: number }
+    | { kind: 'market-pl'; countryId: number; priceLevelId: number }
+  const [createVariationCtx, setCreateVariationCtx] = useState<CreateVariationCtx | null>(null)
 
   // ── Ingredient list sort + drag-to-reorder ────────────────────────────────
   const [itemSortField, setItemSortField] = useState<ItemSortField>('custom')
@@ -179,6 +235,22 @@ export default function RecipesPage() {
   const [loadingMenuAssign,   setLoadingMenuAssign]    = useState(false)
   const [priceLevels,         setPriceLevels]         = useState<PriceLevel[]>([])
   const [selectedPriceLevelId,setSelectedPriceLevelId]= useState<number | null>(null)
+
+  // variantMode is DERIVED from (selectedCountryId, selectedPriceLevelId) — no
+  // separate toggle. The combination of selectors fully determines which kind
+  // of variant we're targeting:
+  //   market = real, PL = none → market variation
+  //   market = none/GLOBAL, PL = real → PL variation
+  //   market = real, PL = real → market+PL variation
+  //   market = GLOBAL/empty, PL = none → global recipe (variantMode='market'
+  //     but activeVariation will be null → activeItems falls back to global)
+  const variantMode = useMemo<'market' | 'price-level' | 'market-pl'>(() => {
+    const hasMarket = typeof selectedCountryId === 'number'
+    const hasPL     = !!selectedPriceLevelId
+    if (hasMarket && hasPL) return 'market-pl'
+    if (hasPL && !hasMarket) return 'price-level'
+    return 'market'
+  }, [selectedCountryId, selectedPriceLevelId])
   const [menuAssignVersion,   setMenuAssignVersion]   = useState(0)
   const [editingTilePrice,    setEditingTilePrice]    = useState<string | null>(null)
 
@@ -246,6 +318,10 @@ export default function RecipesPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Track which recipe_id has already been auto-opened — kept here so the
+  // deep-link effect (defined after loadDetail) can read it.
+  const deepLinkAppliedRef = useRef<string | null>(null)
+
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true)
     setSelected(null)
@@ -264,6 +340,31 @@ export default function RecipesPage() {
       setLoadingDetail(false)
     }
   }, [api])
+
+  // BACK-2615 — auto-open the recipe matching ?recipe_id= once the list
+  // loads. Defined here AFTER loadDetail so we can call it directly with
+  // it in the dep array; idempotent via deepLinkAppliedRef.
+  useEffect(() => {
+    if (!deepLinkRecipeId || deepLinkAppliedRef.current === deepLinkRecipeId) return
+    if (!recipes.length) return
+    const id = Number(deepLinkRecipeId)
+    if (Number.isFinite(id) && recipes.some(r => r.id === id)) {
+      deepLinkAppliedRef.current = deepLinkRecipeId
+      loadDetail(id)
+    }
+  }, [deepLinkRecipeId, recipes, loadDetail])
+
+  // BACK-2652 — when arriving from Menu Builder via ?new=1, open the create
+  // modal automatically. We only do this if a Menu Builder handoff is
+  // present, so a stray ?new=1 from elsewhere is harmless. Single-shot.
+  const newDeepLinkAppliedRef = useRef(false)
+  useEffect(() => {
+    if (newDeepLinkAppliedRef.current) return
+    if (searchParams.get('new') !== '1') return
+    if (!getHandoff()) return
+    newDeepLinkAppliedRef.current = true
+    setRecipeModal('new')
+  }, [searchParams])
 
   // Fetch menu assignments for this recipe across ALL markets
   useEffect(() => {
@@ -335,6 +436,52 @@ export default function RecipesPage() {
     return r
   }, [recipes, search, filterCat, sortField, sortDir])
 
+  // BACK-2353 — Group recipes by category. Each entry is { name, recipes[] }
+  // sorted alphabetically by category name; "Uncategorised" pinned to the top.
+  // Active search auto-expands all groups so matches aren't hidden.
+  const groupedFiltered = useMemo(() => {
+    const buckets = new Map<string, typeof filtered>()
+    for (const r of filtered) {
+      const key = r.category_name?.trim() || 'Uncategorised'
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key)!.push(r)
+    }
+    const entries = Array.from(buckets.entries())
+      .sort(([a], [b]) => {
+        if (a === 'Uncategorised') return -1
+        if (b === 'Uncategorised') return 1
+        return a.localeCompare(b, undefined, { sensitivity: 'base' })
+      })
+    return entries.map(([name, recipes]) => ({ name, recipes }))
+  }, [filtered])
+
+  // Persist collapsed group state across reloads. localStorage key holds an
+  // array of category names that are currently collapsed.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('recipes-collapsed-groups')
+      const arr = raw ? JSON.parse(raw) : []
+      return new Set(Array.isArray(arr) ? arr : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('recipes-collapsed-groups', JSON.stringify([...collapsedGroups]))
+    } catch { /* ignore quota errors */ }
+  }, [collapsedGroups])
+  const toggleGroup = useCallback((name: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name); else next.add(name)
+      return next
+    })
+  }, [])
+  // Active search overrides collapsed state — show every match immediately.
+  const isGroupCollapsed = useCallback((name: string) => {
+    if (search) return false
+    return collapsedGroups.has(name)
+  }, [collapsedGroups, search])
+
   const activeCogs = useMemo(() => {
     if (selectedCountryId === 'GLOBAL') return null
     const base = selected?.cogs_by_country.find(c => c.country_id === selectedCountryId)
@@ -388,12 +535,43 @@ export default function RecipesPage() {
     ) ?? null
   }, [selected, selectedPriceLevelId, variantMode, selectedCountryId])
 
+  // Fallback chain: most-specific variant first, then less-specific, then global.
+  // This matches the pill in the ingredients header — e.g. when (India, Dine In)
+  // is selected but no Market+PL variation exists yet, we still show India's
+  // market variation items (and the pill shows "Market Variation").
   const activeItems = useMemo(() => {
-    if (variantMode === 'market-pl' && activeMarketPlVariation) return activeMarketPlVariation.items
+    if (!selected) return []
+    if (variantMode === 'market-pl') {
+      if (activeMarketPlVariation) return activeMarketPlVariation.items
+      if (activeVariation)         return activeVariation.items
+      if (activePlVariation)       return activePlVariation.items
+      return selected.items ?? []
+    }
     if (variantMode === 'price-level' && activePlVariation) return activePlVariation.items
-    if (variantMode === 'market' && activeVariation) return activeVariation.items
-    return selected?.items ?? []
+    if (variantMode === 'market' && activeVariation)        return activeVariation.items
+    return selected.items ?? []
   }, [variantMode, activeMarketPlVariation, activePlVariation, activeVariation, selected])
+
+  // Open Add Ingredient modal — wires up the correct variation context based
+  // on the active variant mode. Wrapped in useCallback so the keyboard
+  // shortcut (Alt+I) gets a stable reference.
+  const openAddIngredient = useCallback(() => {
+    if (!selected) return
+    if (variantMode === 'market-pl' && activeMarketPlVariation) {
+      setItemModalForMarketPlVariation(activeMarketPlVariation.id)
+      setItemModalForVariation(null)
+      setItemModalForPlVariation(null)
+    } else if (variantMode === 'price-level' && activePlVariation) {
+      setItemModalForPlVariation(activePlVariation.id)
+      setItemModalForVariation(null)
+      setItemModalForMarketPlVariation(null)
+    } else {
+      setItemModalForVariation(activeVariation?.id ?? null)
+      setItemModalForPlVariation(null)
+      setItemModalForMarketPlVariation(null)
+    }
+    setItemModal(true)
+  }, [selected, variantMode, activeMarketPlVariation, activePlVariation, activeVariation])
 
   // Sorted view of activeItems — 'custom' preserves DB sort_order
   const displayItems = useMemo(() => {
@@ -417,15 +595,6 @@ export default function RecipesPage() {
     })
   }, [activeItems, itemSortField, itemSortDir, activeCogs])
 
-  // Unique currencies for the selector (deduplicated by code)
-  const currencyOptions = useMemo(() => {
-    const seen = new Set<string>()
-    return countries
-      .filter(c => { if (seen.has(c.currency_code)) return false; seen.add(c.currency_code); return true })
-      .map(c => ({ code: c.currency_code, symbol: c.currency_symbol }))
-      .sort((a, b) => a.code.localeCompare(b.code))
-  }, [countries])
-
   // Comparison data: ingredient diff between global and active variation
   const comparisonData = useMemo(() => {
     if (!showComparison || !activeVariation || !selected) return null
@@ -436,6 +605,39 @@ export default function RecipesPage() {
     const varNames    = new Set(varItems.map(getName))
     return { globalItems, varItems, globalNames, varNames }
   }, [showComparison, activeVariation, selected])
+
+  // ── Inline header edits ───────────────────────────────────────────────────
+  // Patch one or more recipe fields without opening the modal. Backend PUT
+  // replaces the full row, so we merge `patch` over the currently-loaded
+  // recipe state. Used by the inline-editable name / yield / yield-unit /
+  // category / image controls in the detail header.
+  const updateRecipeField = useCallback(async (patch: Partial<{
+    name: string; category_id: number | null; description: string | null;
+    yield_qty: number; yield_unit_text: string | null; image_url: string | null
+  }>) => {
+    if (!selected) return
+    try {
+      await api.put(`/recipes/${selected.id}`, {
+        name:            patch.name        ?? selected.name,
+        category_id:     'category_id'     in patch ? patch.category_id     : selected.category_id,
+        description:     'description'     in patch ? patch.description     : (selected.description ?? null),
+        yield_qty:       patch.yield_qty   ?? selected.yield_qty,
+        yield_unit_text: 'yield_unit_text' in patch ? patch.yield_unit_text : (selected.yield_unit_abbr ?? null),
+        image_url:       'image_url'       in patch ? patch.image_url       : (selected.image_url ?? null),
+      })
+      loadDetail(selected.id)
+      // Refresh the row in the left list if name/category changed
+      setRecipes(prev => prev.map(r => r.id === selected.id
+        ? { ...r,
+            name:        patch.name        ?? r.name,
+            category_id: 'category_id' in patch ? patch.category_id ?? null : r.category_id,
+          }
+        : r
+      ))
+    } catch (err: any) {
+      showToast(err.message || 'Save failed', 'error')
+    }
+  }, [selected, api, loadDetail])
 
   // ── Recipe CRUD ───────────────────────────────────────────────────────────
 
@@ -454,12 +656,36 @@ export default function RecipesPage() {
       if (isNew) {
         const r = await api.post('/recipes', payload)
         if (form.createSalesItem) {
-          try { await api.post('/sales-items', { name: r.name, item_type: 'recipe', recipe_id: r.id }) } catch {}
+          // Carry the recipe's category onto the sales item so the user
+          // doesn't have to re-pick it. The backend POST /sales-items will
+          // also auto-flip the category's `for_sales_items` flag to true if
+          // it wasn't already, so the new item is visible in Sales Items
+          // category dropdowns straight away.
+          try {
+            await api.post('/sales-items', {
+              name:        r.name,
+              item_type:   'recipe',
+              recipe_id:   r.id,
+              category_id: r.category_id ?? null,
+            })
+          } catch {}
         }
         setRecipes(prev => [...prev, r].sort((a,b) => a.name.localeCompare(b.name)))
         showToast('Recipe created')
         setRecipeModal(null)
         loadDetail(r.id)
+        // BACK-2652 — if the user came from Menu Builder via "+ Add new",
+        // signal the new recipe id to the ReturnToMenuBuilderBanner so it
+        // can flip into the "Add to menu" state. The banner reads this on
+        // its own custom event and on the next render.
+        if (getHandoff()?.item_type === 'recipe') {
+          setPendingAttach({
+            type: 'recipe',
+            id: r.id,
+            name: r.name,
+            category_id: r.category_id ?? null,
+          })
+        }
       } else {
         const r = await api.put(`/recipes/${(recipeModal as Recipe).id}`, payload)
         setRecipes(prev => prev.map(x => x.id === r.id ? { ...x, ...r } : x))
@@ -483,6 +709,48 @@ export default function RecipesPage() {
     }
   }
 
+  // Duplicate the selected recipe — copies metadata, global items, and every
+  // variation (market / PL / market+PL) end-to-end. Backend handles all of
+  // it in a transaction; we just refresh the list and load the new id.
+  // When `alsoSalesItem` is true we also POST /sales-items with the new
+  // recipe linked so the duplicate is immediately puttable on a menu. The
+  // sales item inherits the recipe's category (the sales-items API
+  // auto-flips for_sales_items=true on the linked category if needed).
+  const duplicateRecipe = async (newName: string, alsoSalesItem: boolean) => {
+    if (!selected) return
+    setDuplicating(true)
+    try {
+      const r = await api.post(`/recipes/${selected.id}/duplicate`, { name: newName }) as Recipe
+      setRecipes(prev => [...prev, r].sort((a, b) => a.name.localeCompare(b.name)))
+
+      let salesItemMsg = ''
+      if (alsoSalesItem) {
+        try {
+          await api.post('/sales-items', {
+            item_type:    'recipe',
+            name:         newName,
+            display_name: newName,
+            category_id:  r.category_id ?? null,
+            recipe_id:    r.id,
+          })
+          salesItemMsg = ' (sales item created)'
+        } catch (e: any) {
+          // Non-fatal — the recipe duplicate succeeded; surface the failure
+          // in the toast so the user knows to create the sales item manually.
+          salesItemMsg = ` (⚠ sales item failed: ${e?.message || 'unknown error'})`
+        }
+      }
+
+      setDuplicateDraft(null)
+      showToast(`Duplicated "${selected.name}" → "${newName}"${salesItemMsg}`)
+      loadDetail(r.id)
+    } catch (err: any) {
+      showToast(err.message || 'Duplicate failed', 'error')
+    } finally {
+      setDuplicating(false)
+    }
+  }
+
   // ── Item CRUD ─────────────────────────────────────────────────────────────
 
   const addItem = async (form: ItemForm) => {
@@ -502,6 +770,42 @@ export default function RecipesPage() {
     } catch (err: any) {
       showToast(err.message || 'Add failed', 'error')
     }
+  }
+
+  // Copy a list of RecipeItems into the current recipe's active variant.
+  // Targets the same variant the Add Ingredient button would target — global,
+  // market variation, PL variation, or market+PL variation.
+  const copyItemsFromSource = async (items: RecipeItem[]) => {
+    if (!selected || items.length === 0) return
+    let basePath = `/recipes/${selected.id}/items`
+    if (variantMode === 'market-pl' && activeMarketPlVariation) {
+      basePath = `/recipes/${selected.id}/market-pl-variations/${activeMarketPlVariation.id}/items`
+    } else if (variantMode === 'price-level' && activePlVariation) {
+      basePath = `/recipes/${selected.id}/pl-variations/${activePlVariation.id}/items`
+    } else if (variantMode === 'market' && activeVariation) {
+      basePath = `/recipes/${selected.id}/variations/${activeVariation.id}/items`
+    }
+    let ok = 0, fail = 0
+    for (const it of items) {
+      try {
+        await api.post(basePath, {
+          item_type:               it.item_type,
+          ingredient_id:           it.item_type === 'ingredient' ? it.ingredient_id : null,
+          recipe_item_id:          it.item_type === 'recipe'     ? it.recipe_item_id : null,
+          prep_qty:                Number(it.prep_qty),
+          prep_unit:               it.prep_unit ?? null,
+          prep_to_base_conversion: Number(it.prep_to_base_conversion) || 1,
+        })
+        ok++
+      } catch {
+        fail++
+      }
+    }
+    showToast(fail === 0
+      ? `Copied ${ok} ingredient${ok !== 1 ? 's' : ''}`
+      : `Copied ${ok}, ${fail} failed`, fail === 0 ? undefined : 'error')
+    setShowCopyModal(false)
+    loadDetail(selected.id)
   }
 
   // Save & stay open for rapid sequential entry
@@ -528,14 +832,47 @@ export default function RecipesPage() {
     if (!selected || !selectedItemId) return
     setItemPanelSaving(true)
     try {
-      await api.put(`/recipes/${selected.id}/items/${selectedItemId}`, {
+      // Only send is_modifier_multiplier when we're on the global view + an
+      // ingredient row — server enforces single-flag-per-recipe so we also
+      // optimistically clear the flag on every other item locally on a true.
+      const flagInPlay = isGlobalView && form.item_type === 'ingredient' && form.is_modifier_multiplier !== undefined
+      const body: Record<string, unknown> = {
         prep_qty:               Number(form.prep_qty),
         prep_unit:              form.prep_unit.trim() || null,
         prep_to_base_conversion:Number(form.prep_to_base_conversion) || 1,
+      }
+      if (flagInPlay) body.is_modifier_multiplier = !!form.is_modifier_multiplier
+      await api.put(`/recipes/${selected.id}/items/${selectedItemId}`, body)
+      // Optimistic local patch — avoids a full loadDetail / re-render of the
+      // whole detail panel and the COGS recompute on every save.
+      setSelected(prev => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          items: prev.items.map(it => {
+            if (it.id === selectedItemId) {
+              return {
+                ...it,
+                prep_qty:                Number(form.prep_qty),
+                prep_unit:               form.prep_unit.trim() || null,
+                prep_to_base_conversion: Number(form.prep_to_base_conversion) || 1,
+                ...(flagInPlay ? { is_modifier_multiplier: !!form.is_modifier_multiplier } : {}),
+              }
+            }
+            // When we set the flag on the target row, every other row in the
+            // same recipe loses it (server-side single-flag-per-recipe rule).
+            if (flagInPlay && form.is_modifier_multiplier && it.is_modifier_multiplier) {
+              return { ...it, is_modifier_multiplier: false }
+            }
+            return it
+          }),
+        }
       })
       showToast('Item updated')
       setSelectedItemId(null)
       setItemPanelForm(null)
+      // Background refresh to pick up server-recalculated COGS — non-blocking
+      // so the panel close + toast feel instant.
       loadDetail(selected.id)
     } catch (err: any) {
       showToast(err.message || 'Update failed', 'error')
@@ -543,6 +880,123 @@ export default function RecipesPage() {
       setItemPanelSaving(false)
     }
   }
+
+  // Inline qty save for the ingredient list — dispatches to the correct
+  // endpoint based on which variant view is active, preserving prep_unit
+  // and prep_to_base_conversion (we only patch prep_qty here). Optimistic
+  // refresh via loadDetail on success.
+  const saveItemQtyInline = async (item: { id: number; prep_qty: number | string; prep_unit: string | null; prep_to_base_conversion: number | string }, raw: string) => {
+    if (!selected) return
+    const trimmed = (raw ?? '').trim()
+    if (trimmed === '' || Number.isNaN(Number(trimmed)) || Number(trimmed) < 0) {
+      showToast('Quantity must be a non-negative number', 'error')
+      return
+    }
+    const qty = Number(trimmed)
+    // Display is rounded to 3dp — treat sub-millisecond differences as no-op
+    // so opening then blurring an unchanged cell doesn't fire a phantom PUT
+    // that would silently strip DB-side precision past the 3rd decimal.
+    if (Math.abs(qty - Number(item.prep_qty)) < 0.0005) return
+
+    const body = {
+      prep_qty:                qty,
+      prep_unit:               item.prep_unit ?? null,
+      prep_to_base_conversion: Number(item.prep_to_base_conversion) || 1,
+    }
+
+    // Pick the endpoint matching the currently-shown variant.
+    let path = `/recipes/${selected.id}/items/${item.id}`
+    if (variantMode === 'market-pl' && activeMarketPlVariation) {
+      path = `/recipes/${selected.id}/market-pl-variations/${activeMarketPlVariation.id}/items/${item.id}`
+    } else if (variantMode === 'price-level' && activePlVariation) {
+      path = `/recipes/${selected.id}/pl-variations/${activePlVariation.id}/items/${item.id}`
+    } else if (variantMode === 'market' && activeVariation) {
+      path = `/recipes/${selected.id}/variations/${activeVariation.id}/items/${item.id}`
+    }
+
+    // Optimistic local patch — touches the active variant's items array (or
+    // selected.items for the global view). loadDetail still fires in the
+    // background so server-recalculated COGS replaces the stale cost figure
+    // without holding up the UI.
+    const patchItems = (items: RecipeItem[]) => items.map(it =>
+      it.id === item.id ? { ...it, prep_qty: qty } : it
+    )
+    setSelected(prev => {
+      if (!prev) return prev
+      if (variantMode === 'market-pl' && activeMarketPlVariation) {
+        return { ...prev, market_pl_variations: prev.market_pl_variations?.map(v =>
+          v.id === activeMarketPlVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      if (variantMode === 'price-level' && activePlVariation) {
+        return { ...prev, pl_variations: prev.pl_variations?.map(v =>
+          v.id === activePlVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      if (variantMode === 'market' && activeVariation) {
+        return { ...prev, variations: prev.variations.map(v =>
+          v.id === activeVariation.id ? { ...v, items: patchItems(v.items) } : v) }
+      }
+      return { ...prev, items: patchItems(prev.items) }
+    })
+
+    try {
+      await api.put(path, body)
+      // Background refresh for cost recompute — fire-and-forget so the qty
+      // edit feels instant. Errors still surface via the catch on loadDetail's
+      // own promise chain in the route.
+      loadDetail(selected.id)
+    } catch (err: any) {
+      showToast(err.message || 'Save failed', 'error')
+      // Roll back by re-fetching the truth.
+      loadDetail(selected.id)
+    }
+  }
+
+  // Toggle the modifier-multiplier flag on a recipe item. Only meaningful
+  // for ingredient-typed items on the GLOBAL recipe (not variations) — server
+  // enforces single-flag-per-recipe inside a transaction, clearing the flag
+  // on every other row before setting it on the target. Fully optimistic —
+  // patch the local state immediately, no full reload.
+  const toggleMultiplierFlag = async (item: RecipeItem) => {
+    if (!selected) return
+    const next = !(item.is_modifier_multiplier ?? false)
+    // Optimistic flip locally — set on target, clear on every other ingredient
+    // row of the same recipe to mirror the server-side single-flag rule.
+    setSelected(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        items: prev.items.map(it => {
+          if (it.id === item.id) return { ...it, is_modifier_multiplier: next }
+          if (next && it.is_modifier_multiplier) return { ...it, is_modifier_multiplier: false }
+          return it
+        }),
+      }
+    })
+    try {
+      await api.put(`/recipes/${selected.id}/items/${item.id}`, {
+        prep_qty:                Number(item.prep_qty),
+        prep_unit:               item.prep_unit ?? null,
+        prep_to_base_conversion: Number(item.prep_to_base_conversion) || 1,
+        is_modifier_multiplier:  next,
+      })
+      // Background refresh so any cascading cost recomputes show up — but the
+      // checkbox flip already happened on screen.
+      loadDetail(selected.id)
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update multiplier flag', 'error')
+      loadDetail(selected.id)
+    }
+  }
+
+  // Multiplier UI is only visible / interactive when the user is looking at
+  // the GLOBAL recipe ingredients. The user can have a Market or PL selected
+  // and STILL be viewing the global list (because no variation exists for
+  // that combo) — the "🌍 Global recipe" badge is the truth signal. Mirror
+  // its logic exactly: not in a market-pl / price-level / market variation.
+  const isGlobalView =
+    !(variantMode === 'market-pl'   && !!activeMarketPlVariation) &&
+    !(variantMode === 'price-level' && !!activePlVariation) &&
+    !activeCogs?.has_variation
 
   // ── Column sort toggle ────────────────────────────────────────────────────
   function cycleItemSort(field: ItemSortField) {
@@ -883,6 +1337,7 @@ export default function RecipesPage() {
 
   return (
     <div className="flex flex-col h-full">
+      <ReturnToMenuBuilderBanner />
       <PageHeader
         title="Recipes"
         subtitle={
@@ -910,6 +1365,13 @@ export default function RecipesPage() {
 
       {/* Alt+N → New Recipe */}
       <AltNShortcut onTrigger={() => setRecipeModal('new')} active={recipeModal === null} />
+
+      {/* Alt+I → Add Ingredient (only when a recipe is selected and no other modal is open) */}
+      <AltShortcut
+        keyChar="i"
+        onTrigger={openAddIngredient}
+        active={!!selected && !itemModal && !showCopyModal && recipeModal === null && !showImageModal}
+      />
 
       {/* Split layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -941,10 +1403,22 @@ export default function RecipesPage() {
                 className="btn-outline px-2 text-xs"
                 title="Toggle sort direction"
               >{sortDir === 'asc' ? '↑' : '↓'}</button>
+              {/* BACK-2353: collapse / expand all category groups in one click */}
+              {groupedFiltered.length > 1 && (
+                <button
+                  onClick={() => {
+                    const allCollapsed = groupedFiltered.every(g => collapsedGroups.has(g.name))
+                    if (allCollapsed) setCollapsedGroups(new Set())
+                    else setCollapsedGroups(new Set(groupedFiltered.map(g => g.name)))
+                  }}
+                  className="btn-outline px-2 text-xs"
+                  title={groupedFiltered.every(g => collapsedGroups.has(g.name)) ? 'Expand all categories' : 'Collapse all categories'}
+                >{groupedFiltered.every(g => collapsedGroups.has(g.name)) ? '▶ All' : '▼ All'}</button>
+              )}
             </div>
           </div>
 
-          {/* Recipe list */}
+          {/* Recipe list — grouped by category with collapse/expand (BACK-2353) */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <div className="flex justify-center p-8"><Spinner /></div>
@@ -953,27 +1427,43 @@ export default function RecipesPage() {
                 {search || filterCat ? 'No recipes match.' : 'No recipes yet.'}
               </div>
             ) : (
-              filtered.map(r => (
-                <button
-                  key={r.id}
-                  onClick={() => loadDetail(r.id)}
-                  className={[
-                    'w-full text-left px-4 py-3 border-b border-border transition-colors',
-                    selected?.id === r.id
-                      ? 'bg-accent-dim border-l-2 border-l-accent'
-                      : 'hover:bg-surface-2',
-                  ].join(' ')}
-                >
-                  <div className="font-semibold text-sm text-text-1 truncate">{r.name}</div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    {r.category_name && <span className="text-xs text-text-3 truncate">{r.category_name}</span>}
-                    <span className="text-xs text-text-3 ml-auto shrink-0">
-                      {r.item_count} item{r.item_count !== 1 ? 's' : ''}
-                      {r.yield_qty !== 1 && ` · ${r.yield_qty}${r.yield_unit_abbr ? ' ' + r.yield_unit_abbr : ''}`}
-                    </span>
+              groupedFiltered.map(group => {
+                const collapsed = isGroupCollapsed(group.name)
+                return (
+                  <div key={group.name}>
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(group.name)}
+                      className="w-full flex items-center gap-2 px-3 py-2 bg-surface-2/70 hover:bg-surface-2 border-b border-border text-left sticky top-0 z-[1]"
+                      title={collapsed ? 'Expand' : 'Collapse'}
+                    >
+                      <span className="text-text-3 text-xs w-3 shrink-0">{collapsed ? '▶' : '▼'}</span>
+                      <span className="text-xs font-semibold text-text-2 uppercase tracking-wide truncate flex-1">{group.name}</span>
+                      <span className="text-[10px] text-text-3 font-mono shrink-0">{group.recipes.length}</span>
+                    </button>
+                    {!collapsed && group.recipes.map(r => (
+                      <button
+                        key={r.id}
+                        onClick={() => loadDetail(r.id)}
+                        className={[
+                          'w-full text-left px-4 py-3 border-b border-border transition-colors',
+                          selected?.id === r.id
+                            ? 'bg-accent-dim border-l-2 border-l-accent'
+                            : 'hover:bg-surface-2',
+                        ].join(' ')}
+                      >
+                        <div className="font-semibold text-sm text-text-1 truncate">{r.name}</div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs text-text-3 ml-auto shrink-0">
+                            {r.item_count} item{r.item_count !== 1 ? 's' : ''}
+                            {r.yield_qty !== 1 && ` · ${r.yield_qty}${r.yield_unit_abbr ? ' ' + r.yield_unit_abbr : ''}`}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                </button>
-              ))
+                )
+              })
             )}
           </div>
         </div>
@@ -1011,34 +1501,150 @@ export default function RecipesPage() {
           ) : (
             <div className="p-6 max-w-4xl mx-auto">
 
-              {/* Recipe image banner */}
-              {selected.image_url && (
-                <div className="-mx-6 -mt-6 mb-5">
-                  <img
-                    src={selected.image_url}
-                    alt={selected.name}
-                    className="w-full max-h-56 object-cover"
-                  />
-                </div>
-              )}
-
-              {/* Detail header */}
+              {/* Detail header — image thumb + inline editable name/category/yield */}
               <div className="flex items-start justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-xl font-bold text-text-1">{selected.name}</h2>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {selected.category_name && <Badge label={selected.category_name} variant="neutral" />}
-                    <span className="text-sm text-text-3">
-                      Yield: <span className="font-mono font-semibold text-text-2">{selected.yield_qty}{selected.yield_unit_abbr ? ' ' + selected.yield_unit_abbr : ''}</span>
-                    </span>
-                    <span className="text-sm text-text-3">·</span>
-                    <span className="text-sm text-text-3">{activeItems.length} ingredient{activeItems.length !== 1 ? 's' : ''}</span>
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+
+                  {/* Image thumbnail (clickable → modal) */}
+                  <button
+                    type="button"
+                    onClick={() => setShowImageModal(true)}
+                    title={selected.image_url ? 'Change image' : 'Add image'}
+                    className="shrink-0 w-14 h-14 rounded-lg border border-border bg-surface-2 hover:border-accent hover:shadow-sm overflow-hidden flex items-center justify-center transition-all"
+                  >
+                    {selected.image_url ? (
+                      <img src={selected.image_url} alt={selected.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <ImagePlaceholderIcon size={22} />
+                    )}
+                  </button>
+
+                  <div className="flex-1 min-w-0">
+                    {/* Name — inline editable */}
+                    {editingHeaderField === 'name' ? (
+                      <input
+                        autoFocus
+                        className="input text-xl font-bold w-full"
+                        value={headerDraft}
+                        onChange={e => setHeaderDraft(e.target.value)}
+                        onBlur={() => {
+                          const v = headerDraft.trim()
+                          if (v && v !== selected.name) updateRecipeField({ name: v })
+                          setEditingHeaderField(null)
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                          else if (e.key === 'Escape') setEditingHeaderField(null)
+                        }}
+                      />
+                    ) : (
+                      <h2
+                        className="text-xl font-bold text-text-1 cursor-text hover:bg-surface-2 -mx-1 px-1 rounded transition-colors truncate"
+                        title="Click to edit name"
+                        onClick={() => { setHeaderDraft(selected.name); setEditingHeaderField('name') }}
+                      >
+                        {selected.name}
+                      </h2>
+                    )}
+
+                    {/* Category picker + yield + ingredient count */}
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <div style={{ minWidth: 180 }}>
+                        <CategoryPicker
+                          value={selected.category_id != null ? String(selected.category_id) : ''}
+                          onChange={s => {
+                            const n = s ? Number(s) : null
+                            if (n !== selected.category_id) updateRecipeField({ category_id: n })
+                          }}
+                          categories={categories}
+                          scope="for_recipes"
+                          onCategoryCreated={cat => setApiCategories(prev =>
+                            [...prev, cat].sort((a, b) => a.name.localeCompare(b.name)),
+                          )}
+                          apiPost={(p, b) => api.post(p, b)}
+                          className="input text-xs py-1"
+                          placeholder="Category…"
+                          allowCreate={false}
+                        />
+                      </div>
+
+                      <span className="text-sm text-text-3 flex items-center gap-1">
+                        Yield:&nbsp;
+                        {editingHeaderField === 'yield_qty' ? (
+                          <CalcInput
+                            autoFocus
+                            className="input font-mono font-semibold text-text-2 w-20 text-sm py-0.5 px-1"
+                            value={headerDraft}
+                            // CalcInput.onChange fires on every keystroke for
+                            // plain numeric input — only update local draft
+                            // here; commit and unmount on blur/Enter so focus
+                            // doesn't drop after the first digit.
+                            onChange={v => setHeaderDraft(v)}
+                            onBlur={() => {
+                              const n = Number(headerDraft)
+                              if (!Number.isNaN(n) && n > 0 && n !== Number(selected.yield_qty)) {
+                                updateRecipeField({ yield_qty: n })
+                              }
+                              setEditingHeaderField(null)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                              else if (e.key === 'Escape') setEditingHeaderField(null)
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="font-mono font-semibold text-text-2 cursor-text hover:bg-surface-2 -mx-0.5 px-0.5 rounded"
+                            title="Click to edit yield"
+                            onClick={() => { setHeaderDraft(String(selected.yield_qty)); setEditingHeaderField('yield_qty') }}
+                          >
+                            {selected.yield_qty}
+                          </span>
+                        )}
+                        &nbsp;
+                        {editingHeaderField === 'yield_unit' ? (
+                          <input
+                            autoFocus
+                            className="input w-20 text-sm py-0.5 px-1"
+                            value={headerDraft}
+                            onChange={e => setHeaderDraft(e.target.value)}
+                            onBlur={() => {
+                              const v = headerDraft.trim() || null
+                              if (v !== (selected.yield_unit_abbr ?? null)) {
+                                updateRecipeField({ yield_unit_text: v })
+                              }
+                              setEditingHeaderField(null)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                              else if (e.key === 'Escape') setEditingHeaderField(null)
+                            }}
+                            placeholder="unit"
+                          />
+                        ) : (
+                          <span
+                            className="text-text-2 cursor-text hover:bg-surface-2 -mx-0.5 px-0.5 rounded"
+                            title="Click to edit yield unit"
+                            onClick={() => { setHeaderDraft(selected.yield_unit_abbr ?? ''); setEditingHeaderField('yield_unit') }}
+                          >
+                            {selected.yield_unit_abbr || <span className="text-text-3 italic">unit</span>}
+                          </span>
+                        )}
+                      </span>
+
+                      <span className="text-sm text-text-3">·</span>
+                      <span className="text-sm text-text-3">{activeItems.length} ingredient{activeItems.length !== 1 ? 's' : ''}</span>
+                    </div>
                   </div>
-                  {selected.description && <p className="mt-2 text-sm text-text-2 leading-relaxed">{selected.description}</p>}
                 </div>
+
                 <div className="flex items-center gap-2 shrink-0">
-                  <button className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5" onClick={() => setRecipeModal(selected)}>
-                    <EditIcon size={12} /> Edit
+                  <button
+                    className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                    onClick={() => setDuplicateDraft(`${selected.name} (Copy)`)}
+                    title="Create a copy of this recipe with all ingredients and variations"
+                  >
+                    <CopyIcon size={12} /> Duplicate
                   </button>
                   <button
                     className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1.5"
@@ -1048,91 +1654,6 @@ export default function RecipesPage() {
                   </button>
                 </div>
               </div>
-
-              {/* ── Market + Currency selectors ── */}
-              {selected.cogs_by_country.length > 0 && (
-                <div className="flex items-center gap-4 mb-4 flex-wrap">
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Market</span>
-                    <select
-                      value={selectedCountryId}
-                      onChange={e => {
-                        const v = e.target.value
-                        const newId = v === 'GLOBAL' ? 'GLOBAL' : Number(v)
-                        setSelectedCountryId(newId)
-                        setSelectedCurrencyCode('')
-                        setShowComparison(false)
-                        // Reset tile menu selector to first menu in the new market
-                        const firstInMarket = typeof newId === 'number'
-                          ? menuAssignments.find(m => m.country_id === newId)
-                          : menuAssignments[0]
-                        setSelectedMenuId(firstInMarket?.menu_id ?? null)
-                      }}
-                      className="input text-sm"
-                      style={{ minWidth: 160 }}
-                    >
-                      <option value="GLOBAL">🌍 Global</option>
-                      {selected.cogs_by_country.map(c => (
-                        <option key={c.country_id} value={c.country_id}>
-                          {c.country_name}{c.has_variation ? ' ✦' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {priceLevels.length > 1 && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Price Level</span>
-                      <select
-                        value={selectedPriceLevelId ?? ''}
-                        onChange={e => setSelectedPriceLevelId(e.target.value ? Number(e.target.value) : null)}
-                        className="input text-sm"
-                        style={{ minWidth: 120 }}
-                      >
-                        <option value="">— any —</option>
-                        {priceLevels.map(l => (
-                          <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Display Currency</span>
-                    <select
-                      value={selectedCurrencyCode || '__MARKET__'}
-                      onChange={e => setSelectedCurrencyCode(e.target.value === '__MARKET__' ? '' : e.target.value)}
-                      className="input text-sm"
-                      style={{ minWidth: 120 }}
-                    >
-                      <option value="__MARKET__">Market Currency</option>
-                      <option value="__BASE__">System (USD $)</option>
-                      {currencyOptions.map(c => (
-                        <option key={c.code} value={c.code}>{c.code} {c.symbol}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {activeCogs && (
-                    <div className="flex items-center gap-2 ml-auto">
-                      {activeCogs.has_variation
-                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold">✦ Market Variation</span>
-                        : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-2 text-text-3 text-xs">🌍 Global Recipe</span>
-                      }
-                      {activeVariation && (
-                        <button
-                          onClick={() => setShowComparison(p => !p)}
-                          className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${showComparison ? 'border-accent bg-accent text-white' : 'border-border text-text-2 hover:border-accent hover:text-accent bg-surface'}`}
-                          title="Side-by-side comparison of global vs market variation ingredients"
-                        >
-                          ⇄ Compare
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* ── COGS KPIs ── */}
               {activeCogs && (() => {
@@ -1196,11 +1717,10 @@ export default function RecipesPage() {
                             // Edit always in the menu's own market currency to avoid conversion rounding
                             <div className="flex items-center gap-1 mt-1">
                               <span className="text-sm text-text-3">{activeMenu.currency_symbol}</span>
-                              <input
-                                type="number" min="0" step="0.01"
+                              <CalcInput
                                 className="input text-sm font-mono w-24 py-0.5 px-1"
                                 value={editingTilePrice}
-                                onChange={e => setEditingTilePrice(e.target.value)}
+                                onChange={v => setEditingTilePrice(v)}
                                 onKeyDown={async e => {
                                   if (e.key === 'Enter') {
                                     const gross = parseFloat(editingTilePrice)
@@ -1251,6 +1771,7 @@ export default function RecipesPage() {
                         {(() => {
                           const c = activeCogs.coverage
                           const cfg = {
+                            empty:            { icon: '—', label: 'No ingredients',    cls: 'text-text-3',     sub: 'Add ingredients to see quote coverage',           subCls: 'text-text-3'      },
                             fully_preferred:  { icon: '✓', label: 'Fully Preferred',  cls: 'text-emerald-600', sub: 'All ingredients have preferred vendor quotes',   subCls: 'text-emerald-500' },
                             fully_quoted:     { icon: '✓', label: 'Fully Quoted',      cls: 'text-blue-600',   sub: 'All quoted, but some not from preferred vendors', subCls: 'text-blue-400'    },
                             partially_quoted: { icon: '⚠', label: 'Partially Quoted',  cls: 'text-amber-500',  sub: 'Some ingredients are missing quotes',             subCls: 'text-amber-400'   },
@@ -1269,44 +1790,68 @@ export default function RecipesPage() {
                 )
               })()}
 
-              {/* ── Ingredients table ── */}
-              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+              {/* ── Market + Price Level + Currency selectors (moved here from above KPIs) ── */}
+              {selected.cogs_by_country.length > 0 && (
+                <div className="flex items-center gap-4 mb-3 flex-wrap">
 
-                {/* Table header bar */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
-                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                    <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
-                    {variantMode === 'market-pl' && activeMarketPlVariation
-                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">🌍💰 {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
-                      : variantMode === 'price-level' && activePlVariation
-                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">💰 PL Variation ({activePlVariation.price_level_name})</span>
-                        : activeCogs?.has_variation
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Market Variation</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">Global</span>
-                    }
-                    {/* Variant mode toggle */}
-                    {priceLevels.length > 0 && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('market')}
-                          title="Market variations — different ingredients per country"
-                        >🌍 Market</button>
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'price-level' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('price-level')}
-                          title="Price level variations — different ingredients per price level (global)"
-                        >💰 Price Level</button>
-                        <button
-                          className={`px-2 py-0.5 text-xs rounded-md font-medium transition-colors ${variantMode === 'market-pl' ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                          onClick={() => setVariantMode('market-pl')}
-                          title="Market+PL variations — specific ingredients for a market+price level combination"
-                        >🌍💰 Market+PL</button>
-                      </div>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Market</span>
+                    <select
+                      value={selectedCountryId}
+                      onChange={e => {
+                        const v = e.target.value
+                        const newId = v === 'GLOBAL' ? 'GLOBAL' : Number(v)
+                        setSelectedCountryId(newId)
+                        setShowComparison(false)
+                        const firstInMarket = typeof newId === 'number'
+                          ? menuAssignments.find(m => m.country_id === newId)
+                          : menuAssignments[0]
+                        setSelectedMenuId(firstInMarket?.menu_id ?? null)
+                      }}
+                      className="input text-sm"
+                      style={{ minWidth: 160 }}
+                    >
+                      <option value="GLOBAL">🌍 Global</option>
+                      {selected.cogs_by_country.map(c => (
+                        <option key={c.country_id} value={c.country_id}>
+                          {c.country_name}{c.has_variation ? ' ✦' : ''}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {variantMode === 'market' && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && (
+
+                  {priceLevels.length > 1 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-text-3 whitespace-nowrap">Price Level</span>
+                      <select
+                        value={selectedPriceLevelId ?? ''}
+                        onChange={e => setSelectedPriceLevelId(e.target.value ? Number(e.target.value) : null)}
+                        className="input text-sm"
+                        style={{ minWidth: 120 }}
+                      >
+                        <option value="">— any —</option>
+                        {priceLevels.map(l => (
+                          <option key={l.id} value={l.id}>{l.name}{l.is_default ? ' ★' : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Contextual variant actions — driven entirely by the
+                      Market + Price Level selection above. */}
+                  <div className="flex items-center gap-2 ml-auto flex-wrap">
+                    {activeCogs && activeVariation && (
+                      <button
+                        onClick={() => setShowComparison(p => !p)}
+                        className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${showComparison ? 'border-accent bg-accent text-white' : 'border-border text-text-2 hover:border-accent hover:text-accent bg-surface'}`}
+                        title="Side-by-side comparison of global vs market variation ingredients"
+                      >
+                        ⇄ Compare
+                      </button>
+                    )}
+
+                    {/* Market variation actions */}
+                    {variantMode === 'market' && variationsEnabled && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && (
                       activeCogs?.has_variation && activeCogs.variation_id ? (
                         <>
                           <button
@@ -1327,21 +1872,16 @@ export default function RecipesPage() {
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
-                            if (window.confirm(`Create a market variation for ${countryName}?\n\nThis lets you define different ingredients for this market. The global recipe remains unchanged.\n\nCopy global ingredients as a starting point?`)) {
-                              createVariation(selectedCountryId as number, true)
-                            } else if (window.confirm('Create empty variation instead?')) {
-                              createVariation(selectedCountryId as number, false)
-                            }
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'market', countryId: selectedCountryId as number })}
                           title="Create a market-specific variation of this recipe"
                         >
                           ✦ Create Variation
                         </button>
                       )
                     )}
-                    {variantMode === 'price-level' && selectedPriceLevelId && (
+
+                    {/* Price-level variation actions */}
+                    {variantMode === 'price-level' && variationsEnabled && selectedPriceLevelId && (
                       activePlVariation ? (
                         <>
                           <button
@@ -1362,75 +1902,70 @@ export default function RecipesPage() {
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const levelName = priceLevels.find(l => l.id === selectedPriceLevelId)?.name ?? 'this price level'
-                            if (window.confirm(`Create a price level variation for ${levelName}?\n\nThis lets you define different ingredients for this price level. The global recipe remains unchanged.\n\nCopy global ingredients as a starting point?`)) {
-                              createPlVariation(selectedPriceLevelId, true)
-                            } else if (window.confirm('Create empty PL variation instead?')) {
-                              createPlVariation(selectedPriceLevelId, false)
-                            }
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'pl', priceLevelId: selectedPriceLevelId })}
                           title="Create a price-level-specific variation of this recipe"
                         >
-                          ⊞ Create PL Variation
+                          ✦ Create Variation
                         </button>
                       )
                     )}
-                    {variantMode === 'market-pl' && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && selectedPriceLevelId && (
+
+                    {/* Market+PL variation actions */}
+                    {variantMode === 'market-pl' && variationsEnabled && selectedCountryId !== '' && selectedCountryId !== 'GLOBAL' && selectedPriceLevelId && (
                       activeMarketPlVariation ? (
                         <button
                           className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1"
                           onClick={() => setConfirmDelete({ type: 'market-pl-variation', id: activeMarketPlVariation.id })}
                           title="Delete this market+PL variation"
                         >
-                          <TrashIcon size={11} /> Delete Market+PL
+                          <TrashIcon size={11} /> Delete Variation
                         </button>
                       ) : (
                         <button
                           className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                          onClick={() => {
-                            const countryName = selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'this country'
-                            const levelName   = priceLevels.find(l => l.id === selectedPriceLevelId)?.name ?? 'this price level'
-                            const hasMktVar   = selected.variations.some(v => v.country_id === selectedCountryId)
-                            const hasPlVar    = selected.pl_variations?.some(v => v.price_level_id === selectedPriceLevelId)
-                            const choices = ['global', hasMktVar && 'market', hasPlVar && 'pl'].filter(Boolean) as string[]
-                            const copyLabel = choices.length > 1
-                              ? `\n\nCopy from: global (G), market variation (M)${hasPlVar ? ', PL variation (P)' : ''}?\nEnter G, M${hasPlVar ? ', P' : ''} or leave blank for empty.`
-                              : `\n\nCopy global ingredients as starting point?`
-                            const ans = window.prompt(`Create Market+PL variation for ${countryName} · ${levelName}?${copyLabel}`)
-                            if (ans === null) return
-                            const copyFrom = ans.trim().toUpperCase() === 'M' ? 'market'
-                              : ans.trim().toUpperCase() === 'P' ? 'pl'
-                              : ans.trim() === '' ? null
-                              : 'global'
-                            createMarketPlVariation(selectedCountryId as number, selectedPriceLevelId, copyFrom)
-                          }}
+                          onClick={() => setCreateVariationCtx({ kind: 'market-pl', countryId: selectedCountryId as number, priceLevelId: selectedPriceLevelId })}
                           title="Create a market+price-level-specific variation"
                         >
-                          🌍💰 Create Market+PL
+                          ✦ Create Variation
                         </button>
                       )
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Ingredients table ── */}
+              <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+
+                {/* Table header bar */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border gap-3">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                    <span className="font-semibold text-sm text-text-1 shrink-0">Ingredients</span>
+                    {/* Variant pill — derived from current Market + Price Level selection */}
+                    {variantMode === 'market-pl' && activeMarketPlVariation
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 font-semibold shrink-0">✦ Variation: {activeMarketPlVariation.country_name} · {activeMarketPlVariation.price_level_name}</span>
+                      : variantMode === 'price-level' && activePlVariation
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-semibold shrink-0">✦ Variation: {activePlVariation.price_level_name}</span>
+                        : activeCogs?.has_variation
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold shrink-0">✦ Variation: {selected.cogs_by_country.find(c => c.country_id === selectedCountryId)?.country_name ?? 'Market'}</span>
+                          : <span className="text-xs px-2 py-0.5 rounded-full bg-surface-2 text-text-3 shrink-0">🌍 Global recipe</span>
+                    }
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
-                      onClick={() => {
-                        if (variantMode === 'market-pl' && activeMarketPlVariation) {
-                          setItemModalForMarketPlVariation(activeMarketPlVariation.id)
-                          setItemModalForVariation(null)
-                          setItemModalForPlVariation(null)
-                        } else if (variantMode === 'price-level' && activePlVariation) {
-                          setItemModalForPlVariation(activePlVariation.id)
-                          setItemModalForVariation(null)
-                          setItemModalForMarketPlVariation(null)
-                        } else {
-                          setItemModalForVariation(activeVariation?.id ?? null)
-                          setItemModalForPlVariation(null)
-                          setItemModalForMarketPlVariation(null)
-                        }
-                        setItemModal(true)
-                      }}
+                      onClick={() => setShowCopyModal(true)}
+                      title="Copy ingredients from another recipe"
+                    >
+                      <CopyIcon size={11} /> Copy Ingredients
+                    </button>
+                    <button
+                      className="btn-outline px-3 py-1.5 text-xs flex items-center gap-1.5"
+                      onClick={openAddIngredient}
+                      title="Add ingredient (Alt+I)"
                     >
                       <PlusIcon size={11} /> Add Ingredient
+                      <kbd className="ml-1 hidden sm:inline-flex items-center px-1 py-px text-[10px] font-mono text-text-3 bg-surface-2 border border-border rounded">Alt+I</kbd>
                     </button>
                   </div>
                 </div>
@@ -1472,7 +2007,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || 'portion') : '—')}
                                   </td>
                                 </tr>
                               )
@@ -1518,7 +2053,7 @@ export default function RecipesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-xs text-text-2 whitespace-nowrap">
-                                    {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                                    {fmtQty(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || 'portion') : '—')}
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-mono text-xs">
                                     {localCost != null
@@ -1564,7 +2099,14 @@ export default function RecipesPage() {
                           {itemSortField === 'custom' && <th className="w-6" />}
                           <SortTh label="Ingredient" field="name" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
                           <SortTh label="Qty"        field="qty"  sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="left" className="px-4 py-2.5" />
-                          <th className="px-4 py-2.5 text-left font-semibold">Conversion</th>
+                          {/* × mod — modifier multiplier flag. Only one item per
+                              recipe can carry it; the flagged item's prep_qty
+                              becomes the multiplier on attached modifier costs.
+                              Hidden when looking at a market/PL variation
+                              (variations inherit the global flag, can't override). */}
+                          {isGlobalView && (
+                            <th className="px-2 py-2.5 text-center text-xs font-semibold text-text-3" title="Modifier multiplier — flag the item whose qty multiplies modifier costs (e.g. Bone-In Wing × 6 → sauce × 6 per portion).">× mod</th>
+                          )}
                           {activeCogs && <SortTh label={`Cost (${displayCurrency.code})`} field="cost" sortField={itemSortField} sortDir={itemSortDir} onSort={cycleItemSort} align="right" className="px-4 py-2.5" />}
                           <th className="w-16" />
                         </tr>
@@ -1596,6 +2138,7 @@ export default function RecipesPage() {
                                   prep_qty:                String(item.prep_qty),
                                   prep_unit:               item.prep_unit ?? '',
                                   prep_to_base_conversion: String(item.prep_to_base_conversion),
+                                  is_modifier_multiplier:  !!item.is_modifier_multiplier,
                                 })
                               }}
                             >
@@ -1615,15 +2158,51 @@ export default function RecipesPage() {
                                   <div className="text-xs text-text-3">base unit: {item.base_unit_abbr}</div>
                                 )}
                               </td>
-                              <td className="px-4 py-2.5 font-mono text-text-2">
-                                {fmt(item.prep_qty)} {item.prep_unit || item.base_unit_abbr || '—'}
+                              <td className="px-4 py-2.5 font-mono text-text-2"
+                                  onClick={e => e.stopPropagation()}>
+                                {/* Inline qty edit. CalcInput.onChange used to
+                                    fire on every keystroke for plain numeric
+                                    input — saveItemQtyInline ran per digit,
+                                    loadDetail re-keyed the row, and the input
+                                    lost focus mid-typing. Switched to
+                                    onCommit (fires once on Enter / blur) and
+                                    a no-op onChange so typing stays local. */}
+                                <span className="inline-flex items-center gap-1.5">
+                                  <CalcInput
+                                    className="input w-24 py-0.5 px-1.5 font-mono text-sm"
+                                    value={fmtQty(item.prep_qty)}
+                                    onChange={() => { /* commit-only, see below */ }}
+                                    onCommit={v => saveItemQtyInline(item, v)}
+                                  />
+                                  <span className="text-text-3">
+                                    {item.prep_unit
+                                      || item.base_unit_abbr
+                                      || (item.item_type === 'recipe' ? (item.sub_recipe_yield_unit || `portion${Number(item.prep_qty) !== 1 ? 's' : ''}`) : '')}
+                                  </span>
+                                </span>
                               </td>
-                              <td className="px-4 py-2.5 font-mono text-text-3 text-xs">
-                                {item.item_type === 'ingredient'
-                                  ? `× ${fmt(item.prep_to_base_conversion, 6)} → ${fmt(Number(item.prep_qty) * Number(item.prep_to_base_conversion))} ${item.base_unit_abbr || ''}`
-                                  : `${fmt(item.prep_qty)} portion${Number(item.prep_qty) !== 1 ? 's' : ''}`
-                                }
-                              </td>
+                              {/* × mod cell — checkbox toggling the
+                                  is_modifier_multiplier flag. Single-flag-per
+                                  recipe enforced server-side. Disabled for
+                                  recipe-typed items (sub-recipes can't
+                                  themselves carry the flag — flag the leaf
+                                  ingredient instead) and on variations. */}
+                              {isGlobalView && (
+                                <td className="px-2 py-2.5 text-center" onClick={e => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!item.is_modifier_multiplier}
+                                    disabled={item.item_type !== 'ingredient'}
+                                    onChange={() => toggleMultiplierFlag(item)}
+                                    className="cursor-pointer"
+                                    title={item.item_type !== 'ingredient'
+                                      ? 'Only ingredient lines can be flagged as the multiplier'
+                                      : (item.is_modifier_multiplier
+                                          ? `Flagged — modifier costs scale by ${fmtQty(item.prep_qty)}× (this item''s qty)`
+                                          : `Click to flag this item as the multiplier (sets modifier scale to ${fmtQty(item.prep_qty)}×)`)}
+                                  />
+                                </td>
+                              )}
                               {activeCogs && (
                                 <td className="px-4 py-2.5 text-right font-mono">
                                   {localCost != null
@@ -1652,7 +2231,7 @@ export default function RecipesPage() {
                       {activeCogs && activeCogs.total_cost_base > 0 && (
                         <tfoot>
                           <tr className="border-t-2 border-border bg-surface-2">
-                            <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={itemSortField === 'custom' ? 4 : 3}>Total</td>
+                            <td className="px-4 py-2.5 font-semibold text-text-2" colSpan={itemSortField === 'custom' ? 3 : 2}>Total</td>
                             <td className="px-4 py-2.5 text-right font-mono font-bold text-text-1">
                               {displayCurrency.symbol}{fmtCost(activeCogs.total_cost_base * displayCurrency.rate)}
                             </td>
@@ -1708,6 +2287,56 @@ export default function RecipesPage() {
                       </tbody>
                     </table>
                   )}
+                </div>
+              )}
+
+              {/* ── Notes (inline editable, replaces Edit-modal description) ── */}
+              {selected && (
+                <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <span className="font-semibold text-sm text-text-1">Notes</span>
+                    {!editingNotes && (
+                      <button
+                        className="text-xs text-text-3 hover:text-accent flex items-center gap-1"
+                        onClick={() => { setNotesDraft(selected.description ?? ''); setEditingNotes(true) }}
+                      >
+                        <EditIcon size={11} /> {selected.description ? 'Edit' : 'Add notes'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="px-4 py-3">
+                    {editingNotes ? (
+                      <>
+                        <textarea
+                          autoFocus
+                          className="input w-full"
+                          rows={4}
+                          value={notesDraft}
+                          onChange={e => setNotesDraft(e.target.value)}
+                          placeholder="Method, prep tips, allergen notes…"
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') setEditingNotes(false)
+                          }}
+                        />
+                        <div className="flex items-center justify-end gap-2 mt-2">
+                          <button className="btn-outline px-3 py-1.5 text-xs" onClick={() => setEditingNotes(false)}>Cancel</button>
+                          <button
+                            className="btn-primary px-3 py-1.5 text-xs"
+                            onClick={() => {
+                              const trimmed = notesDraft.trim()
+                              const next: string | null = trimmed === '' ? null : trimmed
+                              if (next !== (selected.description ?? null)) updateRecipeField({ description: next })
+                              setEditingNotes(false)
+                            }}
+                          >Save</button>
+                        </div>
+                      </>
+                    ) : selected.description ? (
+                      <p className="text-sm text-text-2 leading-relaxed whitespace-pre-wrap">{selected.description}</p>
+                    ) : (
+                      <p className="text-sm text-text-3 italic">No notes yet.</p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1814,11 +2443,10 @@ export default function RecipesPage() {
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
                   {isSubRecipe ? (
                     <Field label="Portions used">
-                      <input
-                        className="input font-mono"
-                        type="number" min="0.0001" step="0.0001"
+                      <CalcInput
+                        className="input w-full font-mono"
                         value={itemPanelForm.prep_qty}
-                        onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                        onChange={v => setItemPanelForm(f => f ? { ...f, prep_qty: v } : f)}
                         autoFocus
                       />
                       <p className="text-xs text-text-3 mt-1">How many portions of this sub-recipe go into the parent recipe</p>
@@ -1827,11 +2455,10 @@ export default function RecipesPage() {
                     <>
                       <div className="grid grid-cols-2 gap-3">
                         <Field label="Quantity">
-                          <input
-                            className="input font-mono"
-                            type="number" min="0.0001" step="0.0001"
+                          <CalcInput
+                            className="input w-full font-mono"
                             value={itemPanelForm.prep_qty}
-                            onChange={e => setItemPanelForm(f => f ? { ...f, prep_qty: e.target.value } : f)}
+                            onChange={v => setItemPanelForm(f => f ? { ...f, prep_qty: v } : f)}
                             autoFocus
                           />
                         </Field>
@@ -1846,11 +2473,10 @@ export default function RecipesPage() {
                       </div>
 
                       <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`}>
-                        <input
-                          className="input font-mono"
-                          type="number" min="0.000001" step="0.000001"
+                        <CalcInput
+                          className="input w-full font-mono"
                           value={itemPanelForm.prep_to_base_conversion}
-                          onChange={e => setItemPanelForm(f => f ? { ...f, prep_to_base_conversion: e.target.value } : f)}
+                          onChange={v => setItemPanelForm(f => f ? { ...f, prep_to_base_conversion: v } : f)}
                         />
                         <p className="text-xs text-text-3 mt-1">
                           {itemPanelForm.prep_unit && baseUnit
@@ -1868,6 +2494,27 @@ export default function RecipesPage() {
                             <span className="text-text-3 ml-2">(+{item.waste_pct}% waste → <span className="font-mono">{fmt(baseEquiv * (1 + item.waste_pct / 100), 3)} {baseUnit}</span>)</span>
                           )}
                         </div>
+                      )}
+
+                      {/* Modifier multiplier — global view + ingredient items only.
+                          Mirrors the × mod column on the table; setting it here
+                          clears the flag on every other item server-side and the
+                          updateItem optimistic patch reflects that locally. */}
+                      {isGlobalView && (
+                        <label className="flex items-start gap-2 cursor-pointer rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 hover:border-accent/40">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 cursor-pointer"
+                            checked={!!itemPanelForm.is_modifier_multiplier}
+                            onChange={e => setItemPanelForm(f => f ? { ...f, is_modifier_multiplier: e.target.checked } : f)}
+                          />
+                          <div className="text-xs">
+                            <div className="font-semibold text-text-1">Modifier multiplier</div>
+                            <div className="text-text-3 mt-0.5">
+                              When set, this item’s qty (<span className="font-mono">{itemPanelForm.prep_qty || '?'}</span>) multiplies every modifier-option cost on sales items / combo step options that use this recipe. Only one item per recipe can carry the flag — saving here clears it on the others.
+                            </div>
+                          </div>
+                        </label>
                       )}
                     </>
                   )}
@@ -1907,7 +2554,104 @@ export default function RecipesPage() {
           categories={categories}
           onSave={saveRecipe}
           onClose={() => setRecipeModal(null)}
+          onCategoryCreated={cat => setApiCategories(prev =>
+            [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+          )}
+          apiPost={(p, b) => api.post(p, b)}
         />
+      )}
+
+      {duplicateDraft !== null && selected && (
+        <Modal title={`Duplicate "${selected.name}"`} onClose={() => !duplicating && setDuplicateDraft(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-text-2">
+              Creates a full copy of this recipe — all ingredients, variations, and metadata are preserved.
+              Only the name needs to differ.
+            </p>
+            <Field label="New recipe name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={duplicateDraft}
+                onChange={e => setDuplicateDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && duplicateDraft.trim() && !duplicating) {
+                    duplicateRecipe(duplicateDraft.trim(), duplicateAlsoSalesItem)
+                  }
+                }}
+                disabled={duplicating}
+              />
+            </Field>
+
+            {/* Also create a sales item linked to the new recipe so the
+                duplicate is ready to drop on a menu. The category gets
+                for_sales_items=true automatically (sales-items API handles it). */}
+            <label className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-surface-2 -mx-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={duplicateAlsoSalesItem}
+                onChange={e => setDuplicateAlsoSalesItem(e.target.checked)}
+                disabled={duplicating}
+              />
+              <div className="text-sm">
+                <div className="font-medium text-text-1">Create matching sales item</div>
+                <div className="text-xs text-text-3">
+                  Adds a recipe-type sales item with the same name + category, linked to the new recipe.
+                  Lets you drop it on a menu without a separate trip to Sales Items.
+                </div>
+              </div>
+            </label>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button
+                className="btn-outline px-3 py-1.5 text-sm"
+                onClick={() => setDuplicateDraft(null)}
+                disabled={duplicating}
+              >Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50"
+                disabled={!duplicateDraft.trim() || duplicating}
+                onClick={() => duplicateRecipe(duplicateDraft.trim(), duplicateAlsoSalesItem)}
+              >
+                {duplicating ? 'Duplicating…' : (<><CopyIcon size={12} /> Duplicate</>)}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showImageModal && selected && (
+        <Modal title="Recipe image" onClose={() => setShowImageModal(false)}>
+          <div className="space-y-4">
+            {selected.image_url ? (
+              <div className="rounded-lg border border-border overflow-hidden bg-surface-2">
+                <img src={selected.image_url} alt={selected.name} className="w-full max-h-96 object-contain bg-surface-2" />
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-border p-8 text-center text-text-3 text-sm">
+                No image yet — upload one below.
+              </div>
+            )}
+            <ImageUpload
+              label={selected.image_url ? 'Replace image' : 'Upload image'}
+              value={selected.image_url || null}
+              onChange={url => updateRecipeField({ image_url: url || null })}
+              formKey="recipe"
+            />
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              {selected.image_url && (
+                <button
+                  className="px-3 py-1.5 text-xs border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors flex items-center gap-1.5"
+                  onClick={() => { updateRecipeField({ image_url: null }); setShowImageModal(false) }}
+                >
+                  <TrashIcon size={12} /> Remove image
+                </button>
+              )}
+              <button className="btn-outline px-3 py-1.5 text-xs" onClick={() => setShowImageModal(false)}>Close</button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {itemModal && (
@@ -1928,6 +2672,44 @@ export default function RecipesPage() {
             else                                       addItemAndNext(form)
           }}
           onClose={() => { setItemModal(false); setItemModalForVariation(null); setItemModalForPlVariation(null); setItemModalForMarketPlVariation(null) }}
+        />
+      )}
+
+      {showCopyModal && selected && (
+        <CopyIngredientsModal
+          recipes={recipes.filter(r => r.id !== selected.id)}
+          api={api}
+          targetLabel={
+            variantMode === 'market-pl' && activeMarketPlVariation
+              ? `Market+PL: ${activeMarketPlVariation.country_name} · ${activeMarketPlVariation.price_level_name}`
+              : variantMode === 'price-level' && activePlVariation
+                ? `Price Level: ${activePlVariation.price_level_name}`
+                : variantMode === 'market' && activeVariation
+                  ? `Market: ${activeVariation.country_name}`
+                  : 'Global'
+          }
+          onCopy={copyItemsFromSource}
+          onClose={() => setShowCopyModal(false)}
+        />
+      )}
+
+      {createVariationCtx && selected && (
+        <CreateVariationModal
+          ctx={createVariationCtx}
+          recipe={selected}
+          priceLevels={priceLevels}
+          onConfirm={({ copyFrom }) => {
+            const ctx = createVariationCtx
+            if (ctx.kind === 'market') {
+              createVariation(ctx.countryId, copyFrom === 'global')
+            } else if (ctx.kind === 'pl') {
+              createPlVariation(ctx.priceLevelId, copyFrom === 'global')
+            } else {
+              createMarketPlVariation(ctx.countryId, ctx.priceLevelId, copyFrom)
+            }
+            setCreateVariationCtx(null)
+          }}
+          onClose={() => setCreateVariationCtx(null)}
         />
       )}
 
@@ -1973,11 +2755,319 @@ interface RecipeForm {
   createSalesItem?: boolean
 }
 
-function RecipeFormModal({ recipe, categories, onSave, onClose }: {
+// ── Copy Ingredients Modal ────────────────────────────────────────────────
+// Lets the user pick a source recipe, then a specific source variant
+// (global / market / price-level / market+PL), and copies all of that variant's
+// items into the *currently active* variant of the target recipe.
+//
+// Two-step flow: list of recipes → variant picker for the chosen recipe.
+// Variants of the chosen recipe are loaded lazily via GET /recipes/:id.
+
+interface CopyVariantRow {
+  key:        string  // unique row id
+  label:      string  // human readable
+  itemCount:  number
+  items:      RecipeItem[]
+}
+
+function CopyIngredientsModal({ recipes, api, targetLabel, onCopy, onClose }: {
+  recipes: Recipe[]
+  api: ReturnType<typeof useApi>
+  targetLabel: string
+  onCopy: (items: RecipeItem[]) => Promise<void>
+  onClose: () => void
+}) {
+  const [search,        setSearch]        = useState('')
+  const [pickedId,      setPickedId]      = useState<number | null>(null)
+  const [variants,      setVariants]      = useState<CopyVariantRow[]>([])
+  const [loading,       setLoading]       = useState(false)
+  const [copying,       setCopying]       = useState(false)
+  const [pickedVariant, setPickedVariant] = useState<string | null>(null)
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return q
+      ? recipes.filter(r => r.name.toLowerCase().includes(q) || (r.category_name ?? '').toLowerCase().includes(q))
+      : recipes
+  }, [recipes, search])
+
+  // Load detail when a recipe is picked → enumerate variants
+  useEffect(() => {
+    if (pickedId == null) { setVariants([]); setPickedVariant(null); return }
+    let cancelled = false
+    setLoading(true)
+    api.get(`/recipes/${pickedId}`)
+      .then((d: RecipeDetail) => {
+        if (cancelled) return
+        const rows: CopyVariantRow[] = []
+        rows.push({ key: 'global', label: '🌍 Global', itemCount: d.items?.length ?? 0, items: d.items ?? [] })
+        for (const v of (d.variations ?? [])) {
+          rows.push({ key: `m-${v.id}`, label: `🌍 ${v.country_name} (Market)`, itemCount: v.items.length, items: v.items })
+        }
+        for (const v of (d.pl_variations ?? [])) {
+          rows.push({ key: `pl-${v.id}`, label: `💰 ${v.price_level_name} (PL)`, itemCount: v.items.length, items: v.items })
+        }
+        for (const v of (d.market_pl_variations ?? [])) {
+          rows.push({ key: `mpl-${v.id}`, label: `🌍💰 ${v.country_name} · ${v.price_level_name}`, itemCount: v.items.length, items: v.items })
+        }
+        setVariants(rows)
+        setPickedVariant(rows[0]?.key ?? null)
+      })
+      .catch(() => { if (!cancelled) setVariants([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [pickedId, api])
+
+  const chosen = variants.find(v => v.key === pickedVariant)
+
+  return (
+    <Modal title="Copy ingredients from another recipe" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-text-3">
+          Will append into <span className="font-semibold text-text-2">{targetLabel}</span> on the current recipe.
+        </div>
+
+        {pickedId == null ? (
+          <>
+            <input
+              autoFocus
+              className="input w-full"
+              placeholder="Search recipes…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            <div className="border border-border rounded-lg max-h-96 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <div className="p-4 text-center text-sm text-text-3">No recipes match.</div>
+              ) : (
+                filtered.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => setPickedId(r.id)}
+                    className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-surface-2 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-text-1 truncate">{r.name}</div>
+                      {r.category_name && <div className="text-xs text-text-3 truncate">{r.category_name}</div>}
+                    </div>
+                    <span className="text-xs text-text-3 shrink-0">{r.item_count} item{r.item_count !== 1 ? 's' : ''}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
+              <div className="text-sm font-semibold text-text-1 truncate">
+                {recipes.find(r => r.id === pickedId)?.name}
+              </div>
+              <button className="text-xs text-text-3 hover:text-accent" onClick={() => { setPickedId(null); setVariants([]); setPickedVariant(null) }}>← Pick another</button>
+            </div>
+
+            {loading ? (
+              <div className="flex justify-center p-6"><Spinner /></div>
+            ) : variants.length === 0 ? (
+              <div className="text-sm text-text-3 italic">This recipe has no items.</div>
+            ) : (
+              <div className="border border-border rounded-lg overflow-hidden">
+                {variants.map(v => (
+                  <label
+                    key={v.key}
+                    className={`flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition-colors ${pickedVariant === v.key ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <input
+                        type="radio"
+                        name="copy-variant"
+                        checked={pickedVariant === v.key}
+                        onChange={() => setPickedVariant(v.key)}
+                      />
+                      <span className="text-sm font-medium text-text-1 truncate">{v.label}</span>
+                    </div>
+                    <span className="text-xs text-text-3 shrink-0">{v.itemCount} item{v.itemCount !== 1 ? 's' : ''}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+          <button className="btn-outline px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-primary px-3 py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50"
+            disabled={!chosen || chosen.items.length === 0 || copying}
+            onClick={async () => {
+              if (!chosen) return
+              setCopying(true)
+              try { await onCopy(chosen.items) } finally { setCopying(false) }
+            }}
+          >
+            <CopyIcon size={12} />
+            {copying ? 'Copying…' : chosen ? `Copy ${chosen.itemCount} item${chosen.itemCount !== 1 ? 's' : ''}` : 'Copy'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Create Variation Modal ────────────────────────────────────────────────
+// Replaces the old window.confirm + window.prompt flow. Picks the source to
+// copy ingredients from (or empty start). Shows only options that make sense
+// for the variant kind being created and the variations that already exist.
+
+type CreateVariationCopyFrom = 'global' | 'market' | 'pl' | null
+
+function CreateVariationModal({ ctx, recipe, priceLevels, onConfirm, onClose }: {
+  ctx:
+    | { kind: 'market';    countryId: number }
+    | { kind: 'pl';        priceLevelId: number }
+    | { kind: 'market-pl'; countryId: number; priceLevelId: number }
+  recipe: RecipeDetail
+  priceLevels: PriceLevel[]
+  onConfirm: (opts: { copyFrom: CreateVariationCopyFrom }) => void
+  onClose: () => void
+}) {
+  // Resolve labels
+  const countryName = ctx.kind !== 'pl'
+    ? recipe.cogs_by_country.find(c => c.country_id === ctx.countryId)?.country_name ?? 'this market'
+    : null
+  const levelName = ctx.kind !== 'market'
+    ? priceLevels.find(l => l.id === ctx.priceLevelId)?.name ?? 'this price level'
+    : null
+
+  const scopeLabel = ctx.kind === 'market'
+    ? countryName
+    : ctx.kind === 'pl'
+      ? levelName
+      : `${countryName} · ${levelName}`
+
+  // What can we copy from?
+  const hasGlobal = (recipe.items?.length ?? 0) > 0
+  const hasMarketSource = ctx.kind === 'market-pl'
+    && recipe.variations?.some(v => v.country_id === ctx.countryId && v.items.length > 0)
+  const hasPlSource = ctx.kind === 'market-pl'
+    && recipe.pl_variations?.some(v => v.price_level_id === ctx.priceLevelId && v.items.length > 0)
+
+  // Default selection — first available source, fall back to empty.
+  const initialCopyFrom: CreateVariationCopyFrom =
+    hasMarketSource ? 'market'
+    : hasPlSource     ? 'pl'
+    : hasGlobal       ? 'global'
+    : null
+  const [copyFrom, setCopyFrom] = useState<CreateVariationCopyFrom>(initialCopyFrom)
+
+  // Count of items each option would copy (used in the labels).
+  const globalCount = recipe.items?.length ?? 0
+  const marketCount = ctx.kind === 'market-pl'
+    ? (recipe.variations?.find(v => v.country_id === ctx.countryId)?.items.length ?? 0)
+    : 0
+  const plCount = ctx.kind === 'market-pl'
+    ? (recipe.pl_variations?.find(v => v.price_level_id === ctx.priceLevelId)?.items.length ?? 0)
+    : 0
+
+  return (
+    <Modal title={`Create variation — ${scopeLabel}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-text-2">
+          Pick a starting point for this variation. The original recipe and any other
+          variations are not changed.
+        </p>
+
+        <div className="border border-border rounded-lg overflow-hidden">
+          {/* Market source — Market+PL only, shown first when present */}
+          {ctx.kind === 'market-pl' && (
+            <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasMarketSource ? 'opacity-50 cursor-not-allowed' : copyFrom === 'market' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+              <input
+                type="radio"
+                name="copy-from"
+                className="mt-1"
+                disabled={!hasMarketSource}
+                checked={copyFrom === 'market'}
+                onChange={() => setCopyFrom('market')}
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-text-1">Copy from {countryName} market variation</div>
+                <div className="text-xs text-text-3">
+                  {hasMarketSource ? `${marketCount} ingredient${marketCount !== 1 ? 's' : ''} from the existing market variation.` : 'No market variation exists for this market.'}
+                </div>
+              </div>
+            </label>
+          )}
+
+          {/* PL source — Market+PL only */}
+          {ctx.kind === 'market-pl' && (
+            <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasPlSource ? 'opacity-50 cursor-not-allowed' : copyFrom === 'pl' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+              <input
+                type="radio"
+                name="copy-from"
+                className="mt-1"
+                disabled={!hasPlSource}
+                checked={copyFrom === 'pl'}
+                onChange={() => setCopyFrom('pl')}
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-text-1">Copy from {levelName} price-level variation</div>
+                <div className="text-xs text-text-3">
+                  {hasPlSource ? `${plCount} ingredient${plCount !== 1 ? 's' : ''} from the existing PL variation.` : 'No price-level variation exists for this level.'}
+                </div>
+              </div>
+            </label>
+          )}
+
+          {/* Global */}
+          <label className={`flex items-start gap-3 px-3 py-2 border-b border-border cursor-pointer transition-colors ${!hasGlobal ? 'opacity-50 cursor-not-allowed' : copyFrom === 'global' ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+            <input
+              type="radio"
+              name="copy-from"
+              className="mt-1"
+              disabled={!hasGlobal}
+              checked={copyFrom === 'global'}
+              onChange={() => setCopyFrom('global')}
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text-1">Copy from global recipe</div>
+              <div className="text-xs text-text-3">
+                {hasGlobal
+                  ? `${globalCount} ingredient${globalCount !== 1 ? 's' : ''} from the base recipe.`
+                  : 'Global recipe has no ingredients yet.'}
+              </div>
+            </div>
+          </label>
+
+          {/* Empty — last */}
+          <label className={`flex items-start gap-3 px-3 py-2 last:border-0 cursor-pointer transition-colors ${copyFrom === null ? 'bg-accent-dim' : 'hover:bg-surface-2'}`}>
+            <input type="radio" name="copy-from" className="mt-1" checked={copyFrom === null} onChange={() => setCopyFrom(null)} />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text-1">Empty variation</div>
+              <div className="text-xs text-text-3">Add ingredients manually after creation.</div>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+          <button className="btn-outline px-3 py-1.5 text-sm" onClick={onClose}>Cancel</button>
+          <button
+            className="btn-primary px-3 py-1.5 text-sm"
+            onClick={() => onConfirm({ copyFrom })}
+          >
+            Create Variation
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function RecipeFormModal({ recipe, categories, onSave, onClose, onCategoryCreated, apiPost }: {
   recipe: Recipe | null
   categories: {id: number; name: string}[]
   onSave: (f: RecipeForm) => void
   onClose: () => void
+  onCategoryCreated: (cat: { id: number; name: string }) => void
+  apiPost: (path: string, body: unknown) => Promise<unknown>
 }) {
   const [form, setForm] = useState<RecipeForm>({
     name:            recipe?.name           ?? '',
@@ -1990,6 +3080,9 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
 
   const set = (k: keyof RecipeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
+  // Same as set() but accepts the raw string value — for CalcInput etc.
+  const setV = (k: keyof RecipeForm) => (v: string) =>
+    setForm(f => ({ ...f, [k]: v }))
 
   return (
     <Modal title={recipe ? 'Edit Recipe' : 'New Recipe'} onClose={onClose}>
@@ -1998,17 +3091,35 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           <input className="input" value={form.name} onChange={set('name')} placeholder="e.g. Pad Thai" autoFocus />
         </Field>
 
-        {/* Category select */}
+        {!recipe && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-600 -mt-1">
+            <input type="checkbox" checked={form.createSalesItem ?? false}
+              onChange={e => setForm(f => ({ ...f, createSalesItem: e.target.checked }))} />
+            This is a Sales Item
+          </label>
+        )}
+
+        {/* Category — picker with inline-create. New categories created from
+            here are flagged `for_recipes=true` so they appear in this list
+            immediately, plus `for_sales_items=true` if the user has the
+            "Create Sales Item" toggle on (the same category will be needed
+            on the resulting sales item). */}
         <Field label="Category">
-          <select className="select w-full" value={form.category_id} onChange={set('category_id')}>
-            <option value="">No category…</option>
-            {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={categories}
+            scope="for_recipes"
+            alsoSetScopes={form.createSalesItem ? ['for_sales_items'] : undefined}
+            onCategoryCreated={onCategoryCreated}
+            apiPost={apiPost}
+            placeholder="No category…"
+          />
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Yield Quantity">
-            <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.yield_qty} onChange={set('yield_qty')} />
+            <CalcInput className="input w-full font-mono" value={form.yield_qty} onChange={setV('yield_qty')} />
           </Field>
           <Field label="Yield Unit">
             <input className="input" value={form.yield_unit_text} onChange={set('yield_unit_text')}
@@ -2024,15 +3135,19 @@ function RecipeFormModal({ recipe, categories, onSave, onClose }: {
           label="Recipe Image"
           value={form.image_url || null}
           onChange={url => setForm(f => ({ ...f, image_url: url || '' }))}
+          formKey="recipe"
         />
 
-        {!recipe && (
-          <label className="flex items-center gap-2 text-sm cursor-pointer text-gray-600">
-            <input type="checkbox" checked={form.createSalesItem ?? false}
-              onChange={e => setForm(f => ({ ...f, createSalesItem: e.target.checked }))} />
-            Also create a Sales Item linked to this recipe
-          </label>
+        {/* Translations — only shown for existing recipes */}
+        {recipe && (
+          <TranslationEditor
+            entityType="recipe"
+            entityId={recipe.id}
+            fields={['name', 'description']}
+            compact
+          />
         )}
+
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <button className="btn-ghost px-4 py-2 text-sm" onClick={onClose}>Cancel</button>
           <button className="btn-primary px-4 py-2 text-sm" onClick={() => onSave(form)}>
@@ -2053,6 +3168,7 @@ interface ItemForm {
   prep_qty: string
   prep_unit: string
   prep_to_base_conversion: string
+  is_modifier_multiplier?: boolean
 }
 
 function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onClose }: {
@@ -2189,6 +3305,9 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
   const set = (k: keyof ItemForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
+  // String-value variant for CalcInput.
+  const setV = (k: keyof ItemForm) => (v: string) =>
+    setForm(f => ({ ...f, [k]: v }))
 
   const baseEquiv = selIngredient
     ? Number(form.prep_qty) * Number(form.prep_to_base_conversion)
@@ -2254,7 +3373,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
 
             <div className="grid grid-cols-2 gap-3">
               <Field label="Quantity" required>
-                <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
+                <CalcInput className="input w-full font-mono" value={form.prep_qty} onChange={setV('prep_qty')} />
               </Field>
               <Field label="Prep Unit">
                 <input className="input" value={form.prep_unit} onChange={set('prep_unit')} placeholder={baseUnit || 'e.g. g'} />
@@ -2262,7 +3381,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
             </div>
 
             <Field label={`Prep → Base Conversion${baseUnit ? ` (into ${baseUnit})` : ''}`} required>
-              <input className="input font-mono" type="number" min="0.000001" step="0.000001" value={form.prep_to_base_conversion} onChange={set('prep_to_base_conversion')} />
+              <CalcInput className="input w-full font-mono" value={form.prep_to_base_conversion} onChange={setV('prep_to_base_conversion')} />
               <p className="text-xs text-text-3 mt-1">
                 {form.prep_unit && baseUnit
                   ? <>1 <span className="font-mono">{form.prep_unit}</span> = <span className="font-mono">{form.prep_to_base_conversion}</span> <span className="font-mono">{baseUnit}</span></>
@@ -2320,7 +3439,7 @@ function ItemFormModal({ item, ingredients, recipes, onSave, onSaveAndNext, onCl
               )}
             </Field>
             <Field label="Portions used" required>
-              <input className="input font-mono" type="number" min="0.0001" step="0.0001" value={form.prep_qty} onChange={set('prep_qty')} />
+              <CalcInput className="input w-full font-mono" value={form.prep_qty} onChange={setV('prep_qty')} />
               <p className="text-xs text-text-3 mt-1">How many portions of this sub-recipe go into the parent recipe</p>
             </Field>
           </>
@@ -2361,10 +3480,33 @@ function AltNShortcut({ onTrigger, active }: { onTrigger: () => void; active: bo
   return null
 }
 
+// Generic Alt+<key> shortcut. Skips when focus is in an input/textarea/select
+// or contenteditable so typing the letter into a field doesn't fire the action.
+function AltShortcut({ keyChar, onTrigger, active }: { keyChar: string; onTrigger: () => void; active: boolean }) {
+  useEffect(() => {
+    if (!active) return
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey) return
+      if (e.key.toLowerCase() !== keyChar.toLowerCase()) return
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
+      e.preventDefault()
+      onTrigger()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [active, keyChar, onTrigger])
+  return null
+}
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function PlusIcon({ size = 14 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+}
+function CopyIcon({ size = 14 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
 }
 function EditIcon({ size = 14 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -2377,6 +3519,9 @@ function SearchIcon({ className }: { className?: string }) {
 }
 function BookOpenIcon({ size = 24 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+}
+function ImagePlaceholderIcon({ size = 22 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="text-text-3"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
 }
 function DragHandleIcon({ size = 14 }: { size?: number }) {
   return (

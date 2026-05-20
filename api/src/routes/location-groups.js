@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /location-groups
 router.get('/', async (req, res) => {
@@ -27,6 +28,7 @@ router.post('/', async (req, res) => {
       `INSERT INTO mcogs_location_groups (name, description) VALUES ($1, $2) RETURNING *`,
       [name.trim(), description?.trim() || null]
     );
+    logAudit(pool, req, { action: 'create', entity_type: 'location_group', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -39,11 +41,13 @@ router.put('/:id', async (req, res) => {
   const { name, description } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: { message: 'name is required' } });
   try {
+    const { rows: oldRows } = await pool.query(`SELECT * FROM mcogs_location_groups WHERE id=$1`, [req.params.id]);
     const { rows } = await pool.query(
       `UPDATE mcogs_location_groups SET name=$1, description=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
       [name.trim(), description?.trim() || null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'location_group', entity_id: rows[0].id, entity_label: rows[0].name, field_changes: diffFields(oldRows[0], rows[0], ['name', 'description']) });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -54,10 +58,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /location-groups/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: old } = await pool.query(`SELECT * FROM mcogs_location_groups WHERE id=$1`, [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_location_groups WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'location_group', entity_id: Number(req.params.id), entity_label: old[0]?.name || `id:${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);

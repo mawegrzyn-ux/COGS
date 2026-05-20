@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  EQUIPMENT REGISTER
@@ -46,6 +47,7 @@ router.post('/equipment', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
     `, [name.trim(), type, location_id || null, location_desc?.trim() || null, target_min_temp ?? null, target_max_temp ?? null]);
+    logAudit(pool, req, { action: 'create', entity_type: 'equipment', entity_id: rows[0].id, entity_label: rows[0].name });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -69,6 +71,7 @@ router.put('/equipment/:id', async (req, res) => {
       RETURNING *
     `, [name.trim(), type, location_id || null, location_desc?.trim() || null, target_min_temp ?? null, target_max_temp ?? null, is_active !== false, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Equipment not found' } });
+    logAudit(pool, req, { action: 'update', entity_type: 'equipment', entity_id: rows[0].id, entity_label: rows[0].name });
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -79,10 +82,12 @@ router.put('/equipment/:id', async (req, res) => {
 // DELETE /haccp/equipment/:id
 router.delete('/equipment/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_equipment WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_equipment WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Equipment not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'equipment', entity_id: old?.id, entity_label: old?.name });
     res.status(204).end();
   } catch (err) {
     console.error(err);
@@ -147,6 +152,7 @@ router.post('/equipment/:id/logs', async (req, res) => {
       notes?.trim()             || null,
       logged_at                 || new Date().toISOString(),
     ]);
+    logAudit(pool, req, { action: 'create', entity_type: 'temp_log', entity_id: rows[0].id, entity_label: `${t}°C on equipment #${req.params.id}` });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -243,6 +249,7 @@ router.post('/ccp-logs', async (req, res) => {
       logged_at                 || new Date().toISOString(),
       location_id               || null,
     ]);
+    logAudit(pool, req, { action: 'create', entity_type: 'ccp_log', entity_id: rows[0].id, entity_label: `${log_type}: ${item_name.trim()}` });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);

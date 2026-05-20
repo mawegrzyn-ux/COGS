@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useApi } from '../hooks/useApi'
+import DocLibrary from '../components/DocLibrary'
 
 // ─── Utility components ──────────────────────────────────────────────────────
 
@@ -90,20 +92,75 @@ const SECTIONS = [
   { id: 'dashboard',       icon: '📊', label: 'Dashboard' },
   { id: 'inventory',       icon: '📦', label: 'Inventory' },
   { id: 'recipes',         icon: '🍽️', label: 'Recipes' },
+  { id: 'sales-items',     icon: '🏷️', label: 'Sales Items' },
   { id: 'menus',           icon: '📋', label: 'Menus' },
   { id: 'allergen-matrix', icon: '⚠️', label: 'Allergen Matrix' },
   { id: 'haccp',           icon: '🛡️', label: 'HACCP' },
+  { id: 'stock-manager',   icon: '📦', label: 'Stock Manager' },
   { id: 'configuration',   icon: '⚙️', label: 'Configuration' },
+  { id: 'import',          icon: '📥', label: 'Import Wizard' },
+  { id: 'media-library',   icon: '🖼️', label: 'Media Library' },
+  { id: 'system',          icon: '🖥️', label: 'System' },
   { id: 'user-management', icon: '👥', label: 'User Management' },
   { id: 'ai-assistant',    icon: '🤖', label: 'Pepper (AI)' },
-  { id: 'roadmap',         icon: '🗺️', label: 'Roadmap' },
 ]
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// ─── FAQ types ────────────────────────────────────────────────────────────────
+interface FaqItem { id: number; question: string; answer: string; category: string; tags: string[] }
+
 export default function HelpPage() {
+  const api = useApi()
+  const [helpMode, setHelpMode] = useState<'guide' | 'library' | 'faq'>('guide')
   const [active, setActive] = useState('quick-start')
   const [search, setSearch] = useState('')
+
+  // ─── FAQ state ──────────────────────────────────────────────────────────────
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([])
+  const [faqCategories, setFaqCategories] = useState<string[]>([])
+  const [faqSearch, setFaqSearch] = useState('')
+  const [faqCatFilter, setFaqCatFilter] = useState<string[]>([])
+  const [faqExpanded, setFaqExpanded] = useState<Set<number>>(new Set())
+  const [faqLoading, setFaqLoading] = useState(false)
+
+  const loadFaq = useCallback(async () => {
+    setFaqLoading(true)
+    try {
+      const data = await api.get('/faq')
+      setFaqItems(data?.items || [])
+      setFaqCategories(data?.categories || [])
+    } catch { /* ignore */ }
+    finally { setFaqLoading(false) }
+  }, [api])
+
+  useEffect(() => { if (helpMode === 'faq' && !faqItems.length) loadFaq() }, [helpMode, loadFaq, faqItems.length])
+
+  const filteredFaq = useMemo(() => {
+    let items = faqItems
+    if (faqCatFilter.length) items = items.filter(f => faqCatFilter.includes(f.category))
+    if (faqSearch.trim()) {
+      const q = faqSearch.toLowerCase()
+      items = items.filter(f =>
+        f.question.toLowerCase().includes(q) ||
+        f.answer.toLowerCase().includes(q) ||
+        (f.tags || []).some(t => t.toLowerCase().includes(q))
+      )
+    }
+    return items
+  }, [faqItems, faqCatFilter, faqSearch])
+
+  function toggleFaqCat(cat: string) {
+    setFaqCatFilter(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])
+  }
+
+  function toggleFaqExpand(id: number) {
+    setFaqExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  function askPepperFaq(question: string) {
+    window.dispatchEvent(new CustomEvent('pepper-ask', { detail: { message: question } }))
+  }
 
   // Track active section as user scrolls within `main`
   useEffect(() => {
@@ -134,6 +191,127 @@ export default function HelpPage() {
     search === '' || s.label.toLowerCase().includes(search.toLowerCase())
   )
 
+  // ── Tab bar helper ───────────────────────────────────────────────────────
+  const tabBtn = (mode: 'guide' | 'library' | 'faq', label: string, size: 'sm' | 'xs' = 'sm') => (
+    <button
+      className={`px-3 py-1.5 text-${size === 'xs' ? '[10px]' : 'xs'} rounded-lg font-medium ${
+        helpMode === mode ? 'bg-accent text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      }`}
+      onClick={() => setHelpMode(mode)}
+    >{label}</button>
+  )
+
+  if (helpMode === 'library') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface shrink-0">
+          {tabBtn('guide', 'Guide')}{tabBtn('library', 'Library')}{tabBtn('faq', 'FAQ')}
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <DocLibrary location="help" />
+        </div>
+      </div>
+    )
+  }
+
+  if (helpMode === 'faq') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-surface shrink-0">
+          {tabBtn('guide', 'Guide')}{tabBtn('library', 'Library')}{tabBtn('faq', 'FAQ')}
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto p-6">
+            <h1 className="text-lg font-bold text-text-1 mb-1">Frequently Asked Questions</h1>
+            <p className="text-sm text-text-3 mb-4">Search for answers or browse by category</p>
+
+            {/* Search bar */}
+            <input
+              className="input w-full mb-3"
+              placeholder="Search FAQs..."
+              value={faqSearch}
+              onChange={e => setFaqSearch(e.target.value)}
+            />
+
+            {/* Category pills */}
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {faqCategories.map(cat => (
+                <button key={cat}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                    faqCatFilter.includes(cat)
+                      ? 'bg-accent text-white border-accent'
+                      : 'bg-white text-text-2 border-border hover:bg-accent-dim'
+                  }`}
+                  onClick={() => toggleFaqCat(cat)}
+                >{cat}</button>
+              ))}
+              {faqCatFilter.length > 0 && (
+                <button className="px-2.5 py-1 text-xs text-text-3 hover:text-red-500" onClick={() => setFaqCatFilter([])}>
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* FAQ items */}
+            {faqLoading ? (
+              <div className="text-center py-8 text-text-3 text-sm">Loading FAQs...</div>
+            ) : filteredFaq.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-text-3 text-sm mb-3">No matching FAQs found</p>
+                <button className="btn-primary text-sm" onClick={() => askPepperFaq(faqSearch || 'How can I help?')}>
+                  Ask Pepper Instead
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredFaq.map(faq => {
+                  const isOpen = faqExpanded.has(faq.id)
+                  return (
+                    <div key={faq.id} className="border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border)' }}>
+                      {/* Question header */}
+                      <button
+                        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-surface-2 transition-colors"
+                        onClick={() => toggleFaqExpand(faq.id)}
+                      >
+                        <svg className={`w-3.5 h-3.5 shrink-0 text-text-3 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                          <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                        <span className="flex-1 text-sm font-medium text-text-1">{faq.question}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
+                          style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+                          {faq.category}
+                        </span>
+                      </button>
+
+                      {/* Answer (expanded) */}
+                      {isOpen && (
+                        <div className="px-4 pb-3 pt-0 border-t" style={{ borderColor: 'var(--border)' }}>
+                          <p className="text-sm text-text-2 leading-relaxed mt-3 whitespace-pre-line">{faq.answer}</p>
+                          <div className="flex justify-end mt-3">
+                            <button
+                              className="text-xs text-accent hover:text-accent-dark flex items-center gap-1"
+                              onClick={() => askPepperFaq(faq.question)}
+                            >
+                              <span>Ask Pepper for more detail</span>
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex">
 
@@ -143,8 +321,11 @@ export default function HelpPage() {
         style={{ position: 'sticky', top: 0, height: '100vh', alignSelf: 'flex-start' }}
       >
         <div className="px-4 py-3 border-b border-[#D8E6DD]">
+          <div className="flex items-center gap-1 mb-2">
+            {tabBtn('guide', 'Guide', 'xs')}{tabBtn('library', 'Library', 'xs')}{tabBtn('faq', 'FAQ', 'xs')}
+          </div>
           <p className="text-xs font-bold text-[#0F1F17]">Help Centre</p>
-          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.4</p>
+          <p className="text-[10px] text-[#6B7F74] mt-0.5">COGS Manager v2.5</p>
         </div>
         <div className="px-2 pt-2">
           <input
@@ -219,29 +400,73 @@ export default function HelpPage() {
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           The collapsible left sidebar links to all main pages. Click the <strong>arrow icon</strong> at the top of
           the sidebar to collapse it to icon-only view, freeing horizontal space. Your preference is saved
-          in browser local storage. The <strong>AI Assistant</strong> is always accessible via the{' '}
-          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#146A34] text-white text-xs">🤖</span>{' '}
-          button in the bottom-right corner of every page.
+          in browser local storage. The <strong>Pepper AI Assistant</strong> can be docked to the left, right, or
+          bottom of the screen via the mode icons in its panel header — it is always accessible from any page.
         </p>
 
         {/* ═══════════════════════════════════ DASHBOARD */}
         <H2 id="dashboard" icon="📊" title="Dashboard" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The Dashboard gives a live health snapshot of your COGS data. Hit the <strong>Refresh</strong> button
-          (top-right) to re-fetch all metrics. The last-updated timestamp is shown next to the button.
+          The Dashboard is a <strong>configurable widget grid</strong>. Pick a <strong>template</strong>, add the widgets
+          you care about, reorder them, resize them, and your layout is saved to your browser.
         </p>
 
-        <H3 id="kpi-cards">KPI Cards</H3>
+        <H3 id="market-switcher">Global Market Switcher</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          The top-bar market switcher (right of the logo) scopes the whole app to a single market. Pick a country to
+          filter all market-aware widgets (menus, vendors, quotes, menu tiles, top items, market stats). Pick{' '}
+          <strong>All markets</strong> to reset. Your selection is remembered across sessions.
+        </p>
+
+        <H3 id="templates">Templates</H3>
+        <div className="grid grid-cols-1 gap-2.5 my-3">
+          {[
+            { label: 'Executive',       desc: 'High-level KPIs, menu COGS tiles, top-10 items chart, coverage, recent/missing quotes.' },
+            { label: 'Finance / Cost',  desc: 'Coverage-focused: quote coverage bar, missing quotes, recent quotes, menu tiles.' },
+            { label: 'Market Explorer', desc: 'World map, market banner, market picker, market snapshot, menu tiles for the active market.' },
+          ].map(k => (
+            <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
+              <p className="text-xs font-bold text-[#146A34]">{k.label}</p>
+              <p className="text-xs text-[#6B7F74] mt-0.5 leading-snug">{k.desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <H3 id="customise">Customise Mode</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Click <strong>✎ Customise</strong> (top-right). In edit mode you can:
+        </p>
+        <ul className="list-disc pl-5 space-y-1 text-sm text-[#2D4A38]">
+          <li>Change <strong>template</strong> — replaces the layout (your customisations for the new template persist).</li>
+          <li>Click <strong>+ Add widget</strong> to add any widget not already on the board.</li>
+          <li><strong>Drag tiles</strong> — click and hold anywhere on a tile (or grab the <strong>⠿</strong> handle next to the rename input) to drop it at a new position. The source fades and the target gets a green ring while you drag.</li>
+          <li>Use the <strong>width selector</strong> (¼ W / ½ W / ¾ W / Full W) and <strong>height selector</strong> (1× H / 2× H / 3× H) in the per-widget toolbar to resize. Maps default to 3× H; charts and tables default to 2× H; KPIs stay at 1× H.</li>
+          <li>The ↑ ↓ buttons are still there as a keyboard fallback if you prefer clicking to dragging.</li>
+          <li>✕ removes the widget; <strong>⤢</strong> pops it out to a standalone window (which auto-fullscreens for Mapbox widgets).</li>
+          <li>Click <strong>↺ Reset</strong> to restore the template's default layout.</li>
+          <li>Click <strong>✓ Done</strong> to exit edit mode. Your layout is saved automatically.</li>
+        </ul>
+
+        <H3 id="kpi-cards">Widget Catalog</H3>
         <div className="grid grid-cols-2 gap-2.5 my-3">
           {[
-            { label: 'Ingredients',   desc: 'Total distinct ingredients in the master library' },
-            { label: 'Recipes',       desc: 'Total recipes built in the system' },
-            { label: 'Vendors',       desc: 'Total supplier records across all markets' },
-            { label: 'Markets',       desc: 'Active country/market configurations' },
-            { label: 'Active Quotes', desc: 'Live price quotes from vendors (is_active = true)' },
-            { label: 'Categories',    desc: 'Ingredient and recipe category count' },
-            { label: 'Menu Tiles',    desc: 'One clickable tile per menu — shows market, item count, and COGS% per price level, loaded in background' },
-            { label: 'Coverage %',    desc: 'Percentage of ingredients with at least one active preferred-vendor quote' },
+            { label: 'KPI tiles',        desc: '8 quarter-width tiles: Ingredients, Recipes, Menus, Markets, Vendors, Active Quotes, Categories, Coverage %.' },
+            { label: 'Coverage Bar',     desc: 'Full-width green/amber/red progress bar showing price-quote coverage.' },
+            { label: 'Menu Tiles',       desc: 'Clickable tiles, one per menu in scope. Shows item count and COGS% per price level.' },
+            { label: 'Menu Top Items',   desc: 'Bar chart of the top 10 items per menu. Toggle between Cost / Revenue / COGS% and per-level price.' },
+            { label: 'Missing Quotes',   desc: 'Top 10 ingredients with no active price quote.' },
+            { label: 'Recent Quotes',    desc: 'Latest 8 active price-quote updates, scoped to the active market.' },
+            { label: 'Quick Links',      desc: 'Shortcut tiles with icons for Inventory, Recipes, Menus, Sales Items, Stock, HACCP, Allergens, Config.' },
+            { label: 'World Map',        desc: '2D world map — click any country in your scope to set it as the active market. Countries shaded by avg COGS%. Country level only.' },
+            { label: 'Mapbox World Map', desc: 'Vector-tile world map powered by Mapbox GL JS (requires a Mapbox public token in System → AI → Mapbox Integration). Countries / Regions toggle for admin-1 drill-down. Popout opens in fullscreen.' },
+            { label: 'Mapbox Country Map', desc: 'Zooms to the active market\'s country, shows its admin-1 regions coloured by coverage, plus pins for every location with captured lat/lng. Requires a Mapbox token.' },
+            { label: 'Country Region Map', desc: 'Zoomed GeoJSON map of the active market\'s country with admin-1 regions + optional city pins (react-simple-maps version).' },
+            { label: 'Market Picker',    desc: 'Card grid of all markets with menu/vendor counts and avg COGS%.' },
+            { label: 'Market Stats',     desc: 'Snapshot of the selected market (menus, vendors, avg COGS, currency).' },
+            { label: 'Market Header',    desc: 'Large banner showing the active market name, currency, exchange rate.' },
+            { label: 'Market Selector',  desc: 'Compact chip row that scopes the whole dashboard to a single market in one click.' },
+            { label: 'New Ingredient',   desc: 'Quick-add card — create an ingredient (optionally with a first price quote) without leaving the dashboard.' },
+            { label: 'New Price Quote',  desc: 'Quick-add card — log a price quote for an existing ingredient + vendor in one click.' },
           ].map(k => (
             <div key={k.label} className="bg-white border border-[#D8E6DD] rounded-lg p-3">
               <p className="text-xs font-bold text-[#146A34]">{k.label}</p>
@@ -263,76 +488,17 @@ export default function HelpPage() {
           These are the highest-priority gaps to fill in <strong>Inventory → Price Quotes</strong>.
         </p>
 
-        {/* ═══════════════════════════════════ CONFIGURATION */}
-        <H2 id="configuration" icon="⚙️" title="Configuration" />
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Markets are the core geographic unit. Everything market-specific — vendor pricing, preferred vendors,
-          menu sell prices, tax rates, and COGS calculations — is linked to a Market (Country). The Markets page
-          consolidates all geographic configuration into one place.
-        </p>
-
-        <H3 id="countries-currencies">Countries & Currencies</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Each market stores a <strong>country name</strong>, <strong>ISO currency code</strong> (e.g. GBP),
-          <strong> currency symbol</strong> (£), and an <strong>exchange rate vs USD</strong>.
-          Exchange rates convert all prices (stored in USD base) to local display currency.
-        </p>
-        <InfoBox type="info">
-          All prices are stored in <strong>USD</strong>. Display conversion:{' '}
-          <Mono>dispRate = market.exchange_rate / targetCurrency.exchange_rate</Mono>.
-          Sync live rates via <strong>Settings → Exchange Rates</strong>.
-        </InfoBox>
-
-        <H3 id="tax-rates">Tax Rates</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Each market supports <strong>multiple tax rates</strong> (e.g. Standard 20%, Reduced 5%, Zero 0%).
-          One rate is flagged as <strong>default</strong>. Rates are mapped to price levels via the
-          Country-Level Tax junction — for example, UK Delivery might carry 20% VAT while a different
-          rate applies to eat-in (cold takeaway food at 0% in the UK).
-        </p>
-
-        <H3 id="price-levels-per-market">Price Levels Per Market</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Price levels (Eat-in, Takeout, Delivery) are global but each market has a
-          <strong> default price level</strong> pre-selected when viewing menus for that market.
-        </p>
-
-        <H3 id="locations">Locations & Location Groups</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Physical store locations are linked to a market and optionally to a <strong>Location Group</strong>
-          (e.g. "London Central"). Location Groups allow clustering of sites for reporting. Locations store
-          address, contact details, and are the scope for all HACCP records. <strong>Brand Partners</strong>
-          (franchise operators) are also associated at the market level.
-        </p>
-
-        {/* ═══════════════════════════════════ (Categories — now under Configuration) */}
-        <H3 id="categories">Categories</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Categories organise your ingredients, recipes, and sales items into logical groups. Each category
-          has three <strong>scope flags</strong> that control where it appears:
-        </p>
-        <div className="flex gap-2 my-3 flex-wrap">
-          <span className="bg-[#E8F5ED] border border-[#146A34]/20 text-[#146A34] text-xs font-semibold px-3 py-1 rounded">for_ingredients</span>
-          <span className="bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1 rounded">for_recipes</span>
-          <span className="bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold px-3 py-1 rounded">for_sales_items</span>
-        </div>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          A category can have any combination of flags — e.g. "Mains" might apply to both recipes and
-          sales items. Each category also belongs to a <strong>Category Group</strong> (e.g. "Dairy",
-          "Proteins") from the <Mono>mcogs_category_groups</Mono> table.
-        </p>
-        <InfoBox type="tip">
-          Suggested ingredient groups: <strong>Dairy · Proteins · Produce · Dry Goods · Beverages ·
-          Sauces &amp; Condiments · Packaging · Cleaning</strong>. Suggested recipe/sales item categories:
-          <strong> Mains · Sides · Desserts · Drinks · Sauces</strong>.
+        <InfoBox type="info" title="Before diving in">
+          Before using Inventory, Recipes, or Menus, ensure you have configured at least one <strong>Market</strong>,
+          one <strong>Price Level</strong>, and <strong>Units</strong> in the <strong>Configuration</strong> section.
+          See the Configuration section below for details on Markets, Tax Rates, Locations, and Categories.
         </InfoBox>
 
         {/* ═══════════════════════════════════ INVENTORY */}
         <H2 id="inventory" icon="📦" title="Inventory" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Inventory has four tabs: <strong>Ingredients</strong>, <strong>Price Quotes</strong>,
-          <strong> Vendors</strong>, and <strong>Allergens</strong>. This is where the foundation of
-          all recipe costing is built.
+          Inventory has three tabs: <strong>Ingredients</strong>, <strong>Vendors</strong>, and{' '}
+          <strong>Price Quotes</strong>. This is where the foundation of all recipe costing is built.
         </p>
 
         <H3 id="ingredients">Ingredients</H3>
@@ -468,30 +634,129 @@ export default function HelpPage() {
           flagged. These gaps also appear on the Dashboard Missing Quotes panel.
         </InfoBox>
 
+        <H3 id="pl-recipes">Price Level Recipes (PL Variations)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A <strong>Price Level Recipe</strong> is an alternate ingredient list for a recipe that activates
+          only when that recipe is sold under a specific price level. Useful when the same dish uses different
+          ingredients depending on the sales channel (e.g. premium bun for Eat-in, standard bun for Delivery).
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Open the recipe, switch the variant selector to <strong>Price Level</strong>, choose a level, then click <strong>Create PL Variation</strong>.</li>
+          <li>Choose to start from a copy of the global recipe or an empty list.</li>
+          <li>Edit ingredients for that price level independently. Changes do not affect the global recipe or other variations.</li>
+          <li>Priority order in COGS calculations: <strong>PL variation &gt; market variation &gt; global recipe</strong>.</li>
+          <li>Use <strong>Copy to Global</strong> to promote a PL variation&apos;s ingredients to become the global recipe.</li>
+          <li>Use <strong>Delete PL Variation</strong> to revert that price level back to the global recipe.</li>
+        </ul>
+
+        {/* ═══════════════════════════════════ SALES ITEMS */}
+        <H2 id="sales-items" icon="🏷️" title="Sales Items" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The <strong>Sales Items</strong> page is the catalog of everything that can appear on a menu. It has four tabs:
+          <strong> Items</strong> (the main catalog), <strong>Combos</strong> (structured bundles), <strong>Modifiers</strong> (reusable add-on groups), and <strong>Templates</strong> (reusable combo configurations).
+          Each sales item has one of four types:
+        </p>
+        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
+          <thead><tr><Th>Type</Th><Th>When to use</Th><Th>COGS source</Th></tr></thead>
+          <tbody>
+            <tr><Td><span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded">Recipe</span></Td><Td>Item is a built recipe in the system</Td><Td>Recipe cost per portion from ingredient pricing</Td></tr>
+            <tr><Td><span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded">Ingredient</span></Td><Td>Item sold directly without a recipe (e.g. a bottled drink)</Td><Td>Ingredient cost from vendor pricing</Td></tr>
+            <tr><Td><span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded">Manual</span></Td><Td>Cost entered manually — no recipe in system</Td><Td>Manually entered fixed cost</Td></tr>
+            <tr><Td><span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded">Combo</span></Td><Td>Bundled meal deal with customer-selectable components</Td><Td>Sum of step costs (average across options)</Td></tr>
+          </tbody>
+        </table>
+
+        <H3 id="si-excel-view">List vs Excel view</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The toolbar has a <strong>List | Excel</strong> view-mode toggle next to the search box.
+          List mode is the dense table you already know. <strong>Excel mode</strong> renders the whole
+          catalogue as a spreadsheet grid with frozen Name / Display / Type / Category columns on the
+          left, one column per price level, and one column per market (country) with a checkbox.
+          Click any cell to edit; changes save on blur or Enter with a small amber <span className="inline-block w-2 h-2 rounded-full bg-amber-400 align-middle" /> spinner while the
+          save is in flight. Best when you need to tweak prices or market visibility across many items at
+          once without opening the side panel each time. Your view preference is remembered per browser.
+        </p>
+        <InfoBox type="info">
+          Excel view is read-only for Type, Linked Item, Description, and Image — those need the
+          complex side-panel controls. Everything else is editable inline.
+        </InfoBox>
+
+        <H3 id="si-edit-panel">Editing a Sales Item — Three-Tab Panel</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Click any row in the Items list to open the right-side edit panel. The panel has three tabs:
+        </p>
+        <div className="grid grid-cols-3 gap-2 my-3">
+          {[
+            { tab: 'Details', desc: 'Name, display name, type, linked item (recipe/ingredient/combo search or manual cost), category, description, image. Save button in footer.' },
+            { tab: 'Markets', desc: 'Enable/disable the item per market. Saves automatically on each checkbox toggle.' },
+            { tab: 'Modifiers', desc: 'Attach or remove modifier groups. Saves automatically on each change.' },
+          ].map(({ tab, desc }) => (
+            <div key={tab} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded-lg p-3">
+              <p className="text-xs font-bold text-[#146A34] mb-1">{tab}</p>
+              <p className="text-xs text-[#6B7F74] leading-snug">{desc}</p>
+            </div>
+          ))}
+        </div>
+        <InfoBox type="tip">
+          The panel tab resets to <strong>Details</strong> each time you select a different item.
+          Markets and Modifiers auto-save — no Save button click needed on those tabs.
+        </InfoBox>
+
+        <H3 id="si-combos">Combos</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A <strong>Combo</strong> is a structured sales item made up of <strong>steps</strong> (e.g.
+          &ldquo;Choose your burger&rdquo;, &ldquo;Choose your side&rdquo;), each with one or more <strong>options</strong>.
+          Each option links to a recipe, ingredient, or a manual cost.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Steps have <strong>min/max selection</strong> rules — e.g. exactly 1 burger (min=max=1) or up to 2 extras (min=0, max=2).</li>
+          <li>Step options can have a <strong>price add-on</strong> (e.g. +$1.00 for a premium burger) and a <strong>Qty</strong> field (how much of the linked recipe/ingredient is used).</li>
+          <li>Combo COGS = sum of all step costs, using the average cost across options when a step allows multiple choices.</li>
+          <li>Step options can also have <strong>Modifier Groups</strong> attached — e.g. the &ldquo;Classic Burger&rdquo; option in step 1 gets its own &ldquo;Sauce choice&rdquo; modifier.</li>
+          <li><strong>UI:</strong> Click a step header to expand/collapse its options <em>and</em> open the step&apos;s edit form in the resizable right panel simultaneously. Click an option row to edit that option.</li>
+        </ul>
+
+        <H3 id="si-modifiers">Modifier Groups</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          <strong>Modifier Groups</strong> are reusable add-on lists (e.g. &ldquo;Sauce choice&rdquo;, &ldquo;Extra toppings&rdquo;,
+          &ldquo;Bone-in flavours&rdquo;). They can be attached to standalone Sales Items <em>or</em> to individual
+          Combo step options.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Each group has <strong>min/max select</strong> — e.g. &ldquo;choose exactly 1 sauce&rdquo; or &ldquo;up to 3 toppings&rdquo;.</li>
+          <li><strong>Allow repeat selection</strong> — when enabled, customers can select the same option multiple times (e.g. double sauce). A +/- stepper replaces the checkbox in the POS Mockup.</li>
+          <li><strong>Auto-show</strong> — per-junction flag. When enabled, the modifier group appears inline automatically. When disabled, it appears behind a &ldquo;Customise&rdquo; button (popup overlay in POS Mockup).</li>
+          <li>Each modifier option links to a recipe, ingredient, or manual cost, has an optional <strong>price add-on</strong>, and a <strong>Qty</strong> field (quantity used per selection, default 1).</li>
+          <li>Options can be <strong>reordered</strong> using arrow buttons. Use <strong>Duplicate</strong> on any group to copy it with all options.</li>
+        </ul>
+
+        <H3 id="si-market-visibility">Market Visibility</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Each sales item can be enabled or disabled per market via the <strong>Markets</strong> tab in the edit panel.
+          This controls which items are available when building a menu for a specific country. Items disabled for a market
+          will not appear in the menu builder&apos;s item selector for menus in that market.
+        </p>
+
         {/* ═══════════════════════════════════ MENUS */}
         <H2 id="menus" icon="📋" title="Menus" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           Menus are the top-level sales unit. Each menu belongs to a <strong>market/country</strong> and
-          contains <strong>Sales Items</strong> — configurable items that can link to a recipe, an ingredient,
-          a manual cost entry, or a combo. The Menus page has three tabs.
+          contains <strong>Sales Items</strong> from the catalog. The Menus page has three tabs.
         </p>
 
         <H3 id="menu-builder">Tab 1 — Menu Builder</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Create menus and add <strong>Sales Items</strong> to them. Each Sales Item carries a display name,
-          an item type, and a sort order.
+          Create menus and add <strong>Sales Items</strong> to them. From the Menu Builder you add existing
+          Sales Items from the catalog (see <strong>Sales Items</strong> section above) to a menu, set the
+          display order, and configure sell prices per price level. Each menu is linked to a market/country,
+          which determines the currency and tax rates.
         </p>
         <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
-          <li><strong>Recipe</strong> — links to a recipe; cost calculated from ingredient prices and yield.</li>
-          <li><strong>Ingredient</strong> — links directly to an ingredient; cost calculated from vendor pricing.</li>
-          <li><strong>Manual</strong> — no recipe/ingredient link; you enter the cost directly. Useful for items with no recipe in the system.</li>
-          <li><strong>Combo</strong> — a structured bundle of steps, each with selectable options (e.g. "Choose your burger + Choose your side"). Cost is the sum of its step costs.</li>
+          <li><strong>Add items</strong> — click &ldquo;+ Add Item&rdquo; and search for a sales item by name. The item&apos;s type (recipe/ingredient/manual/combo) determines how COGS is calculated.</li>
+          <li><strong>Sell prices</strong> — set a sell price per price level (Dine In, Delivery, etc.) for each item on the menu. Prices are stored in USD and displayed in the menu&apos;s market currency.</li>
+          <li><strong>Sort order</strong> — drag or use sort controls to arrange items in the desired display order.</li>
+          <li><strong>Three view modes</strong> — toggle between <strong>List</strong> (rich table with progress bars), <strong>Excel</strong> (compact spreadsheet with inline editing), and <strong>Grid</strong> (card tiles).</li>
         </ul>
-        <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Sales Items are managed in the <strong>Sales Items</strong> page (where you create the catalog of items,
-          define combo steps, attach modifier groups, and configure market availability). From the Menu Builder
-          you add existing Sales Items to a menu and set sell prices per price level.
-        </p>
 
         <H3 id="menu-engineer">Tab 2 — Menu Engineer</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
@@ -529,92 +794,10 @@ export default function HelpPage() {
           <li><strong>Copy link</strong> — click the copy icon to copy the full URL to the clipboard.</li>
         </ul>
 
-        <H3 id="sales-items">Sales Items &amp; Combos</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          The <strong>Sales Items</strong> page is the catalog for everything that appears on a menu.
-          Each item has one of four types:
-        </p>
-        <table className="w-full text-sm border-collapse rounded overflow-hidden border border-[#D8E6DD] my-3">
-          <thead><tr><Th>Type</Th><Th>When to use</Th><Th>COGS source</Th></tr></thead>
-          <tbody>
-            <tr><Td><span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded">Recipe</span></Td><Td>Item is a built recipe in the system</Td><Td>Recipe cost per portion from ingredient pricing</Td></tr>
-            <tr><Td><span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded">Ingredient</span></Td><Td>Item sold directly without a recipe (e.g. a drink)</Td><Td>Ingredient cost from vendor pricing</Td></tr>
-            <tr><Td><span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded">Manual</span></Td><Td>Cost entered manually — no recipe in system</Td><Td>Manually entered fixed cost</Td></tr>
-            <tr><Td><span className="bg-orange-100 text-orange-700 text-xs font-semibold px-2 py-0.5 rounded">Combo</span></Td><Td>Bundled meal deal with customer-selectable components</Td><Td>Sum of step costs (average across options)</Td></tr>
-          </tbody>
-        </table>
-
-        <H3 id="sales-item-panel">Editing a Sales Item — Three-Tab Panel</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Click any row in the Sales Items list to open the right-side edit panel. The panel is split into
-          three tabs so the form stays focused:
-        </p>
-        <div className="grid grid-cols-3 gap-2 my-3">
-          {[
-            { tab: 'Details', desc: 'Name, display name, type, linked item, category, description, image. Save button in footer.' },
-            { tab: 'Markets', desc: 'Enable/disable the item per market. Saves automatically on each checkbox toggle.' },
-            { tab: 'Modifiers', desc: 'Attach or remove modifier groups. Saves automatically on each change.' },
-          ].map(({ tab, desc }) => (
-            <div key={tab} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded-lg p-3">
-              <p className="text-xs font-bold text-[#146A34] mb-1">{tab}</p>
-              <p className="text-xs text-[#6B7F74] leading-snug">{desc}</p>
-            </div>
-          ))}
-        </div>
         <InfoBox type="tip">
-          The panel tab resets to <strong>Details</strong> each time you select a different item.
-          Markets and Modifiers auto-save — no Save button click needed on those tabs.
+          Sales Items are created and configured in the <strong>Sales Items</strong> page (see above).
+          The Menu Builder references items from that catalog — you don&apos;t create new items here.
         </InfoBox>
-
-        <H3 id="combos">Combos</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          A <strong>Combo</strong> is a structured sales item made up of <strong>steps</strong> (e.g.
-          "Choose your burger", "Choose your side", "Choose your drink"), each with one or more{' '}
-          <strong>options</strong>. Each option links to a recipe, ingredient, or a manual cost.
-        </p>
-        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
-          <li>Steps have <strong>min/max selection</strong> rules — e.g. exactly 1 burger (min=max=1) or up to 2 extras (min=0, max=2).</li>
-          <li>Step options can have a <strong>price add-on</strong> (e.g. +£1.00 for a premium burger) and a <strong>Qty</strong> field (how much of the linked recipe/ingredient is used).</li>
-          <li>Combo COGS is calculated as the sum of all step costs, using the average cost across options when a step allows multiple choices.</li>
-          <li>Step options can also have <strong>Modifier Groups</strong> attached (see below).</li>
-        </ul>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-1">
-          <strong>Combos tab UI:</strong> Click a step header to expand/collapse its options <em>and</em> open
-          the step's edit form in the resizable right panel at the same time. Click an option row to edit
-          that option. There is no separate edit button — the row click does it all.
-        </p>
-
-        <H3 id="modifiers">Modifier Groups</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          <strong>Modifier Groups</strong> are reusable add-on lists (e.g. "Sauce choice", "Extra toppings",
-          "Bone-in flavours"). They can be attached to standalone Sales Items <em>or</em> to individual
-          Combo step options.
-        </p>
-        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
-          <li>Each group has <strong>min/max select</strong> — e.g. "choose exactly 1 sauce" or "up to 3 toppings".</li>
-          <li>Each modifier option links to a recipe, ingredient, or manual cost, carries an optional <strong>price add-on</strong>, and a <strong>Qty</strong> field (quantity of the linked item used per selection, default 1).</li>
-          <li>Groups are global and reusable — attach the same "Sauce choice" group to multiple items without redefining the options.</li>
-          <li>Option rows can be <strong>reordered</strong> using ↑ ↓ arrow buttons. Order is saved immediately.</li>
-          <li>Use <strong>Duplicate</strong> on any group to create an independent copy with all its options.</li>
-        </ul>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-1">
-          <strong>Modifiers tab UI:</strong> Click <strong>+ New Modifier Group</strong> in the page header
-          to create a group. Click any group row or option row to open its edit form in the right side panel.
-          Save from the panel footer. The side panel is resizable (drag the left edge).
-        </p>
-
-        <H3 id="pl-recipes">Price Level Recipes (PL Variations)</H3>
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          A <strong>Price Level Recipe</strong> is an alternate ingredient list for a recipe that activates only when that recipe is sold under a specific price level. Useful when the same dish uses different ingredients depending on the sales channel (e.g. premium bun for Eat-in, standard bun for Delivery).
-        </p>
-        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
-          <li>Open the recipe, switch the variant selector to <strong>Price Level</strong>, choose a level, then click <strong>⊞ Create PL Variation</strong>.</li>
-          <li>Choose to start from a copy of the global recipe or an empty list.</li>
-          <li>Edit ingredients for that price level independently. Changes do not affect the global recipe or other variations.</li>
-          <li>Priority order in COGS calculations: <strong>PL variation &gt; market variation &gt; global recipe</strong>.</li>
-          <li>Use <strong>Copy to Global</strong> to promote a PL variation's ingredients to become the global recipe.</li>
-          <li>Use <strong>Delete PL Variation</strong> to revert that price level back to the global recipe.</li>
-        </ul>
 
         {/* ═══════════════════════════════════ ALLERGEN MATRIX */}
         <H2 id="allergen-matrix" icon="⚠️" title="Allergen Matrix" />
@@ -694,11 +877,140 @@ export default function HelpPage() {
           franchise compliance reviews.
         </p>
 
-        {/* ═══════════════════════════════════ SETTINGS (renamed to Configuration in nav) */}
-        <H2 id="configuration" icon="⚙️" title="Configuration" />
+        {/* ═══════════════════════════════════ STOCK MANAGER */}
+        <H2 id="stock-manager" icon="📦" title="Stock Manager" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The Stock Manager is a full inventory management module for tracking stock on hand, purchase orders,
+          goods received, invoices, waste, inter-store transfers, and stocktakes. It has <strong>8 tabs</strong>,
+          each with its own RBAC permission for granular access control.
+        </p>
+        <InfoBox type="info">
+          Stores are called <strong>Centres</strong> in the UI. Centres are sub-locations within a Location
+          (e.g. Kitchen, Bar, Walk-in Fridge). Manage centres in <strong>Configuration → Locations</strong>.
+        </InfoBox>
+
+        <H3 id="sm-overview">Tab 1 — Overview</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          The Configuration section (in the left sidebar) covers all system-wide settings and is organised
-          into dedicated sections via a secondary vertical menu.
+          KPI cards showing total items, low stock count, out of stock count, and number of centres. A stock
+          levels grid with colour-coded status badges (OK / Low / Out) and a recent movements feed showing the
+          latest stock changes across all centres.
+        </p>
+
+        <H3 id="sm-stores">Tab 2 — Centres (Stores)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Three-panel layout: locations list → centres within a location → centre detail. Create and manage
+          sub-locations within each physical site. The <strong>is_store_itself</strong> flag marks a centre
+          that represents the location as a whole (rather than a subdivided area).
+        </p>
+
+        <H3 id="sm-purchase-orders">Tab 3 — Purchase Orders</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Three-panel layout: PO list with status filters → PO detail with line items → smart add-item form.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Smart item form</strong> — select an ingredient and the system auto-populates price, unit, and purchase qty from the vendor&apos;s active quote. If no quote exists, a warning appears with manual entry and an option to &ldquo;Save as price quote&rdquo;.</li>
+          <li><strong>Per-item centre assignment</strong> — each line item can target a different centre (defaults to PO-level centre).</li>
+          <li><strong>Status flow:</strong> Draft → Submitted → Partial → Received → Cancelled.</li>
+          <li>Auto-numbered: PO-1001, PO-1002, etc.</li>
+        </ul>
+
+        <H3 id="sm-goods-in">Tab 4 — Goods In (GRN)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Goods Received Notes track what actually arrived. When linked to a PO, quantities auto-populate
+          from the remaining undelivered amounts. <strong>Confirming</strong> a GRN creates stock movements
+          and updates stock levels in a single transaction. Auto-numbered: GRN-1001+.
+        </p>
+
+        <H3 id="sm-invoices">Tab 5 — Invoices</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Invoice lifecycle with subtotal, tax, and total calculation. Can be created from a confirmed GRN
+          (auto-populates items) or standalone. Supports non-ingredient charges (e.g. delivery fees).
+          <strong> Status flow:</strong> Draft → Pending → Approved → Paid → Disputed. Auto-numbered: INV-1001+.
+        </p>
+
+        <H3 id="sm-waste">Tab 6 — Waste</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Bulk waste entry form with multi-row input: ingredient, quantity, reason code, and notes. Each entry
+          creates a stock movement and decrements the centre&apos;s stock level. The right panel manages
+          configurable <strong>reason codes</strong> (Expired, Damaged, Spillage, Over-production, etc.).
+          A waste log history shows all recorded waste events.
+        </p>
+
+        <H3 id="sm-transfers">Tab 7 — Transfers</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Two-step inter-centre stock transfers. <strong>Dispatch</strong> deducts from the source centre
+          and marks the transfer as in-transit. <strong>Confirm</strong> at the receiving centre adds to
+          the destination. Cancel reverses the dispatch. Auto-numbered: TRF-1001+.
+        </p>
+
+        <H3 id="sm-stocktake">Tab 8 — Stocktake</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Physical stock counting sessions. Two modes: <strong>Full count</strong> (&ldquo;Populate All&rdquo; loads every
+          ingredient from stock levels) and <strong>Spot check</strong> (add specific items only).
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Enter counted quantities for each item. The system shows expected qty, counted qty, and variance.</li>
+          <li><strong>Complete</strong> locks the count. <strong>Approve</strong> adjusts stock levels to match the counted quantities, creating adjustment movements for every variance.</li>
+          <li>Useful for monthly inventory audits and shrinkage tracking.</li>
+        </ul>
+        <ProcessFlow steps={[
+          { label: 'Create session', sub: 'Full or spot check' },
+          { label: 'Populate items', sub: 'All or selected' },
+          { label: 'Count stock', sub: 'Enter actual qty' },
+          { label: 'Complete', sub: 'Lock count' },
+          { label: 'Approve', sub: 'Adjust stock levels' },
+        ]} />
+
+        {/* ═══════════════════════════════════ CONFIGURATION */}
+        <H2 id="configuration" icon="⚙️" title="Configuration" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The Configuration page (in the left sidebar) is a unified hub that covers all system-wide settings.
+          It replaces the old separate Settings, Markets, Categories, and Import pages. Sections include:
+          Global Config, Location Structure, Categories, Base Units, Price Levels, Currency, COGS Calculation,
+          Users &amp; Roles, Import, Media Library, and Stock Config.
+        </p>
+
+        <H3 id="markets">Markets (Countries &amp; Currencies)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Markets are the core geographic unit. Everything market-specific — vendor pricing, preferred vendors,
+          menu sell prices, tax rates, and COGS calculations — is linked to a Market (Country).
+          Each market stores a <strong>country name</strong>, <strong>ISO currency code</strong> (e.g. GBP),
+          <strong> currency symbol</strong>, and an <strong>exchange rate vs USD</strong>.
+        </p>
+        <InfoBox type="info">
+          All prices are stored in <strong>USD</strong>. Display conversion:{' '}
+          <Mono>{'dispRate = market.rate / targetCurrency.rate'}</Mono>.
+          Sync live rates via Configuration → Exchange Rates.
+        </InfoBox>
+
+        <H3 id="tax-rates">Tax Rates</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Each market supports <strong>multiple tax rates</strong> (e.g. Standard 20%, Reduced 5%, Zero 0%).
+          One rate is flagged as <strong>default</strong>. Rates are mapped to price levels via the
+          Country-Level Tax junction — for example, UK Delivery might carry 20% VAT while a different
+          rate applies to eat-in.
+        </p>
+
+        <H3 id="locations">Locations, Groups &amp; Centres</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Physical store locations are linked to a market and optionally to a <strong>Location Group</strong>
+          (e.g. &ldquo;London Central&rdquo;). <strong>Centres</strong> (sub-locations within a site — Kitchen, Bar, Walk-in)
+          are managed here and used by the Stock Manager. <strong>Brand Partners</strong> (franchise operators)
+          are also associated at the market level and control user-level market scope.
+        </p>
+
+        <H3 id="categories">Categories</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Categories organise ingredients, recipes, and sales items. Each category has three <strong>scope flags</strong>:
+        </p>
+        <div className="flex gap-2 my-3 flex-wrap">
+          <span className="bg-[#E8F5ED] border border-[#146A34]/20 text-[#146A34] text-xs font-semibold px-3 py-1 rounded">for_ingredients</span>
+          <span className="bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold px-3 py-1 rounded">for_recipes</span>
+          <span className="bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold px-3 py-1 rounded">for_sales_items</span>
+        </div>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          A category can have any combination — e.g. &ldquo;Mains&rdquo; might apply to both recipes and sales items.
+          Categories belong to <strong>Category Groups</strong> (e.g. Dairy, Proteins) for hierarchical organisation.
         </p>
 
         <H3 id="units-settings">Units of Measurement</H3>
@@ -723,13 +1035,29 @@ export default function HelpPage() {
           conversion across the app. Base currency is USD — all rates are stored as <em>units per 1 USD</em>.
         </p>
 
-        <H3 id="cogs-thresholds-tab">COGS Thresholds</H3>
+        <H3 id="cogs-thresholds-tab">COGS Calculation</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Set the target COGS% for colour-coding in the Menu Engineer. Three bands:
+          A single Configuration tab covering the COGS % thresholds, recipe costing method, modifier
+          multiplier, and modifier-cost-by-choices toggle. The thresholds set the target COGS% for
+          colour-coding in the Menu Engineer — three bands:
           <span className="text-green-700 font-semibold"> Excellent</span> (green ≤ target),{' '}
           <span className="text-amber-600 font-semibold">Acceptable</span> (amber, target+10%),{' '}
           <span className="text-red-600 font-semibold">Alert</span> (red, above acceptable). A typical
           QSR target is 28–32% food cost.
+        </p>
+
+        <H3 id="costing-method">Recipe Costing Method</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Controls how ingredient cost is resolved when an ingredient has <strong>no preferred vendor</strong> set for a market.
+          Preferred vendor quotes always win regardless of this setting.
+        </p>
+        <ul className="list-disc pl-5 space-y-1 text-sm text-[#2D4A38]">
+          <li><strong>Best price quote</strong> <em>(default)</em> — the cheapest active quote in the market. Optimistic: reflects best-case sourcing.</li>
+          <li><strong>Market amalgamated quote</strong> — arithmetic mean of all active quotes in the market (FX-normalised per vendor). Blended view: useful when ingredients are sourced from multiple vendors and no single one is clearly preferred.</li>
+        </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mt-2">
+          Switch in <strong>Configuration → COGS Calculation</strong>. Change takes effect immediately — all COGS calculations
+          (recipe costs, menu COGS tiles, Menu Engineer, Pepper responses) respect it automatically.
         </p>
 
         <H3 id="ai-settings">AI Configuration</H3>
@@ -774,6 +1102,34 @@ export default function HelpPage() {
           Assistant will display "API key not configured".
         </InfoBox>
 
+        <H3 id="ai-mobile">Pepper on Mobile (PWA)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Install COGS on your phone (Add to Home Screen on iOS, Install App on Android) to get a native-feeling
+          Pepper experience designed for kitchen + on-the-go use:
+        </p>
+        <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside space-y-1 mb-2">
+          <li><strong>Full-viewport sheet</strong> — below 640 px wide, Pepper takes the whole screen when opened. Tap targets are 44 px (iOS HIG), the font bumps to 16 px, and the input auto-adjusts for the on-screen keyboard.</li>
+          <li><strong>📷 Camera button</strong> — snap a receipt or invoice; Pepper reads it via vision and stages it as an import job. Pick it up on the Import page's "Continue a staged import" panel.</li>
+          <li><strong>🎙️ Voice input (push-to-talk)</strong> — press and hold the mic to dictate. Free + on-device on Chrome Android (native SpeechRecognition). On Safari/iOS it falls back to OpenAI Whisper (requires an OPENAI_API_KEY in System → AI).</li>
+          <li><strong>🔊 Voice output</strong> — toggle the speaker icon in the Pepper header. Replies read aloud sentence-by-sentence as the stream arrives. Uses the browser's built-in speechSynthesis (no extra API cost).</li>
+          <li><strong>🧇 Kitchen Mode</strong> — toggle (the pan icon) for bigger type + 44 px min tap targets <em>across the whole app</em>, not just Pepper. Great for shop-floor tablets where staff are wearing gloves or have greasy fingers.</li>
+        </ul>
+        <InfoBox type="info">
+          Voice, camera, and kitchen-mode toggles persist per-browser. Kitchen Mode is app-wide, not Pepper-only.
+        </InfoBox>
+
+        <H3 id="ai-calc-input">Math in Numeric Fields (CalcInput)</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Every numeric field on the Recipes and Inventory pages evaluates simple math expressions. Type
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">25*6</code> for a case-of-6 price,
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">(10+2)/12</code> for a blended average,
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">200/100</code> for a mg-to-g conversion.
+          You'll see a live <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">= N</code> preview
+          while typing; on blur or Enter the field snaps to the evaluated number. Only
+          <code className="bg-surface-2 rounded px-1 mx-0.5 text-xs font-mono">+ − × ÷ ( )</code> and decimals are
+          accepted — invalid expressions revert to the last good value.
+        </p>
+
         <H3 id="ai-concise-mode">Concise Mode</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
           The <strong>Response Behaviour</strong> toggle in Settings → AI switches Pepper to concise mode.
@@ -799,6 +1155,117 @@ export default function HelpPage() {
           rather than blocking the user. The limit is a soft guard, not a hard billing control.
         </InfoBox>
 
+        {/* ═══════════════════════════════════ IMPORT WIZARD */}
+        <H2 id="import" icon="📥" title="Import Wizard" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The AI-powered Import Wizard lets you import data from spreadsheets (CSV, XLSX, XLSB). It uses
+          Claude to extract and structure your data, then stages it for review before writing to the database.
+        </p>
+        <H3 id="import-steps">5-Step Wizard</H3>
+        <ProcessFlow steps={[
+          { label: '1. Upload', sub: 'Drag-and-drop file' },
+          { label: '2. Review', sub: 'AI-extracted data' },
+          { label: '3. Categories', sub: 'Map to existing' },
+          { label: '4. Vendors', sub: 'Map to existing' },
+          { label: '5. Execute', sub: 'Write to DB' },
+        ]} />
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Upload</strong> — drag-and-drop or click to select a file. Pepper can also initiate an import from a chat conversation.</li>
+          <li><strong>Review</strong> — AI-extracted data displayed in tabbed tables (Ingredients, Price Quotes, Recipes, Menus). Check for accuracy and correct any errors.</li>
+          <li><strong>Categories</strong> — map each imported category to an existing COGS category, or create new ones inline via the dropdown.</li>
+          <li><strong>Vendors</strong> — map imported vendor names to existing vendors, or create new ones.</li>
+          <li><strong>Execute</strong> — write all staged data to the database. Uses transactions for safety.</li>
+        </ul>
+        <H3 id="import-features">Key Features</H3>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Unit fuzzy-matching</strong> — auto-resolves imported unit strings (e.g. &ldquo;pound&rdquo; → kg) with an amber badge showing the original.</li>
+          <li><strong>Sub-recipe recognition</strong> — three-tier recipe hierarchies (ingredient → sub-recipe → main recipe).</li>
+          <li><strong>Override action</strong> — when duplicates are detected, choose Create / Skip / Override per row.</li>
+          <li><strong>Prep unit import</strong> — supports prep_unit and prep_to_base columns for ingredient preparation conversions.</li>
+          <li><strong>Menu import</strong> — import menus and their item assignments in one go.</li>
+          <li><strong>Download template</strong> — click &ldquo;Download template&rdquo; to get a pre-formatted spreadsheet with all supported sheets.</li>
+        </ul>
+        <InfoBox type="tip">
+          Pepper can also trigger an import: paste spreadsheet content into the AI chat, and Pepper will
+          stage it as an import job and provide a link to the wizard&apos;s review step.
+        </InfoBox>
+
+        {/* ═══════════════════════════════════ MEDIA LIBRARY */}
+        <H2 id="media-library" icon="🖼️" title="Media Library" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The Media Library manages all images used across the application (sales item photos, recipe images, etc.).
+          It supports both <strong>local disk</strong> and <strong>Amazon S3</strong> storage backends.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>Upload</strong> — drag-and-drop images. The system automatically generates three variants: original, thumbnail (300px), and web-optimised (1200px).</li>
+          <li><strong>Categories</strong> — organise images into categories for easy browsing.</li>
+          <li><strong>Grid / List view</strong> — toggle between visual grid and compact list views.</li>
+          <li><strong>Selection model</strong> — single-click focuses an item (opens detail panel); checkbox adds to multi-selection. Once 2+ items are selected, clicking anywhere toggles selection for bulk operations.</li>
+          <li><strong>Bulk operations</strong> — move multiple images to a category or bulk delete.</li>
+          <li><strong>S3 migration</strong> — migrate all images from local disk to S3 via a progress-streamed operation (System → Storage).</li>
+        </ul>
+        <InfoBox type="info">
+          Images are served publicly via <Mono>/api/media/img/:filename</Mono> — no authentication required.
+          This allows images to work in shared links and external contexts.
+        </InfoBox>
+
+        {/* ═══════════════════════════════════ SYSTEM */}
+        <H2 id="system" icon="🖥️" title="System" />
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          The System page is the administration and documentation hub. It contains multiple sections,
+          some of which are gated by admin permissions or the developer flag.
+        </p>
+        <div className="grid grid-cols-2 gap-2 my-3">
+          {[
+            { label: 'AI', desc: 'API keys, token usage, concise mode configuration', gate: '' },
+            { label: 'Bugs & Backlog', desc: 'Bug tracker (BUG-1001+) and feature backlog (BACK-1001+). Visible to all users.', gate: '' },
+            { label: 'Audit Log', desc: 'Central audit trail with filters and expandable rows showing field-level diffs.', gate: 'ADMIN' },
+            { label: 'Storage', desc: 'Media storage config — switch between local disk and S3.', gate: 'ADMIN' },
+            { label: 'Database', desc: 'DB connection mode (local vs standalone/RDS), test, save, migrate data, switch.', gate: 'ADMIN' },
+            { label: 'Test Data', desc: 'Load test/small data, clear database, load defaults. All behind date confirmation.', gate: 'DEV' },
+            { label: 'POS Mockup', desc: 'Functional POS simulator — test combos, modifiers, and order flows.', gate: '' },
+            { label: 'CLAUDE.md', desc: 'Project documentation viewer for developers.', gate: 'DEV' },
+            { label: 'Architecture', desc: 'System architecture reference documentation.', gate: '' },
+            { label: 'API Reference', desc: 'Complete API routes documentation.', gate: '' },
+          ].map(({ label, desc, gate }) => (
+            <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-semibold text-[#0F1F17]">{label}</p>
+                {gate === 'ADMIN' && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">ADMIN</span>}
+                {gate === 'DEV' && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">DEV</span>}
+              </div>
+              <p className="text-[10px] text-[#6B7F74] mt-0.5 leading-snug">{desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <H3 id="system-pos">POS Mockup</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          A functional POS simulator that reads live menu data. Use it to test your combos, modifier groups,
+          and pricing before deploying to a real POS system. Features:
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li>Three-panel layout: check (order summary) | menu grid (category tiles) | order flow</li>
+          <li>Combo step walker with auto-advance for single-choice steps</li>
+          <li>Modifier groups with repeat selection (+/- stepper) and auto-show (inline vs popup)</li>
+          <li>Price level selector to test pricing at different service types</li>
+          <li>Mock receipt with print support</li>
+        </ul>
+
+        <H3 id="system-audit">Audit Log</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          The Audit Log records all data changes across the system with full context: who made the change,
+          what changed (field-level old → new diffs), when, and why (source context). Filter by entity type,
+          action, user, or date range. Expandable rows show the complete change detail. Admin access required.
+        </p>
+
+        <H3 id="system-bugs">Bugs &amp; Backlog</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Two-tab interface for tracking bugs (BUG-1001+) and feature backlog items (BACK-1001+). All users
+          can view and submit. Bugs track priority, severity, status, labels, and reproduction steps. Backlog
+          items track item type (story/task/epic), priority, status, and story points.
+        </p>
+
         {/* ═══════════════════════════════════ USER MANAGEMENT */}
         <H2 id="user-management" icon="👥" title="User Management" />
         <p className="text-sm text-[#2D4A38] leading-relaxed">
@@ -813,7 +1280,7 @@ export default function HelpPage() {
           <thead><tr><Th>Role</Th><Th>Default access</Th><Th>Notes</Th></tr></thead>
           <tbody>
             {[
-              ['Admin',    'Write on all 12 features',                          'Full access. Cannot be deleted.'],
+              ['Admin',    'Write on all 21 features',                          'Full access. Cannot be deleted.'],
               ['Operator', 'Write on most features; Read on settings; None on users', 'Day-to-day operators. Cannot manage users/roles.'],
               ['Viewer',   'Read on all features except settings/import/users (None)', 'Read-only. Cannot make any changes.'],
             ].map(([role, access, note]) => (
@@ -826,12 +1293,14 @@ export default function HelpPage() {
           and adjusting the permission matrix.
         </p>
 
-        <H3 id="rbac-features">Features</H3>
+        <H3 id="rbac-features">Features (21)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          The 12 controllable features map directly to the sidebar navigation:
+          The 21 controllable features map to sidebar pages and Stock Manager tabs:
         </p>
         <div className="grid grid-cols-3 gap-1.5 my-3">
-          {['Dashboard','Inventory','Recipes','Menus','Allergens','HACCP','Markets','Categories','Settings','Import','AI Chat','Users'].map(f => (
+          {['Dashboard','Inventory','Recipes','Menus','Allergens','HACCP','Markets','Categories','Settings','Import','AI Chat','Users',
+            'Stock Overview','Stock Purchase Orders','Stock Goods In','Stock Invoices','Stock Waste','Stock Transfers','Stock Stocktake',
+            'Bugs','Backlog'].map(f => (
             <span key={f} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded px-2 py-1 text-xs font-mono text-[#2D4A38] text-center">{f}</span>
           ))}
         </div>
@@ -897,7 +1366,7 @@ export default function HelpPage() {
           <tbody>
             {[
               ['System → Test Data section', 'Hidden', 'Visible — marked with purple DEV badge'],
-              ['Settings → Test Data tab', 'Hidden', 'Visible — marked with purple DEV badge'],
+              ['System → CLAUDE.md section', 'Hidden', 'Visible — marked with purple DEV badge'],
             ].map(([feature, normal, dev]) => (
               <tr key={feature}><Td>{feature}</Td><Td><span className="text-[#6B7F74]">{normal}</span></Td><Td><span className="text-purple-700 font-semibold">{dev}</span></Td></tr>
             ))}
@@ -921,17 +1390,17 @@ export default function HelpPage() {
 
         <H3 id="ai-panel">Opening &amp; Positioning Pepper</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Pepper defaults to a <strong>floating button</strong> in the bottom-right corner. Click it to open
-          the chat panel. Three layout modes are available via the icons in the Pepper panel header:
+          Pepper is always visible as a docked panel. Three layout modes are available via the icons in the
+          Pepper panel header:
         </p>
         <ul className="text-sm text-[#2D4A38] leading-relaxed list-disc list-inside mb-2 space-y-1">
-          <li><strong>Float</strong> — fixed popup overlay (default)</li>
           <li><strong>Dock left</strong> — full-height panel between the sidebar and main content</li>
           <li><strong>Dock right</strong> — full-height panel to the right of main content</li>
+          <li><strong>Dock bottom</strong> — resizable horizontal panel below main content (drag the top edge to resize, 200px–60vh)</li>
         </ul>
         <p className="text-sm text-[#2D4A38] leading-relaxed">
-          Mode is remembered across sessions (stored in your browser). The close button (float mode only)
-          collapses the panel back to the floating button.
+          Mode is remembered across sessions (stored in your browser). Switching modes preserves your
+          conversation — the panel never unmounts, so history is kept intact.
         </p>
 
         <H3 id="ai-input">Sending Messages &amp; Attachments</H3>
@@ -1014,7 +1483,7 @@ export default function HelpPage() {
 
         <H3 id="ai-tools">Layer 2 — What the AI Can Query & Write (Tools)</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Pepper has <strong>87 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database, plus optional GitHub integration and Excel export.
+          Pepper has <strong>92 tools</strong> spanning full read and write access to your live <Mono>mcogs</Mono> database, plus memory, Excel export, web search, and optional GitHub integration.
           Tool calls happen automatically — Pepper determines which tools to call based on your question or request.
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
@@ -1037,6 +1506,8 @@ export default function HelpPage() {
             { label: 'Web Search',          note: 'search_web — only when you explicitly ask to search the web' },
             { label: 'Menu Engineer',       note: 'list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices' },
             { label: 'Feedback',            note: 'get_feedback, submit_feedback' },
+            { label: 'Excel Export',        note: 'export_to_excel — multi-sheet .xlsx (ingredients, quotes, recipes, menus, or full)' },
+            { label: 'Memory',             note: 'save_memory_note, list_memory_notes, delete_memory_note — persistent notes across sessions' },
             { label: 'GitHub (optional)',   note: 'list_files, read_file, search_code, create_branch, create_or_update_file, list_prs, get_pr_diff, create_pr' },
           ].map(({ label, note }) => (
             <div key={label} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-2">
@@ -1048,7 +1519,7 @@ export default function HelpPage() {
 
         <H3 id="ai-no-access">What the AI Cannot Access</H3>
         <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
-          Pepper has full read and write access to all 27 database tables. The only things outside its reach are:
+          Pepper has read and write access to the application database (78 tables). The only things outside its reach are:
         </p>
         <div className="grid grid-cols-2 gap-2 my-3">
           {[
@@ -1151,182 +1622,40 @@ export default function HelpPage() {
           ))}
         </div>
 
-        {/* Architecture, API Reference, Security, Troubleshooting and Domain Migration
-            have moved to the System section — accessible via System in the left sidebar. */}
+        <H3 id="ai-memory">Pepper Memory</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed mb-2">
+          Pepper has a <strong>persistent memory system</strong> that survives across sessions. Tell Pepper to
+          remember things and it will recall them in future conversations.
+        </p>
+        <ul className="text-sm text-[#2D4A38] space-y-1.5 ml-4 list-disc leading-relaxed mb-2">
+          <li><strong>&ldquo;Remember that I always want UK prices in GBP&rdquo;</strong> — saves a pinned note via <Mono>save_memory_note</Mono>.</li>
+          <li><strong>&ldquo;What do you remember about me?&rdquo;</strong> — lists all saved notes via <Mono>list_memory_notes</Mono>.</li>
+          <li><strong>&ldquo;Forget the note about GBP&rdquo;</strong> — deletes a specific note via <Mono>delete_memory_note</Mono>.</li>
+        </ul>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Notes are loaded into Pepper&apos;s context at the start of every conversation. A user profile
+          stores display name and structured preferences. If memory loading fails, chat works normally
+          without it (graceful degradation).
+        </p>
+
+        <H3 id="ai-excel">Excel Export</H3>
+        <p className="text-sm text-[#2D4A38] leading-relaxed">
+          Ask Pepper to export data and it generates a multi-sheet <Mono>.xlsx</Mono> workbook
+          (ingredients, price quotes, recipes, menus, or a full export). The file downloads automatically
+          in your browser. Exports respect your market scope — if you&apos;re restricted to specific markets,
+          only data for those markets is included.
+        </p>
 
         <InfoBox type="tip" title="Technical documentation">
           Architecture, API Reference, Security, Troubleshooting and Domain Migration guides
-          have moved to <strong>System</strong> in the left navigation menu.
-        </InfoBox>
-
-        {/* ═══════════════════════════════════ ROADMAP */}
-        <H2 id="roadmap" icon="🗺️" title="Roadmap" />
-        <p className="text-sm text-[#2D4A38] leading-relaxed mb-4">
-          Planned features that have been scoped and designed but not yet implemented.
-          Each item below includes a summary of the planned approach and effort estimate.
-        </p>
-
-        {/* ── Language Support ── */}
-        <div className="border border-[#D8E6DD] rounded-xl overflow-hidden my-5">
-          {/* Header */}
-          <div className="flex items-start gap-3 px-4 py-3 bg-white border-b border-[#D8E6DD]">
-            <span className="text-2xl shrink-0 mt-0.5">🌍</span>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-bold text-[#0F1F17] text-base">Multi-Language Support</h3>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">ROADMAP</span>
-                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#F7F9F8] text-[#6B7F74] border border-[#D8E6DD]">~16–19 days</span>
-              </div>
-              <p className="text-xs text-[#6B7F74] mt-1">
-                Translate ingredient names, recipes, sales items, categories, and all customer-facing content into any language.
-                Separate layer for UI localisation (buttons, labels, navigation).
-              </p>
-            </div>
-          </div>
-
-          {/* Two-layer summary */}
-          <div className="grid grid-cols-2 divide-x divide-[#D8E6DD] bg-[#F7F9F8]">
-            <div className="p-4">
-              <p className="text-xs font-bold text-[#0F1F17] mb-2">Layer 1 — Content Translation</p>
-              <p className="text-xs text-[#2D4A38] leading-relaxed mb-3">
-                Per-entity translation tables store translated names and descriptions. A
-                SQL <Mono>COALESCE</Mono> chain resolves the right language at query time —
-                requested lang → country default → system default → base (English) column.
-              </p>
-              <div className="space-y-1">
-                {[
-                  'Ingredients (name, notes)',
-                  'Recipes (name)',
-                  'Sales Items + Combos (name, display_name)',
-                  'Modifier Groups & Options',
-                  'Categories, Vendors, Menus',
-                  'Price Levels',
-                ].map(item => (
-                  <div key={item} className="flex items-center gap-1.5 text-xs text-[#2D4A38]">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#146A34" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="p-4">
-              <p className="text-xs font-bold text-[#0F1F17] mb-2">Layer 2 — UI Localisation</p>
-              <p className="text-xs text-[#2D4A38] leading-relaxed mb-3">
-                Static app labels (buttons, headings, tooltips, error messages) are extracted
-                into locale JSON files and loaded via <Mono>react-i18next</Mono>.
-                Language switching persists in <Mono>localStorage</Mono> and applies immediately.
-              </p>
-              <div className="space-y-1">
-                {[
-                  'react-i18next + i18next-http-backend',
-                  'Locale files per page namespace',
-                  'LanguageSwitcher in app header',
-                  'Settings → Localisation tab',
-                  'RTL layout variants (Arabic, Hebrew)',
-                  'Pilot: English + French',
-                ].map(item => (
-                  <div key={item} className="flex items-center gap-1.5 text-xs text-[#2D4A38]">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#146A34" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* DB schema preview */}
-          <div className="px-4 py-3 border-t border-[#D8E6DD] bg-white">
-            <p className="text-xs font-bold text-[#0F1F17] mb-2">New database tables</p>
-            <div className="grid grid-cols-3 gap-1.5">
-              {[
-                { t: 'mcogs_languages',                    note: 'code, name, is_default, is_rtl' },
-                { t: 'mcogs_ingredient_translations',       note: 'ingredient_id × language_code' },
-                { t: 'mcogs_recipe_translations',           note: 'recipe_id × language_code' },
-                { t: 'mcogs_sales_item_translations',       note: 'sales_item_id × language_code' },
-                { t: 'mcogs_modifier_group_translations',   note: 'modifier_group_id × lang' },
-                { t: 'mcogs_modifier_option_translations',  note: 'modifier_option_id × lang' },
-                { t: 'mcogs_combo_step_translations',       note: 'combo_step_id × lang' },
-                { t: 'mcogs_combo_step_option_translations',note: 'combo_step_option_id × lang' },
-                { t: 'mcogs_category_translations',         note: 'category_id × language_code' },
-                { t: 'mcogs_vendor_translations',           note: 'vendor_id × language_code' },
-                { t: 'mcogs_price_level_translations',      note: 'price_level_id × lang' },
-                { t: 'mcogs_menu_translations',             note: 'menu_id × language_code' },
-              ].map(({ t, note }) => (
-                <div key={t} className="bg-[#F7F9F8] border border-[#D8E6DD] rounded p-1.5">
-                  <p className="font-mono text-[9px] font-semibold text-[#146A34] leading-snug">{t}</p>
-                  <p className="text-[9px] text-[#6B7F74] mt-0.5 leading-tight">{note}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Build phases */}
-          <div className="px-4 py-3 border-t border-[#D8E6DD] bg-[#F7F9F8]">
-            <p className="text-xs font-bold text-[#0F1F17] mb-3">Implementation phases</p>
-            <div className="space-y-2">
-              {[
-                { phase: '1', days: '3 days',    title: 'Foundation',              desc: 'mcogs_languages table + /api/languages CRUD + Settings → Localisation tab' },
-                { phase: '2', days: '4 days',    title: 'Translation Tables',      desc: '11 translation tables in migrate.js + sub-routes on each entity router' },
-                { phase: '3', days: '4 days',    title: 'Backend Resolution',      desc: 'resolveLanguage middleware + COALESCE queries on all entity GET endpoints' },
-                { phase: '4', days: '4 days',    title: 'Frontend Wiring',         desc: 'X-Language header in useApi.ts + TranslationEditor component in detail panels' },
-                { phase: '5', days: '4–5 days',  title: 'UI Localisation',         desc: 'react-i18next setup + locale JSON files + LanguageSwitcher + RTL variants' },
-              ].map(({ phase, days, title, desc }) => (
-                <div key={phase} className="flex items-start gap-2.5">
-                  <div className="w-5 h-5 rounded-full bg-[#146A34] text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{phase}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-[#0F1F17]">{title}</span>
-                      <span className="text-[10px] text-[#6B7F74] bg-white border border-[#D8E6DD] rounded px-1.5 py-0.5">{days}</span>
-                    </div>
-                    <p className="text-[11px] text-[#6B7F74] mt-0.5 leading-snug">{desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Open questions */}
-          <div className="px-4 py-3 border-t border-[#D8E6DD] bg-white">
-            <p className="text-xs font-bold text-[#0F1F17] mb-2">Design decisions to confirm before starting</p>
-            <div className="space-y-1.5">
-              {[
-                { n: 1, q: 'Default language', detail: 'English-only initially, or multi-language from day 1?' },
-                { n: 2, q: 'Translation workflow', detail: 'Manual admin entry, AI-assisted (Claude translates on save), or external CMS sync?' },
-                { n: 3, q: 'Country ↔ language', detail: 'Should each country have a default_language_code, or do users pick language per-session?' },
-                { n: 4, q: 'Shared Link language', detail: 'Auto-resolve from recipient\'s country, or add ?lang= param to the share URL?' },
-                { n: 5, q: 'RTL day-1 requirement', detail: 'Arabic / Hebrew needed at launch, or deferred to a later phase?' },
-                { n: 6, q: 'UI localisation scope', detail: 'Full app (all 12 pages), or priority pages only (Menus, Sales Items, Inventory)?' },
-              ].map(({ n, q, detail }) => (
-                <div key={n} className="flex items-start gap-2 text-xs">
-                  <span className="shrink-0 w-4 h-4 rounded-full bg-amber-100 text-amber-700 text-[9px] font-bold flex items-center justify-center mt-0.5">{n}</span>
-                  <div>
-                    <span className="font-semibold text-[#0F1F17]">{q}</span>
-                    <span className="text-[#6B7F74]"> — {detail}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Footer link */}
-          <div className="px-4 py-2.5 border-t border-[#D8E6DD] bg-[#F7F9F8] flex items-center gap-2">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6B7F74" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            <p className="text-[11px] text-[#6B7F74]">
-              Full specification: <Mono>docs/LANGUAGE_SUPPORT.md</Mono> in the repository
-            </p>
-          </div>
-        </div>
-
-        <InfoBox type="info" title="How to request a roadmap item">
-          To start implementation of any roadmap feature, open a work order and reference the
-          specification document. Each item has a fully detailed technical plan ready to execute.
+          are available in <strong>System</strong> in the left navigation menu.
         </InfoBox>
 
         {/* Footer */}
         <div className="mt-12 pt-6 border-t border-[#D8E6DD] text-center">
-          <p className="text-xs text-[#6B7F74]">COGS Manager v2.1 · React 18 + Node.js 20 + PostgreSQL 16</p>
+          <p className="text-xs text-[#6B7F74]">COGS Manager v2.5 · React 18 + Node.js 20 + PostgreSQL 16</p>
           <p className="text-xs text-[#6B7F74] mt-1.5 space-x-3">
-            <a href="https://cogs.flavorconnect.tech" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">Production App</a>
+            <a href="https://cogs.macaroonie.com" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">Production App</a>
             <span>·</span>
             <a href="https://github.com/mawegrzyn-ux/COGS" className="text-[#146A34] hover:underline" target="_blank" rel="noreferrer">GitHub Repo</a>
             <span>·</span>

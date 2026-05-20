@@ -527,15 +527,69 @@ async function clearData(client) {
   // Clear all operational / COGS data in dependency-safe order.
   // CASCADE automatically truncates any referencing tables not listed here.
   //
-  // Tables intentionally preserved (not truncated):
-  //   mcogs_allergens          — FIC 1169 reference data seeded by migration
-  //   mcogs_roles, mcogs_role_permissions — RBAC reference data seeded by migration
-  //   mcogs_users, mcogs_user_brand_partners — auth data (would break login)
+  // Tables intentionally preserved (not truncated). "Implicit" entries are
+  // reference tables seeded by migrate.js — they're left off the TRUNCATE
+  // list so the seed cycle doesn't need to re-insert them.
+  //
+  //   mcogs_allergens          — FIC 1169 reference data (migration-seeded)
+  //   mcogs_roles, mcogs_role_permissions — RBAC reference data (migration-seeded)
+  //   mcogs_users, mcogs_user_scope — auth data (would break login)
   //   mcogs_ai_chat_log        — AI assistant history
   //   mcogs_feedback           — user-submitted bug/feature reports
   //   mcogs_import_jobs        — import staging data
+  //   mcogs_audit_log          — historical audit trail (preserved for compliance)
+  //   mcogs_user_notes         — Pepper memory notes (preserved per-user)
+  //   mcogs_user_profiles      — Pepper user profiles (preserved per-user)
+  //   mcogs_settings           — global settings blob (base currency, thresholds, costing_method)
+  //   mcogs_changelog          — project change log (migration-seeded, historical)
+  //   mcogs_languages          — supported UI languages (migration-seeded)
+  //   mcogs_regions            — world region catalog (migration-seeded, ~3,800 rows)
+  //   mcogs_qsc_questions      — Wingstop QSC question bank (migration-seeded, 150 rows)
+  //   mcogs_qsc_templates      — QSC audit templates (system + user-created)
+  //
+  // NOTE: mcogs_qsc_audits / mcogs_qsc_responses / mcogs_qsc_response_photos
+  //       are cascade-truncated when mcogs_locations is truncated (FK on
+  //       qsc_audits.location_id), even though location_id is ON DELETE
+  //       SET NULL — TRUNCATE CASCADE wipes FK children regardless of action.
+  //       To preserve audit history across a "Clear Database", set
+  //       location_id = NULL on all audits before TRUNCATE (future work).
   await client.query(`
     TRUNCATE TABLE
+      -- FAQ knowledge base
+      mcogs_faq,
+      -- AI memory consolidation
+      mcogs_memory_monthly,
+      mcogs_memory_daily,
+      -- Doc library
+      mcogs_docs,
+      mcogs_doc_categories,
+      -- Media library
+      mcogs_media_items,
+      mcogs_media_categories,
+      -- Bug tracker + backlog (comments reference these)
+      mcogs_item_comments,
+      mcogs_backlog,
+      mcogs_bugs,
+      -- Stock Manager supply chain
+      mcogs_stocktake_items,
+      mcogs_stocktakes,
+      mcogs_stock_transfer_items,
+      mcogs_stock_transfers,
+      mcogs_waste_log,
+      mcogs_waste_reason_codes,
+      mcogs_credit_note_items,
+      mcogs_credit_notes,
+      mcogs_invoice_items,
+      mcogs_invoices,
+      mcogs_goods_received_items,
+      mcogs_goods_received,
+      mcogs_order_template_items,
+      mcogs_order_templates,
+      mcogs_purchase_order_items,
+      mcogs_purchase_orders,
+      mcogs_stock_movements,
+      mcogs_stock_levels,
+      mcogs_stores,
       -- Shared pages & changes (reference menus + scenarios)
       mcogs_shared_page_changes,
       mcogs_shared_pages,

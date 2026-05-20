@@ -3,7 +3,7 @@
 // URL: /share/:slug
 // =============================================================================
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -41,6 +41,13 @@ interface SharedItem {
   item_type:    'recipe' | 'ingredient' | 'manual' | 'combo'
   category:     string
   cost:         number
+  // Cost adder used by the "Include modifier cost" toggle. In market currency,
+  // qty already applied. Computed server-side: full × min_select for any
+  // attached modifier groups (combo items receive the delta beyond avg×1
+  // already embedded in `cost`).
+  modifier_cost_adder?: number
+  // BUG-1181 — sales item image, rendered as the tile thumbnail in Grid view.
+  image_url?:   string | null
   levels:       Record<number, LevelEntry>
 }
 
@@ -194,9 +201,21 @@ export default function SharedMenuPage() {
 
   // Mobile + view mode state
   const [isMobile,          setIsMobile]          = useState(() => window.innerWidth < 768)
-  const [gridView,          setGridView]          = useState(false)
+  const [viewMode,          setViewMode]          = useState<'table' | 'grid' | 'excel'>('table')
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(true)
   const [mobileLevelFilter, setMobileLevelFilter] = useState<number | 'all'>('all')
+
+  // "Include modifier cost" toggle — same feature as the Menu Engineer button.
+  // Adds avg × min_select per attached modifier group to every item's cost
+  // (and recomputes cogs_pct / gp_net per level on the fly). Defaults to ON;
+  // persisted per browser, scoped to the shared slug, so a viewer that turned
+  // it off keeps it off on subsequent visits to the same link.
+  const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
+    try { return localStorage.getItem(`shared-include-mod-cost-${slug}`) !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(`shared-include-mod-cost-${slug}`, includeModifierCost ? '1' : '0') } catch { /* ignore */ }
+  }, [includeModifierCost, slug])
 
   // Context menu (right-click to comment on an item)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: SharedItem } | null>(null)
@@ -291,13 +310,18 @@ export default function SharedMenuPage() {
 
   // ── Inline price save ────────────────────────────────────────────────────────
 
+  const commitInFlight = useRef(false)
+
   async function commitEdit() {
     if (!editCell || !token || !slug) return
+    // Prevent double-fire from onBlur + onKeyDown both calling commitEdit
+    if (commitInFlight.current) return
     const gross = parseFloat(editCell.value)
     if (isNaN(gross) || gross < 0) { setEditCell(null); return }
     // No-op guard — bail without saving if value hasn't changed
     if (parseFloat(editCell.value) === parseFloat(editCell.originalValue)) { setEditCell(null); return }
 
+    commitInFlight.current = true
     setSaving(true)
     setSaveError('')
     setSaveOk(null)
@@ -321,6 +345,7 @@ export default function SharedMenuPage() {
     } finally {
       setSaving(false)
       setEditCell(null)
+      commitInFlight.current = false
     }
   }
 
@@ -358,11 +383,47 @@ export default function SharedMenuPage() {
 
   // ── Category helpers ─────────────────────────────────────────────────────────
 
+  // Derived items list — applies the "Include modifier cost" toggle by adding
+  // each item's `modifier_cost_adder` (market currency, qty applied) on top of
+  // its base cost AND recomputing per-level cogs_pct + gp_net so every place
+  // that reads `data.items` downstream picks up the adjusted figures without
+  // needing toggle-aware code at every render site.
+  const effectiveItems = useMemo<SharedItem[]>(() => {
+    if (!data) return []
+    if (!includeModifierCost) return data.items
+    return data.items.map(item => {
+      const adder = item.modifier_cost_adder || 0
+      if (adder <= 0) return item
+      const cost = item.cost + adder
+      const newLevels: Record<number, LevelEntry> = {}
+      for (const [k, lvl] of Object.entries(item.levels)) {
+        const lid = Number(k)
+        if (lvl.set && lvl.net != null && lvl.net > 0) {
+          newLevels[lid] = {
+            ...lvl,
+            cogs_pct: Math.round((cost / lvl.net) * 10000) / 100,
+            gp_net:   Math.round((lvl.net - cost) * 10000) / 10000,
+          }
+        } else {
+          newLevels[lid] = lvl
+        }
+      }
+      return { ...item, cost, levels: newLevels }
+    })
+  }, [data, includeModifierCost])
+
+  // True when at least one item has a non-zero adder — used to disable the
+  // toggle on menus where it would have no effect (avoids confusion).
+  const hasAnyModifierAdder = useMemo(() => {
+    if (!data) return false
+    return data.items.some(i => (i.modifier_cost_adder || 0) > 0)
+  }, [data])
+
   const categories = useMemo(() => {
     if (!data) return []
-    const cats = [...new Set(data.items.map(i => i.category || 'Uncategorised'))].sort()
+    const cats = [...new Set(effectiveItems.map(i => i.category || 'Uncategorised'))].sort()
     return cats
-  }, [data])
+  }, [data, effectiveItems])
 
   function toggleCat(cat: string) {
     setCollapsedCats(prev => {
@@ -397,7 +458,9 @@ export default function SharedMenuPage() {
     const qtyData    = data.scenario_qty_data       || {}
     const scenLvlId  = data.scenario_price_level_id || null
     const levels     = data.price_levels
-    const items      = data.items
+    // Use effectiveItems so toggling "Include modifier cost" flows into every
+    // KPI, level breakdown, and category aggregate downstream.
+    const items      = effectiveItems
     const hasQty     = Object.values(qtyData).some(v => Number(v) > 0)
 
     // ── KPI aggregates ────────────────────────────────────────────────────────
@@ -522,7 +585,7 @@ export default function SharedMenuPage() {
       catBreakdown,
       levelBreakdown,
     }
-  }, [data])
+  }, [data, effectiveItems])
 
   // ── Stable levels + mobile filter ────────────────────────────────────────────
   // MUST be declared before any early returns to keep hook call count stable
@@ -770,23 +833,45 @@ export default function SharedMenuPage() {
                 <span className="hidden sm:inline">Help</span>
               </button>
 
-              {/* Grid / list toggle */}
-              <button
-                className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${gridView ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}
-                onClick={() => setGridView(v => !v)}
-                title={gridView ? 'Switch to table view' : 'Switch to grid view'}
-              >
-                {gridView ? (
+              {/* Include modifier cost toggle — same feature as Menu Engineer.
+                  Shown only when at least one item has a non-zero adder. */}
+              {hasAnyModifierAdder && (
+                <button
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    includeModifierCost
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                  onClick={() => setIncludeModifierCost(v => !v)}
+                  title={includeModifierCost
+                    ? 'Modifier costs included in COGS (avg × min selections required). Click to exclude.'
+                    : 'Include the cost of required modifiers in COGS (avg × min selections per group).'}
+                >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/>
                   </svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
-                  </svg>
-                )}
-                <span className="hidden sm:inline">{gridView ? 'List' : 'Grid'}</span>
-              </button>
+                  <span className="hidden sm:inline">{includeModifierCost ? 'Modifiers in COGS' : 'Modifiers'}</span>
+                </button>
+              )}
+
+              {/* View mode toggle: Table / Excel / Grid */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
+                {([
+                  { mode: 'table' as const, label: 'List', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/></svg> },
+                  { mode: 'excel' as const, label: 'Excel', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M3 6h18M3 18h18M8 6v12M16 6v12"/></svg> },
+                  { mode: 'grid' as const, label: 'Grid', icon: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg> },
+                ]).map(({ mode, label, icon }) => (
+                  <button
+                    key={mode}
+                    className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === mode ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                    onClick={() => setViewMode(mode)}
+                    title={label}
+                  >
+                    {icon}
+                    <span className="hidden sm:inline">{label}</span>
+                  </button>
+                ))}
+              </div>
 
               {/* Changes toggle */}
               <button
@@ -905,25 +990,56 @@ export default function SharedMenuPage() {
                 />
               </>
             ) : (
-              <>
-                <KpiTile
-                  label="Avg COGS"
-                  value={`${fmt2(summary.avgCogs)}%`}
-                  sub="all price levels"
-                  colour={
-                    summary.avgCogs === null ? 'gray'
-                    : summary.avgCogs <= 28  ? 'green'
-                    : summary.avgCogs <= 35  ? 'amber'
-                    : 'red'
-                  }
-                />
-                <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
-                <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
-                <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
-              </>
+              <KpiTile
+                label="Avg COGS"
+                value={`${fmt2(summary.avgCogs)}%`}
+                sub="all price levels"
+                colour={
+                  summary.avgCogs === null ? 'gray'
+                  : summary.avgCogs <= 28  ? 'green'
+                  : summary.avgCogs <= 35  ? 'amber'
+                  : 'red'
+                }
+              />
             )}
 
-            {/* Category chart */}
+            {/* Category mix tile */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sales Mix by Category</h3>
+              {summary.catBreakdown.length > 0 ? (
+                <div className="space-y-2">
+                  {summary.catBreakdown.slice(0, 6).map(cat => (
+                    <div key={cat.name} className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 truncate w-20 flex-shrink-0">{cat.name}</span>
+                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`} style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                      </div>
+                      <span className="text-[11px] font-semibold text-gray-700 tabular-nums w-10 text-right">{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-gray-400">No data</p>}
+            </div>
+
+            {/* Price level mix tile */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sales Mix by Price Level</h3>
+              {summary.levelBreakdown.length > 0 ? (
+                <div className="space-y-2">
+                  {summary.levelBreakdown.map(lvl => (
+                    <div key={lvl.id} className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 truncate w-20 flex-shrink-0">{lvl.name}</span>
+                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${cogsBarCls(lvl.avgCogs)}`} style={{ width: `${Math.max(2, lvl.revPct)}%` }} />
+                      </div>
+                      <span className="text-[11px] font-semibold text-gray-700 tabular-nums w-10 text-right">{lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-xs text-gray-400">No data</p>}
+            </div>
+
+            {/* Category chart (detailed) */}
             <div className="bg-gray-50 rounded-xl border border-gray-100 p-4">
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Rev &amp; COGS by Category</h3>
               <div className="space-y-2.5">
@@ -1013,27 +1129,44 @@ export default function SharedMenuPage() {
                             colour={summary.weightedCogs === null ? 'gray' : summary.weightedCogs <= 28 ? 'green' : summary.weightedCogs <= 35 ? 'amber' : 'red'} />
                         </>
                       ) : (
-                        <>
-                          <KpiTile label="Avg COGS" value={`${fmt2(summary.avgCogs)}%`} sub="all levels"
-                            colour={summary.avgCogs === null ? 'gray' : summary.avgCogs <= 28 ? 'green' : summary.avgCogs <= 35 ? 'amber' : 'red'} />
-                          <KpiTile label="Items"    value={String(data!.items.length)} sub="on menu" colour="blue" />
-                        </>
+                        <KpiTile label="Avg COGS" value={`${fmt2(summary.avgCogs)}%`} sub="all levels"
+                          colour={summary.avgCogs === null ? 'gray' : summary.avgCogs <= 28 ? 'green' : summary.avgCogs <= 35 ? 'amber' : 'red'} />
                       )}
                     </div>
+                    {/* Category mix */}
                     {summary.catBreakdown.length > 0 && (
-                      <div className="mt-3 space-y-1.5">
-                        {summary.catBreakdown.slice(0, 5).map(cat => (
-                          <div key={cat.name} className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500 truncate w-24 flex-shrink-0">{cat.name}</span>
-                            <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`}
-                                style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                      <div className="mt-3">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Category Mix</p>
+                        <div className="space-y-1.5">
+                          {summary.catBreakdown.slice(0, 5).map(cat => (
+                            <div key={cat.name} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 truncate w-20 flex-shrink-0">{cat.name}</span>
+                              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${cogsBarCls(cat.cogsPct)}`}
+                                  style={{ width: `${Math.max(2, summary.hasQty ? cat.revPct : cat.costPct)}%` }} />
+                              </div>
+                              <span className="text-[11px] font-semibold text-gray-600 tabular-nums w-9 text-right">{fmt2(summary.hasQty ? cat.revPct : cat.costPct)}%</span>
                             </div>
-                            {cat.cogsPct !== null && (
-                              <span className={`text-xs flex-shrink-0 tabular-nums ${cogsCls(cat.cogsPct)}`}>{fmt2(cat.cogsPct)}%</span>
-                            )}
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* Price level mix */}
+                    {summary.levelBreakdown.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Price Level Mix</p>
+                        <div className="space-y-1.5">
+                          {summary.levelBreakdown.map(lvl => (
+                            <div key={lvl.id} className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 truncate w-20 flex-shrink-0">{lvl.name}</span>
+                              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${cogsBarCls(lvl.avgCogs)}`}
+                                  style={{ width: `${Math.max(2, lvl.revPct)}%` }} />
+                              </div>
+                              <span className="text-[11px] font-semibold text-gray-600 tabular-nums w-9 text-right">{lvl.revPct > 0 ? `${fmt2(lvl.revPct)}%` : '—'}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1069,22 +1202,17 @@ export default function SharedMenuPage() {
                   />
                 </>
               ) : (
-                <>
-                  <KpiTile
-                    label="Avg COGS"
-                    value={`${fmt2(summary.avgCogs)}%`}
-                    sub="all price levels"
-                    colour={
-                      summary.avgCogs === null ? 'gray'
-                      : summary.avgCogs <= 28  ? 'green'
-                      : summary.avgCogs <= 35  ? 'amber'
-                      : 'red'
-                    }
-                  />
-                  <KpiTile label="Menu Items"   value={String(data.items.length)} sub="total items"   colour="blue" />
-                  <KpiTile label="Categories"   value={String(categories.length)} sub="item groups"   colour="gray" />
-                  <KpiTile label="Price Levels" value={String(levels.length)}     sub="pricing tiers" colour="gray" />
-                </>
+                <KpiTile
+                  label="Avg COGS"
+                  value={`${fmt2(summary.avgCogs)}%`}
+                  sub="all price levels"
+                  colour={
+                    summary.avgCogs === null ? 'gray'
+                    : summary.avgCogs <= 28  ? 'green'
+                    : summary.avgCogs <= 35  ? 'amber'
+                    : 'red'
+                  }
+                />
               )}
             </div>
             )}  {/* end tilesLayout === 'top' KPI tiles */}
@@ -1156,11 +1284,11 @@ export default function SharedMenuPage() {
             )}  {/* end tilesLayout === 'top' charts */}
 
             {/* ── Grid view ──────────────────────────────────────────────────────── */}
-            {gridView && (
+            {viewMode === 'grid' && (
               <div className="flex-1 min-h-0 overflow-auto pb-2">
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {categories.map(cat => {
-                    const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                    const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
                     return (
                       <React.Fragment key={cat}>
                         {/* Category label spanning full row */}
@@ -1170,9 +1298,31 @@ export default function SharedMenuPage() {
                         {catItems.map(item => (
                           <div
                             key={item.menu_item_id}
-                            className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col gap-1.5 hover:border-emerald-200 transition-colors"
+                            className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col hover:border-emerald-200 transition-colors"
                             onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
                           >
+                            {/* BUG-1181 — Image thumbnail when a sales-item
+                                image is set. Aspect-square so all tiles in
+                                the grid line up regardless of source ratio.
+                                Falls back to a soft emerald-tinted placeholder
+                                so the tile height stays consistent. */}
+                            {item.image_url ? (
+                              <div className="aspect-square bg-gradient-to-br from-emerald-50 to-emerald-100 overflow-hidden">
+                                <img
+                                  src={item.image_url}
+                                  alt=""
+                                  loading="lazy"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+                                <span className="text-3xl font-bold text-gray-300 select-none">
+                                  {(item.display_name || '?').slice(0, 1).toUpperCase()}
+                                </span>
+                              </div>
+                            )}
+                            <div className="p-3 flex flex-col gap-1.5 flex-1">
                             {/* Item name */}
                             <button
                               className={`text-sm font-semibold text-gray-800 text-left leading-tight ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 transition-colors cursor-pointer' : 'cursor-default'}`}
@@ -1247,6 +1397,7 @@ export default function SharedMenuPage() {
                                 )
                               })}
                             </div>
+                            </div>{/* close p-3 padded body wrapper (BUG-1181) */}
                           </div>
                         ))}
                       </React.Fragment>
@@ -1257,7 +1408,7 @@ export default function SharedMenuPage() {
             )}
 
             {/* ── Table view ─────────────────────────────────────────────────────── */}
-            {!gridView && (
+            {viewMode === 'table' && (
             <div className="flex-1 min-h-0 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
@@ -1285,7 +1436,7 @@ export default function SharedMenuPage() {
 
                   <tbody>
                     {categories.map(cat => {
-                      const catItems = data.items.filter(i => (i.category || 'Uncategorised') === cat)
+                      const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
                       const isCollapsed = collapsedCats.has(cat)
                       const setPriced   = catItems.filter(i => levels.some(l => i.levels[l.id]?.set))
                       // Per-level average COGS for category header row
@@ -1464,14 +1615,207 @@ export default function SharedMenuPage() {
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400" /> ≤ 28% Good</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-amber-400"   /> 28–35% Watch</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-red-400"     /> &gt; 35% High</span>
-                {data.items.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
+                {effectiveItems.some(i => levels.some(l => i.levels[l.id]?.is_scenario_override)) && (
                   <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> Scenario override</span>
                 )}
                 {isEdit && <span className="text-amber-600 font-medium">Edit mode — saves to live database</span>}
                 <span className="text-gray-300 ml-auto hidden sm:block">Right-click any row to add a comment</span>
               </div>
             </div>
-            )}  {/* end !gridView */}
+            )}  {/* end table view */}
+
+            {/* ── Excel view ────────────────────────────────────────────────────── */}
+            {viewMode === 'excel' && (
+            <div className="flex-1 min-h-0 bg-white border border-gray-200 overflow-hidden flex flex-col" style={{ fontSize: 12 }}>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full" style={{ borderCollapse: 'collapse' }}>
+                  <thead className="sticky top-0 z-10">
+                    <tr style={{ background: '#f0f0f0' }}>
+                      <th className="text-left font-semibold text-gray-600 uppercase tracking-wide sticky left-0 whitespace-nowrap border border-gray-300"
+                          style={{ background: '#e8e8e8', padding: '4px 8px', fontSize: 10, minWidth: 180 }}>
+                        <div className="flex items-center gap-1.5">
+                          Item
+                          <button
+                            className="text-gray-400 hover:text-gray-600 text-[9px] border border-gray-300 rounded px-1 py-0 bg-white/80 leading-tight"
+                            onClick={() => collapsedCats.size === categories.length ? expandAll() : collapseAll()}
+                          >
+                            {collapsedCats.size === categories.length ? '▼' : '▶'}
+                          </button>
+                        </div>
+                      </th>
+                      <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                          style={{ background: '#e8e8e8', padding: '4px 8px', fontSize: 10, minWidth: 70 }}>
+                        Cost
+                      </th>
+                      {visibleLevels.map(l => (
+                        <React.Fragment key={l.id}>
+                          <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                              style={{ background: '#dce8dc', padding: '4px 8px', fontSize: 10, minWidth: 80 }}>
+                            {l.name}
+                          </th>
+                          <th className="text-right font-semibold text-gray-600 uppercase tracking-wide border border-gray-300 whitespace-nowrap"
+                              style={{ background: '#dce8dc', padding: '4px 8px', fontSize: 10, minWidth: 60 }}>
+                            COGS%
+                          </th>
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.map(cat => {
+                      const catItems = effectiveItems.filter(i => (i.category || 'Uncategorised') === cat)
+                      const isCollapsed = collapsedCats.has(cat)
+                      const avgCogsPerLevel = Object.fromEntries(
+                        levels.map(l => {
+                          const vals = catItems.map(i => i.levels[l.id]?.cogs_pct).filter((v): v is number => v !== null && v !== undefined)
+                          return [l.id, vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null]
+                        })
+                      )
+
+                      return (
+                        <React.Fragment key={`xl-${cat}`}>
+                          {/* Category header */}
+                          <tr
+                            className="cursor-pointer select-none"
+                            style={{ background: '#f5f5f0' }}
+                            onClick={() => toggleCat(cat)}
+                          >
+                            <td className="font-bold text-gray-700 uppercase tracking-wide sticky left-0 border border-gray-300"
+                                style={{ background: '#f5f5f0', padding: '3px 8px', fontSize: 10 }}
+                                colSpan={1}>
+                              <span className="text-gray-400 mr-1">{isCollapsed ? '▶' : '▼'}</span>
+                              {cat}
+                              <span className="text-gray-400 font-normal ml-1.5">({catItems.length})</span>
+                            </td>
+                            <td className="border border-gray-300" style={{ background: '#f5f5f0', padding: '3px 8px' }} />
+                            {visibleLevels.map(l => {
+                              const avg = avgCogsPerLevel[l.id]
+                              return (
+                                <React.Fragment key={l.id}>
+                                  <td className="border border-gray-300" style={{ background: '#f5f5f0', padding: '3px 8px' }} />
+                                  <td className="text-right border border-gray-300 font-mono" style={{ background: '#f5f5f0', padding: '3px 8px', fontSize: 11 }}>
+                                    {avg !== null && (
+                                      <span className={cogsCls(avg)}>{fmt2(avg)}%</span>
+                                    )}
+                                  </td>
+                                </React.Fragment>
+                              )
+                            })}
+                          </tr>
+                          {/* Item rows */}
+                          {!isCollapsed && catItems.map((item, idx) => (
+                            <tr
+                              key={`xl-${item.menu_item_id}`}
+                              className="hover:bg-blue-50/40 transition-colors"
+                              style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}
+                              onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, item }) }}
+                            >
+                              {/* Item name */}
+                              <td className="sticky left-0 border border-gray-200" style={{ background: 'inherit', padding: '2px 8px' }}>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    className={`font-medium text-gray-800 text-left truncate ${(item.item_type === 'recipe' || item.item_type === 'combo') ? 'hover:text-emerald-600 cursor-pointer underline decoration-dotted underline-offset-2' : 'cursor-default'}`}
+                                    onClick={() => (item.item_type === 'recipe' || item.item_type === 'combo') && openBreakdown(item.menu_item_id)}
+                                    style={{ fontSize: 12 }}
+                                  >
+                                    {item.display_name}
+                                  </button>
+                                  {changes.some(c => c.change_type === 'comment' && c.menu_item_id === item.menu_item_id) && (
+                                    <span className="text-blue-400 text-[10px]">💬</span>
+                                  )}
+                                </div>
+                              </td>
+                              {/* Cost */}
+                              <td className="text-right font-mono text-gray-500 border border-gray-200 tabular-nums" style={{ padding: '2px 8px', fontSize: 11 }}>
+                                {sym}{fmt2(item.cost)}
+                              </td>
+                              {/* Price levels */}
+                              {visibleLevels.map(l => {
+                                const entry = item.levels[l.id]
+                                const isEditing = editCell?.itemId === item.menu_item_id && editCell?.levelId === l.id
+                                const changeKey = `${item.menu_item_id}_l${l.id}`
+                                const cellChange = changedCells[changeKey]
+
+                                if (!entry?.set) {
+                                  return (
+                                    <React.Fragment key={l.id}>
+                                      <td className={`text-center border border-gray-200 ${cellChange ? 'bg-amber-50' : ''}`} style={{ padding: '2px 8px' }}>
+                                        {isEdit ? (
+                                          isEditing ? (
+                                            <input
+                                              className="w-16 text-right border border-emerald-400 rounded px-1 py-0 text-xs tabular-nums outline-none bg-white font-mono"
+                                              type="number" step="0.01" min="0" autoFocus
+                                              value={editCell!.value}
+                                              onChange={e => setEditCell(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                              onBlur={commitEdit}
+                                              onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditCell(null) }}
+                                            />
+                                          ) : (
+                                            <button className="text-gray-300 hover:text-emerald-500 text-[10px]"
+                                              onClick={() => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: '', originalValue: '' })}>
+                                              +
+                                            </button>
+                                          )
+                                        ) : (
+                                          <span className="text-gray-200">—</span>
+                                        )}
+                                      </td>
+                                      <td className="border border-gray-200" style={{ padding: '2px 8px' }}>
+                                        <span className="text-gray-200">—</span>
+                                      </td>
+                                    </React.Fragment>
+                                  )
+                                }
+
+                                return (
+                                  <React.Fragment key={l.id}>
+                                    {/* Sell price cell — editable */}
+                                    <td
+                                      className={`text-right border border-gray-200 tabular-nums font-mono ${cellChange || entry.is_scenario_override ? 'bg-amber-50' : ''}`}
+                                      style={{ padding: '2px 8px', fontSize: 11, cursor: isEdit ? 'pointer' : 'default' }}
+                                      onClick={isEdit && !isEditing ? () => setEditCell({ itemId: item.menu_item_id, levelId: l.id, value: fmt2(entry.gross), originalValue: fmt2(entry.gross) }) : undefined}
+                                    >
+                                      {isEditing ? (
+                                        <input
+                                          className="w-16 text-right border border-emerald-400 rounded px-1 py-0 text-xs tabular-nums outline-none bg-white font-mono"
+                                          type="number" step="0.01" min="0" autoFocus
+                                          value={editCell!.value}
+                                          onChange={e => setEditCell(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                          onBlur={commitEdit}
+                                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditCell(null) }}
+                                        />
+                                      ) : (
+                                        <span className={`${isEdit ? 'hover:text-emerald-600' : ''} text-gray-800`}>
+                                          {(cellChange || entry.is_scenario_override) && <span className="inline-block w-1 h-1 rounded-full bg-amber-400 mr-1 align-middle" />}
+                                          {sym}{fmt2(entry.gross)}
+                                        </span>
+                                      )}
+                                    </td>
+                                    {/* COGS% cell */}
+                                    <td className={`text-right border border-gray-200 tabular-nums font-mono ${cogsCls(entry.cogs_pct)}`}
+                                        style={{ padding: '2px 8px', fontSize: 11 }}>
+                                      {entry.cogs_pct !== null ? `${fmt2(entry.cogs_pct)}%` : '—'}
+                                    </td>
+                                  </React.Fragment>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* Legend */}
+              <div className="flex items-center gap-3 text-[10px] text-gray-400 px-3 py-1.5 border-t border-gray-200 flex-shrink-0 flex-wrap" style={{ background: '#f8f8f8' }}>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" /> ≤28%</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" /> 28-35%</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400" /> &gt;35%</span>
+                {isEdit && <span className="text-amber-600 font-medium">Click prices to edit</span>}
+              </div>
+            </div>
+            )}
 
           </>
         )}

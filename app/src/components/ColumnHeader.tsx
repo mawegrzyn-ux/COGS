@@ -92,7 +92,7 @@ export function ColumnHeader<T>({
   }, [open])
 
   return (
-    <th className={`px-4 py-3 ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <th className={`px-4 py-3 sticky top-0 z-10 bg-surface-2 ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <div ref={ref} className={`relative inline-block ${align === 'right' ? 'float-right' : ''}`}>
 
         {/* Header button */}

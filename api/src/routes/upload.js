@@ -54,7 +54,15 @@ router.post('/', upload.single('image'), async (req, res, next) => {
         ContentType: req.file.mimetype,
       }));
       const baseUrl = (cfg.s3_base_url || `https://${cfg.s3_bucket}.s3.${region}.amazonaws.com`).replace(/\/$/, '');
-      return res.json({ url: `${baseUrl}/${key}` });
+      const fileUrl = `${baseUrl}/${key}`;
+      // Backfill into media library (non-blocking)
+      pool.query(
+        `INSERT INTO mcogs_media_items (filename, original_filename, url, thumb_url, web_url, storage_type, storage_key, mime_type, size_bytes, scope, form_key, uploaded_by)
+         VALUES ($1,$2,$3,$3,$3,'s3',$4,$5,$6,'shared',$7,$8)
+         ON CONFLICT DO NOTHING`,
+        [path.basename(key), req.file.originalname, fileUrl, key, req.file.mimetype, req.file.size, req.body?.form_key || null, req.user?.sub || null]
+      ).catch(() => {});
+      return res.json({ url: fileUrl });
     }
 
     // ── Local disk path ──────────────────────────────────────────────────────
@@ -63,8 +71,16 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     const ext  = path.extname(req.file.originalname).toLowerCase() || '.jpg';
     const name = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
     fs.writeFileSync(path.join(uploadsDir, name), req.file.buffer);
-    const baseUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
-    return res.json({ url: `${baseUrl}/uploads/${name}` });
+    // Use relative query-param URL to avoid domain/cert issues (same pattern as media.js)
+    const fileUrl = `/api/media/img?f=${encodeURIComponent(name)}`;
+    // Backfill into media library (non-blocking)
+    pool.query(
+      `INSERT INTO mcogs_media_items (filename, original_filename, url, thumb_url, web_url, storage_type, storage_key, mime_type, size_bytes, scope, form_key, uploaded_by)
+       VALUES ($1,$2,$3,$3,$3,'local',$4,$5,$6,'shared',$7,$8)
+       ON CONFLICT DO NOTHING`,
+      [name, req.file.originalname, fileUrl, name, req.file.mimetype, req.file.size, req.body?.form_key || null, req.user?.sub || null]
+    ).catch(() => {});
+    return res.json({ url: fileUrl });
 
   } catch (err) { next(err); }
 });

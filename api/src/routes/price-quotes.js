@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 // GET /price-quotes?ingredient_id=&vendor_id=&country_id=&is_active=
 router.get('/', async (req, res) => {
@@ -107,7 +108,25 @@ router.post('/', async (req, res) => {
       is_active !== false && is_active !== 'false',
       vendor_product_code?.trim()  || null,
     ]);
-    res.status(201).json(rows[0]);
+    const created = rows[0];
+
+    // Audit: look up names for label
+    const { rows: meta } = await pool.query(
+      `SELECT i.name AS ingredient_name, v.name AS vendor_name
+       FROM mcogs_ingredients i, mcogs_vendors v
+       WHERE i.id=$1 AND v.id=$2`, [ingredient_id, vendor_id]
+    );
+    const label = meta[0] ? `${meta[0].ingredient_name} — ${meta[0].vendor_name}` : `Quote #${created.id}`;
+    await logAudit(pool, req, {
+      action: 'create',
+      entity_type: 'price_quote',
+      entity_id: created.id,
+      entity_label: label,
+      field_changes: { purchase_price: { old: null, new: purchase_price }, qty_in_base_units: { old: null, new: qty_in_base_units }, is_active: { old: null, new: created.is_active } },
+      context: { source: 'manual' },
+    });
+
+    res.status(201).json(created);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create price quote' } });
@@ -122,6 +141,10 @@ router.put('/:id', async (req, res) => {
   if (purchase_price == null) return res.status(400).json({ error: { message: 'purchase_price is required' } });
   if (!qty_in_base_units)     return res.status(400).json({ error: { message: 'qty_in_base_units is required' } });
   try {
+    // Snapshot before update for diff
+    const { rows: [oldRow] } = await pool.query('SELECT * FROM mcogs_price_quotes WHERE id=$1', [req.params.id]);
+    if (!oldRow) return res.status(404).json({ error: { message: 'Not found' } });
+
     const { rows } = await pool.query(`
       UPDATE mcogs_price_quotes
       SET ingredient_id=$1, vendor_id=$2, purchase_price=$3, qty_in_base_units=$4,
@@ -138,6 +161,28 @@ router.put('/:id', async (req, res) => {
       req.params.id,
     ]);
     if (!rows.length) return res.status(404).json({ error: { message: 'Not found' } });
+
+    const changes = diffFields(oldRow, rows[0], [
+      'purchase_price', 'qty_in_base_units', 'purchase_unit', 'is_active',
+      'vendor_product_code', 'ingredient_id', 'vendor_id',
+    ]);
+    if (changes) {
+      const { rows: meta } = await pool.query(
+        `SELECT i.name AS ingredient_name, v.name AS vendor_name
+         FROM mcogs_ingredients i, mcogs_vendors v
+         WHERE i.id=$1 AND v.id=$2`, [ingredient_id, vendor_id]
+      );
+      const label = meta[0] ? `${meta[0].ingredient_name} — ${meta[0].vendor_name}` : `Quote #${req.params.id}`;
+      await logAudit(pool, req, {
+        action: 'update',
+        entity_type: 'price_quote',
+        entity_id: parseInt(req.params.id),
+        entity_label: label,
+        field_changes: changes,
+        context: { source: 'manual' },
+      });
+    }
+
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -148,10 +193,30 @@ router.put('/:id', async (req, res) => {
 // DELETE /price-quotes/:id
 router.delete('/:id', async (req, res) => {
   try {
+    // Snapshot before delete for audit
+    const { rows: [old] } = await pool.query(`
+      SELECT pq.*, i.name AS ingredient_name, v.name AS vendor_name
+      FROM mcogs_price_quotes pq
+      LEFT JOIN mcogs_ingredients i ON i.id = pq.ingredient_id
+      LEFT JOIN mcogs_vendors v ON v.id = pq.vendor_id
+      WHERE pq.id=$1`, [req.params.id]);
+
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_price_quotes WHERE id=$1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+
+    if (old) {
+      await logAudit(pool, req, {
+        action: 'delete',
+        entity_type: 'price_quote',
+        entity_id: parseInt(req.params.id),
+        entity_label: `${old.ingredient_name} — ${old.vendor_name}`,
+        field_changes: { purchase_price: { old: old.purchase_price, new: null }, is_active: { old: old.is_active, new: null } },
+        context: { source: 'manual' },
+      });
+    }
+
     res.status(204).send();
   } catch (err) {
     console.error(err);

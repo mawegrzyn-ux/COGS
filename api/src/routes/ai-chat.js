@@ -10,6 +10,7 @@ const router    = require('express').Router();
 const Anthropic = require('@anthropic-ai/sdk');
 const XLSX      = require('xlsx');
 const pool      = require('../db/pool');
+const localPool = require('../db/local-pool');
 const rag       = require('../helpers/rag');
 const aiConfig  = require('../helpers/aiConfig');
 const { agenticStream } = require('../helpers/agenticStream');
@@ -209,6 +210,165 @@ CONFIRMATION REQUIRED before calling.`,
         id: { type: 'integer', description: 'Ticket ID to delete' },
       },
       required: ['id'],
+    },
+  },
+
+  // ── Bugs & Backlog ──────────────────────────────────────────────────────────
+  {
+    name: 'list_bugs',
+    description: `Returns bug tickets from the bugs log, filterable by status, priority, severity, and full-text search. Search matches \`key\`, \`summary\`, AND \`description\` — when the user names a specific bug by its key (e.g. "what's BUG-1027"), pass the key directly as \`search\` rather than assuming the row is missing.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status:   { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] },
+        priority: { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity: { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        search:   { type: 'string', description: 'Matches key (e.g. "BUG-1027"), summary, OR description. Case-insensitive substring.' },
+        limit:    { type: 'integer', description: 'Max rows (default 30)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_bug',
+    description: 'Logs a new bug report. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary:              { type: 'string', description: 'Short bug title' },
+        description:          { type: 'string', description: 'Detailed description' },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity:             { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        page:                 { type: 'string', description: 'Which page/module is affected' },
+        steps_to_reproduce:   { type: 'string' },
+      },
+      required: ['summary'],
+    },
+  },
+  {
+    name: 'update_bug_status',
+    description: 'Updates the status of a bug. Only developers can change bug status. Call list_bugs first to get the ID. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:         { type: 'integer', description: 'Bug ID' },
+        status:     { type: 'string', enum: ['open', 'in_progress', 'resolved', 'closed', 'wont_fix'] },
+        resolution: { type: 'string', description: 'Resolution notes (optional)' },
+      },
+      required: ['id', 'status'],
+    },
+  },
+  {
+    name: 'list_backlog',
+    description: `Returns backlog items (stories, tasks, epics), filterable by status, priority, type, and full-text search. Use get_backlog_stats first if you only need counts — list_backlog returns full rows and is slow over large result sets.
+
+When the user names a specific item by its key (e.g. "what's BACK-1400" or "why is back-1400 high priority"), pass the key directly as \`search\` — search matches \`key\`, \`summary\`, AND \`description\`. Do NOT assume the item is missing just because the default 50-row listing didn't include it: rows are ordered by sort_order ASC and BACK-#### numbers in the thousands fall well past the first 50. Either search by key, or bump \`limit\` to 500.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status:    { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'wont_do'] },
+        priority:  { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        item_type: { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        search:    { type: 'string', description: 'Matches key (e.g. "BACK-1400"), summary, OR description. Case-insensitive substring.' },
+        limit:     { type: 'integer', description: 'Max rows (default 50, max 500)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_backlog_stats',
+    description: 'Returns total counts of backlog items grouped by status, priority, and item_type. Cheap and fast — use this for "how many?" questions instead of list_backlog. Always returns the entire table aggregated.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'create_backlog_item',
+    description: 'Creates a new backlog item (story, task, epic, or improvement). CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary:             { type: 'string', description: 'Short title' },
+        description:         { type: 'string', description: 'Detailed description' },
+        item_type:           { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        priority:            { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        acceptance_criteria: { type: 'string' },
+        story_points:        { type: 'integer' },
+      },
+      required: ['summary'],
+    },
+  },
+  {
+    name: 'update_backlog_status',
+    description: 'Updates the status of a backlog item. Only developers can change status. Call list_backlog first to get the ID. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:     { type: 'integer', description: 'Backlog item ID' },
+        status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'wont_do'] },
+      },
+      required: ['id', 'status'],
+    },
+  },
+
+  // ── Bugs & Backlog — Edit + Comments ──────────────────────────────────────
+  {
+    name: 'edit_bug',
+    description: 'Edits bug fields (not status). Only the original reporter or a developer can edit. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                   { type: 'integer', description: 'Bug ID' },
+        summary:              { type: 'string' },
+        description:          { type: 'string' },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        severity:             { type: 'string', enum: ['critical', 'major', 'minor', 'trivial'] },
+        page:                 { type: 'string' },
+        steps_to_reproduce:   { type: 'string' },
+        resolution:           { type: 'string' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'edit_backlog_item',
+    description: 'Edits backlog item fields (not status). Only the original requester or a developer can edit. CONFIRMATION REQUIRED before calling.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:                   { type: 'integer', description: 'Backlog item ID' },
+        summary:              { type: 'string' },
+        description:          { type: 'string' },
+        item_type:            { type: 'string', enum: ['story', 'task', 'epic', 'improvement'] },
+        priority:             { type: 'string', enum: ['highest', 'high', 'medium', 'low', 'lowest'] },
+        acceptance_criteria:  { type: 'string' },
+        story_points:         { type: 'integer' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'add_comment',
+    description: 'Posts a comment on a bug or backlog item. Anyone can comment. No confirmation required.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['bug', 'backlog'], description: 'Type of item to comment on' },
+        entity_id:   { type: 'integer', description: 'Bug or backlog item ID' },
+        comment:     { type: 'string', description: 'Comment text' },
+        parent_id:   { type: 'integer', description: 'Optional: ID of parent comment to reply to' },
+      },
+      required: ['entity_type', 'entity_id', 'comment'],
+    },
+  },
+  {
+    name: 'list_comments',
+    description: 'Lists all comments on a bug or backlog item.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['bug', 'backlog'] },
+        entity_id:   { type: 'integer', description: 'Bug or backlog item ID' },
+      },
+      required: ['entity_type', 'entity_id'],
     },
   },
 
@@ -674,11 +834,12 @@ CONFIRMATION REQUIRED before calling.`,
 
   {
     name: 'start_import',
-    description: `Sends a file that the user has already uploaded in this conversation to the Import Wizard for structured review. Use this when:
-- The user uploads a spreadsheet and says "import this", "use the import wizard", or similar
+    description: `Stages a file the user has already uploaded in this conversation so they can finish the import manually in the Import Wizard. Use this when:
+- The user uploads a spreadsheet and says "import this", "stage this", "use the import wizard", or similar
 - The file contains many ingredients/recipes and the user wants to review before committing
+The job is persisted with the current user's email so it appears in their "Continue a staged import" panel on the Import page, and can be resumed later via list_import_jobs.
 Returns a job URL — share it with the user as a clickable link: /import?job=<id>
-Do NOT use this for small single-record requests; use the individual create_* tools instead.`,
+Do NOT use this for small single-record requests; use the individual create_* tools instead. Do NOT execute the import yourself — the user reviews and commits in the wizard.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -686,6 +847,26 @@ Do NOT use this for small single-record requests; use the individual create_* to
         filename:     { type: 'string', description: 'Original filename, e.g. "ingredients.xlsx"' },
       },
       required: ['file_content', 'filename'],
+    },
+  },
+
+  {
+    name: 'list_import_jobs',
+    description: `Lists the user's staged import jobs — use this when the user asks "what have I got pending?", "show me my staged imports", "did I leave anything unfinished?", or wants to resume an earlier import. Returns one row per job with counts and a clickable URL (/import?job=<id>) for the user to open in the Import Wizard. Defaults to the current user's non-terminal jobs (staging, ready, failed); pass status explicitly to broaden (e.g. include 'done' for history).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'array',
+          items: { type: 'string', enum: ['staging', 'ready', 'importing', 'done', 'failed'] },
+          description: 'Which statuses to return. Default: ["staging","ready","failed"].',
+        },
+        mine: {
+          type: 'boolean',
+          description: 'If true (default), filter to jobs staged by the current user. Set false to see everyone\u2019s jobs (admin use).',
+        },
+        limit: { type: 'integer', description: 'Max rows (default 20, max 100).' },
+      },
     },
   },
 
@@ -1280,6 +1461,49 @@ Always call list_menus first to resolve the menu ID. No confirmation needed — 
     },
   },
 
+  // ── Page navigation ──────────────────────────────────────────────────────────
+  {
+    name: 'navigate_to_page',
+    description: `Navigates the user to a different page in the app. Use when the user says "open / take me to / show me / go to <page>" — e.g. "open recipes", "show me the dashboard", "go to inventory", "open backlog", "open users".
+The browser will switch to the chosen page; the user keeps their current chat and the conversation continues. Always confirm verbally first (e.g. "Opening the Recipes page now") so the user knows what's about to happen.
+
+Many pages have sub-sections that the user can ask for directly. Examples:
+  • "open backlog"        → page="system",        section="bugs-backlog"
+  • "open audit log"      → page="system",        section="audit-log"
+  • "open jira sync"      → page="system",        section="jira"
+  • "open ai settings"    → page="system",        section="ai"
+  • "open POS mockup"     → page="system",        section="pos-tester"
+  • "open users"          → page="configuration", section="users-roles"
+  • "open import"         → page="configuration", section="import"
+  • "open categories"     → page="configuration", section="categories"
+  • "open price levels"   → page="configuration", section="price-levels"
+  • "open media library"  → page="configuration", section="media"
+
+System sections: ai, bugs-backlog, jira, audit-log, storage, database, test-data, tests, doc-library, pos-tester, localization, architecture, api-reference, security, troubleshooting, domain-migration, claude-doc.
+Configuration sections: global-config, location-structure, categories, units, price-levels, currency, cogs-thresholds, users-roles, import, media, stock-config.
+
+Always pass section when the user names a sub-section. Pick the closest match. Do NOT invent URLs.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+          enum: [
+            'dashboard', 'inventory', 'recipes', 'sales-items', 'menus',
+            'allergens', 'haccp', 'audits', 'stock-manager', 'media',
+            'configuration', 'system', 'help', 'pepper',
+          ],
+          description: 'The destination page (sidebar key, plus "pepper" for the standalone chat).',
+        },
+        section: {
+          type: 'string',
+          description: 'Optional sub-section id within the destination page. Becomes the URL hash (e.g. /system#bugs-backlog). See description for the supported list per page.',
+        },
+      },
+      required: ['page'],
+    },
+  },
+
   // ── Excel Export ─────────────────────────────────────────────────────────────
   {
     name: 'export_to_excel',
@@ -1308,6 +1532,228 @@ Returns a summary of what was exported; the file downloads automatically in the 
       required: ['dataset'],
     },
   },
+  {
+    name: 'save_to_media_library',
+    description: `Saves an image URL that is already accessible (e.g. a screenshot or uploaded image from this conversation) into the Media Library so the user can find it later in Settings → Media Library.
+Use when the user says "save this to the library", "add to media library", "keep this screenshot", etc.
+Requires: url (the image URL to save). Optional: filename, category_id, form_key.
+Returns the saved media item with its id and thumb_url.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:         { type: 'string',  description: 'The image URL to register in the library. Must be publicly accessible.' },
+        filename:    { type: 'string',  description: 'Optional display filename. Defaults to the URL basename.' },
+        category_id: { type: 'integer', description: 'Optional category ID to file it under.' },
+        form_key:    { type: 'string',  description: 'Optional form scope (e.g. "ingredient", "recipe"). Defaults to "shared".' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'list_media_library',
+    description: `Lists items in the Media Library. Use when the user asks to "show me the media library", "what images do we have", "find images of X", etc.
+Supports optional filters: category_id, form_key, search query.
+Returns items with their urls and metadata.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        q:           { type: 'string',  description: 'Search by filename.' },
+        category_id: { type: 'integer', description: 'Filter by category ID.' },
+        form_key:    { type: 'string',  description: 'Filter by form scope.' },
+      },
+    },
+  },
+
+  // ── Memory tools ────────────────────────────────────────────────────────────
+  {
+    name: 'save_memory_note',
+    description: 'Save a note that will persist across all future conversations. Use when the user says "remember this", "always do X", "note that...", or similar requests to store a preference or fact.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'The note to save. Should be a concise, self-contained statement.' },
+      },
+      required: ['note'],
+    },
+  },
+  {
+    name: 'list_memory_notes',
+    description: 'List all pinned memory notes for the current user. Use when the user asks "what do you remember?" or "show my notes".',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'delete_memory_note',
+    description: 'Delete a specific pinned memory note by ID. Use when the user asks to forget something or remove a note.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        note_id: { type: 'integer', description: 'The ID of the note to delete' },
+      },
+      required: ['note_id'],
+    },
+  },
+
+  // ── Audit Log (read-only) ─────────────────────────────────────────────────
+  {
+    name: 'query_audit_log',
+    description: 'Search the audit log for recent changes. Returns who changed what, when, and the old/new field values. Use when user asks about change history, who did something, or what happened recently.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', description: 'Filter by type: ingredient, recipe, price_quote, purchase_order, goods_received, stocktake, waste, stock_level' },
+        entity_id:   { type: 'integer', description: 'Filter by specific entity ID' },
+        user_email:  { type: 'string', description: 'Filter by user email (partial match)' },
+        action:      { type: 'string', description: 'Filter by action: create, update, delete, status_change, confirm, approve, reverse' },
+        from:        { type: 'string', description: 'Start date (ISO format, e.g. 2026-04-01)' },
+        to:          { type: 'string', description: 'End date (ISO format)' },
+        search:      { type: 'string', description: 'Search in entity label (item name)' },
+        limit:       { type: 'integer', description: 'Max results (default 20, max 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_entity_audit_history',
+    description: 'Get the full change history for a specific entity (e.g. a specific ingredient or recipe). Shows all changes over time with old/new field values.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', description: 'Entity type (e.g. ingredient, recipe, price_quote)' },
+        entity_id:   { type: 'integer', description: 'Entity ID' },
+      },
+      required: ['entity_type', 'entity_id'],
+    },
+  },
+  {
+    name: 'get_audit_stats',
+    description: 'Get audit log summary statistics: total changes, breakdown by action/entity type, most active users. Use for activity overviews or "what happened this week" questions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Start date (ISO format)' },
+        to:   { type: 'string', description: 'End date (ISO format)' },
+      },
+      required: [],
+    },
+  },
+
+  // ── FAQ Knowledge Base ────────────────────────────────────────────────────
+  {
+    name: 'search_faq',
+    description: 'Search the FAQ knowledge base for answers to common questions about COGS Manager features. Use when the user asks a how-to question, needs help, or wants to know how something works. Check FAQ first before giving a general answer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:    { type: 'string', description: 'Search query (keywords or natural question)' },
+        category: { type: 'string', description: 'Optional category filter (e.g. "Recipes", "Menus & COGS", "Stock Manager")' },
+      },
+      required: ['query'],
+    },
+  },
+
+  // ── Change Log ────────────────────────────────────────────────────────────
+  {
+    name: 'get_changelog',
+    description: 'Get the project change log — shows what was added, changed, fixed, or removed in each session/release. Use when user asks "what changed recently?", "what\'s new?", or "show me the changelog".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        version: { type: 'string', description: 'Optional: specific version/date to look up (e.g. "2026-04-14")' },
+        limit:   { type: 'integer', description: 'Max entries to return (default 5)' },
+      },
+      required: [],
+    },
+  },
+
+  // ── QSC Audits ────────────────────────────────────────────────────────────
+  {
+    name: 'list_audits',
+    description: 'List QSC (Quality/Service/Cleanliness) audits performed at restaurant locations. Use when the user asks about recent audits, audit scores, or audit history for a location. Returns audit key, type (external/internal), location, status, score, and rating.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        audit_type:  { type: 'string', enum: ['external', 'internal'], description: 'Filter by type' },
+        status:      { type: 'string', enum: ['in_progress', 'completed', 'cancelled'], description: 'Filter by status' },
+        location_id: { type: 'integer', description: 'Filter to one location' },
+        limit:       { type: 'integer', description: 'Max rows (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_audit_report',
+    description: 'Get the full scored report for one QSC audit — overall score and rating, department/category breakdowns, critical findings, list of non-compliant items with comments and photos, and repeat findings. Use when the user asks "how did audit X go?", "show me the last audit for location Y", or wants remediation suggestions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        audit_id: { type: 'integer', description: 'Primary key id of the audit' },
+        audit_key:{ type: 'string',  description: 'Audit key (e.g. AUD-1001)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_qsc_questions',
+    description: 'Query the QSC question bank (150 Wingstop audit questions). Filter by department, category, risk level, or text search. Use when the user asks "show me all Critical First Priority questions", "what do we check for in Personal Hygiene?", or "which questions mention walk-in coolers?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        department: { type: 'string', enum: ['Food Safety', 'Brand Standards'], description: 'Filter by department' },
+        category:   { type: 'string', description: 'Filter by category (e.g. "Temperature Control", "Dining Room")' },
+        risk_level: { type: 'string', description: 'Filter by risk level (e.g. "Critical First Priority", "First Priority", "Second Priority", "Third Priority", "Information Only")' },
+        search:     { type: 'string', description: 'Text search on code or title' },
+        limit:      { type: 'integer', description: 'Max rows (default 25, max 100)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_qsc_question',
+    description: 'Get the full detail for one QSC question by its code (e.g. A101, DR201). Returns title, full policy text, risk level, points, repeat points, auto-unacceptable flag, photo-required flag, temperature-input flag, and cross-referenced codes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Question code (e.g. "A101")' },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: 'list_audit_templates',
+    description: 'List the saved audit templates (7 system + any custom). Each template is a named subset of question codes used for internal ad-hoc audits (e.g. "Line Check Peak", "Walk-in & Cold Hold"). Use when the user asks "what templates are available?" or "what does the Line Check template cover?".',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_audit_nc_trends',
+    description: 'Aggregate non-compliance trends across completed audits — returns the most frequently failed question codes with their NC count and points deducted. Use when the user asks "which codes fail most often?", "what are our recurring issues?", or wants remediation priorities.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'integer', description: 'Optional: limit to one location' },
+        audit_type:  { type: 'string', enum: ['external', 'internal'], description: 'Optional: limit to one audit type' },
+        from:        { type: 'string', description: 'Optional: only audits completed on or after this date (ISO format)' },
+        to:          { type: 'string', description: 'Optional: only audits completed on or before this date (ISO format)' },
+        limit:       { type: 'integer', description: 'Top N codes to return (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_location_audit_history',
+    description: 'Get the audit timeline for one location — a chronological list of every audit plus a running average score and rating distribution. Use when the user asks "show me the audit history for location X" or wants to see a location\'s trajectory over time.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location_id: { type: 'integer', description: 'Location primary key id' },
+        limit:       { type: 'integer', description: 'Max audits to return (default 10)' },
+      },
+      required: ['location_id'],
+    },
+  },
 ];
 
 // ── Tool executor ─────────────────────────────────────────────────────────────
@@ -1315,6 +1761,35 @@ Returns a summary of what was exported; the file downloads automatically in the 
 // Helper: ensure category name exists in mcogs_categories (mirrors ingredients.js)
 
 async function executeTool(name, input, send = null, userCtx = {}) {
+  // Translation helpers — when the user has a non-English language, every read
+  // tool that returns entity name/description should resolve via COALESCE so
+  // Pepper sees the translated string and can quote it back naturally.
+  const _lang = userCtx?.language && userCtx.language !== 'en' ? userCtx.language : null;
+  const _tSel = (alias, field, paramIdx) =>
+    _lang ? `COALESCE(${alias}.translations->$${paramIdx}->>'${field}', ${alias}.${field})`
+          : `${alias}.${field}`;
+
+  // Per-market write enforcement. Returns null if the user has write access
+  // for `feature` in the given country, or an { error } object the tool can
+  // return early with. Unrestricted users (allowedCountries === null) always
+  // pass — same as the user's union permissions. Restricted users with no
+  // entry for the country, or read-only access, get a clear error.
+  const _assertMarketWrite = (feature, countryId) => {
+    if (countryId == null) return null;
+    const allowed = userCtx?.allowedCountries;
+    if (allowed === null || allowed === undefined) return null; // unrestricted
+    const cid = Number(countryId);
+    const scoped = userCtx?.scopedAccess || {};
+    const entry  = scoped[cid];
+    const access = entry?.permissions?.[feature] || 'none';
+    if (access !== 'write') {
+      return { error: `You do not have write access to ${feature} in this market (country ${cid}). Ask an admin to grant access.` };
+    }
+    return null;
+  };
+  // Suppress unused-var warning when this helper isn't used by a particular branch
+  void _assertMarketWrite;
+
   switch (name) {
 
     // ── Read / Lookup (existing) ───────────────────────────────────────────────
@@ -1345,27 +1820,42 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'list_ingredients': {
       const { search } = input;
-      const q = search
-        ? `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id WHERE i.name ILIKE $1 ORDER BY i.name LIMIT 100`
-        : `SELECT i.id, i.name, cat.name AS category, i.waste_pct, i.base_unit_id FROM mcogs_ingredients i LEFT JOIN mcogs_categories cat ON cat.id = i.category_id ORDER BY i.name LIMIT 100`;
-      const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
+      // Language-aware: when _lang is set, $1 is lang and $2 is the search term
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (search) { params.push(`%${search}%`); where = `WHERE i.name ILIKE $${params.length}`; }
+      const iName = _lang ? `COALESCE(i.translations->$1->>'name', i.name)` : `i.name`;
+      const catName = _lang ? `COALESCE(cat.translations->$1->>'name', cat.name)` : `cat.name`;
+      const { rows } = await pool.query(
+        `SELECT i.id, ${iName} AS name, ${catName} AS category, i.waste_pct, i.base_unit_id
+         FROM mcogs_ingredients i
+         LEFT JOIN mcogs_categories cat ON cat.id = i.category_id
+         ${where} ORDER BY name LIMIT 100`,
+        params
+      );
       return rows;
     }
 
     case 'get_ingredient': {
       const { id } = input;
+      const iSel = _lang ? `COALESCE(i.translations->$2->>'name', i.name) AS name, COALESCE(i.translations->$2->>'notes', i.notes) AS notes` : `i.name, i.notes`;
+      const vSel = _lang ? `COALESCE(v.translations->$2->>'name', v.name) AS vendor_name` : `v.name AS vendor_name`;
+      const ingArgs = _lang ? [id, _lang] : [id];
       const [ing, quotes, allergens] = await Promise.all([
         pool.query(`
-          SELECT i.*, u.name as base_unit_name, u.abbreviation as base_unit_abbr
+          SELECT i.id, ${iSel}, i.category_id, i.base_unit_id, i.waste_pct,
+                 i.default_prep_unit, i.default_prep_to_base_conversion,
+                 i.image_url, i.allergen_notes, i.translations,
+                 u.name as base_unit_name, u.abbreviation as base_unit_abbr
           FROM mcogs_ingredients i
           LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
-          WHERE i.id = $1`, [id]),
+          WHERE i.id = $1`, ingArgs),
         pool.query(`
-          SELECT pq.*, v.name as vendor_name, co.name as country_name, co.currency_symbol
+          SELECT pq.*, ${vSel}, co.name as country_name, co.currency_symbol
           FROM mcogs_price_quotes pq
           JOIN mcogs_vendors v ON v.id = pq.vendor_id
           LEFT JOIN mcogs_countries co ON co.id = v.country_id
-          WHERE pq.ingredient_id = $1 ORDER BY v.name`, [id]),
+          WHERE pq.ingredient_id = $1 ORDER BY v.name`, ingArgs),
         pool.query(`
           SELECT a.name, a.code, ia.status
           FROM mcogs_ingredient_allergens ia
@@ -1378,41 +1868,55 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'list_recipes': {
       const { search } = input;
-      const q = search
-        ? `SELECT id, name, description FROM mcogs_recipes WHERE name ILIKE $1 ORDER BY name LIMIT 100`
-        : `SELECT id, name, description FROM mcogs_recipes ORDER BY name LIMIT 100`;
-      const { rows } = await pool.query(q, search ? [`%${search}%`] : []);
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (search) { params.push(`%${search}%`); where = `WHERE r.name ILIKE $${params.length}`; }
+      const rName = _lang ? `COALESCE(r.translations->$1->>'name', r.name)` : `r.name`;
+      const rDesc = _lang ? `COALESCE(r.translations->$1->>'description', r.description)` : `r.description`;
+      const { rows } = await pool.query(
+        `SELECT r.id, ${rName} AS name, ${rDesc} AS description FROM mcogs_recipes r ${where} ORDER BY name LIMIT 100`,
+        params
+      );
       return rows;
     }
 
     case 'get_recipe': {
       const { id } = input;
+      const rArgs = _lang ? [id, _lang] : [id];
+      const rName = _tSel('r', 'name', 2);
+      const rDesc = _tSel('r', 'description', 2);
+      const iName = _tSel('i', 'name', 2);
+      const srName = _tSel('sr', 'name', 2);
       const [rec, items] = await Promise.all([
         pool.query(`
-          SELECT r.*, u.abbreviation as yield_unit_abbr
+          SELECT r.id, ${rName} AS name, ${rDesc} AS description,
+                 r.category_id, r.yield_qty, r.yield_unit_id, r.yield_unit_text,
+                 r.translations,
+                 u.abbreviation as yield_unit_abbr
           FROM mcogs_recipes r
           LEFT JOIN mcogs_units u ON u.id = r.yield_unit_id
-          WHERE r.id = $1`, [id]),
+          WHERE r.id = $1`, rArgs),
         pool.query(`
-          SELECT ri.*, i.name as ingredient_name, u.abbreviation as unit_abbr,
-                 sr.name as sub_recipe_name
+          SELECT ri.*, ${iName} as ingredient_name, u.abbreviation as unit_abbr,
+                 ${srName} as sub_recipe_name
           FROM mcogs_recipe_items ri
           LEFT JOIN mcogs_ingredients i ON i.id = ri.ingredient_id
           LEFT JOIN mcogs_units u ON u.id = i.base_unit_id
           LEFT JOIN mcogs_recipes sr ON sr.id = ri.recipe_item_id
           WHERE ri.recipe_id = $1
-          ORDER BY ri.id ASC`, [id]),
+          ORDER BY ri.id ASC`, rArgs),
       ]);
       if (!rec.rows.length) return { error: 'Recipe not found' };
       return { ...rec.rows[0], items: items.rows };
     }
 
     case 'list_menus': {
+      const mName = _tSel('m', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT m.id, m.name, c.name as market, c.currency_symbol
+        SELECT m.id, ${mName} AS name, c.name as market, c.currency_symbol
         FROM mcogs_menus m LEFT JOIN mcogs_countries c ON c.id = m.country_id
-        ORDER BY c.name, m.name
-      `);
+        ORDER BY c.name, name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -1571,7 +2075,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       // Call the full COGS calculation endpoint internally
       const port = process.env.PORT || 3001;
       const qs   = effectivePlId ? `?price_level_id=${effectivePlId}` : '';
-      const resp = await fetch(`http://localhost:${port}/api/cogs/menu/${menu_id}${qs}`, {
+      const resp = await fetch(`http://localhost:${port}/api/cogs/menu-sales/${menu_id}${qs}`, {
         headers: { 'x-internal-service': INTERNAL_SERVICE_KEY },
       });
       if (!resp.ok) return { error: `COGS endpoint returned ${resp.status}` };
@@ -1653,25 +2157,230 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       return { deleted: rows[0].id };
     }
 
+    // ── Bugs & Backlog (local DB) ────────────────────────────────────────────
+
+    case 'list_bugs': {
+      const { status, priority, severity, search, limit = 30 } = input;
+      const conditions = [];
+      const vals = [];
+      if (status)   conditions.push(`status = $${vals.push(status)}`);
+      if (priority) conditions.push(`priority = $${vals.push(priority)}`);
+      if (severity) conditions.push(`severity = $${vals.push(severity)}`);
+      // Search across key, summary, description (parity with list_backlog).
+      if (search)   conditions.push(`(key ILIKE $${vals.push(`%${search}%`)} OR summary ILIKE $${vals.length} OR description ILIKE $${vals.length})`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      vals.push(Math.min(parseInt(limit, 10) || 30, 100));
+      const { rows } = await localPool.query(
+        `SELECT id, key, summary, priority, status, severity, reported_by_email, assigned_to, page, created_at, updated_at FROM mcogs_bugs ${where} ORDER BY created_at DESC LIMIT $${vals.length}`,
+        vals
+      );
+      return rows.length ? rows : 'No bugs found.';
+    }
+
+    case 'create_bug': {
+      const { summary, description, priority, severity, page, steps_to_reproduce } = input;
+      if (!summary?.trim()) return { error: 'summary is required' };
+      const keyRes = await localPool.query(`SELECT nextval('mcogs_bug_number_seq')::int AS num`);
+      const key = `BUG-${keyRes.rows[0].num}`;
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_bugs (key, summary, description, priority, severity, reported_by, reported_by_email, page, steps_to_reproduce)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, key, summary, priority, severity, status
+      `, [key, summary.trim(), description?.trim() || null, priority || 'medium', severity || 'minor',
+          userCtx.sub || null, userCtx.email || null, page?.trim() || null, steps_to_reproduce?.trim() || null]);
+      return rows[0];
+    }
+
+    case 'update_bug_status': {
+      const { id, status, resolution } = input;
+      const bugAccess = userCtx.permissions?.bugs || 'none';
+      if (bugAccess !== 'write') return { error: 'You need bugs:write permission to update bugs.' };
+      if (!userCtx.is_dev) return { error: 'Only developers can change bug status.' };
+      const sets = [`status = $1`, `updated_at = NOW()`];
+      const vals = [status];
+      if (resolution) { sets.push(`resolution = $${vals.push(resolution.trim())}`); }
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_bugs SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, status, resolution`,
+        vals
+      );
+      if (!rows.length) return { error: `Bug #${id} not found` };
+      return rows[0];
+    }
+
+    case 'list_backlog': {
+      const { status, priority, item_type, search, limit = 50 } = input;
+      const conditions = [];
+      const vals = [];
+      if (status)    conditions.push(`status = $${vals.push(status)}`);
+      if (priority)  conditions.push(`priority = $${vals.push(priority)}`);
+      if (item_type) conditions.push(`item_type = $${vals.push(item_type)}`);
+      // Search across key, summary, and description so Pepper can find a row
+      // by its BACK-#### identifier (the previous version only matched
+      // summary/description, so a user asking "what's back-1400?" returned
+      // nothing for items past the default 50-row LIMIT).
+      if (search)    conditions.push(`(key ILIKE $${vals.push(`%${search}%`)} OR summary ILIKE $${vals.length} OR description ILIKE $${vals.length})`);
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const cap = Math.min(parseInt(limit, 10) || 50, 500);
+      // Cheap COUNT(*) so Pepper can tell whether the LIMIT is truncating the
+      // result — the previous version silently capped at 30 rows with no signal.
+      const { rows: [totalRow] } = await localPool.query(
+        `SELECT COUNT(*)::int AS total FROM mcogs_backlog ${where}`, vals
+      );
+      vals.push(cap);
+      // Drop description from the default SELECT — keeps payload small for
+      // listing/counting. Callers that need it can use update_backlog_status
+      // or hit the REST API directly.
+      const { rows } = await localPool.query(
+        `SELECT id, key, summary, item_type, priority, status, story_points, sprint, sort_order, created_at FROM mcogs_backlog ${where} ORDER BY sort_order ASC, created_at DESC LIMIT $${vals.length}`,
+        vals
+      );
+      const total = totalRow?.total ?? rows.length;
+      if (rows.length === 0) return 'No backlog items found.';
+      return { total, returned: rows.length, truncated: rows.length < total, rows };
+    }
+
+    case 'get_backlog_stats': {
+      const { rows: byStatus }   = await localPool.query(`SELECT status,    COUNT(*)::int AS count FROM mcogs_backlog GROUP BY status    ORDER BY count DESC`);
+      const { rows: byPriority } = await localPool.query(`SELECT priority,  COUNT(*)::int AS count FROM mcogs_backlog GROUP BY priority  ORDER BY count DESC`);
+      const { rows: byType }     = await localPool.query(`SELECT item_type, COUNT(*)::int AS count FROM mcogs_backlog GROUP BY item_type ORDER BY count DESC`);
+      const { rows: [{ total }] } = await localPool.query(`SELECT COUNT(*)::int AS total FROM mcogs_backlog`);
+      return { total, by_status: byStatus, by_priority: byPriority, by_item_type: byType };
+    }
+
+    case 'create_backlog_item': {
+      const { summary, description, item_type, priority, acceptance_criteria, story_points } = input;
+      if (!summary?.trim()) return { error: 'summary is required' };
+      const keyRes = await localPool.query(`SELECT nextval('mcogs_backlog_number_seq')::int AS num`);
+      const key = `BACK-${keyRes.rows[0].num}`;
+      const maxSort = await localPool.query(`SELECT COALESCE(MAX(sort_order), 0)::int + 1 AS next FROM mcogs_backlog`);
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_backlog (key, summary, description, item_type, priority, requested_by, requested_by_email, acceptance_criteria, story_points, sort_order)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, key, summary, item_type, priority, status
+      `, [key, summary.trim(), description?.trim() || null, item_type || 'story', priority || 'medium',
+          userCtx.sub || null, userCtx.email || null, acceptance_criteria?.trim() || null, story_points || null, maxSort.rows[0].next]);
+      return rows[0];
+    }
+
+    case 'update_backlog_status': {
+      const { id, status } = input;
+      const blAccess = userCtx.permissions?.backlog || 'none';
+      if (blAccess !== 'write') return { error: 'You need backlog:write permission to update backlog items.' };
+      if (!userCtx.is_dev) return { error: 'Only developers can change backlog status.' };
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_backlog SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, key, status`,
+        [status, id]
+      );
+      if (!rows.length) return { error: `Backlog item #${id} not found` };
+      return rows[0];
+    }
+
+    // ── Bugs & Backlog — Edit + Comments ────────────────────────────────────
+
+    case 'edit_bug': {
+      const { id, summary, description, priority, severity, page, steps_to_reproduce, resolution } = input;
+      const bug = await localPool.query(`SELECT reported_by FROM mcogs_bugs WHERE id = $1`, [id]);
+      if (!bug.rows.length) return { error: `Bug #${id} not found` };
+      const isAuthor = bug.rows[0].reported_by && bug.rows[0].reported_by === userCtx.sub;
+      if (!isAuthor && !userCtx.is_dev) return { error: 'Only the original reporter or a developer can edit this bug.' };
+      const sets = ['updated_at = NOW()'];
+      const vals = [];
+      if (summary)              sets.push(`summary = $${vals.push(summary.trim())}`);
+      if (description)          sets.push(`description = $${vals.push(description.trim())}`);
+      if (priority)             sets.push(`priority = $${vals.push(priority)}`);
+      if (severity)             sets.push(`severity = $${vals.push(severity)}`);
+      if (page !== undefined)   sets.push(`page = $${vals.push(page.trim())}`);
+      if (steps_to_reproduce)   sets.push(`steps_to_reproduce = $${vals.push(steps_to_reproduce.trim())}`);
+      if (resolution)           sets.push(`resolution = $${vals.push(resolution.trim())}`);
+      if (vals.length === 0) return { error: 'No fields to update' };
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_bugs SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, summary, priority, severity, status`,
+        vals
+      );
+      return rows[0];
+    }
+
+    case 'edit_backlog_item': {
+      const { id, summary, description, item_type, priority, acceptance_criteria, story_points } = input;
+      const bl = await localPool.query(`SELECT requested_by FROM mcogs_backlog WHERE id = $1`, [id]);
+      if (!bl.rows.length) return { error: `Backlog item #${id} not found` };
+      const isAuthor = bl.rows[0].requested_by && bl.rows[0].requested_by === userCtx.sub;
+      if (!isAuthor && !userCtx.is_dev) return { error: 'Only the original requester or a developer can edit this item.' };
+      const sets = ['updated_at = NOW()'];
+      const vals = [];
+      if (summary)              sets.push(`summary = $${vals.push(summary.trim())}`);
+      if (description)          sets.push(`description = $${vals.push(description.trim())}`);
+      if (item_type)            sets.push(`item_type = $${vals.push(item_type)}`);
+      if (priority)             sets.push(`priority = $${vals.push(priority)}`);
+      if (acceptance_criteria)  sets.push(`acceptance_criteria = $${vals.push(acceptance_criteria.trim())}`);
+      if (story_points !== undefined) sets.push(`story_points = $${vals.push(story_points)}`);
+      if (vals.length === 0) return { error: 'No fields to update' };
+      vals.push(id);
+      const { rows } = await localPool.query(
+        `UPDATE mcogs_backlog SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id, key, summary, item_type, priority, status`,
+        vals
+      );
+      return rows[0];
+    }
+
+    case 'add_comment': {
+      const { entity_type, entity_id, comment, parent_id } = input;
+      if (!comment?.trim()) return { error: 'comment text is required' };
+      const table = entity_type === 'bug' ? 'mcogs_bugs' : 'mcogs_backlog';
+      const check = await localPool.query(`SELECT id FROM ${table} WHERE id = $1`, [entity_id]);
+      if (!check.rows.length) return { error: `${entity_type} #${entity_id} not found` };
+      if (parent_id) {
+        const pCheck = await localPool.query(
+          `SELECT id FROM mcogs_item_comments WHERE id = $1 AND entity_type = $2 AND entity_id = $3`,
+          [parent_id, entity_type, entity_id]
+        );
+        if (!pCheck.rows.length) return { error: 'Parent comment not found' };
+      }
+      const { rows } = await localPool.query(`
+        INSERT INTO mcogs_item_comments (entity_type, entity_id, user_sub, user_email, user_name, comment, parent_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, user_name, comment, created_at
+      `, [entity_type, entity_id, userCtx.sub || null, userCtx.email || null,
+          userCtx.name || userCtx.email || 'Pepper', comment.trim(), parent_id || null]);
+      return rows[0];
+    }
+
+    case 'list_comments': {
+      const { entity_type, entity_id } = input;
+      const { rows } = await localPool.query(
+        `SELECT id, user_name, comment, parent_id, created_at FROM mcogs_item_comments WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at ASC`,
+        [entity_type, entity_id]
+      );
+      return rows.length ? rows : 'No comments found.';
+    }
+
     // ── New Lookup / Read ──────────────────────────────────────────────────────
 
     case 'list_vendors': {
       const { country_id } = input;
-      const q = country_id
-        ? `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id WHERE v.country_id = $1 ORDER BY v.name`
-        : `SELECT v.id, v.name, c.name as country_name, c.currency_symbol FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id ORDER BY v.name`;
-      const { rows } = await pool.query(q, country_id ? [country_id] : []);
+      const params = _lang ? [_lang] : [];
+      let where = '';
+      if (country_id) { params.push(country_id); where = `WHERE v.country_id = $${params.length}`; }
+      const vName = _tSel('v', 'name', 1);
+      const { rows } = await pool.query(
+        `SELECT v.id, ${vName} AS name, c.name as country_name, c.currency_symbol
+         FROM mcogs_vendors v LEFT JOIN mcogs_countries c ON c.id = v.country_id ${where} ORDER BY name`,
+        params
+      );
       return rows;
     }
 
     case 'list_markets': {
+      // Country names are intentionally not translated (they're proper nouns,
+      // stored in English by design). Price-level name IS translatable.
+      const plName = _tSel('pl', 'name', 1);
       const { rows } = await pool.query(`
         SELECT c.id, c.name, c.currency_code, c.currency_symbol, c.exchange_rate,
-               c.default_price_level_id, pl.name AS default_price_level_name
+               c.default_price_level_id, ${plName} AS default_price_level_name,
+               c.default_language_code
         FROM   mcogs_countries c
         LEFT JOIN mcogs_price_levels pl ON pl.id = c.default_price_level_id
         ORDER BY c.name
-      `);
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -1682,14 +2391,15 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       if (for_recipes)     conditions.push('c.for_recipes = true');
       if (for_sales_items) conditions.push('c.for_sales_items = true');
       const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : '';
+      const cName = _tSel('c', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT c.id, c.name, c.sort_order, c.for_ingredients, c.for_recipes, c.for_sales_items,
+        SELECT c.id, ${cName} AS name, c.sort_order, c.for_ingredients, c.for_recipes, c.for_sales_items,
                c.group_id, g.name AS group_name
         FROM mcogs_categories c
         LEFT JOIN mcogs_category_groups g ON g.id = c.group_id
         ${where}
-        ORDER BY c.name
-      `);
+        ORDER BY name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
@@ -1701,23 +2411,27 @@ async function executeTool(name, input, send = null, userCtx = {}) {
     }
 
     case 'list_price_levels': {
+      const plName = _tSel('pl', 'name', 1);
       const { rows } = await pool.query(`
-        SELECT id, name, description, is_default FROM mcogs_price_levels ORDER BY name
-      `);
+        SELECT pl.id, ${plName} AS name, pl.description, pl.is_default
+        FROM mcogs_price_levels pl ORDER BY name
+      `, _lang ? [_lang] : []);
       return rows;
     }
 
     case 'list_price_quotes': {
       const { ingredient_id, vendor_id, is_active } = input;
+      const vals = _lang ? [_lang] : [];
       const conditions = [];
-      const vals = [];
       if (ingredient_id !== undefined) conditions.push(`pq.ingredient_id = $${vals.push(ingredient_id)}`);
       if (vendor_id     !== undefined) conditions.push(`pq.vendor_id = $${vals.push(vendor_id)}`);
       if (is_active     !== undefined) conditions.push(`pq.is_active = $${vals.push(is_active)}`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const iName = _tSel('i', 'name', 1);
+      const vName = _tSel('v', 'name', 1);
       const { rows } = await pool.query(`
         SELECT pq.id, pq.ingredient_id, pq.vendor_id,
-               i.name as ingredient_name, v.name as vendor_name,
+               ${iName} as ingredient_name, ${vName} as vendor_name,
                pq.purchase_price, pq.qty_in_base_units, pq.purchase_unit,
                pq.is_active, pq.vendor_product_code,
                ROUND((pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))::numeric, 4) as price_per_base_unit
@@ -1725,7 +2439,7 @@ async function executeTool(name, input, send = null, userCtx = {}) {
         JOIN mcogs_ingredients i ON i.id = pq.ingredient_id
         JOIN mcogs_vendors v ON v.id = pq.vendor_id
         ${where}
-        ORDER BY i.name, v.name
+        ORDER BY ingredient_name, vendor_name
         LIMIT 200
       `, vals);
       return rows;
@@ -1888,6 +2602,8 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     case 'set_preferred_vendor': {
       const { ingredient_id, country_id, vendor_id, quote_id } = input;
+      const denied = _assertMarketWrite('inventory', country_id);
+      if (denied) return denied;
       const { rows } = await pool.query(`
         INSERT INTO mcogs_ingredient_preferred_vendor
           (ingredient_id, country_id, vendor_id, quote_id)
@@ -2174,7 +2890,10 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       const { stageFileContent } = require('./import');
       const Anthropic = require('@anthropic-ai/sdk');
       const importClient = new Anthropic({ apiKey: importKey });
-      const result = await stageFileContent(importClient, file_content, filename, null);
+      // Attribute the job to the current user so it shows up in their
+      // "Continue a staged import" list on the Import page.
+      const userEmail = userCtx?.email || null;
+      const result = await stageFileContent(importClient, file_content, filename, userEmail);
       const counts = result.staged_data;
       return {
         job_id: result.job_id,
@@ -2186,6 +2905,45 @@ async function executeTool(name, input, send = null, userCtx = {}) {
           recipes:      counts.recipes?.length      || 0,
         },
       };
+    }
+
+    case 'list_import_jobs': {
+      // List recent import jobs the user can resume manually. Defaults to
+      // the current user's pending (non-terminal) jobs, matching what the
+      // Import page's "Continue a staged import" panel shows.
+      const { status, mine = true, limit = 20 } = input || {};
+      const userEmail = userCtx?.email || null;
+      const allowed   = ['staging', 'ready', 'importing', 'done', 'failed'];
+      const statuses  = Array.isArray(status) && status.length
+        ? status.filter(s => allowed.includes(s))
+        : ['staging', 'ready', 'failed'];
+      if (!statuses.length) return [];
+
+      const cap    = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+      const params = [statuses, cap];
+      let where    = `status = ANY($1::text[])`;
+      if (mine && userEmail) {
+        params.push(userEmail);
+        where += ` AND user_email = $${params.length}`;
+      }
+
+      const { rows } = await pool.query(`
+        SELECT id, user_email, source_file, status, created_at, updated_at,
+               COALESCE(jsonb_array_length(staged_data -> 'ingredients'),  0) AS ingredient_count,
+               COALESCE(jsonb_array_length(staged_data -> 'vendors'),      0) AS vendor_count,
+               COALESCE(jsonb_array_length(staged_data -> 'price_quotes'), 0) AS quote_count,
+               COALESCE(jsonb_array_length(staged_data -> 'recipes'),      0) AS recipe_count,
+               COALESCE(jsonb_array_length(staged_data -> 'menus'),        0) AS menu_count
+        FROM   mcogs_import_jobs
+        WHERE  ${where}
+        ORDER  BY created_at DESC
+        LIMIT  $2
+      `, params);
+
+      return rows.map(r => ({
+        ...r,
+        url: `/import?job=${r.id}`,
+      }));
     }
 
     case 'search_web': {
@@ -2961,6 +3719,22 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
     // ── Excel Export ───────────────────────────────────────────────────────────
 
+    case 'navigate_to_page': {
+      const page = String(input?.page || '').trim();
+      const allowed = new Set([
+        'dashboard', 'inventory', 'recipes', 'sales-items', 'menus',
+        'allergens', 'haccp', 'audits', 'stock-manager', 'media',
+        'configuration', 'system', 'help',
+      ]);
+      if (!allowed.has(page)) return { error: `Unknown page "${page}"` };
+      const path = `/${page}`;
+      // Emit an SSE 'navigate' event so the browser switches routes. The
+      // tool result string is what Claude sees in the conversation; the SSE
+      // event is the side-channel that actually drives the browser.
+      if (send) send({ type: 'navigate', path });
+      return { ok: true, opened: path, message: `Opened ${page} for the user.` };
+    }
+
     case 'export_to_excel': {
       try {
         const { dataset = 'full_export', country_id, filename: customFilename } = input;
@@ -3115,6 +3889,363 @@ async function executeTool(name, input, send = null, userCtx = {}) {
       }
     }
 
+    case 'save_to_media_library': {
+      try {
+        const { url, filename, category_id, form_key } = input;
+        if (!url) return { error: 'url is required' };
+        const safeName = filename || url.split('/').pop()?.split('?')[0] || 'image.jpg';
+        const { rows } = await pool.query(
+          `INSERT INTO mcogs_media_items (filename, original_filename, url, thumb_url, web_url, storage_type, mime_type, size_bytes, scope, form_key, category_id, uploaded_by)
+           VALUES ($1,$2,$3,$3,$3,'external','image/jpeg',0,$4,$5,$6,$7)
+           RETURNING id, filename, url, thumb_url, web_url, scope, category_id, created_at`,
+          [safeName, safeName, url, form_key ? 'form' : 'shared', form_key || null, category_id || null, userCtx?.sub || null]
+        );
+        return { saved: true, item: rows[0], message: `Saved "${safeName}" to the media library (id: ${rows[0].id})` };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    case 'list_media_library': {
+      try {
+        const { q, category_id, form_key } = input;
+        const conds = [], vals = [];
+        if (q) { vals.push(`%${q.toLowerCase()}%`); conds.push(`LOWER(m.filename) LIKE $${vals.length}`); }
+        if (category_id) { vals.push(Number(category_id)); conds.push(`m.category_id = $${vals.length}`); }
+        if (form_key) { vals.push(form_key); conds.push(`m.form_key = $${vals.length}`); }
+        const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+        const { rows } = await pool.query(
+          `SELECT m.id, m.filename, m.url, m.thumb_url, m.web_url, m.scope, m.form_key,
+                  m.size_bytes, m.width, m.height, m.created_at, c.name AS category_name
+           FROM mcogs_media_items m
+           LEFT JOIN mcogs_media_categories c ON c.id = m.category_id
+           ${where} ORDER BY m.created_at DESC LIMIT 50`,
+          vals
+        );
+        return { count: rows.length, items: rows };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    // ── Memory tools ──────────────────────────────────────────────────────────
+
+    case 'save_memory_note': {
+      const { note } = input;
+      if (!note?.trim()) return 'Error: note text is required';
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rows: [created] } = await pool.query(
+          'INSERT INTO mcogs_user_notes (user_sub, note) VALUES ($1, $2) RETURNING id, note, created_at',
+          [sub, note.trim()]
+        );
+        // Verify the row is queryable from the same pool (defence against any
+        // pooler-level surprise). The INSERT...RETURNING already guarantees
+        // commit, but a follow-up SELECT confirms the row is visible to
+        // subsequent reads on the same pool.
+        const { rows: verify } = await pool.query(
+          'SELECT id FROM mcogs_user_notes WHERE id = $1 AND user_sub = $2',
+          [created.id, sub]
+        );
+        if (!verify.length) {
+          return `Error: note appeared to save (id ${created.id}) but is not visible on read-back. Try again.`;
+        }
+        // Explicitly remind Claude that the snapshot in the system prompt is
+        // now stale — without this, Claude tends to answer follow-up "list my
+        // notes" questions from the stale snapshot rather than calling
+        // list_memory_notes (BUG-1148).
+        return `Saved note #${created.id}: "${created.note}". The Memory section in your system prompt is now stale — call list_memory_notes to see the updated list before reporting it to the user.`;
+      } catch (err) {
+        return `Error saving note: ${err.message}`;
+      }
+    }
+    case 'list_memory_notes': {
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rows } = await pool.query(
+          'SELECT id, note, created_at FROM mcogs_user_notes WHERE user_sub = $1 ORDER BY created_at ASC',
+          [sub]
+        );
+        if (!rows.length) return 'No pinned notes found.';
+        return rows.map(n => `#${n.id}: "${n.note}" (saved ${new Date(n.created_at).toLocaleDateString()})`).join('\n');
+      } catch (err) {
+        return `Error listing notes: ${err.message}`;
+      }
+    }
+    case 'delete_memory_note': {
+      const { note_id } = input;
+      const sub = userCtx.sub;
+      if (!sub) return 'Error: user context unavailable';
+      try {
+        const { rowCount } = await pool.query(
+          'DELETE FROM mcogs_user_notes WHERE id = $1 AND user_sub = $2',
+          [note_id, sub]
+        );
+        if (!rowCount) return `Note #${note_id} not found`;
+        return `Deleted note #${note_id}. The Memory section in your system prompt is now stale — call list_memory_notes if the user wants to see the remaining notes.`;
+      } catch (err) {
+        return `Error deleting note: ${err.message}`;
+      }
+    }
+
+    // ── Audit Log ───────────────────────────────────────────────────────────────
+
+    case 'query_audit_log': {
+      const { entity_type, entity_id, user_email, action, from, to, search, limit } = input;
+      const conditions = [], params = [];
+      let idx = 1;
+      if (entity_type) { conditions.push(`entity_type = $${idx++}`); params.push(entity_type); }
+      if (entity_id)   { conditions.push(`entity_id = $${idx++}`);   params.push(entity_id); }
+      if (user_email)  { conditions.push(`user_email ILIKE $${idx++}`); params.push(`%${user_email}%`); }
+      if (action)      { conditions.push(`action = $${idx++}`);       params.push(action); }
+      if (from)        { conditions.push(`created_at >= $${idx++}`);  params.push(from); }
+      if (to)          { conditions.push(`created_at < ($${idx++})::date + 1`); params.push(to); }
+      if (search)      { conditions.push(`entity_label ILIKE '%' || $${idx++} || '%'`); params.push(search); }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const cap = Math.min(limit || 20, 50);
+      const { rows } = await pool.query(`
+        SELECT id, action, entity_type, entity_id, entity_label,
+               user_email, user_name, field_changes, context, created_at
+        FROM   mcogs_audit_log ${where}
+        ORDER BY created_at DESC LIMIT $${idx}
+      `, [...params, cap]);
+      return { count: rows.length, entries: rows };
+    }
+
+    case 'get_entity_audit_history': {
+      const { entity_type, entity_id } = input;
+      const { rows } = await pool.query(`
+        SELECT id, action, entity_label, user_email, user_name,
+               field_changes, context, related_entities, created_at
+        FROM   mcogs_audit_log
+        WHERE  entity_type = $1 AND entity_id = $2
+        ORDER BY created_at ASC
+      `, [entity_type, entity_id]);
+      return { entity_type, entity_id, history: rows };
+    }
+
+    case 'search_faq': {
+      const { query, category } = input;
+      const conditions = ['is_published = TRUE'];
+      const faqParams = [];
+      let fi = 1;
+      conditions.push(`(question ILIKE '%' || $${fi} || '%' OR answer ILIKE '%' || $${fi} || '%' OR tags::text ILIKE '%' || $${fi} || '%')`);
+      faqParams.push(query);
+      fi++;
+      if (category) { conditions.push(`category = $${fi++}`); faqParams.push(category); }
+      const { rows } = await pool.query(`
+        SELECT id, question, answer, category
+        FROM   mcogs_faq
+        WHERE  ${conditions.join(' AND ')}
+        ORDER BY sort_order, id LIMIT 5
+      `, faqParams);
+      if (!rows.length) return { message: 'No FAQ entries found matching that query. Try different keywords or answer from your own knowledge.' };
+      return { count: rows.length, results: rows };
+    }
+
+    case 'get_changelog': {
+      const { version, limit } = input;
+      if (version) {
+        const { rows } = await pool.query(
+          'SELECT * FROM mcogs_changelog WHERE version = $1 ORDER BY id', [version]
+        );
+        return rows.length ? rows : { message: `No changelog entry for version ${version}` };
+      }
+      const cap = Math.min(limit || 5, 20);
+      const { rows } = await pool.query(
+        'SELECT * FROM mcogs_changelog ORDER BY version DESC, id DESC LIMIT $1', [cap]
+      );
+      return { count: rows.length, entries: rows };
+    }
+
+    case 'list_audits': {
+      const { audit_type, status, location_id, limit } = input;
+      const where = [], params = [];
+      if (audit_type)  { params.push(audit_type);   where.push(`a.audit_type = $${params.length}`); }
+      if (status)      { params.push(status);       where.push(`a.status = $${params.length}`); }
+      if (location_id) { params.push(location_id);  where.push(`a.location_id = $${params.length}`); }
+      params.push(Math.min(limit || 20, 100));
+      const { rows } = await pool.query(
+        `SELECT a.id, a.key, a.audit_type, a.status, a.overall_score, a.overall_rating,
+                a.auto_unacceptable, a.started_at, a.completed_at, a.auditor_name,
+                l.name AS location_name
+         FROM   mcogs_qsc_audits a
+         LEFT JOIN mcogs_locations l ON l.id = a.location_id
+         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+         ORDER  BY a.started_at DESC LIMIT $${params.length}`,
+        params
+      );
+      return { count: rows.length, audits: rows };
+    }
+
+    case 'get_audit_report': {
+      const { audit_id, audit_key } = input;
+      if (!audit_id && !audit_key) return { error: 'Provide audit_id or audit_key' };
+      const audit = await pool.query(
+        audit_id
+          ? `SELECT a.*, l.name AS location_name FROM mcogs_qsc_audits a LEFT JOIN mcogs_locations l ON l.id = a.location_id WHERE a.id = $1`
+          : `SELECT a.*, l.name AS location_name FROM mcogs_qsc_audits a LEFT JOIN mcogs_locations l ON l.id = a.location_id WHERE a.key = $1`,
+        [audit_id || audit_key]
+      );
+      if (!audit.rows.length) return { error: 'Audit not found' };
+      const a = audit.rows[0];
+      const nc = await pool.query(
+        `SELECT r.question_code, r.comment, r.points_deducted, r.is_repeat,
+                q.title, q.risk_level, q.department, q.category
+         FROM   mcogs_qsc_responses r
+         JOIN   mcogs_qsc_questions q ON q.code = r.question_code AND q.version = $2
+         WHERE  r.audit_id = $1 AND r.status = 'not_compliant'
+         ORDER  BY q.sort_order`,
+        [a.id, a.question_version]
+      );
+      return {
+        audit: {
+          key: a.key, type: a.audit_type, status: a.status,
+          location: a.location_name, auditor: a.auditor_name,
+          started_at: a.started_at, completed_at: a.completed_at,
+          overall_score: a.overall_score, overall_rating: a.overall_rating,
+          auto_unacceptable: a.auto_unacceptable, notes: a.notes,
+        },
+        non_compliant_count: nc.rows.length,
+        non_compliant:       nc.rows,
+      };
+    }
+
+    case 'list_qsc_questions': {
+      const { department, category, risk_level, search, limit } = input;
+      const where = ['active = TRUE'];
+      const params = [];
+      if (department) { params.push(department);                         where.push(`department = $${params.length}`); }
+      if (category)   { params.push(category);                           where.push(`category = $${params.length}`); }
+      if (risk_level) { params.push(risk_level);                         where.push(`risk_level = $${params.length}`); }
+      if (search)     {
+        params.push(`%${search}%`);
+        where.push(`(code ILIKE $${params.length} OR title ILIKE $${params.length})`);
+      }
+      params.push(Math.min(limit || 25, 100));
+      const { rows } = await pool.query(
+        `SELECT code, department, category, title, risk_level, points, repeat_points,
+                auto_unacceptable, photo_required, temperature_input
+         FROM   mcogs_qsc_questions
+         WHERE  ${where.join(' AND ')}
+         ORDER  BY sort_order LIMIT $${params.length}`,
+        params
+      );
+      return { count: rows.length, questions: rows };
+    }
+
+    case 'get_qsc_question': {
+      const { code } = input;
+      if (!code) return { error: 'code is required' };
+      const { rows } = await pool.query(
+        `SELECT * FROM mcogs_qsc_questions WHERE code = $1 AND active = TRUE ORDER BY version DESC LIMIT 1`,
+        [code]
+      );
+      if (!rows.length) return { error: `Question ${code} not found` };
+      return rows[0];
+    }
+
+    case 'list_audit_templates': {
+      const { rows } = await pool.query(
+        `SELECT id, name, description, is_system, question_codes,
+                jsonb_array_length(question_codes) AS question_count
+         FROM   mcogs_qsc_templates
+         ORDER  BY is_system DESC, name`
+      );
+      return { count: rows.length, templates: rows };
+    }
+
+    case 'get_audit_nc_trends': {
+      const { location_id, audit_type, from, to, limit } = input;
+      const where = [`a.status = 'completed'`, `r.status = 'not_compliant'`];
+      const params = [];
+      if (location_id) { params.push(location_id); where.push(`a.location_id = $${params.length}`); }
+      if (audit_type)  { params.push(audit_type);  where.push(`a.audit_type = $${params.length}`); }
+      if (from)        { params.push(from);        where.push(`a.completed_at >= $${params.length}`); }
+      if (to)          { params.push(to);          where.push(`a.completed_at < ($${params.length})::date + 1`); }
+      params.push(Math.min(limit || 20, 50));
+      const { rows } = await pool.query(
+        `SELECT r.question_code,
+                q.title, q.risk_level, q.department, q.category,
+                COUNT(*)::int AS nc_count,
+                SUM(r.points_deducted)::int AS total_points_deducted,
+                COUNT(*) FILTER (WHERE r.is_repeat)::int AS repeat_count
+         FROM   mcogs_qsc_responses r
+         JOIN   mcogs_qsc_audits    a ON a.id   = r.audit_id
+         JOIN   mcogs_qsc_questions q ON q.code = r.question_code AND q.version = a.question_version
+         WHERE  ${where.join(' AND ')}
+         GROUP  BY r.question_code, q.title, q.risk_level, q.department, q.category
+         ORDER  BY nc_count DESC, total_points_deducted DESC
+         LIMIT $${params.length}`,
+        params
+      );
+      // Also return how many audits were in the filter window for denominator context
+      const denomWhere = where.filter(w => !w.includes('r.status'));
+      const denomParams = params.slice(0, params.length - 1);
+      const denom = await pool.query(
+        `SELECT COUNT(DISTINCT a.id)::int AS audit_count
+         FROM   mcogs_qsc_audits a
+         ${denomWhere.length ? 'WHERE ' + denomWhere.join(' AND ').replace(/r\.status = 'not_compliant' AND /, '') : ''}`,
+        denomParams
+      );
+      return {
+        audit_count: denom.rows[0]?.audit_count ?? 0,
+        trend_count: rows.length,
+        trends:      rows,
+      };
+    }
+
+    case 'get_location_audit_history': {
+      const { location_id, limit } = input;
+      if (!location_id) return { error: 'location_id is required' };
+      const cap = Math.min(limit || 10, 50);
+      const { rows } = await pool.query(
+        `SELECT a.id, a.key, a.audit_type, a.status,
+                a.started_at, a.completed_at,
+                a.overall_score, a.overall_rating, a.auto_unacceptable,
+                a.auditor_name,
+                (SELECT COUNT(*)::int FROM mcogs_qsc_responses WHERE audit_id = a.id AND status = 'not_compliant') AS nc_count
+         FROM   mcogs_qsc_audits a
+         WHERE  a.location_id = $1
+         ORDER  BY COALESCE(a.completed_at, a.started_at) DESC
+         LIMIT  $2`,
+        [location_id, cap]
+      );
+      const completed = rows.filter(r => r.status === 'completed' && r.overall_score != null);
+      const avg = completed.length
+        ? Math.round((completed.reduce((s, r) => s + Number(r.overall_score), 0) / completed.length) * 10) / 10
+        : null;
+      const ratingDist = completed.reduce((acc, r) => {
+        acc[r.overall_rating || 'Unknown'] = (acc[r.overall_rating || 'Unknown'] || 0) + 1;
+        return acc;
+      }, {});
+      return {
+        location_id,
+        audit_count:          rows.length,
+        completed_count:      completed.length,
+        average_score:        avg,
+        rating_distribution:  ratingDist,
+        audits:               rows,
+      };
+    }
+
+    case 'get_audit_stats': {
+      const { from, to } = input;
+      const conditions = [], params = [];
+      let idx = 1;
+      if (from) { conditions.push(`created_at >= $${idx++}`); params.push(from); }
+      if (to)   { conditions.push(`created_at < ($${idx++})::date + 1`); params.push(to); }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const [totRes, byRes, usrRes] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS total FROM mcogs_audit_log ${where}`, params),
+        pool.query(`SELECT action, entity_type, COUNT(*)::int AS count FROM mcogs_audit_log ${where} GROUP BY action, entity_type ORDER BY count DESC`, params),
+        pool.query(`SELECT user_email, user_name, COUNT(*)::int AS action_count, MAX(created_at) AS last_action FROM mcogs_audit_log ${where} GROUP BY user_email, user_name ORDER BY action_count DESC LIMIT 10`, params),
+      ]);
+      return { total: totRes.rows[0].total, by_action_entity: byRes.rows, top_users: usrRes.rows };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -3122,16 +4253,205 @@ async function executeTool(name, input, send = null, userCtx = {}) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(context, helpContext, conciseMode = false) {
+async function buildSystemPrompt(context, helpContext, conciseMode = false, is_dev = false, userLanguage = 'en') {
   const page = context?.currentPage || 'unknown';
+
+  // ── Language directive ───────────────────────────────────────────────────
+  // When the user has a non-English preference, instruct Pepper to respond in
+  // that language. Tool results will still come back in the resolved language
+  // (via the COALESCE pattern in route handlers); Pepper reads them and
+  // naturally re-uses those translated strings in its prose.
+  let languageBlock = '';
+  if (userLanguage && userLanguage !== 'en') {
+    const languageNames = {
+      fr: 'French', es: 'Spanish', de: 'German', it: 'Italian', nl: 'Dutch',
+      pl: 'Polish', pt: 'Portuguese', hi: 'Hindi',
+    };
+    const name = languageNames[userLanguage] || userLanguage;
+    languageBlock = `\n\n## User Language\nThe user's preferred language is ${name} (${userLanguage}). Respond to the user in ${name}. When you present data (ingredient names, recipe names, categories, etc.) use the translations returned by the tools — do not re-translate them yourself. Keep keyboard shortcuts, feature names like "Dashboard" / "Pepper" / URLs, and SQL/technical identifiers in English where appropriate.\n`;
+  }
+
+  // ── Memory context (pinned notes + profile) ──────────────────────────────
+  let memoryBlock = '';
+  try {
+    const userSub = context?.userSub;
+    if (userSub) {
+      const [notesRes, profileRes, dailyRes, lastChatRes] = await Promise.all([
+        pool.query(
+          'SELECT note, created_at FROM mcogs_user_notes WHERE user_sub = $1 ORDER BY created_at ASC',
+          [userSub]
+        ),
+        pool.query(
+          'SELECT display_name, profile_json, long_term_summary FROM mcogs_user_profiles WHERE user_sub = $1',
+          [userSub]
+        ),
+        pool.query(
+          'SELECT summary_date, summary FROM mcogs_memory_daily WHERE user_sub = $1 ORDER BY summary_date DESC LIMIT 3',
+          [userSub]
+        ),
+        pool.query(
+          'SELECT created_at FROM mcogs_ai_chat_log WHERE user_sub = $1 ORDER BY created_at DESC LIMIT 1 OFFSET 1',
+          [userSub]
+        ),
+      ]);
+      const notes   = notesRes.rows;
+      const profile = profileRes.rows[0];
+      const dailySummaries = dailyRes.rows;
+      const prevChat = lastChatRes.rows[0];
+
+      if (notes.length || profile || dailySummaries.length) {
+        memoryBlock = '\n\n## Memory\n';
+
+        if (profile?.display_name) {
+          memoryBlock += `The user\'s preferred name is "${profile.display_name}".\n`;
+        }
+        if (profile?.long_term_summary) {
+          memoryBlock += `\nUser summary: ${profile.long_term_summary}\n`;
+        }
+        if (profile?.profile_json && typeof profile.profile_json === 'object' && Object.keys(profile.profile_json).length > 0) {
+          const pj = profile.profile_json;
+          if (pj.primary_markets) memoryBlock += `Primary markets: ${Array.isArray(pj.primary_markets) ? pj.primary_markets.join(', ') : pj.primary_markets}.\n`;
+          if (pj.response_preference) memoryBlock += `Response preference: ${pj.response_preference}.\n`;
+          if (pj.recurring_focus) memoryBlock += `Recurring focus areas: ${Array.isArray(pj.recurring_focus) ? pj.recurring_focus.join(', ') : pj.recurring_focus}.\n`;
+        }
+
+        if (notes.length) {
+          memoryBlock += `\nPinned notes (snapshot from session start — call list_memory_notes after any save_memory_note / delete_memory_note for the live list):\n`;
+          for (const n of notes) {
+            memoryBlock += `- ${n.note}\n`;
+          }
+        }
+
+        // Recent daily summaries (from nightly consolidation job)
+        if (dailySummaries.length) {
+          memoryBlock += '\nRecent conversation summaries:\n';
+          for (const d of dailySummaries) {
+            memoryBlock += `- ${d.summary_date}: ${d.summary}\n`;
+          }
+        }
+
+        // Activity digest — changes since last conversation
+        if (prevChat?.created_at) {
+          try {
+            const { rows: recentAudit } = await pool.query(`
+              SELECT entity_type, action, entity_label
+              FROM   mcogs_audit_log
+              WHERE  created_at > $1
+              ORDER BY created_at DESC LIMIT 10
+            `, [prevChat.created_at]);
+            if (recentAudit.length) {
+              memoryBlock += '\nChanges since your last conversation:\n';
+              for (const a of recentAudit) {
+                memoryBlock += `- ${a.action} ${a.entity_type}: ${a.entity_label || '(unnamed)'}\n`;
+              }
+            }
+          } catch { /* non-critical — skip activity digest */ }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[memory] Failed to load memory context:', err.message);
+    // Graceful degradation — chat works without memory
+  }
+
+  // ── Operator directives ──────────────────────────────────────────────────
+  // Free-form admin-set instructions loaded into every Pepper session. Used
+  // for organisation-wide policy ("never go outside COGS scope", "no explicit
+  // language", "always cite sources before quoting prices", etc.). Stored on
+  // mcogs_settings.data.pepper_directives. Empty / missing → no block emitted.
+  //
+  // Two sources are merged into a single block:
+  //   • Manual directives — admin-typed text in Settings → AI
+  //   • Derived directives — auto-generated nightly by deriveDirectives.js
+  //     from chat-history + pinned-note patterns. Already filtered for
+  //     RBAC-bypass / user-specific / credential leakage at write time.
+  let directivesBlock = '';
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings LIMIT 1`);
+    const settings = rows[0]?.data || {};
+    const manualRaw = settings.pepper_directives;
+    const manualText = typeof manualRaw === 'string' ? manualRaw.trim() : '';
+
+    const derived = settings.pepper_derived_directives;
+    const derivedList = Array.isArray(derived?.directives) ? derived.directives : [];
+    const derivedText = derivedList
+      .filter(d => d && typeof d.text === 'string' && d.text.trim().length > 0)
+      .map(d => `• ${d.text.trim()}`)
+      .join('\n');
+
+    const pieces = [];
+    if (manualText)  pieces.push(`### Set by administrator\n\n${manualText}`);
+    if (derivedText) pieces.push(`### Auto-derived from usage patterns\n\nThese were inferred from observed chat history and pinned notes. Apply them when relevant; defer to manual directives above when they conflict.\n\n${derivedText}`);
+
+    if (pieces.length > 0) {
+      directivesBlock = `\n\n## Operator Directives\n\nThese instructions are set by the deployment administrator and apply to every conversation. Treat them as binding policy — they override your default behaviour where they conflict, except for safety-critical rules below (accuracy, write-confirmation, RBAC).\n\n${pieces.join('\n\n')}\n`;
+    }
+  } catch (err) {
+    console.error('[directives] Failed to load operator directives:', err.message);
+    // Non-fatal — chat works without them
+  }
+
   return `You are Pepper — an AI assistant embedded in the COGS Manager platform, a tool for restaurant franchise operators to manage menu cost-of-goods (COGS).
 
 Your name is Pepper. When users greet you or ask your name, introduce yourself as Pepper.
 
-## CRITICAL: ACCURACY RULES
-- NEVER invent page names, tab names, feature names, or field names that are not explicitly documented in your context or the sections below.
-- If you are unsure whether a feature exists, say so — do not guess or hallucinate UI elements.
-- The authoritative list of pages, tabs, and features is in this system prompt and the retrieved documentation context. Treat it as ground truth over any prior training knowledge about this app.
+You are talking to real restaurant operators who make food-cost decisions on real money based on what you tell them. Confident wrong answers cost them money. Read the CRITICAL: ACCURACY RULES section below before answering anything that involves a number, an entity name, a date, or a claim about what you've done — those rules are non-negotiable and override every other directive in this prompt.
+${languageBlock}${memoryBlock}${directivesBlock}
+## Memory Tools
+
+You have persistent memory across conversations via pinned notes. When the user says things like:
+- "Remember that I always want prices in GBP"
+- "Note that our UK supplier is Farm Fresh"
+- "Always use concise format for reports"
+
+Call the save_memory_note tool to save this as a pinned note. These notes are loaded into every future conversation.
+
+When the user asks "what do you remember?" or "show my notes", you MUST call list_memory_notes. Do NOT answer from the snapshot in the Memory section — that snapshot is captured at session start and goes stale after any save_memory_note or delete_memory_note in this session.
+
+When the user asks to forget something, call delete_memory_note.
+
+After save_memory_note or delete_memory_note returns, the Memory section above is stale. If the user then asks anything that depends on the current pinned-notes list, call list_memory_notes for fresh data.
+
+Your pinned notes (if any) are shown in the Memory section above. Use them as background context for personalization, but always call list_memory_notes when the user explicitly asks to see or verify their notes.
+
+## CRITICAL: ACCURACY RULES (these override every other directive — no exceptions)
+
+These are anti-hallucination rules. You are a tool that real operators use to make real food-cost decisions on real money. A confident wrong answer is worse than saying "I don't know — let me check". When in doubt, call a tool.
+
+### Rule 1 — Numbers: never quote a value you didn't load via a tool this session
+- Prices, costs, COGS %, quantities, counts, percentages, dates — all of these MUST come from a tool result you received in THIS conversation.
+- Never round, infer, extrapolate, or estimate without saying so explicitly ("roughly", "approximately", "if I had to guess").
+- If you don't have a tool result for a number, your only options are: (a) call the relevant tool first, or (b) tell the user "I haven't checked — would you like me to fetch it?"
+- Industry context is fine when framed as such (e.g. "typical QSR food cost is 28–32%"), but NEVER present it as a fact about this user's menu, ingredients, or recipes.
+
+### Rule 2 — Entity references: never name an entity you haven't loaded
+- Never reference a BACK-####, BUG-####, ingredient name, recipe name, menu name, vendor name, sales-item name, or any other entity by its specific identifier unless that exact identifier appears in a tool result you received this conversation.
+- If the user mentions "BACK-2812" and you haven't loaded it, your first move is to call list_backlog (with the search filter) — do NOT acknowledge it as if you already know what it is.
+- "Let me check that ticket" is always better than inventing a plausible-sounding summary.
+
+### Rule 3 — Truncation: say so when a list is cut off
+- List tools may return fewer rows than the underlying dataset (default LIMIT, configured page size, etc.). If your result is potentially incomplete, lead with "Showing N of M — there may be more" (or "I'm only seeing the first N") before drawing any conclusion.
+- Never count, aggregate, or summarise a truncated list as if it were complete. ("You have 50 ingredients" is wrong if the list was capped at 50 — fetch more, or use a stats tool, before answering.)
+- When the user asks "how many X do I have?", prefer tools that return totals (get_audit_stats, get_backlog_stats, /ingredients/stats) over counting list rows.
+
+### Rule 4 — Action claims: never say "I did X" without a successful tool call
+- Never say "I've updated…", "I've created…", "I've deleted…", "I've saved…" without the corresponding write tool call returning successfully in this conversation.
+- If a write tool returned an error, surface the error message — don't paper over it with a reassuring summary.
+- After a write returns, restate the actual response ("the API returned id=47, status=created") rather than just re-stating what the user asked for.
+
+### Rule 5 — Cite your tool when stating a fact
+- When you give a number, status, or any concrete claim, attribute it to the tool you used: "From get_ingredient, the waste % is 5". This lets the user spot when your prose diverges from the tool output.
+- If asked "where did you get that?" you must be able to point at a tool call from this conversation. If you can't, you fabricated it — own it, apologise, and re-fetch.
+
+### Rule 6 — Defer to tools over training data
+- Tool results always win over what you "remember" from training.
+- Dates (when X was deployed, what's the latest version, is Y resolved) MUST come from get_changelog / list_backlog / list_bugs / query_audit_log — never from your prior knowledge.
+- If a tool result and a previous statement of yours disagree, the tool is correct and your earlier claim was wrong. Acknowledge the correction explicitly to the user.
+
+### Rule 7 — UI claims: don't invent screens or fields
+- NEVER invent page names, tab names, feature names, button labels, or field names that are not in this system prompt or the retrieved documentation context.
+- The authoritative list of pages, tabs, and features is in this system prompt. Treat it as ground truth over any prior training knowledge about this app.
+- "I don't see a feature for that — want me to check the docs?" beats inventing one.
 
 You can both READ and WRITE to the database — you are a full sysadmin assistant with the ability to create, update, and delete records across all entities.
 
@@ -3241,19 +4561,19 @@ The Settings page has these tabs — users sometimes ask what they do:
 
 **COGS Thresholds** — configure the green/amber/red colour thresholds for COGS% display. "Excellent" (green) and "Acceptable" (amber) percentages are set here; above acceptable = red.
 
-**System → Test Data** — developer/demo tool to populate the database with realistic dummy data for exploration and testing. Only visible to users with the `is_dev` flag on, marked with a purple DEV badge, and every destructive action requires typing today's date as ddmmyyyy in a confirmation modal. Note: **System → Database** is a different section — it's admin-gated and controls the DB connection (local vs AWS RDS), not seeding. Four actions:
-- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 12 sales items (incl. a combo meal deal), 2 modifier groups, ingredient allergen tags, 10 vendors, 3 brand partners, 4 countries. Use this to explore a fully populated account.
-- "Load Small Data" — same shape, but 200 ingredients (faster, for development).
-- "Clear Database" — permanently removes ALL rows from every operational table (sales items, combos, modifiers, scenarios, HACCP logs, etc.). Schema and reference data (allergens, roles, users) preserved. Cannot be undone.
-- "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 3 unified categories scoped for ingredients/recipes/sales-items, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
-Warning users: these operations cannot be undone and will delete real data. Only use on a demo or dev account.
+**Test Data** (System → Database section, visible to dev users only) — developer/demo tool to populate the database with realistic dummy data. Four actions:
+- "Load Test Data" — wipes ALL existing data, then inserts 1,000 ingredients, 500 quotes, 48 recipes, 4 menus, 10 vendors, 4 countries. Requires typing today's date (ddmmyyyy format) to confirm.
+- "Load Small Data" — same but 200 ingredients (faster, for development). Also requires date confirmation.
+- "Clear Database" — permanently removes ALL rows from every table. Schema is preserved. Requires date confirmation.
+- "Load Default Data" — safe to run after Clear Database; adds a minimal production-ready starting point (1 market/UK, 3 units, 6 categories, 1 price level, 1 vendor, UK VAT rates). Does NOT wipe existing data.
+Warning users: these operations cannot be undone and will delete real data. Only use Test Data on a demo or dev account. The Test Data section is only visible to users with the dev flag enabled (Settings → Users → </> button).${is_dev ? '\nThe current user HAS the dev flag — they can access System → Database → Test Data.' : ''}
 
 **AI** — configure API keys (Anthropic for Pepper, Voyage for semantic search, Brave for web search), toggle Concise Mode, and generate a Claude Code integration key.
 
 **Import** — embeds the full AI Import Wizard (same as the /import page). A 5-step wizard: Upload file → Review extracted data → Map categories → Map vendors → Execute. Supports CSV, XLSX, XLSB. Use this to bulk-import ingredients, price quotes, recipes, and menus from a spreadsheet.
 
 ## TOOLS AVAILABLE
-You have 89 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), and **export_to_excel** (generates an Excel download filtered to the user's market scope).
+You have 97 tools covering: dashboard stats, ingredients, vendors, price quotes, preferred vendors, recipes, recipe items, menus, menu items, menu item prices, categories (full CRUD), units, price levels (full CRUD), tax rates (full CRUD), markets (full CRUD), brand partners (full CRUD + assign), settings (read/update), HACCP equipment + temp logs + CCP logs, locations + location groups, allergens (list/read/write/menu matrix), feedback (submit/read/update status/delete), **start_import**, **search_web** (only when explicitly asked), **Menu Engineer** (list_scenarios, get_scenario_analysis, save_scenario, push_scenario_prices), **GitHub** (github_list_files, github_read_file, github_search_code, github_create_or_update_file, github_create_branch, github_list_prs, github_get_pr_diff, github_create_pr), **export_to_excel** (generates an Excel download filtered to the user's market scope), **Memory** (save_memory_note, list_memory_notes, delete_memory_note), **Audit Log** (query_audit_log, get_entity_audit_history, get_audit_stats), **FAQ** (search_faq — searches the FAQ knowledge base for how-to answers), and **Change Log** (get_changelog — project change history by version/date).
 
 ## GITHUB TOOLS
 Use GitHub tools when the user asks to check code, view files, review PRs, or make code changes. The default repo is configured in Settings → AI → GitHub Repo.
@@ -3284,12 +4604,18 @@ Use export_to_excel when the user asks to "export", "download", "get a spreadshe
 - The file downloads automatically in the user's browser; tell them it has been downloaded
 - No confirmation required (read-only operation)
 
-## BULK FILE IMPORT (start_import tool)
+## BULK FILE IMPORT (start_import + list_import_jobs tools)
 When the user uploads a spreadsheet/CSV with many rows AND wants to import it:
-1. Call start_import with the file content text and filename
-2. It stages the data for review and returns a job URL
-3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. before confirming."
-4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import
+1. Call start_import with the file content text and filename.
+2. It stages the data under the user's email and returns a job URL.
+3. Reply: "I've staged your file for import. **[Open Import Wizard](/import?job=<id>)** to review [N] ingredients, [N] recipes etc. and commit."
+4. Do NOT individually call create_ingredient/create_vendor etc. for bulk imports — use start_import.
+5. Do NOT commit the staged data yourself. The user reviews and finishes the import manually in the wizard.
+
+When the user asks "what imports do I have pending?", "any staged imports?", "can I resume an earlier import?":
+- Call list_import_jobs (defaults to the current user's non-terminal jobs).
+- Format the result as a short table: job id, filename, status, counts, clickable /import?job=<id> link.
+- If the list is empty, say so plainly and suggest uploading a new file to start one.
 
 ## FEEDBACK TOOL RULES
 - After calling submit_feedback, you MUST state the ticket ID from the tool result (e.g. "Ticket #15 logged"). Never confirm a ticket was submitted without seeing a successful tool result containing a valid id. If submit_feedback returns an error, tell the user it failed — do not claim success.
@@ -3320,8 +4646,26 @@ router.post('/', async (req, res) => {
     return res.status(503).json({ error: { message: 'Anthropic API key is not configured. Add it in Settings → AI.' } });
   }
 
-  const { message, context = {}, history = [], sessionId, userEmail, userSub } = req.body;
+  const { message, context = {}, history = [], sessionId, userEmail, userSub, model: requestedTier } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: { message: 'message is required' } });
+
+  // BACK-2565 — resolve the requested tier ('default' | 'premium') to the
+  // configured Anthropic model ID, gating premium behind ai_premium_access.
+  // Defence: never trust the client. We re-check req.user.ai_premium_access
+  // even if the client sent { model: 'premium' }.
+  let modelId;
+  let modelTier = 'default';
+  try {
+    const { resolveModelForTier } = require('../helpers/aiModels');
+    const resolved = await resolveModelForTier(requestedTier, { userHasPremium: !!req.user?.ai_premium_access });
+    modelId   = resolved.modelId;
+    modelTier = resolved.tier;
+  } catch (err) {
+    if (err.statusCode === 403) {
+      return res.status(403).json({ error: { message: err.message, code: err.code } });
+    }
+    return res.status(500).json({ error: { message: 'Failed to resolve AI model: ' + err.message } });
+  }
 
   // ── Monthly token allowance check ────────────────────────────────────────────
   const allowance = await checkTokenAllowance(userSub || req.user?.sub);
@@ -3354,7 +4698,10 @@ router.post('/', async (req, res) => {
     conciseMode = sRows[0]?.v === 'true';
   } catch (_) {}
 
-  const systemPrompt = buildSystemPrompt(context, helpContext, conciseMode);
+  // Inject userSub into context so buildSystemPrompt can load memory
+  context.userSub = context.userSub || userSub || req.user?.sub;
+
+  const systemPrompt = await buildSystemPrompt(context, helpContext, conciseMode, req.user?.is_dev || false, req.language || 'en');
 
   // Build messages array (enforce max 20 history items)
   const messages = [
@@ -3363,19 +4710,24 @@ router.post('/', async (req, res) => {
   ];
 
   // Bind user context (allowedCountries, etc.) into executeTool for this request
-  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, req.user || {});
+  // Inject req.language into userCtx so every tool executor that resolves
+  // translatable fields can COALESCE via the user's preferred language.
+  const userCtxWithLang = { ...(req.user || {}), language: req.language || 'en' };
+  const boundExecuteTool = (name, input, send) => executeTool(name, input, send, userCtxWithLang);
 
   const { responseText, toolsCalled, tokensIn, tokensOut, errorMsg } =
-    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res });
+    await agenticStream({ anthropic, systemPrompt, messages, tools: TOOLS, executeTool: boundExecuteTool, res, model: modelId });
 
-  // Log to DB (best-effort)
+  // Log to DB (best-effort) — includes model tier so usage can be split by
+  // Haiku / Opus per user (Story 6 / BACK-2568).
   pool.query(
     `INSERT INTO mcogs_ai_chat_log
-       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (user_message, response, tools_called, context, tokens_in, tokens_out, error, user_email, user_sub, session_id, model_id, model_tier)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [message, responseText, JSON.stringify(toolsCalled), JSON.stringify(context),
      tokensIn, tokensOut, errorMsg,
-     userEmail || null, userSub || null, sessionId || null]
+     userEmail || null, userSub || null, sessionId || null,
+     modelId, modelTier]
   ).catch(e => console.error('[ai-chat] log error:', e.message));
 });
 
@@ -3506,19 +4858,31 @@ router.get('/my-usage', async (req, res) => {
     const userSub      = req.user?.sub;
 
     let periodTokens = 0;
+    let byTier = { default: 0, premium: 0 };
     if (userSub) {
+      // BACK-2568 — break out tokens by tier so the frontend can render a
+      // per-model usage chip alongside the rollup. Single query — group by
+      // tier with a fallback bucket for legacy rows that have NULL model_tier.
       const { rows } = await pool.query(`
-        SELECT COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
+        SELECT COALESCE(model_tier, 'default')::text AS tier,
+               COALESCE(SUM(COALESCE(tokens_in,0) + COALESCE(tokens_out,0)), 0)::bigint AS total
         FROM   mcogs_ai_chat_log
         WHERE  user_sub = $1 AND created_at >= $2
+        GROUP  BY COALESCE(model_tier, 'default')
       `, [userSub, periodStart.toISOString()]);
-      periodTokens = Number(rows[0]?.total || 0);
+      for (const r of rows) {
+        const n = Number(r.total || 0);
+        periodTokens += n;
+        if (r.tier === 'premium') byTier.premium += n;
+        else                      byTier.default += n;
+      }
     }
 
     res.json({
       period_start:  periodStart.toISOString(),
       next_reset:    nextReset.toISOString(),
       period_tokens: periodTokens,
+      by_tier:       byTier,
       limit:         globalLimit,
       remaining:     globalLimit > 0 ? Math.max(0, globalLimit - periodTokens) : null,
       exceeded:      globalLimit > 0 && periodTokens >= globalLimit,
@@ -3565,7 +4929,9 @@ router.get('/usage', async (req, res) => {
         ORDER BY 1 ASC
       `),
 
-      // Per-user breakdown — top 20 by total tokens, including current billing period
+      // Per-user breakdown — top 20 by total tokens, including current billing period.
+      // BACK-2568 — also expose tokens by tier so admins can see Haiku vs Opus
+      // spend per user when deciding whether to grant premium access.
       pool.query(`
         SELECT
           COALESCE(user_email, user_sub, 'unknown')  AS user_label,
@@ -3574,6 +4940,10 @@ router.get('/usage', async (req, res) => {
           COALESCE(SUM(tokens_out), 0)::bigint       AS tokens_out,
           COALESCE(SUM(CASE WHEN created_at >= $1
             THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS period_tokens,
+          COALESCE(SUM(CASE WHEN model_tier = 'premium'
+            THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS premium_tokens,
+          COALESCE(SUM(CASE WHEN model_tier = 'premium' AND created_at >= $1
+            THEN COALESCE(tokens_in,0) + COALESCE(tokens_out,0) ELSE 0 END), 0)::bigint AS premium_period_tokens,
           MAX(created_at)                            AS last_active
         FROM mcogs_ai_chat_log
         GROUP BY COALESCE(user_email, user_sub, 'unknown')

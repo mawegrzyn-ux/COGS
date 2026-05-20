@@ -1,0 +1,4825 @@
+﻿// =============================================================================
+// Menu Builder — unified all-in-one menu setup page (BACK-2516 epic)
+// =============================================================================
+// One screen does everything: pick a menu, see its items, add items inline
+// either by searching the existing sales-item catalog OR by creating a new
+// one (recipe / ingredient / manual / combo) without leaving the page.
+//
+// This page deliberately overlaps with the existing Menus page (which keeps
+// the Menu Engineer / Shared Links / pricing-grid features). Menu Builder is
+// the *editing* surface; Menus is the *analysis* surface.
+//
+// Story 1 (BACK-2517): shell — menu picker, items list, "+ Add item" side
+//   panel with search-existing + create-new tabs + type radio. Branches
+//   (recipe-pick, manual capture, combo builder, modifier groups) plug into
+//   this shell in stories 2–7.
+// =============================================================================
+
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useApi } from '../hooks/useApi'
+import { useMarket } from '../contexts/MarketContext'
+import { PageHeader, Spinner, EmptyState, Field, Modal, Toast, PepperHelpButton, CalcInput, CategoryPicker } from '../components/ui'
+import ImageUpload from '../components/ImageUpload'
+import { setHandoff, type HandoffItemType } from '../lib/menuBuilderHandoff'
+
+// ── Types ───────────────────────────────────────────────────────────────────
+
+interface Menu {
+  id: number
+  name: string
+  country_id: number
+  country_name: string
+  currency_code?: string | null
+  currency_symbol?: string | null
+  description: string | null
+}
+
+interface MenuSalesItem {
+  id: number                     // menu_sales_item_id
+  menu_id: number
+  sales_item_id: number
+  qty: number
+  sort_order: number
+  sales_item_name: string
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  si_image_url: string | null
+  category: string | null
+  category_id?: number | null    // resolved sales-item category id
+  // BACK-2781 — category sort_order from mcogs_categories. Drives the
+  // grouped-mode bucket order so it matches Configuration → Categories.
+  category_sort_order?: number | null
+  prices?: MenuItemPrice[]       // story 6 — already in the GET response
+  has_price_override?: boolean
+  modifier_group_count?: number  // BACK-2573 — surfaced via the GET join
+  // BACK-2730 — per-msi tax override. NULL = fall back to the country_level_tax
+  // / country default chain. Set via PATCH /menu-sales-items/:id/tax.
+  tax_rate_id?: number | null
+}
+
+// BACK-2730 — country tax rate option for the override dropdown.
+interface TaxRateOption {
+  id:         number
+  name:       string
+  rate:       number              // e.g. 0.18 → 18%
+  is_default: boolean
+}
+
+// BACK-2573 / BACK-2574 — sub-prices payload from
+// GET /menu-sales-items/:id/sub-prices. Both modifier groups (for non-combo
+// items) and combo step structure are returned in one shot.
+interface SubPricesResp {
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  modifier_groups: SubModifierGroup[]
+  combo_steps: SubComboStep[]
+}
+
+interface SubModifierGroup {
+  modifier_group_id: number
+  name: string
+  min_select: number
+  max_select: number
+  options: SubOption[]
+  // BACK-2814 — group-level cost summary (returned by the backend; used in
+  // the group header and to align with the main row's cost column).
+  avg_cost?: number
+  min_cost?: number
+  max_cost?: number
+}
+
+interface SubComboStep {
+  id: number
+  name: string
+  min_select: number
+  max_select: number
+  options: SubComboOption[]
+  avg_cost?: number
+  min_cost?: number
+  max_cost?: number
+}
+
+interface SubOption {
+  id: number              // modifier_option_id
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  price_addon: number
+  prices: Record<string, number>  // { [price_level_id]: sell_price }
+  // BACK-2814 — per-option cost in market currency × qty (already includes
+  // the recipe-multiplier scaling when the modifier-multiplier setting is
+  // on). Computed server-side in loadModifierGroupsForItem / loadComboStructure.
+  cost?: number
+  image_url?: string | null
+}
+
+interface SubComboOption {
+  id: number              // combo_step_option_id
+  name: string
+  display_name: string | null
+  // BUG-1185 follow-up — sales_item is a valid option type; the editor in
+  // MenuBuilderPage now exposes it, and the backend has long accepted it.
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
+  price_addon: number
+  prices: Record<string, number>
+  modifier_groups: SubModifierGroup[]
+  cost?: number
+  image_url?: string | null
+}
+
+interface MenuItemPrice {
+  id: number
+  menu_sales_item_id: number
+  price_level_id: number
+  price_level_name: string
+  sell_price: number
+  default_price: number | null   // from mcogs_sales_item_prices
+  is_overridden: boolean
+  tax_rate_id: number | null
+}
+
+// BACK-2569 — country-scoped price-level row used to filter the inline price
+// columns. Returned by GET /api/country-price-levels/:countryId. is_enabled
+// false means the level is configured but turned off for that country and
+// should NOT appear as a column.
+interface CountryPriceLevel {
+  price_level_id: number
+  price_level_name: string
+  is_enabled: boolean
+  // BACK-2673 — tax mapping for this country+level combo. Populated by
+  // mcogs_country_level_tax → mcogs_country_tax_rates. Null when the
+  // operator has not assigned a tax rate to this level for the country.
+  tax_rate_id?:   number | null
+  tax_rate_name?: string | null
+  // Stored as a decimal multiplier in mcogs_country_tax_rates.rate
+  // (NUMERIC(8,4)) — e.g. 0.05 means 5%, 0.20 means 20%. Always
+  // multiply by 100 before display.
+  tax_rate?:      number | null
+}
+
+// TaxRate interface removed in BACK-2569 — inline price cells are tax-rate-
+// agnostic for now (sales-item-level tax_rate_id stays untouched on save).
+
+interface ModifierGroup {
+  id: number
+  name: string
+  display_name: string | null
+  min_select: number
+  max_select: number
+  allow_repeat_selection: boolean
+  default_auto_show: boolean
+  option_count?: number
+}
+
+interface AttachedModifierGroup {
+  modifier_group_id: number
+  sort_order: number
+  auto_show: boolean
+  name: string
+  description: string | null
+  min_select: number
+  max_select: number
+}
+
+// ComboDef removed (BACK-2627) — Combo creation now happens in the Sales
+// Items module; Menu Builder only picks an existing combo.
+
+interface SalesItemRow {
+  id: number
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  category_id: number | null
+  category_name?: string | null
+  image_url: string | null
+  // Used by Story 2 / BACK-2627 to detect when a recipe / ingredient / combo
+  // already has a wrapping sales item — instead of creating a duplicate the
+  // picker offers to reuse.
+  recipe_id: number | null
+  ingredient_id: number | null
+  combo_id: number | null
+}
+
+// Story 2 — recipe + ingredient catalog rows for the create-new picker.
+interface RecipeRow {
+  id: number
+  name: string
+  category_name: string | null
+  yield_qty: number
+  yield_unit_abbr: string | null
+  item_count: number
+}
+
+interface IngredientRow {
+  id: number
+  name: string
+  category_name: string | null
+  base_unit_abbr: string | null
+  image_url: string | null
+  // BACK-2548 — when fetched with ?country_id=X, the API attaches market-
+  // specific cost data so we can show cost in the picker + offer "+ Add quote"
+  // when none exists for the current market.
+  has_market_quote?: boolean
+  market_cost_per_base_unit?: number | null
+  market_purchase_unit?: string | null
+  market_purchase_price?: number | null
+  market_qty_in_base_units?: number | null
+  market_vendor_name?: string | null
+  market_quote_is_preferred?: boolean
+}
+
+// BACK-2627 — combo catalog row for the Create new picker (combos are now
+// treated like recipes / ingredients: existing-only picker, build a new
+// combo from the Sales Items module).
+interface ComboRow {
+  id: number
+  name: string
+  description: string | null
+  category_name: string | null
+  image_url: string | null
+}
+
+interface VendorRow {
+  id: number
+  name: string
+  country_id: number
+  country_name?: string | null
+  currency_code?: string | null
+  currency_symbol?: string | null
+}
+
+interface CategoryRow {
+  id: number
+  name: string
+  for_sales_items?: boolean
+}
+
+// BACK-2599 — full sales item from GET /api/sales-items/:id. Used by the
+// right-panel Details section so the operator can edit every field without
+// leaving Menu Builder.
+interface FullSalesItem {
+  id: number
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+  name: string
+  display_name: string | null
+  category_id: number | null
+  category_name?: string | null
+  description: string | null
+  recipe_id: number | null
+  recipe_name?: string | null
+  ingredient_id: number | null
+  ingredient_name?: string | null
+  combo_id: number | null
+  combo_name?: string | null
+  manual_cost: number | null
+  image_url: string | null
+  sort_order: number
+  qty: number
+  modifier_groups?: AttachedModifierGroup[]
+}
+
+type SalesItemType = 'recipe' | 'ingredient' | 'manual' | 'combo'
+
+// Side-panel mode: search existing catalog vs. create-new walker
+type AddMode = 'search' | 'create'
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const TYPE_LABELS: Record<SalesItemType, string> = {
+  recipe:     'Recipe',
+  ingredient: 'Ingredient',
+  manual:     'Manual',
+  combo:      'Combo',
+}
+
+const TYPE_DESCRIPTIONS: Record<SalesItemType, string> = {
+  recipe:     'Link to an existing recipe. Cost flows from preferred-vendor quotes.',
+  ingredient: 'Link to a single ingredient. Cost flows from its active price quote.',
+  manual:     'Fixed cost typed by hand. Use for items with no recipe or ingredient link.',
+  combo:      'Bundle of steps, each with one or more options. Cost is the sum / average of step costs.',
+}
+
+const TYPE_BADGE: Record<SalesItemType, { label: string; cls: string }> = {
+  recipe:     { label: 'R',  cls: 'bg-emerald-100 text-emerald-700' },
+  ingredient: { label: 'I',  cls: 'bg-sky-100      text-sky-700' },
+  manual:     { label: 'M',  cls: 'bg-amber-100    text-amber-700' },
+  combo:      { label: 'C',  cls: 'bg-violet-100   text-violet-700' },
+}
+
+// ── Page ────────────────────────────────────────────────────────────────────
+
+// BACK-2837 — hideHeader skips the internal PageHeader when MenuBuilderPage
+// is mounted inside MenuEntryPage, which now owns the single "Menu Builder"
+// title at the top of the page.
+export default function MenuBuilderPage({ hideHeader = false }: { hideHeader?: boolean } = {}) {
+  const api = useApi()
+
+  const [menus,        setMenus]        = useState<Menu[]>([])
+  const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null)
+  const [items,        setItems]        = useState<MenuSalesItem[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [itemsLoading, setItemsLoading] = useState(false)
+  const [toast,        setToast]        = useState<{ message: string; type?: 'success' | 'error' } | null>(null)
+  // Fullscreen Menu Builder — covers sidebar + top tab strip when active.
+  // Esc and the toggle button both exit. Local state, not persisted.
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  // Setting toggle from Configuration → COGS Calculation. When true, modifier
+  // group cost summaries multiply per-pick avg by min_select. Default false
+  // preserves the historical avg-only display.
+  const [modCostUsesMinSelect, setModCostUsesMinSelect] = useState(false)
+  useEffect(() => {
+    api.get('/settings')
+      .then((s: { modifier_cost_uses_min_select?: boolean }) => {
+        if (typeof s?.modifier_cost_uses_min_select === 'boolean') {
+          setModCostUsesMinSelect(s.modifier_cost_uses_min_select)
+        }
+      })
+      .catch(() => { /* default off */ })
+  }, [api])
+
+  // New Menu modal — quick-create without leaving the Menu Builder.
+  // Country list comes from MarketContext (RBAC-scoped to allowedCountries).
+  const { countries: allCountries, countryId: marketCountryId } = useMarket()
+  const [newMenuModal, setNewMenuModal] = useState(false)
+  const [newMenuName, setNewMenuName] = useState('')
+  const [newMenuCountryId, setNewMenuCountryId] = useState<number | null>(null)
+  const [newMenuDescription, setNewMenuDescription] = useState('')
+  const [creatingMenu, setCreatingMenu] = useState(false)
+  const openNewMenuModal = () => {
+    setNewMenuName('')
+    setNewMenuDescription('')
+    // Pre-select the active market when available; otherwise the first allowed country.
+    setNewMenuCountryId(marketCountryId ?? (allCountries[0]?.id ?? null))
+    setNewMenuModal(true)
+  }
+  const submitNewMenu = async () => {
+    const name = newMenuName.trim()
+    if (!name || !newMenuCountryId || creatingMenu) return
+    setCreatingMenu(true)
+    try {
+      const created = await api.post('/menus', {
+        name,
+        country_id: newMenuCountryId,
+        description: newMenuDescription.trim() || null,
+      }) as Menu
+      setMenus(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      setSelectedMenu(created)
+      setNewMenuModal(false)
+      setToast({ message: `Menu "${created.name}" created`, type: 'success' })
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to create menu'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setCreatingMenu(false)
+    }
+  }
+  useEffect(() => {
+    if (!isFullscreen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isFullscreen])
+
+  // Add-item side panel
+  const [panelOpen,    setPanelOpen]    = useState(false)
+  const [addMode,      setAddMode]      = useState<AddMode>('search')
+
+  // Right-side editor target. BACK-2587 — panel becomes context-aware:
+  //   • sales-item    → modifier-groups list for the active SI (default mode)
+  //   • modifier-group → single group editor with options CRUD (BACK-2585)
+  //   • combo-step    → single combo step editor with options CRUD
+  // Setting null closes the panel entirely.
+  type EditTarget =
+    | { kind: 'sales-item';     msi: MenuSalesItem; tab?: 'details' | 'modifiers' }
+    | { kind: 'modifier-group'; msi: MenuSalesItem; modifierGroupId: number }
+    | { kind: 'combo-step';     msi: MenuSalesItem; comboStepId:     number }
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null)
+  // Convenience accessor — most read-sites only need the parent MSI.
+  const editingMsi = editTarget?.msi ?? null
+  // BACK-2569 — price levels enabled in the selected menu's country. Drives
+  // the inline price columns on the items list. Filtered to is_enabled=true.
+  const [enabledPriceLevels, setEnabledPriceLevels] = useState<CountryPriceLevel[]>([])
+  // BACK-2730 — country tax rates available for the per-msi override dropdown.
+  // Refetched whenever the menu (and therefore country) changes.
+  const [taxRates, setTaxRates] = useState<TaxRateOption[]>([])
+  // BACK-2730 — saving spinner per cell during the PATCH /:id/tax round-trip.
+  const [savingTaxCells, setSavingTaxCells] = useState<Set<number>>(new Set())
+  // BACK-2571 — group items by category toggle. Persisted to localStorage so
+  // each user's preference sticks across sessions.
+  const [groupByCategory, setGroupByCategory] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('menu-builder-group-by-category') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('menu-builder-group-by-category', groupByCategory ? '1' : '0') } catch { /* ignore */ }
+  }, [groupByCategory])
+  // BACK-2572 — drag-drop reorder state.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // BACK-2770 — when group-by-category is on the user can also drop directly
+  // on a category header to land at the end of that category. Stored as
+  // either a category_id (number, or null for Uncategorised) plus its
+  // displayed name so the optimistic local update can rename the row.
+  const [dragOverCat, setDragOverCat] = useState<{ id: number | null; name: string | null } | null>(null)
+  // BACK-2781 — drag a category header → drop on another header to reorder
+  // the categories themselves (writes through to mcogs_categories.sort_order
+  // so Configuration → Categories sees the same order).
+  const [catDragId,     setCatDragId]     = useState<number | null>(null)
+  const [catDragOverId, setCatDragOverId] = useState<number | null>(null)
+  const [salesCategories, setSalesCategories] = useState<{ id: number; name: string; sort_order: number; group_id: number | null }[]>([])
+  // BACK-2782 — collapsed-category set keyed by displayed name (matches the
+  // bucket key in the grouped renderer). Persisted per-browser so the
+  // operator's collapse state sticks across reloads. Default = all expanded.
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('menu-builder-collapsed-cats')
+      if (!raw) return new Set()
+      const arr = JSON.parse(raw) as string[]
+      return new Set(Array.isArray(arr) ? arr : [])
+    } catch { return new Set() }
+  })
+  const toggleCatCollapsed = useCallback((name: string) => {
+    setCollapsedCats(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name); else next.add(name)
+      try { window.localStorage.setItem('menu-builder-collapsed-cats', JSON.stringify([...next])) } catch { /* quota */ }
+      return next
+    })
+  }, [])
+  const setAllCatsCollapsed = useCallback((collapsed: boolean, names: string[]) => {
+    setCollapsedCats(_prev => {
+      const next = collapsed ? new Set(names) : new Set<string>()
+      try { window.localStorage.setItem('menu-builder-collapsed-cats', JSON.stringify([...next])) } catch { /* quota */ }
+      return next
+    })
+  }, [])
+  // BACK-2638 — per-item cost (cost_per_portion in market currency) keyed by
+  // menu_sales_item_id. Populated from /api/cogs/menu-sales when the menu
+  // loads + after every items reload (so a price/recipe change refreshes).
+  const [costByMsi, setCostByMsi] = useState<Record<number, number>>({})
+  // BACK-2573/2574 — per-row expansion of modifiers / combo structure.
+  // expanded keyed by msi.id; subPrices cached by msi.id once fetched.
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [subPricesById, setSubPricesById] = useState<Record<number, SubPricesResp>>({})
+  const [subPricesLoading, setSubPricesLoading] = useState<Set<number>>(new Set())
+  // BACK-2598 — inner expansion within an expanded item. Keys:
+  //   • `${msiId}:mg:${modifier_group_id}`     — modifier group
+  //   • `${msiId}:cs:${combo_step_id}`         — combo step
+  //   • `${msiId}:csmg:${cso_id}:${mg_id}`     — modifier group on a combo step option
+  // Default: not in the set → collapsed. Persists across reloads so the
+  // operator does not have to re-collapse every time.
+  const [expandedInnerKeys, setExpandedInnerKeys] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem('menu-builder-expanded-inner-keys')
+      return new Set(raw ? JSON.parse(raw) : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('menu-builder-expanded-inner-keys', JSON.stringify([...expandedInnerKeys])) } catch { /* ignore */ }
+  }, [expandedInnerKeys])
+  const toggleInnerKey = useCallback((key: string) => {
+    setExpandedInnerKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }, [])
+  // Per-cell saving for nested option price edits.
+  const [savingOptionCells, setSavingOptionCells] = useState<Set<string>>(new Set())
+  // Per-cell saving state — keyed by `${msi_id}:${price_level_id}` so each
+  // price cell shows its own spinner without blocking the others.
+  const [savingPriceCells, setSavingPriceCells] = useState<Set<string>>(new Set())
+
+  // Story 7 — shared panel width (px). Persisted across reloads so the user
+  // gets their preferred width back. Clamped 320–720.
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    try {
+      const stored = window.localStorage.getItem('menu-builder-panel-width')
+      const n = stored ? Number(stored) : NaN
+      if (Number.isFinite(n) && n >= 320 && n <= 720) return n
+    } catch { /* ignore */ }
+    return 416  // 26rem default
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('menu-builder-panel-width', String(panelWidth)) } catch { /* ignore */ }
+  }, [panelWidth])
+
+  // Story 7 — Esc closes any open panel.
+  useEffect(() => {
+    if (!panelOpen && !editTarget) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (panelOpen) setPanelOpen(false)
+        if (editTarget) setEditTarget(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [panelOpen, editTarget])
+
+  // Confirm-reuse modal — story 2 duplicate detection. When the user picks a
+  // recipe/ingredient that already has a wrapping sales item in the catalog,
+  // we ask whether to reuse the existing SI or create a new one.
+  const [reuseConfirm, setReuseConfirm] = useState<{
+    existing: SalesItemRow
+    onReuse: () => void
+    onCreateNew: () => void
+  } | null>(null)
+
+  // BACK-2652 — pick up ?menu=<id>&attached=<msi_id> set by the
+  // ReturnToMenuBuilderBanner so we land on the originating menu and
+  // surface a toast confirming the new item was added. The menu= half
+  // overrides the localStorage-restored menu for this navigation. Both
+  // params are consumed once and stripped from the URL so a reload
+  // doesn't re-fire the toast.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const returnedMenuParam     = searchParams.get('menu')
+  const returnedAttachedParam = searchParams.get('attached')
+
+  // Persist last-selected menu across reloads so the page reopens where the
+  // user left off. The ?menu= URL param wins if present (set by the banner).
+  useEffect(() => {
+    try {
+      // ?menu= takes precedence over localStorage so a return-from-source
+      // hands the user back to the right menu even if localStorage is stale.
+      if (returnedMenuParam) {
+        const id = Number(returnedMenuParam)
+        if (Number.isFinite(id)) {
+          ;(window as unknown as { __mbRestoreId?: number }).__mbRestoreId = id
+          return
+        }
+      }
+      const stored = window.localStorage.getItem('menu-builder-selected-menu')
+      if (stored) {
+        const id = Number(stored)
+        if (Number.isFinite(id)) {
+          ;(window as unknown as { __mbRestoreId?: number }).__mbRestoreId = id
+        }
+      }
+    } catch { /* ignore */ }
+  }, [returnedMenuParam])
+
+  // Load menus on mount
+  useEffect(() => {
+    setLoading(true)
+    api.get('/menus')
+      .then((data: Menu[]) => {
+        setMenus(data || [])
+        const restoreId = (window as unknown as { __mbRestoreId?: number }).__mbRestoreId
+        const initial = (restoreId && data?.find(m => m.id === restoreId)) || data?.[0] || null
+        setSelectedMenu(initial)
+      })
+      .catch(() => setToast({ message: 'Failed to load menus', type: 'error' }))
+      .finally(() => setLoading(false))
+  }, [api])
+
+  // Persist selected menu
+  useEffect(() => {
+    if (selectedMenu) {
+      try { window.localStorage.setItem('menu-builder-selected-menu', String(selectedMenu.id)) } catch { /* ignore */ }
+    }
+  }, [selectedMenu])
+
+  // Load items whenever the selected menu changes
+  const loadItems = useCallback(async (menuId: number) => {
+    setItemsLoading(true)
+    try {
+      const data = await api.get(`/menu-sales-items?menu_id=${menuId}`) as MenuSalesItem[]
+      setItems(data || [])
+    } catch {
+      setToast({ message: 'Failed to load menu items', type: 'error' })
+    } finally {
+      setItemsLoading(false)
+    }
+    // BACK-2638 — fetch per-item cost in parallel. Best-effort: failure here
+    // just leaves the Cost column blank, the items list still renders.
+    try {
+      const cogs = await api.get(`/cogs/menu-sales/${menuId}`) as { items?: Array<{ menu_sales_item_id: number; cost_per_portion: number }> }
+      const map: Record<number, number> = {}
+      for (const it of cogs?.items || []) {
+        map[it.menu_sales_item_id] = Number(it.cost_per_portion) || 0
+      }
+      setCostByMsi(map)
+    } catch {
+      setCostByMsi({})
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (selectedMenu) loadItems(selectedMenu.id)
+    else setItems([])
+  }, [selectedMenu, loadItems])
+
+  // BACK-2652 — once the menu items have loaded after a return from the
+  // source-module banner, find the freshly-attached msi by id, show a
+  // success toast, and strip both params from the URL so a reload doesn't
+  // re-fire the toast.
+  useEffect(() => {
+    if (!returnedAttachedParam || !selectedMenu) return
+    if (itemsLoading) return
+    const id = Number(returnedAttachedParam)
+    if (!Number.isFinite(id)) return
+    const found = items.find(it => it.id === id)
+    if (found) {
+      setToast({ message: `Added "${found.sales_item_name}" to ${selectedMenu.name}`, type: 'success' })
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('attached')
+    next.delete('menu')
+    setSearchParams(next, { replace: true })
+  }, [returnedAttachedParam, selectedMenu, items, itemsLoading, searchParams, setSearchParams])
+
+  // BACK-2569 — load the price levels enabled for this menu's country so the
+  // inline price columns only show columns the operator can actually use.
+  useEffect(() => {
+    if (!selectedMenu) { setEnabledPriceLevels([]); return }
+    api.get(`/country-price-levels/${selectedMenu.country_id}`)
+      .then((d: CountryPriceLevel[]) => setEnabledPriceLevels((d || []).filter(l => l.is_enabled)))
+      .catch(() => setEnabledPriceLevels([]))
+  }, [api, selectedMenu])
+
+  // BACK-2730 — load this country's tax rates so the per-msi override dropdown
+  // can list them. Default rate is highlighted; selecting it (or a different
+  // rate) writes through to mcogs_menu_sales_items.tax_rate_id.
+  useEffect(() => {
+    if (!selectedMenu) { setTaxRates([]); return }
+    api.get(`/tax-rates?country_id=${selectedMenu.country_id}`)
+      .then((d: TaxRateOption[]) => setTaxRates(d || []))
+      .catch(() => setTaxRates([]))
+  }, [api, selectedMenu])
+
+  // BACK-2781 — load the for_sales_items category set once so drag-drop
+  // category-header reordering has the canonical full ordering to splice
+  // into (the menu builder only renders categories that have items, so we
+  // can't derive the full set from `items` alone).
+  const loadSalesCategories = useCallback(async () => {
+    try {
+      const d = await api.get('/categories?for_sales_items=true') as Array<{ id: number; name: string; sort_order: number; group_id: number | null }>
+      setSalesCategories((d || []).map(c => ({
+        id:         c.id,
+        name:       c.name,
+        sort_order: Number(c.sort_order ?? 0),
+        group_id:   c.group_id ?? null,
+      })))
+    } catch { /* non-fatal */ }
+  }, [api])
+  useEffect(() => { loadSalesCategories() }, [loadSalesCategories])
+
+  // BACK-2781 — reorder categories. dragId + targetId are mcogs_category ids.
+  // Splice dragId before targetId in the canonical sales-categories list,
+  // renumber sort_order 0..N-1 across the whole set, persist via the
+  // existing POST /categories/reorder, then refetch the menu items so the
+  // bucket order picks up the new sort_order on the next render.
+  const reorderCategories = useCallback(async (sourceCatId: number, targetCatId: number) => {
+    if (sourceCatId === targetCatId) return
+    if (!salesCategories.length) return
+    // Sort the canonical set by current sort_order (alphabetical tie-break)
+    // so the splice math is predictable regardless of insertion order.
+    const ordered = [...salesCategories].sort((a, b) =>
+      a.sort_order - b.sort_order || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    )
+    const fromIdx = ordered.findIndex(c => c.id === sourceCatId)
+    const toIdx   = ordered.findIndex(c => c.id === targetCatId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const [moved] = ordered.splice(fromIdx, 1)
+    const insertAt = toIdx > fromIdx ? toIdx - 1 : toIdx
+    ordered.splice(insertAt, 0, moved)
+    const renumbered = ordered.map((c, idx) => ({ ...c, sort_order: idx }))
+
+    // Optimistic local update — items[].category_sort_order is mirrored
+    // from the renumbered set so the bucket order updates on the next render
+    // without waiting for a refetch.
+    const sortByCat = new Map(renumbered.map(c => [c.id, c.sort_order]))
+    setSalesCategories(renumbered)
+    setItems(prev => prev.map(it => it.category_id != null
+      ? { ...it, category_sort_order: sortByCat.get(it.category_id) ?? it.category_sort_order ?? 0 }
+      : it))
+
+    try {
+      await api.post('/categories/reorder', renumbered.map(c => ({
+        id:         c.id,
+        group_id:   c.group_id,
+        sort_order: c.sort_order,
+      })))
+    } catch (err: unknown) {
+      // Revert + reload from server on failure so the UI doesn't drift.
+      const msg = (err as { message?: string })?.message || 'Failed to reorder categories'
+      setToast({ message: msg, type: 'error' })
+      loadSalesCategories()
+      if (selectedMenu) loadItems(selectedMenu.id)
+    }
+  }, [api, salesCategories, selectedMenu, loadItems, loadSalesCategories])
+
+  // BACK-2730 — set or clear the tax override on a menu_sales_item. NULL
+  // clears it; the row falls back to country_level_tax / country default.
+  const saveTaxOverride = useCallback(async (msi: MenuSalesItem, taxRateId: number | null) => {
+    setSavingTaxCells(prev => { const n = new Set(prev); n.add(msi.id); return n })
+    // Optimistic update so the cell flips colour immediately.
+    setItems(prev => prev.map(it => it.id === msi.id ? { ...it, tax_rate_id: taxRateId } : it))
+    try {
+      await api.patch(`/menu-sales-items/${msi.id}/tax`, { tax_rate_id: taxRateId })
+    } catch {
+      setToast({ message: 'Failed to save tax override', type: 'error' })
+      // Roll back to the previous value on failure.
+      setItems(prev => prev.map(it => it.id === msi.id ? { ...it, tax_rate_id: msi.tax_rate_id ?? null } : it))
+    } finally {
+      setSavingTaxCells(prev => { const n = new Set(prev); n.delete(msi.id); return n })
+    }
+  }, [api])
+
+  // BACK-2573 / BACK-2574 — toggle expansion + lazy-load /sub-prices.
+  // Cached once fetched so collapsing-then-expanding is instant. Reload on
+  // demand happens after a nested price save so the override marker updates.
+  const loadSubPrices = useCallback(async (msiId: number) => {
+    setSubPricesLoading(prev => { const n = new Set(prev); n.add(msiId); return n })
+    try {
+      const data = await api.get(`/menu-sales-items/${msiId}/sub-prices`) as SubPricesResp
+      setSubPricesById(prev => ({ ...prev, [msiId]: data }))
+    } catch {
+      // empty state will render
+    } finally {
+      setSubPricesLoading(prev => { const n = new Set(prev); n.delete(msiId); return n })
+    }
+  }, [api])
+
+  const toggleExpand = useCallback((msiId: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(msiId)) {
+        next.delete(msiId)
+      } else {
+        next.add(msiId)
+        // Lazy-fetch on first expand
+        if (!subPricesById[msiId]) loadSubPrices(msiId)
+      }
+      return next
+    })
+  }, [subPricesById, loadSubPrices])
+
+  // Save a per-menu override on a nested option price (modifier OR combo step).
+  // Uses the appropriate PUT depending on `kind`. Optimistic patch on the
+  // cached SubPricesResp; reload from server on failure to recover state.
+  const saveOptionPrice = useCallback(async (
+    kind: 'modifier' | 'combo',
+    msiId: number,
+    optionId: number,
+    priceLevelId: number,
+    newSell: number,
+  ) => {
+    const cellKey = `${kind}:${msiId}:${optionId}:${priceLevelId}`
+    setSavingOptionCells(prev => { const n = new Set(prev); n.add(cellKey); return n })
+
+    // Optimistic patch into the cached SubPricesResp
+    setSubPricesById(prev => {
+      const sp = prev[msiId]; if (!sp) return prev
+      const patchOption = (o: SubOption | SubComboOption): SubOption | SubComboOption => ({
+        ...o,
+        prices: { ...o.prices, [String(priceLevelId)]: newSell },
+      })
+      const patchedModGroups = (groups: SubModifierGroup[]): SubModifierGroup[] =>
+        groups.map(g => ({ ...g, options: g.options.map(o => o.id === optionId && kind === 'modifier' ? patchOption(o) as SubOption : o) }))
+      const next: SubPricesResp = {
+        ...sp,
+        modifier_groups: patchedModGroups(sp.modifier_groups),
+        combo_steps: sp.combo_steps.map(step => ({
+          ...step,
+          options: step.options.map(opt => {
+            if (opt.id === optionId && kind === 'combo') return patchOption(opt) as SubComboOption
+            return { ...opt, modifier_groups: patchedModGroups(opt.modifier_groups) }
+          }),
+        })),
+      }
+      return { ...prev, [msiId]: next }
+    })
+
+    try {
+      const url = kind === 'modifier'
+        ? `/menu-sales-items/${msiId}/modifier-option-price`
+        : `/menu-sales-items/${msiId}/combo-option-price`
+      const body = kind === 'modifier'
+        ? { modifier_option_id: optionId, price_level_id: priceLevelId, sell_price: newSell }
+        : { combo_step_option_id: optionId, price_level_id: priceLevelId, sell_price: newSell }
+      await api.put(url, body)
+    } catch (err: unknown) {
+      // Rollback by re-fetching from server
+      loadSubPrices(msiId)
+      const msg = (err as { message?: string })?.message || 'Failed to save price'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setSavingOptionCells(prev => { const n = new Set(prev); n.delete(cellKey); return n })
+    }
+  }, [api, loadSubPrices])
+
+  // BACK-2572 + BACK-2770 — drag-drop reorder, with cross-category support
+  // when groupByCategory is on. Target shapes:
+  //   { msiId }                       drop on a row → place adjacent
+  //   { categoryId: number | null }   drop on a category header → place at
+  //                                   end of that category (null = Uncategorised)
+  // If the source's category differs from the target's, the source's
+  // sales_item.category_id is updated server-side too (POST /sales-items/
+  // bulk/category — already exists, batch-friendly), then the global
+  // sort_order is rewritten via POST /menu-sales-items/reorder. Optimistic
+  // local update + rollback on failure.
+  const reorderItems = useCallback(async (
+    sourceId: number,
+    target: { msiId?: number; categoryId?: number | null; categoryName?: string | null },
+  ) => {
+    if (!selectedMenu) return
+    const before = items
+    const source = items.find(i => i.id === sourceId)
+    if (!source) return
+
+    // Resolve the destination category + insertion index.
+    let newCategoryId: number | null | undefined
+    let newCategoryName: string | null | undefined
+    let toIdx = -1
+    if (target.msiId != null) {
+      if (target.msiId === sourceId) return
+      const targetItem = items.find(i => i.id === target.msiId)
+      if (!targetItem) return
+      newCategoryId   = targetItem.category_id ?? null
+      newCategoryName = targetItem.category ?? null
+      toIdx = items.findIndex(i => i.id === target.msiId)
+    } else {
+      newCategoryId   = target.categoryId ?? null
+      newCategoryName = target.categoryName ?? null
+      // Find the last item in the destination category and place after it;
+      // if the category is empty (no items yet), place at the end.
+      const lastIdx = items
+        .map((it, idx) => ({ it, idx }))
+        .filter(({ it }) => (it.category_id ?? null) === (newCategoryId ?? null))
+        .map(({ idx }) => idx)
+        .pop() ?? items.length - 1
+      toIdx = lastIdx + 1   // insert after
+    }
+
+    const categoryChanged = (source.category_id ?? null) !== (newCategoryId ?? null)
+    if (!categoryChanged && target.msiId === undefined) return    // no-op
+
+    // Optimistic local reorder + (if needed) category rename.
+    const reordered = (() => {
+      const arr = [...items]
+      const fromIdx = arr.findIndex(i => i.id === sourceId)
+      if (fromIdx < 0) return arr
+      // splice out, then insert at adjusted toIdx (account for removal shift)
+      const [moved] = arr.splice(fromIdx, 1)
+      const adjustedTo = toIdx > fromIdx ? toIdx - 1 : toIdx
+      const updated = categoryChanged
+        ? { ...moved, category_id: newCategoryId ?? null, category: newCategoryName ?? null }
+        : moved
+      arr.splice(Math.max(0, Math.min(adjustedTo, arr.length)), 0, updated)
+      return arr.map((it, idx) => ({ ...it, sort_order: idx }))
+    })()
+    setItems(reordered)
+
+    try {
+      if (categoryChanged) {
+        await api.post('/sales-items/bulk/category', {
+          item_ids:    [source.sales_item_id],
+          category_id: newCategoryId,
+        })
+      }
+      await api.post('/menu-sales-items/reorder', {
+        menu_id: selectedMenu.id,
+        order:   reordered.map(i => i.id),
+      })
+    } catch (err: unknown) {
+      setItems(before)
+      const msg = (err as { message?: string })?.message || 'Failed to save new order'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, selectedMenu, items])
+
+  // Save a single price cell. Optimistic patch on items[]; rolls back on
+  // failure. Used by the inline editor in the items list.
+  const savePriceCell = useCallback(async (msi: MenuSalesItem, priceLevel: CountryPriceLevel, newSell: number) => {
+    if (!selectedMenu) return
+    const cellKey = `${msi.id}:${priceLevel.price_level_id}`
+    setSavingPriceCells(prev => { const next = new Set(prev); next.add(cellKey); return next })
+
+    // Optimistic patch
+    const previous = items
+    setItems(prev => prev.map(it => {
+      if (it.id !== msi.id) return it
+      const existing = (it.prices || []).find(p => p.price_level_id === priceLevel.price_level_id)
+      const updatedPrices = existing
+        ? (it.prices || []).map(p => p.price_level_id === priceLevel.price_level_id ? { ...p, sell_price: newSell, is_overridden: p.default_price !== null && newSell !== p.default_price } : p)
+        : [...(it.prices || []), {
+            id: 0,
+            menu_sales_item_id: msi.id,
+            price_level_id: priceLevel.price_level_id,
+            price_level_name: priceLevel.price_level_name,
+            sell_price: newSell,
+            default_price: null,
+            is_overridden: true,
+            tax_rate_id: null,
+          } as MenuItemPrice]
+      return { ...it, prices: updatedPrices, has_price_override: updatedPrices.some(p => p.is_overridden) }
+    }))
+    try {
+      await api.put(`/menu-sales-items/${msi.id}/prices`, {
+        price_level_id: priceLevel.price_level_id,
+        sell_price:     newSell,
+        tax_rate_id:    null,
+      })
+    } catch (err: unknown) {
+      setItems(previous)
+      const msg = (err as { message?: string })?.message || 'Failed to save price'
+      setToast({ message: msg, type: 'error' })
+    } finally {
+      setSavingPriceCells(prev => { const next = new Set(prev); next.delete(cellKey); return next })
+    }
+  }, [api, selectedMenu, items])
+
+
+  // Attach an existing sales item to the current menu
+  const attachExisting = useCallback(async (si: SalesItemRow) => {
+    if (!selectedMenu) return
+    try {
+      const nextSort = items.length ? Math.max(...items.map(i => i.sort_order)) + 1 : 0
+      await api.post('/menu-sales-items', {
+        menu_id:       selectedMenu.id,
+        sales_item_id: si.id,
+        sort_order:    nextSort,
+      })
+      setToast({ message: `Added “${si.display_name || si.name}” to ${selectedMenu.name}`, type: 'success' })
+      loadItems(selectedMenu.id)
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to attach item'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, selectedMenu, items, loadItems])
+
+  // Story 2: create a sales item that wraps the picked recipe / ingredient,
+  // then attach it to the menu. Single user action, two server calls. If the
+  // sales-item create succeeds but the menu link fails, we surface a clear
+  // error and leave the SI in the catalog (the user can retry the attach
+  // from the search-existing tab on the next try).
+  const createAndAttach = useCallback(async (payload: {
+    item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+    name: string
+    display_name?: string | null
+    category_id?: number | null
+    recipe_id?: number | null
+    ingredient_id?: number | null
+    combo_id?: number | null
+    manual_cost?: number | null
+    image_url?: string | null
+    description?: string | null
+  }): Promise<SalesItemRow | null> => {
+    if (!selectedMenu) return null
+    try {
+      const newSi = await api.post('/sales-items', payload) as SalesItemRow
+      const nextSort = items.length ? Math.max(...items.map(i => i.sort_order)) + 1 : 0
+      try {
+        await api.post('/menu-sales-items', {
+          menu_id:       selectedMenu.id,
+          sales_item_id: newSi.id,
+          sort_order:    nextSort,
+        })
+        setToast({ message: `Created and added “${newSi.display_name || newSi.name}”`, type: 'success' })
+        loadItems(selectedMenu.id)
+        return newSi
+      } catch (linkErr: unknown) {
+        const msg = (linkErr as { message?: string })?.message || 'Sales item created but failed to attach to menu'
+        setToast({ message: msg, type: 'error' })
+        return newSi
+      }
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to create sales item'
+      setToast({ message: msg, type: 'error' })
+      return null
+    }
+  }, [api, selectedMenu, items, loadItems])
+
+  // Remove an item from the menu (does NOT delete the sales item itself)
+  const removeItem = useCallback(async (msi: MenuSalesItem) => {
+    if (!selectedMenu) return
+    try {
+      await api.delete(`/menu-sales-items/${msi.id}`)
+      setToast({ message: `Removed “${msi.sales_item_name}”`, type: 'success' })
+      setItems(prev => prev.filter(i => i.id !== msi.id))
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to remove item'
+      setToast({ message: msg, type: 'error' })
+    }
+  }, [api, selectedMenu])
+
+  return (
+    <div
+      className={`flex flex-col bg-surface ${
+        isFullscreen
+          ? 'fixed inset-0 z-40 h-screen w-screen'
+          : 'h-full'
+      }`}
+    >
+      {!hideHeader && (
+        <PageHeader
+          title="Menu Builder"
+          subtitle="Build menus end-to-end: search or create sales items inline, build combos, attach modifiers, set prices — all on one screen."
+          action={<PepperHelpButton prompt="How do I use the Menu Builder page?" />}
+        />
+      )}
+
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center"><Spinner /></div>
+      ) : menus.length === 0 ? (
+        <EmptyState
+          message="You have no menus yet."
+          action={
+            allCountries.length === 0
+              ? <a href="/configuration" className="btn-primary">Set up a market first</a>
+              : <button className="btn-primary" onClick={openNewMenuModal}>+ New Menu</button>
+          }
+        />
+      ) : (
+        <div className="flex-1 flex overflow-hidden">
+
+          {/* ── Top toolbar: menu picker + actions ── */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-surface flex-wrap">
+              <Field label="Menu">
+                <select
+                  className="input min-w-[16rem]"
+                  value={selectedMenu?.id ?? ''}
+                  onChange={e => {
+                    const m = menus.find(x => x.id === Number(e.target.value)) || null
+                    setSelectedMenu(m)
+                  }}
+                >
+                  {menus.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} — {m.country_name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <button
+                className="btn-outline text-xs px-2.5 py-1.5 self-end"
+                onClick={openNewMenuModal}
+                disabled={allCountries.length === 0}
+                title={allCountries.length === 0 ? 'No markets configured — set one up in Configuration → Markets first' : 'Create a new menu without leaving this page'}
+              >+ New Menu</button>
+              <div className="flex-1" />
+              {/* BACK-2571 — group-by-category toggle */}
+              <label className="flex items-center gap-1.5 text-xs text-text-2 cursor-pointer select-none mr-2">
+                <input
+                  type="checkbox"
+                  checked={groupByCategory}
+                  onChange={(e) => setGroupByCategory(e.target.checked)}
+                />
+                Group by category
+              </label>
+              <button
+                className="btn-primary"
+                onClick={() => { setEditTarget(null); setAddMode('search'); setPanelOpen(true) }}
+                disabled={!selectedMenu}
+              >+ Add Sales Item to Menu</button>
+              {/* Fullscreen toggle — covers sidebar + tab strip. Esc also exits. */}
+              <button
+                className="ml-2 p-2 rounded text-text-3 hover:text-accent hover:bg-accent-dim transition-colors"
+                onClick={() => setIsFullscreen(v => !v)}
+                title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              >
+                {isFullscreen ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 3v3a2 2 0 01-2 2H3" />
+                    <path d="M21 8h-3a2 2 0 01-2-2V3" />
+                    <path d="M3 16h3a2 2 0 012 2v3" />
+                    <path d="M16 21v-3a2 2 0 012-2h3" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 8V5a2 2 0 012-2h3" />
+                    <path d="M16 3h3a2 2 0 012 2v3" />
+                    <path d="M21 16v3a2 2 0 01-2 2h-3" />
+                    <path d="M8 21H5a2 2 0 01-2-2v-3" />
+                  </svg>
+                )}
+              </button>
+            </div>
+
+            {/* ── Items list ──
+                Scroll position preservation: the scroll container stays
+                mounted, and the ItemsList is only replaced by the Spinner on
+                the *initial* load (items.length === 0). When the parent
+                refetches after a modifier save the list stays in the DOM, so
+                the scroll container's scrollTop is preserved naturally.
+                A faint top progress hint replaces the previous full-screen
+                spinner during refresh. */}
+            <div className="flex-1 overflow-y-auto bg-surface-2/40 relative">
+              {!selectedMenu ? (
+                <div className="p-8 text-center text-text-3 text-sm">Pick a menu above.</div>
+              ) : itemsLoading && items.length === 0 ? (
+                <div className="flex justify-center p-12"><Spinner /></div>
+              ) : items.length === 0 ? (
+                <div className="p-8 text-center text-text-3 text-sm">
+                  No items on this menu yet. Click <strong>+ Add Sales Item to Menu</strong> to start.
+                </div>
+              ) : (
+                <>
+                  {itemsLoading && (
+                    <div
+                      className="absolute top-0 left-0 right-0 h-0.5 bg-accent/40 animate-pulse pointer-events-none z-10"
+                      title="Refreshing…"
+                    />
+                  )}
+                <ItemsList
+                  items={items}
+                  enabledPriceLevels={enabledPriceLevels}
+                  selectedMsiId={editingMsi?.id}
+                  groupByCategory={groupByCategory}
+                  savingPriceCells={savingPriceCells}
+                  modCostUsesMinSelect={modCostUsesMinSelect}
+                  onReloadSubPrices={loadSubPrices}
+                  dragId={dragId}
+                  dragOverId={dragOverId}
+                  expandedRows={expandedRows}
+                  subPricesById={subPricesById}
+                  subPricesLoading={subPricesLoading}
+                  savingOptionCells={savingOptionCells}
+                  expandedInnerKeys={expandedInnerKeys}
+                  onToggleInnerKey={toggleInnerKey}
+                  costByMsi={costByMsi}
+                  currencySymbol={selectedMenu.currency_symbol || selectedMenu.currency_code || ''}
+                  taxRates={taxRates}
+                  savingTaxCells={savingTaxCells}
+                  onSaveTaxOverride={saveTaxOverride}
+                  onPriceSave={(it, lvl, v) => savePriceCell(it, lvl, v)}
+                  onOpenDetails={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'details' }) }}
+                  onOpenModifiers={(it) => { setPanelOpen(false); setEditTarget({ kind: 'sales-item', msi: it, tab: 'modifiers' }) }}
+                  onOpenModifierGroup={(it, mgid) => { setPanelOpen(false); setEditTarget({ kind: 'modifier-group', msi: it, modifierGroupId: mgid }) }}
+                  onOpenComboStep={(it, sid) => { setPanelOpen(false); setEditTarget({ kind: 'combo-step', msi: it, comboStepId: sid }) }}
+                  onRemove={(it) => removeItem(it)}
+                  onToggleExpand={toggleExpand}
+                  onSaveOptionPrice={saveOptionPrice}
+                  dragOverCat={dragOverCat}
+                  catDragId={catDragId}
+                  catDragOverId={catDragOverId}
+                  collapsedCats={collapsedCats}
+                  onToggleCatCollapsed={toggleCatCollapsed}
+                  onSetAllCatsCollapsed={setAllCatsCollapsed}
+                  onDragStart={(id) => setDragId(id)}
+                  onDragOver={(e, id) => { e.preventDefault(); setDragOverId(id); setDragOverCat(null) }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDragOverCategory={(e, id, name) => { e.preventDefault(); setDragOverCat({ id, name }); setDragOverId(null) }}
+                  onDragLeaveCategory={() => setDragOverCat(null)}
+                  onCatDragStart={(id) => { setCatDragId(id); setDragId(null) }}
+                  onCatDragOver={(e, id) => { e.preventDefault(); setCatDragOverId(id) }}
+                  onCatDragLeave={() => setCatDragOverId(null)}
+                  onDrop={() => {
+                    // BACK-2781 — category drag wins when both row + category
+                    // drag could fire (you can only have one of them at a time
+                    // anyway, but the priority is explicit).
+                    if (catDragId != null && catDragOverId != null && catDragId !== catDragOverId) {
+                      reorderCategories(catDragId, catDragOverId)
+                    } else if (dragId !== null) {
+                      // BACK-2770 — prefer a row drop when both targets fired
+                      // (mouseover on a row inside a category bucket).
+                      if (dragOverId !== null && dragOverId !== dragId) {
+                        reorderItems(dragId, { msiId: dragOverId })
+                      } else if (dragOverCat) {
+                        reorderItems(dragId, { categoryId: dragOverCat.id, categoryName: dragOverCat.name })
+                      }
+                    }
+                    setDragId(null); setDragOverId(null); setDragOverCat(null)
+                    setCatDragId(null); setCatDragOverId(null)
+                  }}
+                  onDragEnd={() => {
+                    setDragId(null); setDragOverId(null); setDragOverCat(null)
+                    setCatDragId(null); setCatDragOverId(null)
+                  }}
+                />
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* ── Add-item side panel ── */}
+          {panelOpen && selectedMenu && (
+            <AddItemPanel
+              menu={selectedMenu}
+              currentItemIds={items.map(i => i.sales_item_id)}
+              addMode={addMode}
+              setAddMode={setAddMode}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onAttach={async (si) => {
+                await attachExisting(si)
+                setPanelOpen(false)
+              }}
+              onCreateAndAttach={async (payload) => {
+                const result = await createAndAttach(payload)
+                if (result) setPanelOpen(false)
+              }}
+              onAskReuse={(existing, onReuse, onCreateNew) =>
+                setReuseConfirm({ existing, onReuse, onCreateNew })
+              }
+              onClose={() => setPanelOpen(false)}
+            />
+          )}
+
+          {/* ── Right-side editor — context-aware (BACK-2587) ── */}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'sales-item' && (
+            <EditItemPanel
+              key={`si-${editTarget.msi.id}`}
+              menu={selectedMenu}
+              msi={editTarget.msi}
+              initialTab={editTarget.tab || 'details'}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onChanged={() => { loadItems(selectedMenu.id); if (subPricesById[editTarget.msi.id]) loadSubPrices(editTarget.msi.id) }}
+              onOpenGroupEditor={(mgid) => setEditTarget({ kind: 'modifier-group', msi: editTarget.msi, modifierGroupId: mgid })}
+              onClose={() => setEditTarget(null)}
+              onToast={(t) => setToast(t)}
+            />
+          )}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'modifier-group' && (
+            <ModifierGroupEditorPanel
+              key={`mg-${editTarget.modifierGroupId}`}
+              menu={selectedMenu}
+              msi={editTarget.msi}
+              modifierGroupId={editTarget.modifierGroupId}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onBack={() => setEditTarget({ kind: 'sales-item', msi: editTarget.msi })}
+              onClose={() => setEditTarget(null)}
+              onChanged={() => { loadItems(selectedMenu.id); loadSubPrices(editTarget.msi.id) }}
+              onToast={(t) => setToast(t)}
+            />
+          )}
+          {editTarget && selectedMenu && !panelOpen && editTarget.kind === 'combo-step' && (
+            <ComboStepEditorPanel
+              key={`cs-${editTarget.comboStepId}`}
+              menu={selectedMenu}
+              msi={editTarget.msi}
+              comboStepId={editTarget.comboStepId}
+              width={panelWidth}
+              onResize={setPanelWidth}
+              onBack={() => setEditTarget({ kind: 'sales-item', msi: editTarget.msi })}
+              onClose={() => setEditTarget(null)}
+              onChanged={() => { loadItems(selectedMenu.id); loadSubPrices(editTarget.msi.id) }}
+              onToast={(t) => setToast(t)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Story 2: duplicate-detection confirm dialog */}
+      {reuseConfirm && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setReuseConfirm(null)} />
+          <div className="relative bg-surface rounded-xl shadow-modal w-full max-w-md p-5">
+            <div className="font-semibold text-text-1 mb-1">A sales item already wraps this</div>
+            <p className="text-sm text-text-2 mb-4">
+              <strong>“{reuseConfirm.existing.display_name || reuseConfirm.existing.name}”</strong> already exists in the catalog and points at the same {reuseConfirm.existing.recipe_id ? 'recipe' : 'ingredient'}. Reusing it keeps the catalog tidy.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setReuseConfirm(null)}>Cancel</button>
+              <button
+                className="btn-outline"
+                onClick={() => { reuseConfirm.onCreateNew(); setReuseConfirm(null) }}
+              >Make a new one</button>
+              <button
+                className="btn-primary"
+                onClick={() => { reuseConfirm.onReuse(); setReuseConfirm(null) }}
+              >Reuse existing</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* New Menu modal (quick-create without leaving the page) */}
+      {newMenuModal && (
+        <Modal title="Create a new menu" onClose={() => { if (!creatingMenu) setNewMenuModal(false) }}>
+          <div className="px-5 py-4 space-y-3">
+            <Field label="Name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={newMenuName}
+                onChange={e => setNewMenuName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && newMenuName.trim() && newMenuCountryId) submitNewMenu() }}
+                placeholder="e.g. India NME May 2026"
+              />
+            </Field>
+            <Field label="Market" required>
+              <select
+                className="input w-full"
+                value={newMenuCountryId ?? ''}
+                onChange={e => setNewMenuCountryId(Number(e.target.value) || null)}
+              >
+                <option value="" disabled>Pick a market…</option>
+                {allCountries.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Description">
+              <textarea
+                className="input w-full"
+                rows={2}
+                value={newMenuDescription}
+                onChange={e => setNewMenuDescription(e.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+          </div>
+          <div className="px-5 py-3 border-t border-border flex justify-end gap-2 bg-surface-2/40">
+            <button className="btn-ghost" onClick={() => setNewMenuModal(false)} disabled={creatingMenu}>Cancel</button>
+            <button
+              className="btn-primary"
+              onClick={submitNewMenu}
+              disabled={creatingMenu || !newMenuName.trim() || !newMenuCountryId}
+            >{creatingMenu ? 'Creating…' : 'Create menu'}</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ── Items list (BACK-2569 / 2571 / 2572 / 2731) ────────────────────────────
+// Pulls flat-vs-grouped rendering, drag-drop sort, and the inline price
+// columns into one component. Drag-drop works in both flat and grouped
+// modes; in grouped mode dropping on a row in another category (or on a
+// category header) also moves the underlying sales item into that
+// category server-side via POST /sales-items/bulk/category.
+
+function ItemsList({
+  items, enabledPriceLevels, selectedMsiId, groupByCategory, savingPriceCells,
+  modCostUsesMinSelect,
+  dragId, dragOverId, dragOverCat,
+  catDragId, catDragOverId,
+  collapsedCats, onToggleCatCollapsed, onSetAllCatsCollapsed,
+  expandedRows, subPricesById, subPricesLoading, savingOptionCells,
+  expandedInnerKeys, onToggleInnerKey,
+  costByMsi, currencySymbol,
+  taxRates, savingTaxCells, onSaveTaxOverride,
+  onPriceSave, onOpenDetails, onOpenModifiers, onOpenModifierGroup, onOpenComboStep, onRemove, onToggleExpand, onSaveOptionPrice,
+  onReloadSubPrices,
+  onDragStart, onDragOver, onDragLeave, onDragOverCategory, onDragLeaveCategory,
+  onCatDragStart, onCatDragOver, onCatDragLeave,
+  onDrop, onDragEnd,
+}: {
+  items: MenuSalesItem[]
+  enabledPriceLevels: CountryPriceLevel[]
+  selectedMsiId?: number
+  groupByCategory: boolean
+  savingPriceCells: Set<string>
+  // BACK-2839 — when true, modifier group cost summaries multiply per-pick
+  // avg by min_select (see Configuration → COGS Thresholds → "Modifier Cost ×
+  // Number of Choices").
+  modCostUsesMinSelect: boolean
+  dragId: number | null
+  dragOverId: number | null
+  // BACK-2770 — drop-on-category-header target.
+  dragOverCat: { id: number | null; name: string | null } | null
+  // BACK-2781 — category-header drag (reorder categories themselves).
+  catDragId:     number | null
+  catDragOverId: number | null
+  // BACK-2782 — collapsible category buckets.
+  collapsedCats: Set<string>
+  onToggleCatCollapsed: (name: string) => void
+  onSetAllCatsCollapsed: (collapsed: boolean, names: string[]) => void
+  expandedRows: Set<number>
+  subPricesById: Record<number, SubPricesResp>
+  subPricesLoading: Set<number>
+  savingOptionCells: Set<string>
+  expandedInnerKeys: Set<string>
+  onToggleInnerKey: (key: string) => void
+  costByMsi: Record<number, number>
+  currencySymbol: string
+  // BACK-2730 — per-msi tax override.
+  taxRates: TaxRateOption[]
+  savingTaxCells: Set<number>
+  onSaveTaxOverride: (msi: MenuSalesItem, taxRateId: number | null) => void | Promise<void>
+  onPriceSave: (it: MenuSalesItem, lvl: CountryPriceLevel, v: number) => void | Promise<void>
+  onOpenDetails: (it: MenuSalesItem) => void
+  onOpenModifiers: (it: MenuSalesItem) => void
+  onOpenModifierGroup: (it: MenuSalesItem, modifierGroupId: number) => void
+  onOpenComboStep: (it: MenuSalesItem, comboStepId: number) => void
+  onRemove: (it: MenuSalesItem) => void
+  onToggleExpand: (msiId: number) => void
+  onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  // BACK-2937 — triggered by add/remove step actions inside the expanded
+  // combo view so the sub-prices payload re-fetches after a structural change.
+  onReloadSubPrices: (msiId: number) => Promise<void> | void
+  onDragStart: (id: number) => void
+  onDragOver: (e: React.DragEvent, id: number) => void
+  onDragLeave: () => void
+  // BACK-2770 — category-header drop zone callbacks (drop ITEM into category).
+  onDragOverCategory: (e: React.DragEvent, categoryId: number | null, categoryName: string | null) => void
+  onDragLeaveCategory: () => void
+  // BACK-2781 — category-header drag callbacks (drag the CATEGORY itself).
+  onCatDragStart:    (categoryId: number) => void
+  onCatDragOver:     (e: React.DragEvent, categoryId: number) => void
+  onCatDragLeave:    () => void
+  onDrop: () => void
+  onDragEnd: () => void
+}) {
+  // BACK-2770 — drag is now enabled in both flat and grouped modes. In
+  // grouped mode, dropping on a row in another category also moves the
+  // sales item into that category server-side.
+  const draggable = true
+
+  // BACK-2571 + BACK-2770 + BACK-2781 — bucket items by category.
+  // Uncategorised pinned to the top. Categorised buckets follow the
+  // sort_order from Configuration → Categories so the menu builder and
+  // the catalog stay in lockstep. Alphabetical tie-break for the rare
+  // case where multiple categories share a sort_order.
+  const groups = useMemo(() => {
+    const buckets = new Map<string, { id: number | null; sortOrder: number; rows: MenuSalesItem[] }>()
+    for (const it of items) {
+      const name = (it.category || '').trim() || 'Uncategorised'
+      const id   = it.category_id ?? null
+      const sortOrder = Number(it.category_sort_order ?? 0)
+      if (!buckets.has(name)) buckets.set(name, { id, sortOrder, rows: [] })
+      buckets.get(name)!.rows.push(it)
+    }
+    return Array.from(buckets.entries())
+      .map(([name, v]) => ({ name, id: v.id, sortOrder: v.sortOrder, rows: v.rows }))
+      .sort((a, b) => {
+        if (a.name === 'Uncategorised') return -1
+        if (b.name === 'Uncategorised') return 1
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      })
+  }, [items])
+
+  const renderRow = (it: MenuSalesItem) => {
+    const selected = selectedMsiId === it.id
+    const isDragging  = dragId === it.id
+    const isDropOver  = dragOverId === it.id && dragId !== it.id
+    const expandable  = it.item_type === 'combo' || (it.modifier_group_count ?? 0) > 0
+    const isExpanded  = expandedRows.has(it.id)
+    const sub         = subPricesById[it.id]
+    const loadingSub  = subPricesLoading.has(it.id)
+    return (
+      <li key={it.id}>
+        <div
+          // BACK-2611 / BACK-2612 — only the drag handle is draggable; the
+          // rest of the row is a regular click target that opens the panel.
+          onDragOver={draggable ? (e) => onDragOver(e, it.id) : undefined}
+          onDragLeave={draggable ? onDragLeave : undefined}
+          onDrop={draggable ? onDrop : undefined}
+          onClick={() => onOpenDetails(it)}
+          className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer border-b border-border/40 ${
+            selected     ? 'bg-accent-dim border-l-4 border-l-accent ring-1 ring-inset ring-accent/30 shadow-sm' :
+            isDropOver   ? 'bg-accent-dim/40 border-t-2 border-accent' :
+                           'bg-surface hover:bg-surface-2 border-l-2 border-l-transparent'
+          } ${isDragging ? 'opacity-40' : ''}`}
+        >
+          {/* Drag handle (BACK-2611) — only this element starts a drag */}
+          {draggable ? (
+            <span
+              draggable
+              onDragStart={(e) => { e.stopPropagation(); onDragStart(it.id) }}
+              onDragEnd={(e) => { e.stopPropagation(); onDragEnd() }}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 w-4 h-6 flex items-center justify-center text-text-3 hover:text-text-1 cursor-grab active:cursor-grabbing"
+              title="Drag to reorder"
+            >⠿</span>
+          ) : (
+            <span className="shrink-0 w-4" />
+          )}
+
+          {/* Expand caret — only for items with modifiers OR combos */}
+          {expandable ? (
+            <button
+              type="button"
+              className="shrink-0 w-4 h-4 flex items-center justify-center text-text-3 hover:text-text-1 text-xs"
+              onClick={(e) => { e.stopPropagation(); onToggleExpand(it.id) }}
+              title={isExpanded ? 'Collapse' : 'Expand'}
+            >{isExpanded ? '▼' : '▶'}</button>
+          ) : (
+            <span className="shrink-0 w-4" />
+          )}
+
+          {it.si_image_url ? (
+            <img src={it.si_image_url} alt="" className="shrink-0 w-10 h-10 rounded object-cover border border-border" />
+          ) : (
+            <div className="shrink-0 w-10 h-10 rounded bg-surface-2 border border-border" />
+          )}
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-sm text-text-1 truncate">{it.sales_item_name}</span>
+              {/* Full-word type pill — clearer than the single-letter avatar. */}
+              <span
+                className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded uppercase tracking-wide ${TYPE_BADGE[it.item_type].cls}`}
+                title={TYPE_LABELS[it.item_type]}
+              >{TYPE_LABELS[it.item_type]}</span>
+              {(it.modifier_group_count ?? 0) > 0 && (
+                <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">
+                  {it.modifier_group_count} mod{it.modifier_group_count === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-text-3 truncate">
+              {it.category || 'Uncategorised'}
+              {it.qty !== 1 ? ` · qty ${it.qty}` : ''}
+            </div>
+          </div>
+
+          {/* BACK-2638 + BACK-2673 + BACK-2730 — each level cell is a 3-column
+              row: tax (clickable for per-msi override) · price input ·
+              cost+COGS% stack. Visual separation between levels via alt-bg
+              + a left divider. The msi-level tax override applies to ALL
+              levels in this row (any cell's dropdown writes the same
+              override) — when set, every cell gets an amber tint. */}
+          {enabledPriceLevels.map((lvl, lvlIdx) => {
+            const price = (it.prices || []).find(p => p.price_level_id === lvl.price_level_id)
+            const cellKey = `${it.id}:${lvl.price_level_id}`
+            const cost = costByMsi[it.id]
+            const hasCost = cost != null && Number.isFinite(cost) && cost > 0
+            const sell = Number(price?.sell_price ?? 0)
+            const cogsPct = (hasCost && sell > 0) ? (cost / sell) * 100 : null
+            // Effective tax: msi override → level fallback (already country-default
+            // resolved server-side) → null. Override flag drives the amber tint.
+            const overrideRate = it.tax_rate_id
+              ? taxRates.find(r => r.id === it.tax_rate_id) || null
+              : null
+            const effectiveRate = overrideRate
+              ? Number(overrideRate.rate)
+              : (lvl.tax_rate != null ? Number(lvl.tax_rate) : null)
+            const isOverride = overrideRate != null
+            const altBg = lvlIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/50'
+            return (
+              <div
+                key={lvl.price_level_id}
+                onClick={(e) => e.stopPropagation()}
+                className={`shrink-0 flex items-center gap-1.5 px-1 py-0.5 rounded ${altBg} ${lvlIdx > 0 ? 'border-l border-border/60 ml-1' : ''}`}
+              >
+                <TaxCell
+                  msiId={it.id}
+                  effectiveRate={effectiveRate}
+                  effectiveName={overrideRate?.name || lvl.tax_rate_name || null}
+                  isOverride={isOverride}
+                  saving={savingTaxCells.has(it.id)}
+                  taxRates={taxRates}
+                  onPick={(taxRateId) => onSaveTaxOverride(it, taxRateId)}
+                />
+                <PriceCell
+                  value={price?.sell_price ?? 0}
+                  isOverride={price?.is_overridden ?? false}
+                  defaultPrice={price?.default_price ?? null}
+                  saving={savingPriceCells.has(cellKey)}
+                  onSave={(v) => onPriceSave(it, lvl, v)}
+                />
+                <div className="shrink-0 w-14 text-right font-mono leading-tight">
+                  <div className="text-[10px] text-text-2">
+                    {hasCost ? `${currencySymbol}${cost.toFixed(2)}` : '\u2014'}
+                  </div>
+                  {cogsPct != null && (
+                    <div className="text-[9px] text-text-3">{cogsPct.toFixed(1)}%</div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+
+          <button
+            className={`shrink-0 text-xs px-2.5 py-1 rounded-md border font-medium transition-colors ${
+              selected
+                ? 'bg-accent text-white border-accent shadow-sm'
+                : 'bg-white text-accent border-accent/40 hover:bg-accent-dim hover:border-accent'
+            }`}
+            onClick={(e) => { e.stopPropagation(); onOpenModifiers(it) }}
+            title="Open modifiers"
+          >Modifiers ›</button>
+
+          <button
+            className="shrink-0 text-xs px-2.5 py-1 rounded-md border border-border bg-white text-text-3 hover:border-red-300 hover:bg-red-50 hover:text-red-600 transition-colors"
+            onClick={(e) => { e.stopPropagation(); onRemove(it) }}
+            title="Remove from menu (does not delete the sales item)"
+          >Remove</button>
+        </div>
+
+        {/* BACK-2573 / BACK-2574 — nested expanded section */}
+        {expandable && isExpanded && (
+          <div className="bg-surface-2/30 border-t border-border">
+            {loadingSub && !sub ? (
+              <div className="px-12 py-3 text-xs text-text-3 italic">Loading…</div>
+            ) : sub ? (
+              <ExpandedItemContent
+                msiId={it.id}
+                salesItemId={it.sales_item_id}
+                sub={sub}
+                enabledPriceLevels={enabledPriceLevels}
+                savingOptionCells={savingOptionCells}
+                expandedInnerKeys={expandedInnerKeys}
+                onToggleInnerKey={onToggleInnerKey}
+                onSaveOptionPrice={onSaveOptionPrice}
+                currencySymbol={currencySymbol}
+                modCostUsesMinSelect={modCostUsesMinSelect}
+                onOpenModifierGroup={(mgid) => onOpenModifierGroup(it, mgid)}
+                onOpenComboStep={(sid) => onOpenComboStep(it, sid)}
+                onReloadSubPrices={() => onReloadSubPrices(it.id)}
+              />
+            ) : (
+              <div className="px-12 py-3 text-xs text-text-3 italic">Failed to load sub-prices.</div>
+            )}
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  return (
+    <div className="bg-surface">
+      {enabledPriceLevels.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border bg-surface-2/40 text-[10px] uppercase tracking-wide text-text-3 font-semibold">
+          <span className="shrink-0 w-4" />
+          <span className="shrink-0 w-6" />
+          <span className="shrink-0 w-10" />
+          <span className="flex-1 min-w-0">Item</span>
+          {enabledPriceLevels.map(lvl => (
+            <span
+              key={lvl.price_level_id}
+              className="shrink-0 w-[14.5rem] text-right pr-[3.75rem]"
+              title="Tax % · sell price · cost / COGS%"
+            >{lvl.price_level_name}</span>
+          ))}
+          <span className="shrink-0 w-20 text-right">Modifiers</span>
+          <span className="shrink-0 w-14 text-right" />
+        </div>
+      )}
+
+      {groupByCategory ? (
+        <>
+          {/* BACK-2782 — collapse-all / expand-all toolbar. Compact strip
+              right above the first category header. Only visible when there
+              is more than one category bucket. */}
+          {groups.length > 1 && (
+            <div className="flex items-center justify-end gap-3 px-4 py-1 border-b border-border bg-surface-2/30 text-[10px] uppercase tracking-wide text-text-3 font-semibold">
+              <button
+                type="button"
+                className="hover:text-accent transition-colors"
+                onClick={() => onSetAllCatsCollapsed(true, groups.map(g => g.name))}
+                title="Collapse every category"
+              >▶ collapse all</button>
+              <span className="text-border">·</span>
+              <button
+                type="button"
+                className="hover:text-accent transition-colors"
+                onClick={() => onSetAllCatsCollapsed(false, [])}
+                title="Expand every category"
+              >▼ expand all</button>
+            </div>
+          )}
+          {groups.map(({ name, id, rows }) => {
+            // Drop-target states. Two distinct gestures share the header:
+            //   • dragging an ITEM      → highlight as cross-category move target
+            //   • dragging a CATEGORY   → highlight as reorder target
+            const isItemDropOver = !!dragOverCat && dragOverCat.id === id && dragId !== null
+            const isCatDropOver  = catDragId !== null && catDragOverId === id && catDragId !== id && id != null
+            const isBeingCatDragged = catDragId === id
+            // Uncategorised has no real id, so it can't itself be reordered.
+            // Item drops onto it still work (clears the category override).
+            const headerDraggable = id != null
+            const isCollapsed = collapsedCats.has(name)
+            return (
+              <div key={name}>
+                <div
+                  onDragOver={(e) => {
+                    // Prefer category-drag handler when a category is being
+                    // dragged; otherwise treat as an item-drop target.
+                    if (catDragId !== null && id != null) onCatDragOver(e, id)
+                    else                                  onDragOverCategory(e, id, name === 'Uncategorised' ? null : name)
+                  }}
+                  onDragLeave={() => { catDragId !== null ? onCatDragLeave() : onDragLeaveCategory() }}
+                  onDrop={onDrop}
+                  // BACK-2782 — clicking the header (anywhere except the
+                  // drag handle / caret) toggles collapse. Drag handle stops
+                  // propagation so it doesn't trigger toggle on drag-start.
+                  onClick={() => onToggleCatCollapsed(name)}
+                  className={`px-4 py-1.5 border-b text-[10px] uppercase tracking-wide font-semibold text-text-2 sticky top-0 z-[1] transition-colors flex items-center gap-2 cursor-pointer ${
+                    isItemDropOver || isCatDropOver
+                      ? 'bg-accent-dim border-accent border-b-2'
+                      : 'bg-surface-2/70 border-border hover:bg-surface-2'
+                  } ${isBeingCatDragged ? 'opacity-40' : ''}`}
+                  title={
+                    catDragId !== null && id != null
+                      ? 'Drop here to reorder categories'
+                      : dragId !== null
+                        ? 'Drop here to move into this category'
+                        : isCollapsed
+                          ? 'Click to expand'
+                          : 'Click to collapse'
+                  }
+                >
+                  {/* Category-drag handle. Uncategorised has no id, so the
+                      handle is a placeholder there. */}
+                  {headerDraggable ? (
+                    <span
+                      draggable
+                      onDragStart={(e) => { e.stopPropagation(); onCatDragStart(id!) }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0 text-text-3 hover:text-text-1 cursor-grab active:cursor-grabbing select-none"
+                      title="Drag to reorder this category"
+                    >⠿</span>
+                  ) : (
+                    <span className="shrink-0 w-3 opacity-40" />
+                  )}
+                  {/* BACK-2782 — collapse caret. Click anywhere on the header
+                      toggles, but the caret gives a clear affordance. */}
+                  <span className="shrink-0 text-text-3 select-none w-3 text-center">
+                    {isCollapsed ? '▶' : '▼'}
+                  </span>
+                  <span className="flex-1">
+                    {name} <span className="ml-1 font-mono text-text-3 normal-case">({rows.length})</span>
+                  </span>
+                  {isItemDropOver && (
+                    <span className="text-accent normal-case font-medium">↓ drop here</span>
+                  )}
+                  {isCatDropOver && (
+                    <span className="text-accent normal-case font-medium">↕ reorder</span>
+                  )}
+                </div>
+                {!isCollapsed && (
+                  <ul className="divide-y divide-border">
+                    {rows.map(renderRow)}
+                  </ul>
+                )}
+              </div>
+            )
+          })}
+        </>
+      ) : (
+        <ul className="divide-y divide-border">
+          {items.map(renderRow)}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ── Expanded item content (BACK-2573 / BACK-2574) ──────────────────────────
+// Renders the nested structure under an expanded row:
+//   • Modifier groups → options (per-level price cells)            [BACK-2573]
+//   • Combo steps → step options (per-level prices) → step-option
+//     modifier groups → modifier options (per-level prices)        [BACK-2574]
+// Each option-level price cell saves via the appropriate per-menu override
+// endpoint. Indented to make the hierarchy visually obvious.
+
+function ExpandedItemContent({
+  msiId, salesItemId, sub, enabledPriceLevels, savingOptionCells, expandedInnerKeys, onToggleInnerKey, onSaveOptionPrice,
+  currencySymbol,
+  modCostUsesMinSelect,
+  onOpenModifierGroup, onOpenComboStep,
+  onReloadSubPrices,
+}: {
+  msiId: number
+  // BACK-2835 — needed for the combo step reorder API call (msi → sales_item
+  // → combo_id chain). Fetched lazily on first drop and cached locally.
+  salesItemId: number
+  sub: SubPricesResp
+  enabledPriceLevels: CountryPriceLevel[]
+  savingOptionCells: Set<string>
+  expandedInnerKeys: Set<string>
+  onToggleInnerKey: (key: string) => void
+  onSaveOptionPrice: (kind: 'modifier' | 'combo', msiId: number, optionId: number, priceLevelId: number, newSell: number) => void | Promise<void>
+  // BACK-2814 — currency symbol so nested cost cells match the main-row format.
+  currencySymbol: string
+  // BACK-2839 — multiply modifier group's per-pick avg by min_select when on.
+  modCostUsesMinSelect: boolean
+  onOpenModifierGroup: (modifierGroupId: number) => void
+  onOpenComboStep: (comboStepId: number) => void
+  // BACK-2937 — re-fetches sub-prices after add/remove step actions so the
+  // expanded combo view reflects the new structure without a page reload.
+  onReloadSubPrices: () => Promise<void> | void
+}) {
+  const api = useApi()
+
+  // BACK-2835 — local step-order override applied to sub.combo_steps when
+  // the user drag-drops steps. Null = use server order. The actual rendering
+  // sorts by this when present.
+  const [stepOrderOverride, setStepOrderOverride] = useState<number[] | null>(null)
+  const [dragStepId, setDragStepId]   = useState<number | null>(null)
+  const [dropStepId, setDropStepId]   = useState<number | null>(null)
+  // Cache the combo_id so we don't re-fetch /sales-items/:id on every drop.
+  const comboIdRef = useRef<number | null>(null)
+
+  const orderedSteps = useMemo(() => {
+    if (!stepOrderOverride) return sub.combo_steps
+    const byId = new Map(sub.combo_steps.map(s => [s.id, s]))
+    const out: SubComboStep[] = []
+    for (const id of stepOrderOverride) {
+      const s = byId.get(id)
+      if (s) { out.push(s); byId.delete(id) }
+    }
+    // Any steps that weren't in the override (defensive) get appended in their
+    // original order at the end.
+    for (const s of sub.combo_steps) if (byId.has(s.id)) out.push(s)
+    return out
+  }, [sub.combo_steps, stepOrderOverride])
+
+  const persistStepOrder = async (newOrder: number[]) => {
+    setStepOrderOverride(newOrder)
+    try {
+      let comboId = comboIdRef.current
+      if (comboId == null) {
+        const si = await api.get(`/sales-items/${salesItemId}`) as { combo_id: number | null }
+        comboId = si.combo_id
+        comboIdRef.current = comboId
+      }
+      if (!comboId) throw new Error('No combo_id')
+      await api.post(`/combos/${comboId}/steps/reorder`, { order: newOrder })
+    } catch {
+      // Roll back to server order on failure
+      setStepOrderOverride(null)
+    }
+  }
+
+  // BACK-2937 — resolve combo_id once + cache. Shared by add/remove step
+  // handlers below. Same lazy-fetch pattern as persistStepOrder.
+  const resolveComboId = async (): Promise<number | null> => {
+    if (comboIdRef.current != null) return comboIdRef.current
+    try {
+      const si = await api.get(`/sales-items/${salesItemId}`) as { combo_id: number | null }
+      comboIdRef.current = si.combo_id
+      return si.combo_id
+    } catch { return null }
+  }
+
+  const [addingStep, setAddingStep] = useState(false)
+  const handleAddStep = async () => {
+    if (addingStep) return
+    setAddingStep(true)
+    try {
+      const comboId = await resolveComboId()
+      if (!comboId) throw new Error('Could not resolve combo id')
+      const created = await api.post(`/combos/${comboId}/steps`, {
+        name: 'New step',
+        sort_order: sub.combo_steps.length,
+        min_select: 1,
+        max_select: 1,
+        allow_repeat: false,
+        auto_select: false,
+      }) as { id: number }
+      await onReloadSubPrices()
+      // Pop the edit panel open so the operator can rename + tweak right away.
+      onOpenComboStep(created.id)
+    } catch (err: unknown) {
+      // Toast is owned by the parent — silently fail here; the parent's
+      // existing error handling on api.* covers most issues.
+      console.error('[add-step]', err)
+    } finally {
+      setAddingStep(false)
+    }
+  }
+
+  const handleRemoveStep = async (stepId: number) => {
+    // window.confirm matches the existing pattern in this file + the
+    // Combos catalog tab. Tracked for ConfirmDialog migration in the
+    // standard design-rules cleanup follow-up.
+    if (!window.confirm('Delete this step and all its options from this combo? This affects every menu the combo is used on.')) return
+    try {
+      const comboId = await resolveComboId()
+      if (!comboId) throw new Error('Could not resolve combo id')
+      await api.delete(`/combos/${comboId}/steps/${stepId}`)
+      await onReloadSubPrices()
+    } catch (err: unknown) {
+      console.error('[remove-step]', err)
+    }
+  }
+
+  // BUG-1186 — compute the modifier adder per combo option so the step's
+  // displayed cost summary includes the cost of attached modifier groups
+  // (avg × min_select), not just the base option cost. Mirrors what
+  // loadModifierCostAdders on the backend does for menu-item-level totals.
+  const stepTotalsWithMods = (step: SubComboStep): { avg: number; min: number; max: number } => {
+    const optTotals = (step.options || []).map(o => {
+      const base = Number(o.cost ?? 0)
+      const adder = (o.modifier_groups || []).reduce((s, g) => {
+        const ga = Number(g.avg_cost ?? 0)
+        return s + ga * Number(g.min_select || 0)
+      }, 0)
+      return base + adder
+    })
+    if (!optTotals.length) {
+      return { avg: Number(step.avg_cost ?? 0), min: Number(step.min_cost ?? 0), max: Number(step.max_cost ?? 0) }
+    }
+    const avg = optTotals.reduce((a, b) => a + b, 0) / optTotals.length
+    return { avg, min: Math.min(...optTotals), max: Math.max(...optTotals) }
+  }
+  // BACK-2814 — small helper for the cost-summary suffix on a group/step
+  // header. Renders "avg ₹X · ₹min–₹max" when a meaningful range exists,
+  // or "cost ₹X" when there's only one option / all options share cost.
+  const fmtCostSummary = (avg?: number, min?: number, max?: number): string | null => {
+    if (avg == null || !Number.isFinite(avg)) return null
+    if (min != null && max != null && Number.isFinite(min) && Number.isFinite(max) && Math.abs(max - min) > 0.005) {
+      return `avg ${currencySymbol}${Number(avg).toFixed(2)} · ${currencySymbol}${Number(min).toFixed(2)}–${currencySymbol}${Number(max).toFixed(2)}`
+    }
+    return `cost ${currencySymbol}${Number(avg).toFixed(2)}`
+  }
+
+  // Stable nested renderers — small helpers to keep the JSX tree readable.
+  // BACK-2598 — modifier groups + combo steps are collapsed by default; the
+  // user toggles each individually via the caret on the header.
+  const renderModGroup = (g: SubModifierGroup, indentPx: number, parentKey?: string) => {
+    // parentKey distinguishes a top-level mod group (`mg:N`) from one nested
+    // under a combo step option (`csmg:OPT_ID:MG_ID`) so the collapse state
+    // is independent.
+    const innerKey = parentKey ? `${msiId}:${parentKey}:${g.modifier_group_id}` : `${msiId}:mg:${g.modifier_group_id}`
+    const open = expandedInnerKeys.has(innerKey)
+    // BACK-2839 — multiply per-pick avg/min/max by min_select when the
+    // setting is on. Skipped (1×) when min_select=0 to avoid hiding optional
+    // groups entirely. Multiplying min and max by the same factor keeps the
+    // range readable.
+    const factor = modCostUsesMinSelect && g.min_select > 0 ? g.min_select : 1
+    const scaledAvg = g.avg_cost != null ? Number(g.avg_cost) * factor : undefined
+    const scaledMin = g.min_cost != null ? Number(g.min_cost) * factor : undefined
+    const scaledMax = g.max_cost != null ? Number(g.max_cost) * factor : undefined
+    const costSummary = fmtCostSummary(scaledAvg, scaledMin, scaledMax)
+    return (
+      <NestedGroup
+        key={g.modifier_group_id}
+        title={g.name}
+        minSelect={g.min_select}
+        maxSelect={g.max_select}
+        optionsCount={g.options.length}
+        costSummary={costSummary}
+        indentPx={indentPx}
+        collapsed={!open}
+        onToggleCollapse={() => onToggleInnerKey(innerKey)}
+        onEdit={() => onOpenModifierGroup(g.modifier_group_id)}
+      >
+        {open && g.options.map(o => (
+          <NestedOption
+            key={o.id}
+            title={o.display_name || o.name}
+            subtitle={`+${o.price_addon.toFixed(2)} addon`}
+            indentPx={indentPx + 16}
+            cost={o.cost}
+            currencySymbol={currencySymbol}
+            enabledPriceLevels={enabledPriceLevels}
+            renderPriceCell={(lvl) => {
+              const overrideKey = String(lvl.price_level_id)
+              const override = o.prices[overrideKey]
+              const value = override != null ? override : o.price_addon
+              const isOverride = override != null
+              const cellKey = `modifier:${msiId}:${o.id}:${lvl.price_level_id}`
+              return {
+                value,
+                cell: (
+                  <PriceCell
+                    value={value}
+                    isOverride={isOverride}
+                    defaultPrice={o.price_addon}
+                    saving={savingOptionCells.has(cellKey)}
+                    onSave={(v) => onSaveOptionPrice('modifier', msiId, o.id, lvl.price_level_id, v)}
+                  />
+                ),
+              }
+            }}
+          />
+        ))}
+      </NestedGroup>
+    )
+  }
+
+  return (
+    <div className="py-2">
+      {/* Combo structure (BACK-2574) — only rendered for combo items.
+          BACK-2835 adds drag-drop reorder; BACK-2836 adds the left accent
+          bar for hierarchy; BUG-1186 widens the cost summary to include
+          the modifier adder. BACK-2937 adds inline add/remove step controls
+          + always shows the wrapper for combo items so the user can add a
+          first step from an empty combo. */}
+      {sub.item_type === 'combo' && (
+        <div>
+          {orderedSteps.map((step, idx) => {
+            // BACK-2598 — combo steps default collapsed.
+            const stepKey = `${msiId}:cs:${step.id}`
+            const stepOpen = expandedInnerKeys.has(stepKey)
+            const totals = stepTotalsWithMods(step)
+            const stepCostSummary = fmtCostSummary(totals.avg, totals.min, totals.max)
+            const isDragging   = dragStepId === step.id
+            const isDropTarget = dropStepId === step.id && dragStepId !== null && dragStepId !== step.id
+            return (
+              <div
+                key={step.id}
+                draggable
+                onDragStart={() => setDragStepId(step.id)}
+                onDragOver={e => { e.preventDefault(); if (dragStepId !== null && dragStepId !== step.id) setDropStepId(step.id) }}
+                onDragLeave={() => { if (dropStepId === step.id) setDropStepId(null) }}
+                onDrop={e => {
+                  e.preventDefault()
+                  const fromId = dragStepId
+                  setDragStepId(null); setDropStepId(null)
+                  if (fromId == null || fromId === step.id) return
+                  const ids = orderedSteps.map(s => s.id)
+                  const fromIdx = ids.indexOf(fromId)
+                  const toIdx   = ids.indexOf(step.id)
+                  if (fromIdx < 0 || toIdx < 0) return
+                  const [moved] = ids.splice(fromIdx, 1)
+                  ids.splice(toIdx, 0, moved)
+                  persistStepOrder(ids)
+                }}
+                onDragEnd={() => { setDragStepId(null); setDropStepId(null) }}
+                className={`mb-1.5 mx-2 rounded border-l-4 border transition-all ${
+                  isDropTarget ? 'border-l-accent border-accent ring-1 ring-accent/30' :
+                                 'border-l-accent/40 border-border'
+                } ${isDragging ? 'opacity-40' : ''} bg-white`}
+              >
+                {/* Step header — matches the Combos catalog tab card style:
+                    rounded gray header, drag handle, expand caret, name +
+                    pill-badge metadata (min/max/options/cost), Edit pill. */}
+                <div
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t flex-wrap"
+                  onClick={() => onToggleInnerKey(stepKey)}
+                >
+                  {/* BACK-2835 — drag handle */}
+                  <span
+                    className="shrink-0 text-text-3 hover:text-accent cursor-grab active:cursor-grabbing select-none text-[12px] leading-none"
+                    title="Drag to reorder step"
+                    onMouseDown={e => e.stopPropagation()}
+                  >⋮⋮</span>
+                  <span className="shrink-0 text-text-3 text-[10px] w-3 text-center">
+                    {stepOpen ? '▼' : '▶'}
+                  </span>
+                  <span className="text-xs font-mono text-text-3 shrink-0">Step {idx + 1}</span>
+                  <span className="text-sm font-medium text-text-1">{step.name}</span>
+                  <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Min choices">min {step.min_select ?? 1}</span>
+                  <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Max choices">max {step.max_select ?? 1}</span>
+                  <span className="text-xs bg-gray-100 text-text-3 px-1.5 py-0.5 rounded shrink-0">
+                    {step.options.length} option{step.options.length === 1 ? '' : 's'}
+                  </span>
+                  {stepCostSummary && (
+                    <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded shrink-0 font-mono">{stepCostSummary}</span>
+                  )}
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    className="shrink-0 text-accent text-[10px] font-medium px-2 py-0.5 rounded border border-accent/40 bg-white hover:bg-accent-dim hover:border-accent transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onOpenComboStep(step.id) }}
+                    title="Edit step (settings + options)"
+                  >Edit ›</button>
+                  <button
+                    type="button"
+                    className="shrink-0 text-red-500 text-[10px] font-medium px-2 py-0.5 rounded border border-red-300 bg-white hover:bg-red-50 hover:border-red-400 hover:text-red-700 transition-colors ml-1"
+                    onClick={(e) => { e.stopPropagation(); handleRemoveStep(step.id) }}
+                    title="Delete this step (affects every menu using this combo)"
+                  >Remove</button>
+                </div>
+                {stepOpen && step.options.map(o => (
+                  <div key={o.id}>
+                    <NestedOption
+                      title={o.display_name || o.name}
+                      subtitle={`Combo option · +${o.price_addon.toFixed(2)} addon`}
+                      indentPx={48}
+                      cost={o.cost}
+                      currencySymbol={currencySymbol}
+                      enabledPriceLevels={enabledPriceLevels}
+                      renderPriceCell={(lvl) => {
+                        const overrideKey = String(lvl.price_level_id)
+                        const override = o.prices[overrideKey]
+                        const value = override != null ? override : o.price_addon
+                        const isOverride = override != null
+                        const cellKey = `combo:${msiId}:${o.id}:${lvl.price_level_id}`
+                        return {
+                          value,
+                          cell: (
+                            <PriceCell
+                              value={value}
+                              isOverride={isOverride}
+                              defaultPrice={o.price_addon}
+                              saving={savingOptionCells.has(cellKey)}
+                              onSave={(v) => onSaveOptionPrice('combo', msiId, o.id, lvl.price_level_id, v)}
+                            />
+                          ),
+                        }
+                      }}
+                    />
+                    {/* Per-step-option modifier groups (BACK-2574) — collapsed by default */}
+                    {o.modifier_groups.length > 0 && (
+                      <div>
+                        {o.modifier_groups.map(g => renderModGroup(g, 64, `csmg:${o.id}`))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+          {/* BACK-2937 — Add Step button. Always shown on combo items, so an
+              operator can add a first step to an empty combo without leaving
+              the Menu Builder. */}
+          <div className="px-2 pt-1 pb-2">
+            <button
+              type="button"
+              disabled={addingStep}
+              className="text-[11px] font-medium px-2.5 py-1 rounded border border-dashed border-accent/50 text-accent hover:bg-accent-dim hover:border-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleAddStep}
+              title="Add a new step to this combo (affects every menu using it)"
+            >{addingStep ? 'Adding…' : '+ Add step'}</button>
+            {orderedSteps.length === 0 && (
+              <span className="ml-2 text-[10px] text-text-3 italic">
+                This combo has no steps yet — add one to start building.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modifier groups for non-combo items (BACK-2573) */}
+      {sub.modifier_groups.length > 0 && (
+        <div>
+          {sub.modifier_groups.map(g => renderModGroup(g, 16))}
+        </div>
+      )}
+
+      {sub.modifier_groups.length === 0 && sub.combo_steps.length === 0 && (
+        <div className="px-12 py-2 text-xs text-text-3 italic">Nothing nested under this item.</div>
+      )}
+    </div>
+  )
+}
+
+// Section header for a modifier group inside the expanded view. The caret on
+// the left toggles collapse (BACK-2598); the Edit › pill on the right routes
+// to the group editor in the side panel (BACK-2587).
+// Card-style modifier group header that matches the combo-step look — same
+// rounded card, gray header, accent-bar on the left, pill-badge metadata
+// (min/max/options/cost) instead of "·"-separated text. Used both for
+// top-level modifier groups on non-combo items AND modifier groups attached
+// to combo step options, so the visual language is consistent across the
+// entire expanded view.
+function NestedGroup({
+  title, minSelect, maxSelect, optionsCount, costSummary,
+  indentPx, collapsed, onToggleCollapse, onEdit, children,
+}: {
+  title: string
+  minSelect: number
+  maxSelect: number
+  optionsCount: number
+  costSummary: string | null
+  indentPx: number
+  collapsed?: boolean
+  onToggleCollapse?: () => void
+  onEdit?: () => void
+  children: React.ReactNode
+}) {
+  // Slightly different accent shade for modifier groups vs combo steps so
+  // the two hierarchical levels read distinctly — purple-tinted left bar.
+  return (
+    <div style={{ paddingLeft: indentPx, paddingRight: 8 }}>
+      <div className="mb-1.5 rounded border-l-4 border border-l-purple-300 border-border bg-white">
+        <div
+          className="flex items-center gap-2 px-3 py-2 cursor-pointer bg-purple-50/50 hover:bg-purple-50 rounded-t flex-wrap"
+          onClick={onToggleCollapse}
+        >
+          {onToggleCollapse ? (
+            <span className="shrink-0 text-text-3 text-[10px] w-3 text-center">
+              {collapsed ? '▶' : '▼'}
+            </span>
+          ) : (
+            <span className="shrink-0 w-3" />
+          )}
+          <span className="text-sm font-medium text-text-1">{title}</span>
+          <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Min selections">min {minSelect}</span>
+          <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded shrink-0" title="Max selections">max {maxSelect}</span>
+          <span className="text-xs bg-gray-100 text-text-3 px-1.5 py-0.5 rounded shrink-0">
+            {optionsCount} option{optionsCount === 1 ? '' : 's'}
+          </span>
+          {costSummary && (
+            <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded shrink-0 font-mono">{costSummary}</span>
+          )}
+          <div className="flex-1" />
+          {onEdit && (
+            <button
+              type="button"
+              className="shrink-0 text-accent text-[10px] font-medium px-2 py-0.5 rounded border border-accent/40 bg-white hover:bg-accent-dim hover:border-accent transition-colors"
+              onClick={(e) => { e.stopPropagation(); onEdit() }}
+              title="Edit group (settings + options)"
+            >Edit ›</button>
+          )}
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// Single nested option row — keeps the column alignment matching the parent
+// list (item info on the left, price-level cells on the right).
+// BACK-2814 — aligned nested option row. Mirrors the main-row level-cell
+// layout exactly so columns line up under the header: empty tax slot +
+// editable price + cost / COGS% stack per level, plus the trailing
+// w-20 / w-14 placeholders for the Modifiers ›/Remove columns. The cost
+// is per-option (single value), COGS% recomputes per-level from each
+// cell's effective sell price.
+//
+// renderPriceCell returns BOTH the JSX cell to render AND the numeric
+// effective sell value so this component can compute COGS% per level
+// without duplicating the override-resolution logic from the parent.
+function NestedOption({
+  title, subtitle, indentPx, cost, currencySymbol, enabledPriceLevels, renderPriceCell,
+}: {
+  title: string
+  subtitle?: string
+  indentPx: number
+  cost?: number
+  currencySymbol: string
+  enabledPriceLevels: CountryPriceLevel[]
+  renderPriceCell: (lvl: CountryPriceLevel) => { cell: React.ReactNode; value: number }
+}) {
+  const hasCost = cost != null && Number.isFinite(cost) && cost > 0
+  return (
+    <div className="flex items-center gap-3 py-1.5" style={{ paddingLeft: indentPx, paddingRight: 16 }}>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-text-1 truncate">{title}</div>
+        {subtitle && <div className="text-[10px] text-text-3 truncate">{subtitle}</div>}
+      </div>
+      {enabledPriceLevels.map((lvl, lvlIdx) => {
+        const { cell, value } = renderPriceCell(lvl)
+        const sell    = Number(value || 0)
+        const cogsPct = (hasCost && sell > 0) ? (Number(cost) / sell) * 100 : null
+        const altBg   = lvlIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/50'
+        return (
+          <div
+            key={lvl.price_level_id}
+            className={`shrink-0 flex items-center gap-1.5 px-1 py-0.5 rounded ${altBg} ${lvlIdx > 0 ? 'border-l border-border/60 ml-1' : ''}`}
+          >
+            {/* Tax slot is empty for nested options — tax is set on the
+                parent menu_sales_item, not on individual modifier / step
+                options. Width matches main row's TaxCell so columns
+                align under the header. */}
+            <span className="shrink-0 w-9" aria-hidden />
+            {cell}
+            <div className="shrink-0 w-14 text-right font-mono leading-tight">
+              <div className="text-[10px] text-text-2">
+                {hasCost ? `${currencySymbol}${Number(cost).toFixed(2)}` : '\u2014'}
+              </div>
+              {cogsPct != null && (
+                <div className="text-[9px] text-text-3">{cogsPct.toFixed(1)}%</div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+      <span className="shrink-0 w-20" aria-hidden />
+      <span className="shrink-0 w-14" aria-hidden />
+    </div>
+  )
+}
+
+// ── Shared bits ─────────────────────────────────────────────────────────────
+
+// Inline tax cell for the items list (BACK-2730). Renders the effective tax
+// rate as a tiny clickable button; clicking opens a portal-positioned
+// dropdown that lists every country tax rate plus a "Use default" option to
+// clear the override. Override applies to the whole menu_sales_item (all
+// price levels) — selecting a rate from any cell affects every level cell
+// in that row.
+function TaxCell({
+  msiId, effectiveRate, effectiveName, isOverride, saving, taxRates, onPick,
+}: {
+  msiId: number
+  effectiveRate: number | null
+  effectiveName: string | null
+  isOverride: boolean
+  saving: boolean
+  taxRates: TaxRateOption[]
+  onPick: (taxRateId: number | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos]   = useState<{ top: number; left: number } | null>(null)
+  const btnRef          = useRef<HTMLButtonElement>(null)
+
+  // Close on outside click + ESC.
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (btnRef.current?.contains(target)) return
+      const inDropdown = (target as HTMLElement)?.closest?.('[data-tax-dropdown="' + msiId + '"]')
+      if (inDropdown) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown',   onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown',   onKey)
+    }
+  }, [open, msiId])
+
+  const toggle = () => {
+    if (!btnRef.current) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current.getBoundingClientRect()
+    setPos({ top: r.bottom + 4, left: r.left })
+    setOpen(true)
+  }
+
+  // Rates are stored as decimal multipliers (0.05 = 5%, 0.20 = 20%).
+  // Multiply by 100 for the on-screen percentage. Strip trailing zeros so
+  // 5.00% renders as 5%, 5.50% as 5.5%, 20.00% as 20%.
+  const formatPct = (rate: number, dp = 2) => {
+    const v = Number(rate) * 100
+    const s = v.toFixed(dp)
+    // Drop trailing zeros and a dangling decimal point for compactness.
+    return s.replace(/\.?0+$/, '')
+  }
+  const label = saving
+    ? '…'
+    : effectiveRate != null && Number.isFinite(effectiveRate)
+      ? `${formatPct(effectiveRate, 1)}%`
+      : '—'
+  const title = effectiveRate != null
+    ? `${effectiveName || 'Tax'} · ${formatPct(effectiveRate, 2)}%${isOverride ? ' (override)' : ''}\nClick to change`
+    : 'No tax assigned · click to set an override'
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); toggle() }}
+        className={`shrink-0 w-9 text-right text-[10px] font-mono px-1 py-0.5 rounded transition-colors ${
+          isOverride
+            ? 'text-amber-800 bg-amber-100 hover:bg-amber-200'
+            : 'text-text-3 hover:bg-surface-2'
+        }`}
+        title={title}
+      >{label}</button>
+      {open && pos && createPortal(
+        <div
+          data-tax-dropdown={String(msiId)}
+          className="fixed bg-surface border border-border rounded-md shadow-lg z-[10000] min-w-[180px] py-1 text-xs"
+          style={{ top: pos.top, left: pos.left }}
+        >
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-text-3 font-semibold">Tax rate (this item)</div>
+          <button
+            type="button"
+            onClick={() => { onPick(null); setOpen(false) }}
+            className={`w-full text-left px-2 py-1.5 hover:bg-surface-2 ${!isOverride ? 'font-semibold text-accent' : 'text-text-1'}`}
+          >Use country default</button>
+          <div className="border-t border-border my-1" />
+          {taxRates.map(r => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => { onPick(r.id); setOpen(false) }}
+              className={`w-full text-left px-2 py-1.5 hover:bg-surface-2 flex items-center justify-between gap-2 ${
+                effectiveName === r.name && isOverride ? 'font-semibold text-accent' : 'text-text-1'
+              }`}
+            >
+              <span>{r.name}{r.is_default ? <span className="text-text-3 ml-1 text-[10px]">(default)</span> : null}</span>
+              <span className="font-mono text-text-2">{formatPct(r.rate, 2)}%</span>
+            </button>
+          ))}
+          {taxRates.length === 0 && (
+            <div className="px-2 py-1.5 text-text-3 italic">No tax rates configured for this market</div>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+// Inline price cell for the items list (BACK-2569). Each cell is a small
+// editable input that saves on blur when the value has changed. Shows an
+// amber tint when the per-menu override differs from the catalog default,
+// and a saving spinner while the PUT is in flight.
+function PriceCell({
+  value, isOverride, defaultPrice, saving, onSave,
+}: {
+  value: number
+  isOverride: boolean
+  defaultPrice: number | null
+  saving: boolean
+  onSave: (v: number) => void | Promise<void>
+}) {
+  const [draft, setDraft] = useState<string>(String(value ?? 0))
+  // Re-sync local draft when the upstream value changes (e.g. after a save
+  // bumps is_overridden or after a parent reload).
+  useEffect(() => { setDraft(String(value ?? 0)) }, [value])
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    if (trimmed === '') return
+    const n = Number(trimmed)
+    if (!Number.isFinite(n)) { setDraft(String(value ?? 0)); return }
+    if (Math.abs(n - Number(value)) < 0.0005) return // no-op: within rounding
+    onSave(n)
+  }
+
+  return (
+    <div className="shrink-0 w-24 relative">
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`input w-full text-right text-sm font-mono px-2 py-1 ${isOverride ? 'border-amber-300 bg-amber-50/40' : ''}`}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        title={defaultPrice != null ? `Default: ${defaultPrice}${isOverride ? ' (overridden)' : ''}` : (isOverride ? 'Per-menu override' : '')}
+      />
+      {saving && (
+        <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-accent" title="Saving…">●</span>
+      )}
+    </div>
+  )
+}
+
+// Drag handle on the LEFT edge of a right-side panel. Left-side mouse drag
+// changes width inversely (drag left → wider). Clamped 320–720.
+function ResizeHandle({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+  return (
+    <div
+      className="absolute left-0 top-0 bottom-0 w-1 hover:w-1.5 bg-transparent hover:bg-accent/40 cursor-col-resize z-10 transition-all"
+      onMouseDown={(e) => {
+        e.preventDefault()
+        const startX = e.clientX
+        const startW = width
+        const onMove = (ev: MouseEvent) => {
+          const next = Math.max(320, Math.min(720, startW - (ev.clientX - startX)))
+          onResize(next)
+        }
+        const onUp = () => {
+          window.removeEventListener('mousemove', onMove)
+          window.removeEventListener('mouseup', onUp)
+        }
+        window.addEventListener('mousemove', onMove)
+        window.addEventListener('mouseup', onUp)
+      }}
+      title="Drag to resize"
+    />
+  )
+}
+
+// ── Add-item side panel ─────────────────────────────────────────────────────
+
+function AddItemPanel({
+  menu, currentItemIds, addMode, setAddMode, width, onResize, onAttach, onCreateAndAttach, onAskReuse, onClose,
+}: {
+  menu: Menu
+  currentItemIds: number[]
+  addMode: AddMode
+  setAddMode: (m: AddMode) => void
+  width: number
+  onResize: (w: number) => void
+  onAttach: (si: SalesItemRow) => void | Promise<void>
+  onCreateAndAttach: (payload: {
+    item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+    name: string
+    display_name?: string | null
+    category_id?: number | null
+    recipe_id?: number | null
+    ingredient_id?: number | null
+    combo_id?: number | null
+    manual_cost?: number | null
+    image_url?: string | null
+    description?: string | null
+  }) => void | Promise<void>
+  onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
+  onClose: () => void
+}) {
+  const api = useApi()
+  const [catalog, setCatalog] = useState<SalesItemRow[]>([])
+  const [searchText, setSearchText] = useState('')
+  const [catalogLoading, setCatalogLoading] = useState(false)
+
+  // Sales-item catalog: lazy-load on first open of either tab. Both tabs need
+  // it (search-existing for picking, create-new for duplicate detection on
+  // the recipe / ingredient / combo / manual picker).
+  useEffect(() => {
+    if (catalog.length) return
+    setCatalogLoading(true)
+    api.get('/sales-items?include_prices=false')
+      .then((d: SalesItemRow[]) => setCatalog(d || []))
+      .catch(() => { /* surfaced via empty state */ })
+      .finally(() => setCatalogLoading(false))
+  }, [api, catalog.length])
+
+  const filtered = useMemo(() => {
+    const q = searchText.trim().toLowerCase()
+    const list = catalog.filter(c => !currentItemIds.includes(c.id))
+    if (!q) return list.slice(0, 50)
+    return list
+      .filter(c => (c.name + ' ' + (c.display_name || '') + ' ' + (c.category_name || '')).toLowerCase().includes(q))
+      .slice(0, 50)
+  }, [catalog, searchText, currentItemIds])
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-text-3 font-semibold">{menu.name} <span className="text-text-3/60">›</span> Add Sales Item</div>
+          <div className="font-semibold text-sm text-text-1">{addMode === 'search' ? 'Search existing' : 'Create new'}</div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-border">
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${addMode === 'search' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setAddMode('search')}
+        >Search existing</button>
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${addMode === 'create' ? 'text-accent border-b-2 border-accent' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setAddMode('create')}
+        >Create new</button>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-3">
+        {addMode === 'search' ? (
+          <SearchExistingTab
+            search={searchText}
+            setSearch={setSearchText}
+            results={filtered}
+            loading={catalogLoading}
+            onPick={onAttach}
+            catalogTotal={catalog.length}
+            alreadyOnMenuCount={catalog.filter(c => currentItemIds.includes(c.id)).length}
+          />
+        ) : (
+          <CreateNewTab
+            menu={menu}
+            catalog={catalog}
+            onAttachExisting={onAttach}
+            onCreateAndAttach={onCreateAndAttach}
+            onAskReuse={onAskReuse}
+            onCancel={onClose}
+          />
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// ── Tab: search existing catalog ────────────────────────────────────────────
+
+function SearchExistingTab({
+  search, setSearch, results, loading, onPick, catalogTotal, alreadyOnMenuCount,
+}: {
+  search: string
+  setSearch: (s: string) => void
+  results: SalesItemRow[]
+  loading: boolean
+  onPick: (si: SalesItemRow) => void | Promise<void>
+  catalogTotal: number
+  alreadyOnMenuCount: number
+}) {
+  // Distinguish three empty states (BACK-2546):
+  //   1. no catalog at all                  → suggest Create new
+  //   2. catalog exists but every item already on the menu  → say so explicitly
+  //   3. search yielded nothing             → No matches
+  const allOnMenu = !loading && !search && catalogTotal > 0 && results.length === 0 && alreadyOnMenuCount === catalogTotal
+  return (
+    <div className="space-y-3">
+      <input
+        className="input w-full"
+        autoFocus
+        placeholder="Search the sales-item catalog…"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+      {loading ? (
+        <div className="flex justify-center py-8"><Spinner /></div>
+      ) : results.length === 0 ? (
+        <div className="text-xs text-text-3 italic py-6 text-center px-3">
+          {search
+            ? 'No matches.'
+            : allOnMenu
+              ? <>Every sales item in the catalog is already on this menu. Switch to <strong>Create new</strong> to add a fresh one.</>
+              : <>No sales items in the catalog yet — switch to <strong>Create new</strong>.</>}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
+          {results.map(si => (
+            <li
+              key={si.id}
+              className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer"
+              onClick={() => onPick(si)}
+            >
+              <span
+                className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center ${TYPE_BADGE[si.item_type].cls}`}
+                title={TYPE_LABELS[si.item_type]}
+              >{TYPE_BADGE[si.item_type].label}</span>
+              {si.image_url ? (
+                <img src={si.image_url} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
+              ) : (
+                <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-text-1 truncate">{si.display_name || si.name}</div>
+                <div className="text-[11px] text-text-3 truncate">
+                  {si.category_name || 'Uncategorised'} · {TYPE_LABELS[si.item_type]}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-[11px] text-text-3 italic">
+        Picking an item attaches it to the menu using its default prices. You can override prices per menu in story 6.
+      </p>
+    </div>
+  )
+}
+
+// ── Tab: create new ────────────────────────────────────────────────────────
+// Type radio + branch-specific picker. Story 2 ships the recipe + ingredient
+// branches via RecipeOrIngredientPicker; manual + combo still show roadmap
+// stubs awaiting BACK-2519 / BACK-2520.
+
+function CreateNewTab({
+  menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse, onCancel,
+}: {
+  menu: Menu
+  catalog: SalesItemRow[]
+  onAttachExisting: (si: SalesItemRow) => void | Promise<void>
+  onCreateAndAttach: (payload: {
+    item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+    name: string
+    display_name?: string | null
+    category_id?: number | null
+    recipe_id?: number | null
+    ingredient_id?: number | null
+    combo_id?: number | null
+    manual_cost?: number | null
+    image_url?: string | null
+    description?: string | null
+  }) => void | Promise<void>
+  onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
+  onCancel: () => void
+}) {
+  const [type, setType] = useState<SalesItemType>('recipe')
+  const TYPES: SalesItemType[] = ['recipe', 'ingredient', 'manual', 'combo']
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-xs font-semibold text-text-2 mb-2">Linked to</div>
+        <div className="grid grid-cols-2 gap-2">
+          {TYPES.map(t => (
+            <label
+              key={t}
+              className={`flex items-start gap-2 cursor-pointer rounded-lg border px-3 py-2.5 transition-colors ${
+                type === t
+                  ? 'border-accent bg-accent-dim/40'
+                  : 'border-border hover:border-accent/40 bg-surface-2/30'
+              }`}
+            >
+              <input
+                type="radio"
+                name="si-type"
+                className="mt-0.5"
+                checked={type === t}
+                onChange={() => setType(t)}
+              />
+              <span className="flex-1 min-w-0">
+                <span className={`inline-flex items-center gap-1.5 text-xs font-semibold`}>
+                  <span className={`w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center ${TYPE_BADGE[t].cls}`}>{TYPE_BADGE[t].label}</span>
+                  {TYPE_LABELS[t]}
+                </span>
+                <span className="block text-[10px] text-text-3 mt-1 leading-snug">{TYPE_DESCRIPTIONS[t]}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Branch by type. BACK-2627 + BACK-2639 — every type uses the same
+          search-only picker. Manual lists existing item_type='manual' rows
+          from the catalog; new manuals are created in the Sales Items module
+          via the + Add new ↗ shortcut (BACK-2640). */}
+      <RecipeOrIngredientPicker
+        mode={type}
+        menu={menu}
+        catalog={catalog}
+        onAttachExisting={onAttachExisting}
+        onCreateAndAttach={onCreateAndAttach}
+        onAskReuse={onAskReuse}
+      />
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Recipe / ingredient picker (Story 2 / BACK-2518) ───────────────────────
+// Search-only picker. Click a row → if a sales item already wraps the picked
+// recipe/ingredient, prompt to reuse; else create a new sales item that wraps
+// it and immediately attach to the menu.
+
+function RecipeOrIngredientPicker({
+  mode, menu, catalog, onAttachExisting, onCreateAndAttach, onAskReuse,
+}: {
+  // BACK-2627 — combo joins recipe + ingredient in this picker.
+  // BACK-2639 — manual joins too. For manual, picking attaches the existing
+  // sales item directly (no wrapping needed since manual sales items are
+  // themselves the entity).
+  mode: 'recipe' | 'ingredient' | 'combo' | 'manual'
+  menu: Menu
+  catalog: SalesItemRow[]
+  onAttachExisting: (si: SalesItemRow) => void | Promise<void>
+  onCreateAndAttach: (payload: {
+    item_type: 'recipe' | 'ingredient' | 'manual' | 'combo'
+    name: string
+    display_name?: string | null
+    category_id?: number | null
+    recipe_id?: number | null
+    ingredient_id?: number | null
+    combo_id?: number | null
+  }) => void | Promise<void>
+  onAskReuse: (existing: SalesItemRow, onReuse: () => void, onCreateNew: () => void) => void
+}) {
+  const api = useApi()
+  const [recipes,     setRecipes]     = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  const [combos,      setCombos]      = useState<ComboRow[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [search,  setSearch]  = useState('')
+  // BACK-2548 — track which ingredient row has the inline add-quote form open
+  const [addQuoteFor, setAddQuoteFor] = useState<IngredientRow | null>(null)
+
+  const reloadIngredients = useCallback(() => {
+    setLoading(true)
+    return api.get(`/ingredients?country_id=${menu.country_id}`)
+      .then((d: IngredientRow[]) => setIngredients(d || []))
+      .catch(() => setIngredients([]))
+      .finally(() => setLoading(false))
+  }, [api, menu.country_id])
+
+  // Lazy-load whichever catalog matches the active mode. Cached locally so
+  // flipping between modes doesn't refetch. Ingredient call is scoped to
+  // the menu's country so each row carries cost data. Manual mode reuses
+  // the existing sales-item catalog (filtered to type='manual') so no
+  // separate fetch is needed.
+  useEffect(() => {
+    if (mode === 'recipe' && recipes === null) {
+      setLoading(true)
+      api.get('/recipes')
+        .then((d: RecipeRow[]) => setRecipes(d || []))
+        .catch(() => setRecipes([]))
+        .finally(() => setLoading(false))
+    } else if (mode === 'ingredient' && ingredients === null) {
+      reloadIngredients()
+    } else if (mode === 'combo' && combos === null) {
+      setLoading(true)
+      api.get('/combos')
+        .then((d: ComboRow[]) => setCombos(d || []))
+        .catch(() => setCombos([]))
+        .finally(() => setLoading(false))
+    }
+  }, [api, mode, recipes, ingredients, combos, reloadIngredients])
+
+  // Active source list + filter. For manual, source is the page-level
+  // sales-item catalog filtered to type='manual'.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (mode === 'recipe') {
+      const list = recipes || []
+      if (!q) return list.slice(0, 50)
+      return list.filter(r => (r.name + ' ' + (r.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
+    } else if (mode === 'ingredient') {
+      const list = ingredients || []
+      if (!q) return list.slice(0, 50)
+      return list.filter(i => (i.name + ' ' + (i.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
+    } else if (mode === 'combo') {
+      const list = combos || []
+      if (!q) return list.slice(0, 50)
+      return list.filter(c => (c.name + ' ' + (c.category_name || '') + ' ' + (c.description || '')).toLowerCase().includes(q)).slice(0, 50)
+    } else {
+      // manual — picker over existing manual sales items in the catalog
+      const list = catalog.filter(si => si.item_type === 'manual')
+      if (!q) return list.slice(0, 50)
+      return list.filter(s => (s.name + ' ' + (s.display_name || '') + ' ' + (s.category_name || '')).toLowerCase().includes(q)).slice(0, 50)
+    }
+  }, [mode, recipes, ingredients, combos, catalog, search])
+
+  // Click a row → for recipe / ingredient / combo: duplicate-detect against
+  // existing sales-item catalog, then reuse or create-and-attach. For
+  // manual: the row IS the sales item, attach directly.
+  const handlePick = useCallback((row: RecipeRow | IngredientRow | ComboRow | SalesItemRow) => {
+    if (mode === 'manual') {
+      onAttachExisting(row as SalesItemRow)
+      return
+    }
+    const existing = catalog.find(si =>
+      (mode === 'recipe'      && si.item_type === 'recipe'     && si.recipe_id     === row.id) ||
+      (mode === 'ingredient'  && si.item_type === 'ingredient' && si.ingredient_id === row.id) ||
+      (mode === 'combo'       && si.item_type === 'combo'      && si.combo_id      === row.id)
+    )
+    const createNew = () => {
+      onCreateAndAttach({
+        item_type: mode,
+        name: row.name,
+        display_name: null,
+        category_id: null,
+        recipe_id:     mode === 'recipe'     ? row.id : null,
+        ingredient_id: mode === 'ingredient' ? row.id : null,
+        combo_id:      mode === 'combo'      ? row.id : null,
+      })
+    }
+    if (existing) {
+      onAskReuse(existing, () => onAttachExisting(existing), createNew)
+    } else {
+      createNew()
+    }
+  }, [mode, catalog, onAttachExisting, onCreateAndAttach, onAskReuse])
+
+  // BACK-2652 — "Add new" stashes the menu + item type in sessionStorage and
+  // same-tab navigates to the source module's create flow. The source page
+  // mounts a ReturnToMenuBuilderBanner that lets the user attach the new
+  // entity back to this menu when they're done building it (recipes can take
+  // multiple steps for variants, combos for steps + modifiers, etc.).
+  const navigate = useNavigate()
+  const addNewTarget = mode === 'recipe'     ? '/recipes?new=1'
+                     : mode === 'ingredient' ? '/inventory?new=1'
+                     : mode === 'combo'      ? '/sales-items?new=combo'
+                     : '/sales-items?new=manual'
+  const onAddNew = () => {
+    setHandoff({
+      menu_id:   menu.id,
+      menu_name: menu.name,
+      item_type: mode as HandoffItemType,
+    })
+    navigate(addNewTarget)
+  }
+  const placeholder = mode === 'recipe'     ? 'Search recipes…'
+                    : mode === 'ingredient' ? 'Search ingredients…'
+                    : mode === 'combo'      ? 'Search combos…'
+                    : 'Search manual items…'
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <input
+          className="input flex-1"
+          autoFocus
+          placeholder={placeholder}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-ghost text-xs px-3 py-1 shrink-0 inline-flex items-center"
+          onClick={onAddNew}
+          title={`Create a new ${mode === 'manual' ? 'manual sales item' : mode} and add it to ${menu.name}`}
+        >+ Add new</button>
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-8"><Spinner /></div>
+      ) : filtered.length === 0 ? (
+        <div className="text-xs text-text-3 italic py-6 text-center">
+          {search
+            ? 'No matches.'
+            : mode === 'recipe'
+              ? 'No recipes yet — click + Add new to create one.'
+              : mode === 'ingredient'
+                ? 'No ingredients yet — click + Add new to create one.'
+                : mode === 'combo'
+                  ? 'No combos yet — click + Add new to create one.'
+                  : 'No manual sales items yet — click + Add new to create one.'}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
+          {filtered.map(row => {
+            const exists = mode === 'manual'
+              ? false  // every manual row IS a sales item; picking attaches it directly
+              : catalog.some(si =>
+                  (mode === 'recipe'      && si.recipe_id     === row.id) ||
+                  (mode === 'ingredient'  && si.ingredient_id === row.id) ||
+                  (mode === 'combo'       && si.combo_id      === row.id)
+                )
+            // BACK-2548 — for ingredient mode, surface market cost / "no quote" badges.
+            const ingRow = mode === 'ingredient' ? (row as IngredientRow) : null
+            const cost = ingRow?.market_cost_per_base_unit
+            const hasQuote = !!ingRow?.has_market_quote
+            const symbol = menu.currency_symbol || menu.currency_code || ''
+            const comboRow = mode === 'combo' ? (row as ComboRow) : null
+            const manualRow = mode === 'manual' ? (row as SalesItemRow) : null
+            const imageSrc = mode === 'ingredient'
+              ? (ingRow?.image_url || null)
+              : mode === 'combo'
+                ? (comboRow?.image_url || null)
+                : mode === 'manual'
+                  ? (manualRow?.image_url || null)
+                  : null
+            const displayName = mode === 'manual'
+              ? (manualRow?.display_name || manualRow?.name || row.name)
+              : row.name
+            return (
+              <li key={row.id} className="border-b border-border last:border-b-0">
+                <div
+                  className="flex items-center gap-2 px-2.5 py-2 hover:bg-surface-2/70 cursor-pointer"
+                  onClick={() => handlePick(row)}
+                >
+                  {imageSrc ? (
+                    <img src={imageSrc} alt="" className="shrink-0 w-7 h-7 rounded object-cover border border-border" />
+                  ) : (
+                    <div className="shrink-0 w-7 h-7 rounded bg-surface-2 border border-border" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-text-1 truncate">{displayName}</div>
+                    <div className="text-[11px] text-text-3 truncate">
+                      {('category_name' in row ? row.category_name : null) || 'Uncategorised'}
+                      {mode === 'recipe' && 'yield_qty' in row && (
+                        <> · yield {row.yield_qty}{row.yield_unit_abbr ? ' ' + row.yield_unit_abbr : ''}</>
+                      )}
+                      {mode === 'ingredient' && ingRow?.base_unit_abbr && (
+                        <> · {ingRow.base_unit_abbr}</>
+                      )}
+                      {mode === 'ingredient' && hasQuote && cost != null && (
+                        <> · <span className="text-accent font-semibold">{symbol}{Number(cost).toFixed(4)}</span>/{ingRow!.base_unit_abbr || 'unit'}{ingRow!.market_quote_is_preferred ? ' ★' : ''}</>
+                      )}
+                      {mode === 'combo' && comboRow?.description && (
+                        <> · {comboRow.description}</>
+                      )}
+                    </div>
+                  </div>
+                  {mode === 'ingredient' && !hasQuote && (
+                    <button
+                      className="shrink-0 text-[10px] font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 px-1.5 py-0.5 rounded"
+                      onClick={(e) => { e.stopPropagation(); setAddQuoteFor(addQuoteFor?.id === row.id ? null : (row as IngredientRow)) }}
+                      title="No active quote in this market — click to add one"
+                    >+ Add quote</button>
+                  )}
+                  {exists && (
+                    <span className="shrink-0 text-[10px] font-semibold text-accent bg-accent-dim/60 px-1.5 py-0.5 rounded" title="Already wrapped by an existing sales item — picking will reuse it">in catalog</span>
+                  )}
+                </div>
+                {/* Inline add-quote form (BACK-2548) */}
+                {mode === 'ingredient' && addQuoteFor?.id === row.id && (
+                  <AddQuoteInline
+                    ingredient={row as IngredientRow}
+                    countryId={menu.country_id}
+                    currencySymbol={symbol}
+                    onCancel={() => setAddQuoteFor(null)}
+                    onCreated={async () => {
+                      setAddQuoteFor(null)
+                      await reloadIngredients()
+                    }}
+                  />
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <p className="text-[11px] text-text-3 italic">
+        {mode === 'recipe'
+          ? 'Click + Add new to create a recipe — you’ll come back here when it’s ready.'
+          : mode === 'ingredient'
+            ? 'Click + Add new to create an ingredient — you’ll come back here when it’s ready.'
+            : mode === 'combo'
+              ? 'Click + Add new to create a combo — you’ll come back here when it’s ready.'
+              : 'Click + Add new to create a manual sales item — you’ll come back here when it’s ready.'}
+      </p>
+    </div>
+  )
+}
+
+// ── Inline add-quote form (BACK-2548) ──────────────────────────────────────
+// Surfaced when an ingredient has no active price quote in the menu's market.
+// Lazy-loads the vendor list scoped to the menu's country, lets the user pick
+// or create a vendor, then POSTs to /price-quotes. On success the parent
+// reloads the ingredient catalog so the cost shows up immediately.
+
+function AddQuoteInline({
+  ingredient, countryId, currencySymbol, onCancel, onCreated,
+}: {
+  ingredient: IngredientRow
+  countryId: number
+  currencySymbol: string
+  onCancel: () => void
+  onCreated: () => void | Promise<void>
+}) {
+  const api = useApi()
+  const [vendors,        setVendors]        = useState<VendorRow[]>([])
+  const [vendorsLoading, setVendorsLoading] = useState(false)
+  const [vendorId,       setVendorId]       = useState<string>('')
+  const [purchasePrice,  setPurchasePrice]  = useState<string>('')
+  const [qtyBase,        setQtyBase]        = useState<string>('1')
+  const [purchaseUnit,   setPurchaseUnit]   = useState<string>(ingredient.base_unit_abbr || '')
+  // Inline vendor creation
+  const [creatingVendor, setCreatingVendor] = useState(false)
+  const [newVendorName,  setNewVendorName]  = useState('')
+  const [saving,         setSaving]         = useState(false)
+  const [error,          setError]          = useState<string | null>(null)
+
+  useEffect(() => {
+    setVendorsLoading(true)
+    api.get(`/vendors?country_id=${countryId}`)
+      .then((d: VendorRow[]) => setVendors(d || []))
+      .catch(() => setVendors([]))
+      .finally(() => setVendorsLoading(false))
+  }, [api, countryId])
+
+  const submit = async () => {
+    setError(null)
+    let vendorIdNum = vendorId ? Number(vendorId) : null
+    // If the user typed a new vendor name, create it first.
+    if (creatingVendor) {
+      if (!newVendorName.trim()) { setError('Vendor name is required'); return }
+      try {
+        const v = await api.post('/vendors', {
+          name:       newVendorName.trim(),
+          country_id: countryId,
+        }) as VendorRow
+        vendorIdNum = v.id
+        setVendors(prev => [...prev, v])
+      } catch (err: unknown) {
+        setError((err as { message?: string })?.message || 'Failed to create vendor')
+        return
+      }
+    }
+    if (!vendorIdNum) { setError('Pick or create a vendor'); return }
+    const price = Number(purchasePrice)
+    if (!Number.isFinite(price) || price <= 0) { setError('Purchase price must be > 0'); return }
+    const qty = Number(qtyBase)
+    if (!Number.isFinite(qty) || qty <= 0) { setError('Qty in base units must be > 0'); return }
+    setSaving(true)
+    try {
+      await api.post('/price-quotes', {
+        ingredient_id:     ingredient.id,
+        vendor_id:         vendorIdNum,
+        purchase_price:    price,
+        qty_in_base_units: qty,
+        purchase_unit:     purchaseUnit.trim() || ingredient.base_unit_abbr || null,
+        is_active:         true,
+      })
+      await onCreated()
+    } catch (err: unknown) {
+      setError((err as { message?: string })?.message || 'Failed to save quote')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-amber-50/40 border-t border-amber-200 px-3 py-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+      <div className="text-[11px] font-semibold text-amber-800">
+        Add a price quote for <strong>{ingredient.name}</strong> in {currencySymbol ? <>{currencySymbol} </> : ''}this market
+      </div>
+
+      {/* Vendor picker / inline-create toggle */}
+      <Field label="Vendor" required>
+        {creatingVendor ? (
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              autoFocus
+              value={newVendorName}
+              onChange={e => setNewVendorName(e.target.value)}
+              placeholder="New vendor name…"
+            />
+            <button className="btn-ghost text-[11px] px-2" onClick={() => { setCreatingVendor(false); setNewVendorName('') }}>← Pick existing</button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <select
+              className="input flex-1 text-sm"
+              value={vendorId}
+              onChange={e => setVendorId(e.target.value)}
+              disabled={vendorsLoading}
+            >
+              <option value="">— Pick a vendor —</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <button className="btn-ghost text-[11px] px-2" onClick={() => setCreatingVendor(true)}>+ New</button>
+          </div>
+        )}
+      </Field>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Purchase price" required>
+          <CalcInput
+            className="input w-full font-mono text-sm"
+            value={purchasePrice}
+            onChange={setPurchasePrice}
+            placeholder="0.00"
+          />
+        </Field>
+        <Field label={`Qty in ${ingredient.base_unit_abbr || 'base unit'}`} required>
+          <CalcInput
+            className="input w-full font-mono text-sm"
+            value={qtyBase}
+            onChange={setQtyBase}
+            placeholder="1"
+          />
+        </Field>
+      </div>
+
+      <Field label="Purchase unit (label only)" hint="e.g. case, kg, bag">
+        <input
+          className="input w-full text-sm"
+          value={purchaseUnit}
+          onChange={e => setPurchaseUnit(e.target.value)}
+          placeholder={ingredient.base_unit_abbr || 'unit'}
+        />
+      </Field>
+
+      {error && <div className="text-[11px] text-rose-700 font-medium">{error}</div>}
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button className="btn-ghost text-xs" onClick={onCancel}>Cancel</button>
+        <button
+          className="btn-primary text-xs"
+          disabled={saving}
+          onClick={submit}
+        >{saving ? 'Saving…' : 'Save quote'}</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Manual sales item form — REMOVED (BACK-2639) ───────────────────────────
+// Manual sales items now use the same search-only picker as recipes /
+// ingredients / combos. Creating a new manual item is done from the Sales
+// Items module via the + Add new ↗ shortcut on the picker.
+
+// ── Edit-item side panel (Story 6 / BACK-2522) ─────────────────────────────
+// Opens when the user clicks an item row in the menu items list. Surfaces the
+// per-menu pricing overrides + per-market visibility for that sales item, in
+// two tabs. Save fires server roundtrip per row; markets toggle auto-saves.
+
+function EditItemPanel({
+  menu, msi, initialTab, width, onResize, onChanged, onOpenGroupEditor, onClose, onToast,
+}: {
+  menu: Menu
+  msi: MenuSalesItem
+  initialTab: 'details' | 'modifiers'
+  width: number
+  onResize: (w: number) => void
+  onChanged: () => void
+  onOpenGroupEditor: (modifierGroupId: number) => void
+  onClose: () => void
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+}) {
+  // BACK-2613 — two tabs (Details + Modifiers). Initial tab driven by what
+  // was clicked: row body → details; Modifiers button → modifiers.
+  const [tab, setTab] = useState<'details' | 'modifiers'>(initialTab)
+  // Keep the active tab in sync if the same panel re-opens to a different
+  // initial tab without unmounting (e.g. user clicks Modifiers after row).
+  useEffect(() => { setTab(initialTab) }, [initialTab])
+  const api = useApi()
+  // BACK-2569 — Pricing tab removed. Pricing is now edited inline on the
+  // items list (one editable cell per country-enabled price level).
+  // BACK-2549 — Markets tab also gone (managed from Sales Items only).
+  // BACK-2599 — panel now has TWO sections: Details (full sales-item edit)
+  // and Modifier groups.
+  const [allModGroups,    setAllModGroups]    = useState<ModifierGroup[]>([])
+  const [attachedGroups,  setAttachedGroups]  = useState<AttachedModifierGroup[]>([])
+  const [modsLoading,     setModsLoading]     = useState(false)
+  // BACK-2599 — full sales-item record for the Details section.
+  const [siFull, setSiFull] = useState<FullSalesItem | null>(null)
+  const [siLoading, setSiLoading] = useState(false)
+  const [categories, setCategories] = useState<CategoryRow[]>([])
+
+  // Load modifier-group catalog + the full sales item (which already returns
+  // attached modifier_groups in the same shape). One round-trip covers both.
+  const loadAll = useCallback(async () => {
+    setModsLoading(true)
+    setSiLoading(true)
+    try {
+      const [catalog, full, cats] = await Promise.all([
+        api.get('/modifier-groups') as Promise<ModifierGroup[]>,
+        api.get(`/sales-items/${msi.sales_item_id}`) as Promise<FullSalesItem>,
+        api.get('/categories?for_sales_items=true') as Promise<CategoryRow[]>,
+      ])
+      setAllModGroups(catalog || [])
+      setSiFull(full)
+      setAttachedGroups(full?.modifier_groups || [])
+      setCategories(cats || [])
+    } catch {
+      // surfaced via empty state
+    } finally {
+      setModsLoading(false)
+      setSiLoading(false)
+    }
+  }, [api, msi.sales_item_id])
+
+  useEffect(() => { loadAll() }, [loadAll])
+  // Back-compat alias used in the rollback path of the modifier-group save.
+  const loadMods = loadAll
+
+  // BACK-2599 — auto-save patch on the full sales item via PUT /sales-items/:id.
+  // Optimistic local merge + reload on failure. onChanged also bubbles up so
+  // the items list refreshes (name / image changes are visible right away).
+  const saveSiPatch = async (patch: Partial<FullSalesItem>) => {
+    if (!siFull) return
+    const next = { ...siFull, ...patch } as FullSalesItem
+    setSiFull(next)
+    try {
+      await api.put(`/sales-items/${siFull.id}`, {
+        name:          next.name,
+        display_name:  next.display_name,
+        category_id:   next.category_id,
+        description:   next.description,
+        recipe_id:     next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        combo_id:      next.combo_id,
+        manual_cost:   next.manual_cost,
+        image_url:     next.image_url,
+        sort_order:    next.sort_order,
+        qty:           next.qty,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      // Recover authoritative state on failure
+      loadAll()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save sales item', type: 'error' })
+    }
+  }
+
+  // Persist the attached set to the server. PUT replaces — we send the FULL
+  // list of {modifier_group_id, auto_show} entries.
+  const persistAttachedGroups = async (next: AttachedModifierGroup[]) => {
+    try {
+      await api.put(`/sales-items/${msi.sales_item_id}/modifier-groups`, {
+        groups: next.map(g => ({ modifier_group_id: g.modifier_group_id, auto_show: g.auto_show })),
+      })
+      setAttachedGroups(next)
+      onChanged()
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to update modifier groups'
+      onToast({ message: msg, type: 'error' })
+      // Reload to recover authoritative state
+      loadMods()
+    }
+  }
+
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-text-3 font-semibold truncate">{menu.name} <span className="text-text-3/60">›</span> Edit item</div>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span
+              className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center ${TYPE_BADGE[msi.item_type].cls}`}
+              title={TYPE_LABELS[msi.item_type]}
+            >{TYPE_BADGE[msi.item_type].label}</span>
+            <span className="font-semibold text-sm text-text-1 truncate">{msi.sales_item_name}</span>
+          </div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      {/* BACK-2613 — Details / Modifiers tabs */}
+      <div className="flex border-b border-border bg-surface-2/40">
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'details' ? 'text-accent border-b-2 border-accent bg-surface' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setTab('details')}
+        >Details</button>
+        <button
+          className={`flex-1 px-3 py-2 text-xs font-semibold transition-colors ${tab === 'modifiers' ? 'text-accent border-b-2 border-accent bg-surface' : 'text-text-3 hover:text-text-1'}`}
+          onClick={() => setTab('modifiers')}
+        >Modifiers{attachedGroups.length > 0 && <span className="ml-1 text-text-3 font-mono">({attachedGroups.length})</span>}</button>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto">
+        {tab === 'details' && (
+          <div className="p-3">
+            {siLoading || !siFull ? (
+              <div className="flex justify-center py-4"><Spinner /></div>
+            ) : (
+              <SalesItemDetailsForm
+                si={siFull}
+                categories={categories}
+                onCategoryCreated={(c) => setCategories(prev => [...prev, c])}
+                onPatch={saveSiPatch}
+                api={api}
+              />
+            )}
+          </div>
+        )}
+        {tab === 'modifiers' && (
+          <div className="p-3">
+        <ModifiersTab
+          allGroups={allModGroups}
+          attached={attachedGroups}
+          loading={modsLoading}
+          onDetach={(mgid) => persistAttachedGroups(attachedGroups.filter(g => g.modifier_group_id !== mgid))}
+          onToggleAutoShow={(mgid, autoShow) => persistAttachedGroups(
+            attachedGroups.map(g => g.modifier_group_id === mgid ? { ...g, auto_show: autoShow } : g)
+          )}
+          onAttach={(toAttach) => {
+            const merged = [
+              ...attachedGroups,
+              ...toAttach
+                .filter(g => !attachedGroups.some(a => a.modifier_group_id === g.id))
+                .map((g, idx) => ({
+                  modifier_group_id: g.id,
+                  sort_order: attachedGroups.length + idx,
+                  auto_show: g.default_auto_show,
+                  name: g.name,
+                  description: null,
+                  min_select: g.min_select,
+                  max_select: g.max_select,
+                } satisfies AttachedModifierGroup)),
+            ]
+            return persistAttachedGroups(merged)
+          }}
+          onCreated={(newGroup) => {
+            setAllModGroups(prev => [...prev, newGroup])
+            const merged = [...attachedGroups, {
+              modifier_group_id: newGroup.id,
+              sort_order: attachedGroups.length,
+              auto_show: newGroup.default_auto_show,
+              name: newGroup.name,
+              description: null,
+              min_select: newGroup.min_select,
+              max_select: newGroup.max_select,
+            } satisfies AttachedModifierGroup]
+            return persistAttachedGroups(merged)
+          }}
+          onReorder={(newOrder) => persistAttachedGroups(newOrder)}
+          onOpenEditor={(mgid) => onOpenGroupEditor(mgid)}
+        />
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// PricingTab + PriceLevelRow removed in BACK-2569 — pricing now edits inline
+// on the items list via the PriceCell component.
+
+// ── Modifier-group editor panel (BACK-2585 / BACK-2587) ────────────────────
+// Single-purpose panel that opens when the user clicks a modifier group in
+// the attached list OR in the expanded inline view. Lets them edit group
+// settings + manage options end-to-end (CRUD + drag-drop reorder).
+
+interface FullModifierOption {
+  id: number
+  modifier_group_id: number
+  name: string
+  display_name: string | null
+  item_type: 'recipe' | 'ingredient' | 'manual'
+  recipe_id: number | null
+  ingredient_id: number | null
+  manual_cost: number | null
+  price_addon: number
+  qty: number
+  sort_order: number
+  image_url: string | null
+  recipe_name?: string | null
+  ingredient_name?: string | null
+}
+
+interface FullModifierGroup {
+  id: number
+  name: string
+  display_name: string | null
+  description: string | null
+  min_select: number
+  max_select: number
+  allow_repeat_selection: boolean
+  default_auto_show: boolean
+  options: FullModifierOption[]
+}
+
+function ModifierGroupEditorPanel({
+  menu, msi, modifierGroupId, width, onResize, onBack, onClose, onChanged, onToast,
+}: {
+  menu: Menu
+  msi: MenuSalesItem
+  modifierGroupId: number
+  width: number
+  onResize: (w: number) => void
+  onBack: () => void
+  onClose: () => void
+  onChanged: () => void
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+}) {
+  const api = useApi()
+  const [group, setGroup] = useState<FullModifierGroup | null>(null)
+  const [loading, setLoading] = useState(true)
+  // Catalogs for option pickers — loaded lazily.
+  const [recipes, setRecipes] = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  // Drag-drop reorder state.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // Per-option saving spinner.
+  const [savingOpts, setSavingOpts] = useState<Set<number>>(new Set())
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api.get(`/modifier-groups/${modifierGroupId}`) as FullModifierGroup
+      setGroup(data)
+    } catch {
+      onToast({ message: 'Failed to load modifier group', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [api, modifierGroupId, onToast])
+
+  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    if (recipes === null) {
+      api.get('/recipes').then((d: RecipeRow[]) => setRecipes(d || [])).catch(() => setRecipes([]))
+    }
+    if (ingredients === null) {
+      api.get('/ingredients').then((d: IngredientRow[]) => setIngredients(d || [])).catch(() => setIngredients([]))
+    }
+  }, [api, recipes, ingredients])
+
+  // ── Group settings save (debounced via blur) ──────────────────────────────
+  const saveGroupSettings = async (patch: Partial<FullModifierGroup>) => {
+    if (!group) return
+    const next = { ...group, ...patch }
+    setGroup(next)
+    try {
+      await api.put(`/modifier-groups/${group.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        description: next.description,
+        min_select: next.min_select,
+        max_select: next.max_select,
+        allow_repeat_selection: next.allow_repeat_selection,
+        default_auto_show: next.default_auto_show,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save settings', type: 'error' })
+    }
+  }
+
+  // ── Option CRUD ───────────────────────────────────────────────────────────
+  const addOption = async () => {
+    if (!group) return
+    const nextSort = group.options.length
+    try {
+      const created = await api.post(`/modifier-groups/${group.id}/options`, {
+        name: `Option ${nextSort + 1}`,
+        item_type: 'manual',
+        manual_cost: 0,
+        price_addon: 0,
+        qty: 1,
+        sort_order: nextSort,
+      }) as FullModifierOption
+      setGroup({ ...group, options: [...group.options, created] })
+      onChanged()
+    } catch (err: unknown) {
+      onToast({ message: (err as { message?: string })?.message || 'Failed to add option', type: 'error' })
+    }
+  }
+
+  const saveOption = async (opt: FullModifierOption, patch: Partial<FullModifierOption>) => {
+    if (!group) return
+    const next = { ...opt, ...patch }
+    // Optimistic
+    setGroup({ ...group, options: group.options.map(o => o.id === opt.id ? next : o) })
+    setSavingOpts(prev => { const s = new Set(prev); s.add(opt.id); return s })
+    try {
+      await api.put(`/modifier-groups/${group.id}/options/${opt.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        item_type: next.item_type,
+        recipe_id: next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        manual_cost: next.manual_cost,
+        price_addon: next.price_addon,
+        qty: next.qty,
+        sort_order: next.sort_order,
+        image_url: next.image_url,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save option', type: 'error' })
+    } finally {
+      setSavingOpts(prev => { const s = new Set(prev); s.delete(opt.id); return s })
+    }
+  }
+
+  const deleteOption = async (opt: FullModifierOption) => {
+    if (!group) return
+    const before = group
+    setGroup({ ...group, options: group.options.filter(o => o.id !== opt.id) })
+    try {
+      await api.delete(`/modifier-groups/${group.id}/options/${opt.id}`)
+      onChanged()
+    } catch (err: unknown) {
+      setGroup(before)
+      onToast({ message: (err as { message?: string })?.message || 'Failed to delete option', type: 'error' })
+    }
+  }
+
+  const reorderOptions = async (sourceId: number, targetId: number) => {
+    if (!group || sourceId === targetId) return
+    const fromIdx = group.options.findIndex(o => o.id === sourceId)
+    const toIdx   = group.options.findIndex(o => o.id === targetId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const next = [...group.options]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    const reindexed = next.map((o, i) => ({ ...o, sort_order: i }))
+    setGroup({ ...group, options: reindexed })
+    try {
+      await api.post(`/modifier-groups/${group.id}/options/reorder`, { order: reindexed.map(o => o.id) })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to reorder', type: 'error' })
+    }
+  }
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <button
+            type="button"
+            className="text-[10px] uppercase tracking-wide text-text-3 hover:text-accent font-semibold flex items-center gap-1"
+            onClick={onBack}
+          >‹ {menu.name} <span className="text-text-3/60">›</span> {msi.sales_item_name}</button>
+          <div className="font-semibold text-sm text-text-1 truncate mt-0.5">
+            Modifier group: {group?.name || '…'}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {loading || !group ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : (
+          <>
+            {/* Settings */}
+            <div className="rounded-lg border border-border bg-surface-2/30 px-3 py-3 space-y-2">
+              <div className="text-xs font-semibold text-text-2">Settings</div>
+              <Field label="Name" required>
+                <input
+                  className="input w-full text-sm"
+                  defaultValue={group.name}
+                  onBlur={(e) => { if (e.target.value.trim() !== group.name) saveGroupSettings({ name: e.target.value.trim() }) }}
+                />
+              </Field>
+              <Field label="Description">
+                <input
+                  className="input w-full text-sm"
+                  defaultValue={group.description || ''}
+                  onBlur={(e) => { if ((e.target.value || null) !== group.description) saveGroupSettings({ description: e.target.value || null }) }}
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Min select">
+                  <input
+                    className="input w-full font-mono text-sm" type="number" min={0}
+                    defaultValue={group.min_select}
+                    onBlur={(e) => { const n = Math.max(0, Math.floor(Number(e.target.value)||0)); if (n !== group.min_select) saveGroupSettings({ min_select: n }) }}
+                  />
+                </Field>
+                <Field label="Max select">
+                  <input
+                    className="input w-full font-mono text-sm" type="number" min={1}
+                    defaultValue={group.max_select}
+                    onBlur={(e) => { const n = Math.max(1, Math.floor(Number(e.target.value)||1)); if (n !== group.max_select) saveGroupSettings({ max_select: n }) }}
+                  />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={group.allow_repeat_selection}
+                  onChange={(e) => saveGroupSettings({ allow_repeat_selection: e.target.checked })} />
+                Allow the same option to be picked multiple times
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={group.default_auto_show}
+                  onChange={(e) => saveGroupSettings({ default_auto_show: e.target.checked })} />
+                Show inline by default (vs. behind a button)
+              </label>
+              <div className="text-[10px] text-text-3 italic">Settings auto-save on blur.</div>
+            </div>
+
+            {/* Options */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-text-2">Options{group.options.length > 0 && <span className="ml-1 text-text-3 font-mono">({group.options.length})</span>}</div>
+                <button className="btn-primary text-xs px-2.5 py-1" onClick={addOption}>+ Add option</button>
+              </div>
+              {group.options.length === 0 ? (
+                <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded">No options yet — click + Add option.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {group.options.map(o => (
+                    <li
+                      key={o.id}
+                      draggable
+                      onDragStart={() => setDragId(o.id)}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverId(o.id) }}
+                      onDragLeave={() => setDragOverId(null)}
+                      onDrop={() => { if (dragId !== null) reorderOptions(dragId, o.id); setDragId(null); setDragOverId(null) }}
+                      onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                      className={`rounded border bg-surface-2/30 px-2.5 py-2 cursor-grab active:cursor-grabbing transition-colors ${
+                        dragOverId === o.id && dragId !== o.id ? 'border-accent border-t-2' : 'border-border'
+                      } ${dragId === o.id ? 'opacity-40' : ''} ${savingOpts.has(o.id) ? 'ring-1 ring-accent/30' : ''}`}
+                    >
+                      <ModifierOptionEditor
+                        option={o}
+                        recipes={recipes}
+                        ingredients={ingredients}
+                        onChange={(patch) => saveOption(o, patch)}
+                        onDelete={() => deleteOption(o)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// Inline editor for a single modifier option.
+function ModifierOptionEditor({
+  option, recipes, ingredients, onChange, onDelete,
+}: {
+  option: FullModifierOption
+  recipes: RecipeRow[] | null
+  ingredients: IngredientRow[] | null
+  onChange: (patch: Partial<FullModifierOption>) => void | Promise<void>
+  onDelete: () => void
+}) {
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+
+  return (
+    <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2">
+        <span className="text-text-3 text-xs">⠿</span>
+        <input
+          className="input flex-1 text-sm"
+          defaultValue={option.name}
+          onBlur={(e) => { if (e.target.value.trim() !== option.name) onChange({ name: e.target.value.trim() }) }}
+          placeholder="Option name"
+        />
+        <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
+      </div>
+      <div className="flex items-center gap-3 text-[11px] text-text-2">
+        {(['recipe','ingredient','manual'] as const).map(t => (
+          <label key={t} className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name={`opt-type-${option.id}`} checked={option.item_type === t}
+              onChange={() => onChange({ item_type: t, recipe_id: null, ingredient_id: null, manual_cost: t === 'manual' ? 0 : null })} />
+            <span className="capitalize">{t}</span>
+          </label>
+        ))}
+      </div>
+
+      {option.item_type === 'recipe' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.recipe_id ? (option.recipe_name || `Recipe #${option.recipe_id}`) : recipeSearch}
+            onChange={(e) => setRecipeSearch(e.target.value)}
+            onFocus={() => { if (option.recipe_id) onChange({ recipe_id: null }); setRecipeSearch('') }}
+            placeholder="Search recipe…"
+          />
+          {!option.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ recipe_id: r.id, recipe_name: r.name, name: option.name || r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {option.item_type === 'ingredient' && (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={option.ingredient_id ? (option.ingredient_name || `Ingredient #${option.ingredient_id}`) : ingredientSearch}
+            onChange={(e) => setIngredientSearch(e.target.value)}
+            onFocus={() => { if (option.ingredient_id) onChange({ ingredient_id: null }); setIngredientSearch('') }}
+            placeholder="Search ingredient…"
+          />
+          {!option.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ ingredient_id: i.id, ingredient_name: i.name, name: option.name || i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {option.item_type === 'manual' && (
+        <input
+          className="input w-full text-xs font-mono"
+          defaultValue={option.manual_cost ?? 0}
+          onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.manual_cost)) onChange({ manual_cost: n }) }}
+          placeholder="Manual cost (e.g. 0.25)"
+        />
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-[10px] text-text-3">
+          <span className="block">Price add-on</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.price_addon}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.price_addon)) onChange({ price_addon: n }) }}
+          />
+        </label>
+        <label className="text-[10px] text-text-3">
+          <span className="block">Qty</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.qty}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0 && n !== Number(option.qty)) onChange({ qty: n }) }}
+          />
+        </label>
+      </div>
+      <ImageUpload
+        label="Image"
+        value={option.image_url}
+        onChange={(url) => onChange({ image_url: url })}
+        formKey="modifier_option"
+      />
+    </div>
+  )
+}
+
+// ── Combo step editor panel (BACK-2587) ────────────────────────────────────
+// Mirror of ModifierGroupEditorPanel but for a combo step. Settings include
+// auto_select. Options point at the same recipe / ingredient / manual model
+// but persist into mcogs_combo_step_options.
+
+interface FullComboStepOption {
+  id: number
+  combo_step_id: number
+  name: string
+  display_name: string | null
+  // BUG-1185 — 'sales_item' is a real combo step option type (see
+  // mcogs_combo_step_options.item_type CHECK constraint). The MenuBuilder
+  // editor now surfaces it as a fourth picker.
+  item_type: 'recipe' | 'ingredient' | 'manual' | 'sales_item'
+  recipe_id: number | null
+  ingredient_id: number | null
+  sales_item_id: number | null
+  manual_cost: number | null
+  price_addon: number
+  qty: number
+  sort_order: number
+}
+
+interface FullComboStep {
+  id: number
+  combo_id: number
+  name: string
+  display_name: string | null
+  description: string | null
+  sort_order: number
+  min_select: number
+  max_select: number
+  allow_repeat: boolean
+  auto_select: boolean
+  options: FullComboStepOption[]
+}
+
+function ComboStepEditorPanel({
+  menu, msi, comboStepId, width, onResize, onBack, onClose, onChanged, onToast,
+}: {
+  menu: Menu
+  msi: MenuSalesItem
+  comboStepId: number
+  width: number
+  onResize: (w: number) => void
+  onBack: () => void
+  onClose: () => void
+  onChanged: () => void
+  onToast: (t: { message: string; type?: 'success' | 'error' }) => void
+}) {
+  const api = useApi()
+  const [step, setStep] = useState<FullComboStep | null>(null)
+  const [comboId, setComboId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [recipes, setRecipes] = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  // BUG-1185 — sales_item type option needs a picker too. Lazy-loaded.
+  const [salesItems, setSalesItems] = useState<SalesItemRow[] | null>(null)
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  const [savingOpts, setSavingOpts] = useState<Set<number>>(new Set())
+
+  // Resolve combo_id from the parent SI, then fetch the full combo and pick
+  // out the matching step.
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const si = await api.get(`/sales-items/${msi.sales_item_id}`) as { combo_id: number | null }
+      if (!si.combo_id) { setStep(null); return }
+      setComboId(si.combo_id)
+      const combo = await api.get(`/combos/${si.combo_id}`) as { steps: FullComboStep[] }
+      const found = combo.steps?.find(s => s.id === comboStepId) || null
+      setStep(found)
+    } catch {
+      onToast({ message: 'Failed to load combo step', type: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [api, msi.sales_item_id, comboStepId, onToast])
+
+  useEffect(() => { reload() }, [reload])
+  useEffect(() => {
+    if (recipes === null)     api.get('/recipes').then((d: RecipeRow[]) => setRecipes(d || [])).catch(() => setRecipes([]))
+    if (ingredients === null) api.get('/ingredients').then((d: IngredientRow[]) => setIngredients(d || [])).catch(() => setIngredients([]))
+    if (salesItems === null)  api.get('/sales-items').then((d: SalesItemRow[]) => setSalesItems(d || [])).catch(() => setSalesItems([]))
+  }, [api, recipes, ingredients, salesItems])
+
+  const saveStepSettings = async (patch: Partial<FullComboStep>) => {
+    if (!step || !comboId) return
+    const next = { ...step, ...patch }
+    setStep(next)
+    try {
+      await api.put(`/combos/${comboId}/steps/${step.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        description: next.description,
+        sort_order: next.sort_order,
+        min_select: next.min_select,
+        max_select: next.max_select,
+        allow_repeat: next.allow_repeat,
+        auto_select: next.auto_select,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save settings', type: 'error' })
+    }
+  }
+
+  const addOption = async () => {
+    if (!step || !comboId) return
+    try {
+      const created = await api.post(`/combos/${comboId}/steps/${step.id}/options`, {
+        name: `Option ${step.options.length + 1}`,
+        item_type: 'manual',
+        manual_cost: 0,
+        price_addon: 0,
+        qty: 1,
+        sort_order: step.options.length,
+      }) as FullComboStepOption
+      setStep({ ...step, options: [...step.options, created] })
+      onChanged()
+    } catch (err: unknown) {
+      onToast({ message: (err as { message?: string })?.message || 'Failed to add option', type: 'error' })
+    }
+  }
+
+  const saveOption = async (opt: FullComboStepOption, patch: Partial<FullComboStepOption>) => {
+    if (!step || !comboId) return
+    const next = { ...opt, ...patch }
+    setStep({ ...step, options: step.options.map(o => o.id === opt.id ? next : o) })
+    setSavingOpts(prev => { const s = new Set(prev); s.add(opt.id); return s })
+    try {
+      await api.put(`/combos/${comboId}/steps/${step.id}/options/${opt.id}`, {
+        name: next.name,
+        display_name: next.display_name,
+        item_type: next.item_type,
+        recipe_id: next.recipe_id,
+        ingredient_id: next.ingredient_id,
+        sales_item_id: next.sales_item_id,
+        manual_cost: next.manual_cost,
+        price_addon: next.price_addon,
+        qty: next.qty,
+        sort_order: next.sort_order,
+      })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to save option', type: 'error' })
+    } finally {
+      setSavingOpts(prev => { const s = new Set(prev); s.delete(opt.id); return s })
+    }
+  }
+
+  const deleteOption = async (opt: FullComboStepOption) => {
+    if (!step || !comboId) return
+    const before = step
+    setStep({ ...step, options: step.options.filter(o => o.id !== opt.id) })
+    try {
+      await api.delete(`/combos/${comboId}/steps/${step.id}/options/${opt.id}`)
+      onChanged()
+    } catch (err: unknown) {
+      setStep(before)
+      onToast({ message: (err as { message?: string })?.message || 'Failed to delete option', type: 'error' })
+    }
+  }
+
+  const reorderOptions = async (sourceId: number, targetId: number) => {
+    if (!step || !comboId || sourceId === targetId) return
+    const fromIdx = step.options.findIndex(o => o.id === sourceId)
+    const toIdx   = step.options.findIndex(o => o.id === targetId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const next = [...step.options]
+    const [moved] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, moved)
+    const reindexed = next.map((o, i) => ({ ...o, sort_order: i }))
+    setStep({ ...step, options: reindexed })
+    try {
+      await api.post(`/combos/${comboId}/steps/${step.id}/options/reorder`, { order: reindexed.map(o => o.id) })
+      onChanged()
+    } catch (err: unknown) {
+      reload()
+      onToast({ message: (err as { message?: string })?.message || 'Failed to reorder', type: 'error' })
+    }
+  }
+
+  return (
+    <aside
+      className="shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden relative"
+      style={{ width: `${width}px` }}
+    >
+      <ResizeHandle width={width} onResize={onResize} />
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="min-w-0">
+          <button
+            type="button"
+            className="text-[10px] uppercase tracking-wide text-text-3 hover:text-accent font-semibold flex items-center gap-1"
+            onClick={onBack}
+          >‹ {menu.name} <span className="text-text-3/60">›</span> {msi.sales_item_name}</button>
+          <div className="font-semibold text-sm text-text-1 truncate mt-0.5">
+            Combo step: {step?.name || '…'}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-text-3 hover:text-text-1 text-sm px-2" title="Close (Esc)">✕</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {loading || !step ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : (
+          <>
+            <div className="rounded-lg border border-border bg-surface-2/30 px-3 py-3 space-y-2">
+              <div className="text-xs font-semibold text-text-2">Settings</div>
+              <Field label="Name" required>
+                <input className="input w-full text-sm" defaultValue={step.name}
+                  onBlur={(e) => { if (e.target.value.trim() !== step.name) saveStepSettings({ name: e.target.value.trim() }) }} />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Min select">
+                  <input className="input w-full font-mono text-sm" type="number" min={0}
+                    defaultValue={step.min_select}
+                    onBlur={(e) => { const n = Math.max(0, Math.floor(Number(e.target.value)||0)); if (n !== step.min_select) saveStepSettings({ min_select: n }) }} />
+                </Field>
+                <Field label="Max select">
+                  <input className="input w-full font-mono text-sm" type="number" min={1}
+                    defaultValue={step.max_select}
+                    onBlur={(e) => { const n = Math.max(1, Math.floor(Number(e.target.value)||1)); if (n !== step.max_select) saveStepSettings({ max_select: n }) }} />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={step.auto_select}
+                  onChange={(e) => saveStepSettings({ auto_select: e.target.checked })} />
+                Auto-advance when only one option
+              </label>
+              <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+                <input type="checkbox" checked={step.allow_repeat}
+                  onChange={(e) => saveStepSettings({ allow_repeat: e.target.checked })} />
+                Allow same option picked multiple times
+              </label>
+              <div className="text-[10px] text-text-3 italic">Settings auto-save on blur.</div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-text-2">Options{step.options.length > 0 && <span className="ml-1 text-text-3 font-mono">({step.options.length})</span>}</div>
+                <button className="btn-primary text-xs px-2.5 py-1" onClick={addOption}>+ Add option</button>
+              </div>
+              {step.options.length === 0 ? (
+                <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded">No options yet — click + Add option.</div>
+              ) : (
+                <ul className="space-y-2">
+                  {step.options.map(o => (
+                    <li
+                      key={o.id}
+                      draggable
+                      onDragStart={() => setDragId(o.id)}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverId(o.id) }}
+                      onDragLeave={() => setDragOverId(null)}
+                      onDrop={() => { if (dragId !== null) reorderOptions(dragId, o.id); setDragId(null); setDragOverId(null) }}
+                      onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                      className={`rounded border bg-surface-2/30 px-2.5 py-2 cursor-grab active:cursor-grabbing transition-colors ${
+                        dragOverId === o.id && dragId !== o.id ? 'border-accent border-t-2' : 'border-border'
+                      } ${dragId === o.id ? 'opacity-40' : ''} ${savingOpts.has(o.id) ? 'ring-1 ring-accent/30' : ''}`}
+                    >
+                      <ComboStepOptionEditor
+                        option={o}
+                        recipes={recipes}
+                        ingredients={ingredients}
+                        salesItems={salesItems}
+                        onChange={(patch) => saveOption(o, patch)}
+                        onDelete={() => deleteOption(o)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function ComboStepOptionEditor({
+  option, recipes, ingredients, salesItems, onChange, onDelete,
+}: {
+  option: FullComboStepOption
+  recipes: RecipeRow[] | null
+  ingredients: IngredientRow[] | null
+  salesItems: SalesItemRow[] | null
+  onChange: (patch: Partial<FullComboStepOption>) => void | Promise<void>
+  onDelete: () => void
+}) {
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+  const [salesItemSearch, setSalesItemSearch] = useState('')
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+  const filteredSalesItems = useMemo(() => {
+    const q = salesItemSearch.trim().toLowerCase()
+    // Combos linked back through a sales item are excluded — would create a
+    // cycle and the cost engine currently treats combo-wrapped sales items
+    // as zero anyway (see resolveOptionCost in cogs.js).
+    return (salesItems || []).filter(s => s.item_type !== 'combo' && (!q || s.name.toLowerCase().includes(q))).slice(0, 12)
+  }, [salesItems, salesItemSearch])
+
+  // BUG-1185 — type selector promoted to a 4-button segmented control at the
+  // top of the form, with 'sales_item' surfaced as a real option (it was
+  // missing entirely from this editor even though the data model has long
+  // supported it).
+  const TYPES = ['recipe', 'ingredient', 'manual', 'sales_item'] as const
+  const TYPE_LABEL: Record<typeof TYPES[number], string> = {
+    recipe: 'Recipe', ingredient: 'Ingredient', manual: 'Manual', sales_item: 'Sales Item',
+  }
+  const switchType = (t: typeof TYPES[number]) => {
+    if (option.item_type === t) return
+    onChange({
+      item_type: t,
+      recipe_id: null,
+      ingredient_id: null,
+      sales_item_id: null,
+      manual_cost: t === 'manual' ? 0 : null,
+    })
+    setRecipeSearch(''); setIngredientSearch(''); setSalesItemSearch('')
+  }
+
+  return (
+    <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      {/* BUG-1185 — prominent type selector first */}
+      <div className="bg-accent-dim/30 border border-accent/30 rounded p-1.5 -mx-0.5">
+        <div className="text-[10px] font-semibold text-text-1 mb-1 uppercase tracking-wide">Option type</div>
+        <div className="grid grid-cols-4 gap-1">
+          {TYPES.map(t => {
+            const active = option.item_type === t
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => switchType(t)}
+                className={`text-[10px] font-medium px-1 py-1 rounded transition-colors border ${
+                  active
+                    ? 'bg-accent text-white border-accent'
+                    : 'bg-white text-text-2 border-border hover:border-accent hover:text-accent'
+                }`}
+              >{TYPE_LABEL[t]}</button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="text-text-3 text-xs">⠿</span>
+        <input
+          className="input flex-1 text-sm"
+          defaultValue={option.name}
+          onBlur={(e) => { if (e.target.value.trim() !== option.name) onChange({ name: e.target.value.trim() }) }}
+          placeholder="Option name"
+        />
+        <button className="text-text-3 hover:text-red-600 text-xs" onClick={onDelete} title="Delete option">✕</button>
+      </div>
+      {option.item_type === 'recipe' && (() => {
+        // Resolve display name from the loaded recipes list. While the list
+        // is still null (initial fetch), fall back to "Recipe #N" so the
+        // input isn't empty — but once recipes load the name takes over.
+        const linkedRecipe = option.recipe_id != null
+          ? (recipes || []).find(r => r.id === option.recipe_id)
+          : null
+        const displayValue = option.recipe_id
+          ? (linkedRecipe?.name ?? (recipes ? `Recipe #${option.recipe_id}` : '…'))
+          : recipeSearch
+        return (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={displayValue}
+            onChange={(e) => setRecipeSearch(e.target.value)}
+            onFocus={() => { if (option.recipe_id) onChange({ recipe_id: null }); setRecipeSearch('') }}
+            placeholder="Search recipe…"
+          />
+          {!option.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ recipe_id: r.id, name: option.name || r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </div>
+        )
+      })()}
+      {option.item_type === 'ingredient' && (() => {
+        const linkedIng = option.ingredient_id != null
+          ? (ingredients || []).find(i => i.id === option.ingredient_id)
+          : null
+        const displayValue = option.ingredient_id
+          ? (linkedIng?.name ?? (ingredients ? `Ingredient #${option.ingredient_id}` : '…'))
+          : ingredientSearch
+        return (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={displayValue}
+            onChange={(e) => setIngredientSearch(e.target.value)}
+            onFocus={() => { if (option.ingredient_id) onChange({ ingredient_id: null }); setIngredientSearch('') }}
+            placeholder="Search ingredient…"
+          />
+          {!option.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ ingredient_id: i.id, name: option.name || i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+        )
+      })()}
+      {option.item_type === 'sales_item' && (() => {
+        const linkedSi = option.sales_item_id != null
+          ? (salesItems || []).find(s => s.id === option.sales_item_id)
+          : null
+        const displayValue = option.sales_item_id
+          ? (linkedSi?.name ?? (salesItems ? `Sales Item #${option.sales_item_id}` : '…'))
+          : salesItemSearch
+        return (
+        <div>
+          <input
+            className="input w-full text-xs"
+            value={displayValue}
+            onChange={(e) => setSalesItemSearch(e.target.value)}
+            onFocus={() => { if (option.sales_item_id) onChange({ sales_item_id: null }); setSalesItemSearch('') }}
+            placeholder="Search sales item…"
+          />
+          {!option.sales_item_id && salesItemSearch && (
+            <div className="mt-1 max-h-32 overflow-y-auto rounded border border-border">
+              {filteredSalesItems.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredSalesItems.map(s => (
+                <button key={s.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onChange({ sales_item_id: s.id, name: option.name || s.name }); setSalesItemSearch('') }}
+                >{s.name} <span className="text-text-3">· {s.item_type}</span></button>
+              ))}
+            </div>
+          )}
+        </div>
+        )
+      })()}
+      {option.item_type === 'manual' && (
+        <input
+          className="input w-full text-xs font-mono"
+          defaultValue={option.manual_cost ?? 0}
+          onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.manual_cost)) onChange({ manual_cost: n }) }}
+          placeholder="Manual cost"
+        />
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-[10px] text-text-3">
+          <span className="block">Price add-on</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.price_addon}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n !== Number(option.price_addon)) onChange({ price_addon: n }) }}
+          />
+        </label>
+        <label className="text-[10px] text-text-3">
+          <span className="block">Qty</span>
+          <input className="input w-full text-xs font-mono"
+            defaultValue={option.qty}
+            onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0 && n !== Number(option.qty)) onChange({ qty: n }) }}
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
+// ── Sales-item details form (BACK-2599) ────────────────────────────────────
+// Surfaces every field on mcogs_sales_items so the operator can edit a sales
+// item end-to-end without leaving Menu Builder. Auto-saves on blur for text
+// fields and on change for everything else.
+
+function SalesItemDetailsForm({
+  si, categories, onCategoryCreated, onPatch, api,
+}: {
+  si: FullSalesItem
+  categories: CategoryRow[]
+  onCategoryCreated: (c: CategoryRow) => void
+  onPatch: (patch: Partial<FullSalesItem>) => void | Promise<void>
+  api: {
+    post: (p: string, b: unknown) => Promise<unknown>;
+    get: (p: string) => Promise<unknown>;
+  }
+}) {
+  // Recipe / ingredient pickers — lazy-loaded on demand for the relevant types.
+  const [recipes,     setRecipes]     = useState<RecipeRow[] | null>(null)
+  const [ingredients, setIngredients] = useState<IngredientRow[] | null>(null)
+  const [recipeSearch, setRecipeSearch] = useState('')
+  const [ingredientSearch, setIngredientSearch] = useState('')
+  // BACK-2600 originally opened a quick-edit modal here; replaced with a
+  // direct link to the Recipes / Inventory module (opens in a new tab) so
+  // the operator gets the full editor instead of a partial form.
+
+  useEffect(() => {
+    if (si.item_type === 'recipe' && recipes === null) {
+      api.get('/recipes').then((d) => setRecipes((d as RecipeRow[]) || [])).catch(() => setRecipes([]))
+    }
+    if (si.item_type === 'ingredient' && ingredients === null) {
+      api.get('/ingredients').then((d) => setIngredients((d as IngredientRow[]) || [])).catch(() => setIngredients([]))
+    }
+  }, [api, si.item_type, recipes, ingredients])
+
+  const filteredRecipes = useMemo(() => {
+    const q = recipeSearch.trim().toLowerCase()
+    return (recipes || []).filter(r => !q || r.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [recipes, recipeSearch])
+  const filteredIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase()
+    return (ingredients || []).filter(i => !q || i.name.toLowerCase().includes(q)).slice(0, 12)
+  }, [ingredients, ingredientSearch])
+
+  // BACK-2614 — type change. Switching wipes the previous linked-entity ids
+  // so we never end up with a recipe-typed sales item that still carries an
+  // ingredient_id, etc. Manual type sets a default 0 cost so the field is not
+  // null on save.
+  const changeType = (newType: 'recipe' | 'ingredient' | 'manual' | 'combo') => {
+    if (newType === si.item_type) return
+    onPatch({
+      item_type:     newType,
+      recipe_id:     null,
+      ingredient_id: null,
+      combo_id:      newType === 'combo' ? si.combo_id : null,
+      manual_cost:   newType === 'manual' ? (si.manual_cost ?? 0) : null,
+    })
+  }
+  const TYPES: Array<'recipe' | 'ingredient' | 'manual' | 'combo'> = ['recipe', 'ingredient', 'manual', 'combo']
+
+  // BACK-2626 — type field guarded against accidental changes. Disabled
+  // dropdown by default; user clicks Edit ✎ to enable it. Re-locks after
+  // the change is committed so a second accidental click does not wipe.
+  const [typeUnlocked, setTypeUnlocked] = useState(false)
+
+  return (
+    <div className="space-y-3">
+      {/* BACK-2614 / BACK-2626 — Type select. Locked by default, Edit ✎
+          unlocks it; selecting a different value commits the change AND
+          re-locks. Prevents the previous radio-row from wiping linked
+          recipe/ingredient ids on accidental clicks. */}
+      <Field label="Type">
+        <div className="flex gap-2">
+          <select
+            className="input flex-1 text-sm"
+            value={si.item_type}
+            disabled={!typeUnlocked}
+            onChange={(e) => {
+              const next = e.target.value as 'recipe' | 'ingredient' | 'manual' | 'combo'
+              changeType(next)
+              setTypeUnlocked(false)  // re-lock after commit
+            }}
+          >
+            {TYPES.map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+          </select>
+          <button
+            type="button"
+            className={`text-xs font-semibold px-3 py-1.5 rounded border shrink-0 transition-colors ${
+              typeUnlocked
+                ? 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                : 'bg-surface text-text-2 border-border hover:border-accent/40'
+            }`}
+            onClick={() => setTypeUnlocked(v => !v)}
+            title={typeUnlocked
+              ? 'Cancel — keep current type'
+              : 'Unlock — changing the type clears the linked recipe / ingredient / combo'}
+          >{typeUnlocked ? 'Cancel' : 'Edit ✎'}</button>
+        </div>
+        {typeUnlocked && (
+          <p className="text-[11px] text-amber-700 mt-1">
+            Changing the type clears the linked {si.item_type === 'recipe' ? 'recipe' : si.item_type === 'ingredient' ? 'ingredient' : si.item_type === 'combo' ? 'combo' : 'manual cost'}.
+          </p>
+        )}
+      </Field>
+
+      {/* Image — always editable */}
+      <Field label="Image">
+        <ImageUpload
+          value={si.image_url}
+          onChange={(url) => onPatch({ image_url: url })}
+          formKey={`sales-item-${si.item_type}`}
+        />
+      </Field>
+
+      <Field label="Name" required>
+        <input
+          className="input w-full text-sm"
+          defaultValue={si.name}
+          onBlur={(e) => { if (e.target.value.trim() !== si.name) onPatch({ name: e.target.value.trim() }) }}
+        />
+      </Field>
+
+      <Field label="Display name" hint="Shown on menus / receipts. Falls back to Name if blank.">
+        <input
+          className="input w-full text-sm"
+          defaultValue={si.display_name || ''}
+          onBlur={(e) => { const v = e.target.value || null; if (v !== si.display_name) onPatch({ display_name: v }) }}
+        />
+      </Field>
+
+      <Field label="Category">
+        <CategoryPicker
+          value={si.category_id != null ? String(si.category_id) : ''}
+          onChange={(idStr) => onPatch({ category_id: idStr ? Number(idStr) : null })}
+          categories={categories}
+          scope="for_sales_items"
+          onCategoryCreated={(c) => { onCategoryCreated(c); onPatch({ category_id: c.id }) }}
+          apiPost={(p, b) => api.post(p, b)}
+        />
+      </Field>
+
+      <Field label="Description">
+        <textarea
+          className="input w-full text-sm"
+          rows={2}
+          defaultValue={si.description || ''}
+          onBlur={(e) => { const v = e.target.value || null; if (v !== si.description) onPatch({ description: v }) }}
+        />
+      </Field>
+
+      {/* Type-specific link (changeable) */}
+      {si.item_type === 'manual' && (
+        <Field label="Manual cost" hint="Currency follows the menu's market.">
+          <CalcInput
+            className="input w-full text-sm font-mono"
+            value={si.manual_cost == null ? '' : String(si.manual_cost)}
+            onChange={(v) => {
+              const n = v === '' ? null : Number(v)
+              if (Number.isFinite(n) || n === null) onPatch({ manual_cost: n })
+            }}
+            placeholder="0.00"
+          />
+        </Field>
+      )}
+
+      {si.item_type === 'recipe' && (
+        <Field label="Linked recipe">
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              value={si.recipe_id ? (si.recipe_name || `Recipe #${si.recipe_id}`) : recipeSearch}
+              onChange={(e) => { setRecipeSearch(e.target.value); if (si.recipe_id) onPatch({ recipe_id: null }) }}
+              placeholder="Search recipe…"
+            />
+            {si.recipe_id && (
+              <a
+                className="btn-ghost text-xs px-2 shrink-0 inline-flex items-center"
+                href={`/recipes?recipe_id=${si.recipe_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this recipe in the Recipes module (new tab)"
+              >Edit ✎ ↗</a>
+            )}
+          </div>
+          {!si.recipe_id && recipeSearch && (
+            <div className="mt-1 max-h-40 overflow-y-auto rounded border border-border">
+              {filteredRecipes.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredRecipes.map(r => (
+                <button key={r.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onPatch({ recipe_id: r.id, recipe_name: r.name }); setRecipeSearch('') }}
+                >{r.name}</button>
+              ))}
+            </div>
+          )}
+        </Field>
+      )}
+
+      {si.item_type === 'ingredient' && (
+        <Field label="Linked ingredient">
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 text-sm"
+              value={si.ingredient_id ? (si.ingredient_name || `Ingredient #${si.ingredient_id}`) : ingredientSearch}
+              onChange={(e) => { setIngredientSearch(e.target.value); if (si.ingredient_id) onPatch({ ingredient_id: null }) }}
+              placeholder="Search ingredient…"
+            />
+            {si.ingredient_id && (
+              <a
+                className="btn-ghost text-xs px-2 shrink-0 inline-flex items-center"
+                href={`/inventory?ingredient_id=${si.ingredient_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open this ingredient in Inventory (new tab)"
+              >Edit ✎ ↗</a>
+            )}
+          </div>
+          {!si.ingredient_id && ingredientSearch && (
+            <div className="mt-1 max-h-40 overflow-y-auto rounded border border-border">
+              {filteredIngredients.length === 0 ? (
+                <div className="text-[11px] text-text-3 italic px-2 py-1.5">No matches.</div>
+              ) : filteredIngredients.map(i => (
+                <button key={i.id} type="button"
+                  className="block w-full text-left text-xs px-2 py-1 hover:bg-surface-2"
+                  onClick={() => { onPatch({ ingredient_id: i.id, ingredient_name: i.name }); setIngredientSearch('') }}
+                >{i.name} <span className="text-text-3">{i.base_unit_abbr}</span></button>
+              ))}
+            </div>
+          )}
+        </Field>
+      )}
+
+      {/* BACK-2600 — quick-edit modals removed. Edit ✎ ↗ links above open
+          the full Recipes / Inventory module in a new tab via the
+          BACK-2615 deep-link query params. */}
+
+      {si.item_type === 'combo' && (
+        <Field label="Linked combo">
+          <div className="text-xs text-text-3 italic px-2 py-1.5 border border-border rounded bg-surface-2/40">
+            {si.combo_name || `Combo #${si.combo_id ?? '—'}`}. Edit steps and options by clicking a step header in the expanded inline view.
+          </div>
+        </Field>
+      )}
+
+      <div className="text-[10px] text-text-3 italic">All fields auto-save on blur (image, category and pickers save on change).</div>
+    </div>
+  )
+}
+
+// Recipe + Ingredient quick-edit modals removed (follow-up to BACK-2615).
+// The Edit ✎ ↗ links on the Details tab open the full Recipes / Inventory
+// modules in a new tab via deep-link query params so the operator gets the
+// complete editor instead of a partial form.
+//
+// Removed components: RecipeQuickEditModal, IngredientQuickEditModal,
+// RecipeFull, IngredientFull, UnitRow.
+
+
+// ── Modifiers tab (Story 5 / BACK-2521) ────────────────────────────────────
+// Shows currently attached modifier groups with detach + auto-show toggle.
+// Two add actions: attach existing (multi-select catalog) or create new
+// (inline form + immediate attach).
+
+function ModifiersTab({
+  allGroups, attached, loading,
+  onDetach, onToggleAutoShow, onAttach, onCreated, onReorder, onOpenEditor,
+}: {
+  allGroups: ModifierGroup[]
+  attached: AttachedModifierGroup[]
+  loading: boolean
+  onDetach: (modifier_group_id: number) => void | Promise<void>
+  onToggleAutoShow: (modifier_group_id: number, autoShow: boolean) => void | Promise<void>
+  onAttach: (toAttach: ModifierGroup[]) => void | Promise<void>
+  onCreated: (newGroup: ModifierGroup) => void | Promise<void>
+  /** BACK-2586 — reorder attached groups via drag-drop. */
+  onReorder: (newOrder: AttachedModifierGroup[]) => void | Promise<void>
+  /** BACK-2587 — click an attached group to open its editor in this same panel. */
+  onOpenEditor: (modifier_group_id: number) => void
+}) {
+  // BACK-2586 — drag-drop reorder state for attached groups.
+  const [dragId,    setDragId]    = useState<number | null>(null)
+  const [dragOverId, setDragOverId] = useState<number | null>(null)
+  // BACK-2550 — flattened to a single screen. Two sections:
+  //   (a) Currently attached  — detach + auto-show toggle
+  //   (b) Available to attach — one-click row attach (no multi-select)
+  // "Create new" still toggles its own form.
+  const [creating, setCreating] = useState(false)
+  const [search,   setSearch]   = useState('')
+
+  if (loading) return <div className="flex justify-center py-8"><Spinner /></div>
+
+  if (creating) {
+    return (
+      <CreateModifierGroupForm
+        onCancel={() => setCreating(false)}
+        onCreated={async (g) => { await onCreated(g); setCreating(false) }}
+      />
+    )
+  }
+
+  const attachedIds = new Set(attached.map(a => a.modifier_group_id))
+  const q = search.trim().toLowerCase()
+  const available = allGroups
+    .filter(g => !attachedIds.has(g.id))
+    .filter(g => !q || g.name.toLowerCase().includes(q))
+
+  return (
+    <div className="space-y-4">
+      {/* Attached section */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-text-2">Attached{attached.length > 0 && <span className="ml-1 font-mono text-text-3">({attached.length})</span>}</div>
+          <button className="btn-primary text-xs px-2.5 py-1" onClick={() => setCreating(true)}>+ New group</button>
+        </div>
+        {attached.length === 0 ? (
+          <div className="text-xs text-text-3 italic py-3 text-center border border-dashed border-border rounded-lg">No modifier groups attached. Click any row below to attach.</div>
+        ) : (
+          <ul className="space-y-2">
+            {attached.map(g => (
+              <li
+                key={g.modifier_group_id}
+                draggable
+                onDragStart={() => setDragId(g.modifier_group_id)}
+                onDragOver={(e) => { e.preventDefault(); setDragOverId(g.modifier_group_id) }}
+                onDragLeave={() => setDragOverId(null)}
+                onDrop={() => {
+                  if (dragId !== null && dragId !== g.modifier_group_id) {
+                    const fromIdx = attached.findIndex(a => a.modifier_group_id === dragId)
+                    const toIdx   = attached.findIndex(a => a.modifier_group_id === g.modifier_group_id)
+                    if (fromIdx >= 0 && toIdx >= 0) {
+                      const next = [...attached]
+                      const [m] = next.splice(fromIdx, 1)
+                      next.splice(toIdx, 0, m)
+                      onReorder(next.map((a, i) => ({ ...a, sort_order: i })))
+                    }
+                  }
+                  setDragId(null); setDragOverId(null)
+                }}
+                onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                className={`rounded-lg border px-3 py-2.5 bg-surface-2/30 cursor-grab active:cursor-grabbing transition-colors ${
+                  dragOverId === g.modifier_group_id && dragId !== g.modifier_group_id ? 'border-accent border-t-2' : 'border-border'
+                } ${dragId === g.modifier_group_id ? 'opacity-40' : ''}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    className="min-w-0 text-left flex-1 cursor-pointer hover:text-accent"
+                    onClick={() => onOpenEditor(g.modifier_group_id)}
+                    title="Edit group (settings + options)"
+                  >
+                    <div className="text-sm font-semibold truncate flex items-center gap-1.5">
+                      <span className="text-text-3 text-[10px]">⠿</span>
+                      {g.name}
+                      <span className="ml-auto text-accent text-[10px] font-normal">Edit ›</span>
+                    </div>
+                    <div className="text-[11px] text-text-3 mt-0.5">
+                      Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
+                    </div>
+                  </button>
+                  <button
+                    className="text-text-3 hover:text-red-600 text-xs px-2 shrink-0"
+                    onClick={(e) => { e.stopPropagation(); onDetach(g.modifier_group_id) }}
+                    title="Detach (does not delete the group)"
+                  >Detach</button>
+                </div>
+                <label className="flex items-center gap-2 mt-2 text-[11px] text-text-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={g.auto_show}
+                    onChange={(e) => onToggleAutoShow(g.modifier_group_id, e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  Show inline (un-tick to hide behind a button)
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Available section — one-click attach */}
+      <div className="pt-3 border-t border-border">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-semibold text-text-2">Available{allGroups.length - attached.length > 0 && <span className="ml-1 font-mono text-text-3">({allGroups.length - attached.length})</span>}</div>
+        </div>
+        {allGroups.length === 0 ? (
+          <div className="text-xs text-text-3 italic py-3 text-center">No modifier groups in the catalog. Use <strong>+ New group</strong> to create one.</div>
+        ) : available.length === 0 && !search ? (
+          <div className="text-xs text-text-3 italic py-3 text-center">All groups already attached.</div>
+        ) : (
+          <>
+            {allGroups.length > 6 && (
+              <input
+                className="input w-full mb-2"
+                placeholder="Search groups…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            )}
+            {available.length === 0 ? (
+              <div className="text-xs text-text-3 italic py-3 text-center">No matches.</div>
+            ) : (
+              <ul className="divide-y divide-border rounded-lg border border-border overflow-hidden">
+                {available.map(g => (
+                  <li key={g.id}>
+                    <button
+                      type="button"
+                      className="w-full text-left px-2.5 py-2 hover:bg-accent-dim/40 flex items-center gap-2"
+                      onClick={() => onAttach([g])}
+                      title="Click to attach"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-text-1 truncate">{g.name}</div>
+                        <div className="text-[11px] text-text-3">
+                          Pick {g.min_select === g.max_select ? `${g.min_select}` : `${g.min_select}–${g.max_select}`}
+                          {g.option_count != null ? ` · ${g.option_count} option${g.option_count === 1 ? '' : 's'}` : ''}
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-accent font-semibold shrink-0">+ Attach</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// AttachExistingMods removed in BACK-2550 — replaced by inline click-to-attach
+// list inside ModifiersTab.
+
+function CreateModifierGroupForm({
+  onCancel, onCreated,
+}: {
+  onCancel: () => void
+  onCreated: (g: ModifierGroup) => void | Promise<void>
+}) {
+  const api = useApi()
+  const [name,         setName]         = useState('')
+  const [minSelect,    setMinSelect]    = useState('0')
+  const [maxSelect,    setMaxSelect]    = useState('1')
+  const [allowRepeat,  setAllowRepeat]  = useState(false)
+  const [autoShow,     setAutoShow]     = useState(true)
+  const [saving,       setSaving]       = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+
+  const submit = async () => {
+    setError(null)
+    if (!name.trim()) { setError('Name required'); return }
+    const min = Math.max(0, Math.floor(Number(minSelect) || 0))
+    const max = Math.max(min, Math.floor(Number(maxSelect) || min || 1))
+    setSaving(true)
+    try {
+      const g = await api.post('/modifier-groups', {
+        name: name.trim(),
+        min_select: min,
+        max_select: max,
+        allow_repeat_selection: allowRepeat,
+        default_auto_show: autoShow,
+      }) as ModifierGroup
+      await onCreated(g)
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message || 'Failed to create modifier group'
+      setError(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <button className="text-text-3 hover:text-text-1 text-xs" onClick={onCancel}>← Back</button>
+        <div className="text-xs font-semibold text-text-2">Create new modifier group</div>
+      </div>
+
+      <Field label="Name" required>
+        <input
+          className="input w-full"
+          autoFocus
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="e.g. Flavour Choice"
+        />
+      </Field>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Min select">
+          <input
+            className="input w-full font-mono"
+            type="number"
+            min={0}
+            value={minSelect}
+            onChange={e => setMinSelect(e.target.value)}
+          />
+        </Field>
+        <Field label="Max select">
+          <input
+            className="input w-full font-mono"
+            type="number"
+            min={1}
+            value={maxSelect}
+            onChange={e => setMaxSelect(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+        <input type="checkbox" checked={allowRepeat} onChange={e => setAllowRepeat(e.target.checked)} />
+        Allow the same option to be picked multiple times (e.g. extra cheese ×2)
+      </label>
+
+      <label className="flex items-center gap-2 text-xs text-text-2 cursor-pointer">
+        <input type="checkbox" checked={autoShow} onChange={e => setAutoShow(e.target.checked)} />
+        Show inline by default (vs. behind a button)
+      </label>
+
+      <p className="text-[11px] text-text-3 italic">
+        Options live in the Sales Items module — once the group exists, edit options there. (Inline option editor coming.)
+      </p>
+
+      {error && <div className="text-xs text-rose-600 font-medium">{error}</div>}
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button className="btn-ghost text-xs" onClick={onCancel}>Cancel</button>
+        <button
+          className="btn-primary text-xs"
+          disabled={saving || !name.trim()}
+          onClick={submit}
+        >{saving ? 'Creating…' : 'Create & attach'}</button>
+      </div>
+    </div>
+  )
+}
+
+
+// MarketsTab removed in BACK-2549 — sales-item market visibility is managed
+// from the Sales Items page only. The Country / SalesItemMarket interfaces
+// remain exported above for any future feature that needs them.

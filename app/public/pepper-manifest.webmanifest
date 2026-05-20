@@ -1,0 +1,15 @@
+{
+  "name": "Pepper — Menu COGS Assistant",
+  "short_name": "Pepper",
+  "description": "AI assistant for Menu COGS. Ask about ingredients, recipes, menus, audits, and stock — voice and camera input on mobile.",
+  "start_url": "/pepper",
+  "scope": "/pepper",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#146A34",
+  "background_color": "#146A34",
+  "icons": [
+    { "src": "/icon.svg",          "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

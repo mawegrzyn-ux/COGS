@@ -1,0 +1,2095 @@
+# Wingstop QSC Audit Tool — Build Spec
+
+Spec for an audit module inside the **COGS Manager** app. Based on the Wingstop QSC (Quality, Service, Cleanliness) evaluation framework (source: `Wingstop_QSC_12_17_24.xlsx`).
+
+The tool supports two audit modes:
+
+1. **External Audit (Regular)** — a formal, scheduled QSC evaluation (e.g., quarterly by a third-party evaluator like Steritech). Runs the full question set in canonical order, generates a scored report, escalates critical findings.
+2. **Internal Audit (Ad‑hoc)** — a lightweight self-audit a manager or GM can run any time. Can target a subset (department, category, or saved template), does not require every question be answered, and is distinguished from external audits in reporting.
+
+Both modes share the same question bank, scoring engine, and data model — the difference is workflow, required completeness, and how results are surfaced.
+
+## Goals
+
+- Give operators a single tool to run scheduled external QSC audits and ad-hoc internal audits against the same question bank.
+- Preserve the full Wingstop QSC question set (150 scored items + 10 information-only items) with their policy text, risk levels, and point values.
+- Score audits using the QSC weighting (First Priority = 5, Second Priority = 3, Third Priority = 1, Information Only = 0) and flag automatic-unacceptable conditions.
+- Produce an actionable report: overall score, per-department/category breakdown, list of non-compliant items with photos/notes, and cross-referenced items.
+- Integrate cleanly with the existing COGS Manager (shared auth, store/location selection, navigation).
+
+## Placement in COGS Manager
+
+Add a top-level module `Audits` alongside existing COGS Manager modules. Suggested routes:
+
+```
+/audits                         # dashboard: list of audits, filters, start-new CTA
+/audits/new?type=external       # start a new external audit
+/audits/new?type=internal       # start a new internal (ad-hoc) audit
+/audits/:id                     # in-progress audit (question-by-question flow)
+/audits/:id/report              # finalized report view
+/audits/templates               # manage internal-audit templates (saved question subsets)
+/audits/admin/questions         # admin: view / edit question bank
+```
+
+Reuse COGS Manager's existing store/location picker — an audit is always bound to exactly one location.
+
+## Data Model
+
+### Entities
+
+**`audit_questions`** — the question bank (seeded from the spec below, versioned so historical audits keep their question set).
+
+```
+audit_questions
+  id                  uuid pk
+  code                text   # e.g. 'A101', 'KM206a', 'IN101' — unique within a version
+  version             int    # bumps when the official question set is updated
+  department          text   # 'Food Safety' | 'Brand Standards'
+  category            text   # e.g. 'Temperature Control', 'Dining Room'
+  title               text   # the question / standard being checked
+  risk_level          text   # 'Critical First Priority' | 'First Priority' | 'Second Priority' | 'Third Priority' | 'Information Only'
+  points              int    # 5 / 3 / 1 / 0
+  repeat_points       int    # points charged on repeat non-compliance
+  policy              text   # full policy / how-to-score text (multi-paragraph, markdown)
+  auto_unacceptable   bool   # true when a single failure triggers an automatic 'Unacceptable' rating (e.g. A105, A127, A139, A141, A143)
+  sort_order          int    # canonical display order
+  active              bool
+```
+
+**`audit_templates`** — named subsets used for internal ad-hoc audits (e.g., 'Morning Line Check', 'Walk-in Only', 'Personal Hygiene Spot Check').
+
+```
+audit_templates
+  id              uuid pk
+  name            text
+  description     text
+  type            text   # 'internal' (templates are currently only used for internal audits)
+  question_codes  text[] # array of codes included
+  created_by      uuid fk -> users
+  location_scope  text   # 'all' | 'specific' (if specific, has location_ids)
+  location_ids    uuid[]
+```
+
+**`audits`** — a single audit run.
+
+```
+audits
+  id                uuid pk
+  type              text   # 'external' | 'internal'
+  location_id       uuid fk -> locations
+  template_id       uuid fk -> audit_templates (nullable; external audits always null)
+  question_version  int    # pinned at audit start
+  auditor_id        uuid fk -> users
+  auditor_name      text   # free-text fallback for external evaluators who aren't system users
+  started_at        timestamptz
+  completed_at      timestamptz (nullable)
+  status            text   # 'draft' | 'in_progress' | 'completed' | 'cancelled'
+  overall_score     numeric (nullable; computed on complete)
+  overall_rating    text   # 'Acceptable' | 'Needs Improvement' | 'Unacceptable'
+  notes             text
+```
+
+**`audit_responses`** — one row per question answered within an audit.
+
+```
+audit_responses
+  id                 uuid pk
+  audit_id           uuid fk -> audits
+  question_code      text
+  status             text   # 'compliant' | 'not_compliant' | 'not_observed' | 'not_applicable' | 'informational'
+  is_repeat          bool   # true if the same code was NC on this location's previous external audit
+  points_deducted    int    # 0 if compliant; points or repeat_points otherwise
+  comment            text
+  temperature_value  numeric (nullable)  # for temperature questions
+  temperature_unit   text (nullable)     # 'F' | 'C'
+  product_name       text (nullable)     # for temperature / expiration questions
+  answered_at        timestamptz
+```
+
+**`audit_response_photos`** — 0..N photos per response.
+
+```
+audit_response_photos
+  id           uuid pk
+  response_id  uuid fk -> audit_responses
+  url          text
+  caption      text
+  uploaded_at  timestamptz
+```
+
+## Scoring Engine
+
+Points are **deducted** from a starting score of 100.
+
+- Each question has `points` (5 / 3 / 1) based on risk level.
+- If `status = 'not_compliant'` and `is_repeat = false`, deduct `points`.
+- If `status = 'not_compliant'` and `is_repeat = true`, deduct `repeat_points` (in this data set repeat points equal base points; kept as separate field to allow future divergence).
+- `not_observed`, `not_applicable`, and `informational` deduct 0.
+- `compliant` deducts 0.
+
+**Automatic Unacceptable triggers** — if any of these are marked `not_compliant`, overall_rating is forced to `Unacceptable` regardless of numeric score:
+
+- `A105` — walk-in cooler TCS foods not at temp due to equipment failure
+- `A127` — NO sanitizer available in facility
+- `A139` — sewage backup in facility / no working toilet
+- `A141` — no potable water in facility
+- `A143` — live rodents or roaches
+- `OF101` can also flag (check field `auto_unacceptable` in question bank)
+
+Rating bands (applied after auto-unacceptable check):
+
+- `>= 90` → **Acceptable**
+- `70 – 89.9` → **Needs Improvement**
+- `< 70` → **Unacceptable**
+
+Band thresholds should live in a config table so they can be tuned without a code change.
+
+## External Audit Flow (Regular)
+
+1. Auditor taps **Start External Audit**, picks location, enters their name.
+2. System creates an `audits` row with `type = 'external'`, pins `question_version`.
+3. Questions are presented grouped by Department → Category → Code, in canonical order. The auditor can jump sections but the progress bar shows completeness.
+4. Every scored question must be answered (`compliant`, `not_compliant`, `not_observed`, or `not_applicable`) before the audit can be finalized. Information-only items (`IN1xx`) record a response but do not gate completion.
+5. For `not_compliant`, a comment is required and at least one photo is strongly encouraged (configurable per question — photo is required for items that reference photo evidence in their policy text, e.g., `DR201`, `KM201`).
+6. On finalize: compute score, apply auto-unacceptable rules, lock the audit (status → `completed`, timestamp set). After completion responses are read-only; corrections require an admin-level 'reopen'.
+7. The audit appears on the location's audit history and is used to seed the `is_repeat` flag on the next external audit.
+
+## Internal Audit Flow (Ad-hoc)
+
+1. User taps **Start Internal Audit**, picks location, then picks either:
+   - an existing template (e.g., 'Line Check', 'Walk-in Temps', 'Personal Hygiene'), or
+   - a custom selection (pick any combo of departments / categories / individual codes), or
+   - 'Full audit' (same question set as external, but flagged `type = internal`).
+2. Internal audits do **not** require every question to be answered. The user can finalize at any time; unanswered items are stored with `status = 'not_observed'`.
+3. Scoring is still computed, but reported as a **partial score** (e.g., `92 / 100 across 14 items checked`) — it does not replace the external audit score of record.
+4. Internal audits do **not** update the `is_repeat` flag used by external audits.
+5. Results are tagged visually in the UI (`Internal` badge) so they are never confused with an external evaluation.
+
+### Seeded Internal-Audit Templates (ship with v1)
+
+- **Line Check (Peak)** — `KM201, KM202, KM203, KM204, KM205, KM206, KL201, KL208, KC201, KC202, KC203`
+- **Walk-in & Cold Hold** — `A101, A105, B211, C305, C307`
+- **Personal Hygiene Spot Check** — `A131, A133, A135, B219, B221, B221a, C330, C331`
+- **Expiration Date Sweep** — `A119, A119a, B225, B225a, B225b, B225c, B225d`
+- **Cleaning & Sanitizer** — `A125, A127, B235, B237, B239, C315, C319, C321, C325, C329`
+- **Opening Checklist** — `DR301, FC301, KL301, KL302, KM301, KC302`
+- **Front-of-House Guest Experience** — `DR201, DR204, FC203, FC204, FC205, FC206`
+
+Users can create, edit, share, and favorite their own templates.
+
+## UI / UX Notes
+
+- **Audit runner screen** shows: current question (code, title, risk-level chip colored by priority), large `Compliant` / `Not Compliant` / `Not Observed` / `N/A` buttons, collapsible policy text, comment field, photo picker, and per-question metadata (points value, repeat-points).
+- **Sticky progress header**: `12 of 150 answered · Food Safety ▸ Temperature Control (4/9)`.
+- **Risk-level chip colors**: Critical First Priority = red, First Priority = orange, Second Priority = amber, Third Priority = slate, Information Only = blue.
+- **Cross-references**: when a question's policy mentions another code (e.g., 'also mark A115 as Not Compliant'), render those codes as tappable chips that deep-link to that question.
+- **Temperature entry**: questions tagged `temperature` show a numeric input + unit toggle (°F/°C) with validation ranges derived from the policy (e.g., A101 flags if > 40°F).
+- **Product-name entry**: cold-hold / expiration questions include a `product` field so non-compliance comments aren't free-text-only.
+- **Offline support**: audits must be completable offline; queue responses and photos for sync (COGS Manager likely already has this pattern — reuse it).
+- **Auto-save** after every answer.
+
+## Report View
+
+Top card: location, date, auditor, audit type (External / Internal), overall score, rating band (with color), and any auto-unacceptable triggers called out at the top.
+
+Then:
+
+- **Summary by department**: Food Safety / Brand Standards — points available vs points deducted, number of NC items.
+- **Summary by category**: stacked bar of NC / Compliant / N-O / N-A.
+- **Critical findings** (Critical First Priority items that were NC) — displayed first with full detail.
+- **All non-compliant items**: grouped by category, each with photos, comment, points deducted, cross-references.
+- **Repeat findings**: items that were NC on both the previous external audit and this one — flagged prominently.
+- **Information-only observations**: listed separately at the bottom.
+- **Export**: PDF (shareable with franchisee / ops), CSV (for spreadsheet analysis).
+
+## Question Bank
+
+Below is the full, verbatim question bank (150 scored items + 10 information-only) drawn from `Wingstop_QSC_12_17_24.xlsx`. Every entry must be seeded into `audit_questions` with `version = 1`.
+
+Each item lists: **Code** | **Risk Level** | **Points** — then title, then full policy text (collapsed by default in UI, expandable).
+
+Fields in this document map to DB columns as: code → `code`, risk → `risk_level`, points → `points` / `repeat_points`, title → `title`, policy → `policy` (store as-is, markdown-friendly).
+
+---
+
+## Food Safety
+
+### Information
+
+#### `D103` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Current health department inspection is available for review.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Most recent health inspection report must be available for review during the QSC process.An online health dept inspection is acceptable.If the location has been open for 1 year or less, the location will not have points assessed. It will just be noted on the report.All critical findings should be addressed in an expedient manner to protect our guests and team members.**You should also score the line item that is out of compliance in addition to scoring here if a critical issue on the health dept report hasn't been fixed.**Mark as Not Compliant if:Most recent health department inspection is not available.Critical findings on the health dept report have not been corrected
+```
+
+</details>
+
+### Temperature Control
+
+#### `A101` — First Priority — 5 pts (repeat: 5)
+
+**Title:** All cold hold products and equipment on the line must be held at a temperature of 40°F/5°C or below.  Cold foods that require time/temperature control for safety (TCS) are maintained at 40°F/5°C or below in all cold-holding devices including reach-in refrigerated units, cold-top storage devices and ice wells. Cold TCS foods are properly handled, at proper temperature before being displayed and not left out of temperature-controlled environments for extended periods of time.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop uses a cold holding standard of 40F, instead of 41F.Take the temperature of TCS products in the reach-in coolersTake the temperature of classic wings on the ice bath on the lineThe following items in the walk-in are TCS:Classic chickenRanch dip containersRanch squeeze bottlesBleu cheese dip containersDairy productsFully cooled blanched friesOther new/temporary TCS productsStandard Policy:Record the name and temperature of the first Not Compliant TCS food measured.Document whether there are additional TCS products in the same ice bath or cold holding unit out of temperature:No other foods in this ice bath/unit out of temperatureOther foods in this ice bath/unit out of temperatureRecord the additional product names AND temperaturesMark as Not Compliant if TCS foods are not held ≤ 40°F due to:Food HandlingFood held in ice bath not immersed sufficiently in the ice to maintain proper temperatureIce in the ice bath had melted and not replaced in a timely mannerIce level in the ice bath observed not high enough to maintain proper temperatureTCS food not at proper temperature prior to being placed into self-service display case for saleTCS food stocked above the load lineHeat source placed too close to the cold wellLeft out of temperature-controlled environments for extended periods of time (more than 30 minutes)Equipment Usage (equipment was not handled properly)Blocked airflow (by ice buildup, food blocking fan, etc.)Missing pans/spacers/air escaping from cold wellUnit not turned on/unpluggedUnit left open/uncovered for an extended period of timeEquipment Maintenance (equipment needs service)Gasket missing/damagedUnit does not work/not functioning properly to maintain foods below 41°FUndetermined causeRecord everything that was ruled out as the cause during your root cause investigationWhy This Is Important:Most bacteria which cause foodborne illness won't grow or grow very slowly when the temperature is kept at 41°F or below. This is out of the Temperature Danger Zone (41°F – 135°F).Trending:N/ACross-reference:For improper holding temperatures of cold TCS foods in walk-in coolers, mark A105 as Not Compliant.For improper holding of TCS foods by time alone, mark A107 as Not Compliant.For improper procedures when holding by time alone, mark B205 as Not Compliant.For improper cook temperature, mark A109 or B203 as Not Compliant.For improper cooling of hot TCS foods, mark A111 as Not Compliant.For improper cooling methods, mark B207 as Not Compliant.Food Code References:3-501.16(A)(2) Time/Temperature Control for Safety Food Cold Holding3-501.16(B) Time/Temperature Control for Safety Food Cold Holding
+```
+
+</details>
+
+#### `A103` — First Priority — 5 pts (repeat: 5)
+
+**Title:** All hot hold products must be held at a minimum temperature of 140F/60C.  Hot foods that require time/temperature control for safety (TCS) are maintained at 140°F/60°c or above. Hot TCS foods are properly handled, at proper temperature before being displayed and not left out of temperature-controlled environments for extended periods of time.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop typically only utilizes hot holding for Gehl's cheese.Gehl's cheese sauce must be 140F.Take sample of cheese from the cheese sauce dispenser into a cup and take temperature.Fill sample cup full and take temp of cheese at an angle (thermometer up and down doesn’t temp same as at an angle). See image below.A temperature reading from the gauge on the machine is also required.New bags placed in the unit to warm can take up to 4-6 hours to get to 140F. Note: a few locations (ex. airports) may have hot holding units for wings.Wingstop requires hot holding temperature at 140F.Standard Policy:Mark as Not Compliant if TCS foods are not held ≥ 140°F due to:Food HandlingTCS food stocked above the load lineTCS food not at proper temperature prior to being placed into self-service display case for saleLeft out oftemperature control for an extended periodEquipment Usage (equipment was not handled properly)Steam table not set up properlyTemperature control set incorrectlyUnit left open/uncovered for an extended period of timeUnit not turned on/unpluggedEquipment Maintenance(equipment needs service)Gasket missing/damagedUnit does not work/not functioning properly to maintain foods ≥ 140°FUndetermined causeRecord everything that was ruled out as the cause during your root cause investigationWhy This Is Important:Bacteria which cause foodborne illness won't grow when the temperature is kept at 135°F or above. This is out of the Temperature Danger Zone (41°F – 135°F).Trending:N/ACross-reference:For improper holding of TCS foods by time alone, mark A107 as Not Compliant.For improper procedures when holding by time alone, mark B205 as Not Compliant.For improper cook temperature, mark A109 or B203 as Not Compliant.For improper cooling of hot TCS foods, mark A111 as Not Compliant.For improper cooling methods, mark B207 as Not Compliant.Food Code References:3-501.16(A)(1) Time/Temperature Control for Safety Food Hot Holding
+```
+
+</details>
+
+#### `A105` — Critical First Priority, First Priority — 5 pts (repeat: 5)
+
+**Title:** All walk-in cooler foods must be held at a temperature of 40°F/5°C or below.  Walk-in cooler foods that require time/temperature control for safety (TCS) are maintained at 40°F/5°C or below.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:IMPORTANT: If the product temperature issue is due to the unit not functioning, select Yes to question 'Are multiple products out of temperature due to an equipment issue'. If the product is not at temp due to a food handling issue (ex. Ranch was left on counter too long and caused temperature issue), select No. The following items in the walk-in are TCS:Classic chickenRanch dip containersRanch squeeze bottlesBleu cheese dip containersDairy productsFully cooled blanched friesOther new/temporary TCS productsNOTE: if the cooler is not functioning and the product inside the cooler is not meeting the temperature standard, the evaluation will automatically receive an Unacceptable rating.If an equipment issue is suspected then a second ambient temperature is required to be recorded a minimum of 20 minutes following the initial ambient temperature to ensure the unit is not functioning properly.Standard Policy:Mark as Not Compliant for improper cold holding of TCS foods in walk-in coolers due to equipment issues or food handling.Why This Is Important:Most bacteria that cause foodborne illness won't grow or grow very slowly when the temperature is kept at 41°F or below. This is out of the Temperature Danger Zone (41°F – 135°F).Trending:N/ACross-reference:For improper cold holding of TCS foods in units other than the walk-in cooler, mark A101 as Not Compliant.For foods left unattended out of temperature control for an extended period of time, mark A101 as Not Compliant.For improper holding of TCS foods by time alone, mark A107 as Not Compliant.For improper procedures when holding by time alone, mark B205 as Not Compliant.For improper cook temperature, mark A109 or B203 as Not Compliant.For improper cooling of hot TCS foods, mark A111 as Not Compliant.For improper cooling methods, mark B207 as Not Compliant.Food Code References:3-501.16(A)(2) Time/Temperature Control for Safety Food Cold Holding3-501.16(B) Time/Temperature Control for Safety Food Cold Holding
+```
+
+</details>
+
+#### `D101` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Time and temperature log available and in use properly with corrective actions being recorded (all chicken products temped daily- morning, mid-day, and night temps required).
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:IMPORTANT: When reviewing Zenput for time/temperature logs we are ONLY looking for compliance for time/temperature in this line item. We are not looking at compliance for opening, mid-day or closing checklists.Locations over the coming months (continue into Q2 2023- until further notice) will be transitioning to ZenPut for their temperature logs and Greenbook. If the location is still transitioning to Zenput they may be using paper logs to fill, this is acceptable and we should evaluate both paper and electronic.  Do not score if location is using paper logs.
+```
+
+</details>
+
+#### `B209` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Calibrated probe thermometer(s) present and working with capacity to reach 450°F/232.2°C. Thermometers are accurate and available for use in food receiving, preparation, holding and serving areas.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop requires a thermometer that reaches 450F because they need to be able to take temperatures of their fryer oil. NOTE: there is no way to assess if the thermometer reaches 450F, just ask them to show you the thermometer.NOTE: no points will be assessed if they do not have a thermometer that capacity to reach 450F, it will just be documented.Example of thermometerStandard Policy:Mark as Not Compliant if there isn’t at least one readily accessible working thermometer in the facility.Check thermometers to determine if they are accurate to within +/-2°F.Why This Is Important:Not having thermometers or using thermometers that are not accurate could result in food being held at unsafe temperatures.Trending:N/ACross-reference:For missing/inaccurate thermometers in refrigerated and hot holding units holding TCS foods, mark C301 as Not Compliant.Food Code References:4-203.11 Temperature Measuring Devices, Food4-203.12 Temperature Measuring Devices, Ambient Air and Water4-204.112(E) Temperature Measuring Devices4-302.12 Food Temperature Measuring Devices4-502.11 (B-C) Good Repair and Calibration
+```
+
+</details>
+
+#### `B211` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All foods received at proper temperature with no signs of temperature abuse, frozen foods hard to the touch.  At receiving, foods show no signs of temperature abuse and foods that require time/temperature control for safety (TCS) are received at proper temperatures: 40°F or below, 140°F or above, frozen foods hard to the touch.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop uses a cold holding temperature standard of 40F and a hot holding temperature standard of 140F.Standard Policy:Any time a delivery is being received during an assessment, check product for proper temperatures and mark as Not Compliant for any temperature issues or evidence of prior temperature abuse.Why This Is Important:Inspecting foods at the time of delivery keeps out products that have been temperature-abused or are spoiled so they won't be used. It can also keep out foods that are moldy or infested with pests so that those issues won't spread in the location.Trending:N/ACross-reference:For improper cold holding of TCS foodsor cold foods left out of temperature control for an extended period of time, mark A101 as Not Compliant.For improper hot holding of TCS foods or hot foods left out of temperature control for an extended period of time, mark A103 as Not Compliant.For improper cold holding of TCS foods in walk-in coolers, mark A105 as Not Compliant.For improper holding of TCS foods held by time alone, mark A107 as Not Compliant.For improper procedures when holding by time alone, mark B205 as Not Compliant.For improper cooling of hot TCS foods, mark A111 as Not Compliant.For improper cooling methods, mark B207 as Not Compliant.Food Code References:3-202.11(A) (C-D) Temperature3-202.11(B) (E-F) Temperature3-501.15(D) Cooling
+```
+
+</details>
+
+#### `C301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** All equipment must have easily viewable thermometers that are working, accurate and readable.  When used for food that requires time/temperature control for safety (TCS), refrigerated and hot holding units are equipped with accurate thermometers that are easily viewable.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for any hot or cold unit holding TCS food that does not have a working thermometer.Exceptions are allowed where there is no practical means for measuring the ambient air such as cooktop burner units, heat lamps, cold plates, Bain maries, steam tables, and salad bars.If built-in devices are absent or not working, hanging thermometers are adequate. One or the other must be present and working in each unit.Why This Is Important:Accurate thermometers are necessary to ensure that food is being held at safe temperatures.When a thermometer is within easy view, it makes monitoring the unit quick and easy so that issues are more likely to be identified and addressed quickly.Trending:N/ACross-reference:For issues with thermometers in food receiving, preparation, holding and serving areas, mark B209 as Not Compliant.Food Code Reference:4-204.112 Temperature Measuring Devices.
+```
+
+</details>
+
+#### `C301a` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Fryer, oven and Visi-cooler at required temperature.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Fryer, oven and visi-cooler must be at required temperature.Fryer: (do not assess the temperature if the fryer is off)Temperature of oil in Fryers must be between 350F77C +/- 10F. Temperature should be recorded from the external digital display. Ask the manager to pull up the fryer oil on the digital display. For safety reasons, DO NOT use a thermometer to take the temperature of the oil. The client said if there is no digital display to as the manager/PIC to use their calibrated thermometer to take the temperature of the oil.If chicken was just dropped, wait until end of cooking cycle to take temperature because oil temperature will drop initially when chicken is dropped.Oven:If the location is not serving rolls the oven does not need to be on.The oven must be turned on at all times during operating hours.Temperature of oven/range must be 350F/77C for conventional and 325F/ for convection. A conventional ovens heat source comes from the bottom while a convection ovens heat source is controlled by a fan.Temperature should be recorded from the external digital display or thermometer placed inside the oven Visi-cooler (beverage cooler):Do not assess the temperature of the Visi-cooler if the cooler is turned offAmbient temperature of Visi-cooler (beverage cooler) must be between 34-40F/1-5C. Temperature can be obtained from internal beverage thermometer, infrared gun thermometer or thermometer placed inside the cooler. The external digital display cannot be used to document the temperature.Visi-cooler
+```
+
+</details>
+
+#### `C305` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Frozen foods are held solidly frozen (0°F +/-10°F)/(-18°C +/-12°C)so that they are hard to the touch.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if frozen foods are not hard to the touch.Why This Is Important:Keeping food solidly frozen helps ensure high quality. Food that thaws unexpectedly could create a cross-contamination risk if it begins dripping during the thawing process.Trending:N/ACross-reference:For improper cold holding of TCS foods, mark A101 as Not Compliant.For improper cold holding of TCS foods in walk-in coolers, mark A105 as Not Compliant.For improper thawing of TCS foods, mark C303 as Not Compliant.Food Code References:3-501.11 Frozen Food.
+```
+
+</details>
+
+### Food Handling
+
+#### `A107` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Blanched fries that are held by time alone (TPHC) are at the proper temperature before being removed from temperature control, properly labeled and served or discarded within allowed time.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Document if:Blanched fries not at 40F prior to placing out for service to be held by timeBlanched fries held past expiration timeBlanched fries being held by time not labeled Blanched fries hold time exceeds 4 hours on the label
+```
+
+</details>
+
+#### `A109` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Foods that require time/temperature control for safety (TSC) must be cooked/held to minimum poultry standard (food that is undercooked, raw or falls into the temperature danger zone should ever be served to a guest).  Foods that require time/temperature control for safety (TCS) are cooked to proper internal temperatures: raw poultry to 165°F. Foods prepped on site are reheated to 165°F within 2 hours for hot holding. Foods from a sealed commercial package are reheated to 140°F for hot holding.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Score here if cooked chicken does not reach 165F. Wingstop has Brand Standard items related to cooking chicken for quality. If the proper cooking temperature does not meet Brand Standard requirements, score the Brand Standard item (see cross-reference below).Standard Policy:N/AWhy This Is Important:Cook temperatures vary because different animal proteins have different bacteria in them. Each target temperature is chosen to kill the bacteria from that animal species.Cooking to proper temperatures kills most bacteria found in raw animal foods. However, some bacteria survive the cooking process as spores. Limiting the reheating time to 2 hours is necessary to prevent those spores from growing to dangerous levels.Trending:N/ACross-reference:If classic wings do not reach 200-210F, score KC202.If boneless wing do not reach 175-195F, score KC203.If tenders do not reach 175-195F, score KC203.Food Code References:3-401.11 Raw Animal Foods3-403.11(A) Reheating for Hot Holding
+```
+
+</details>
+
+#### `A111` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Blanched fries: Foods that require time/temperature control for safety (TCS) are cooled from 140°F to 70°F or below within 2 hours, and from 140°F to 41°F or below within 6 hours.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Mark as Not Compliant if hot TCS food is not cooled from 140°F to 70°F or below within two hours and then cooled all the way to 41°F or below in a total of six hours. Standard Policy:N/AWhy This Is Important:The cooling cycle takes food back through the Temperature Danger Zone where bacteria that cause foodborne illness can grow. If this isn't done very quickly, some bacteria can produce toxic chemicals in the food. The toxins are odorless, colorless and tasteless, and they won't be destroyed by reheating.Because bacteria grow fastest between 70°F and 135°F, it is very important to get the food through that part of the Temperature Danger Zone within 2 hours, but also completely through the Danger Zone in less than a total of 6 hours.Trending:N/ACross-reference:For improper cooling methods, mark B207 as Not Compliant.For improper cold holding of TCS foods, mark A101 or A105 as Not Compliant.For improper holding of TCS foods by time alone, mark A107 as Not Compliant.For improper procedures when holding by time alone, mark B205 as Not Compliant.For improper cook temperature, mark A109 or B203 as Not Compliant.Food Code References:3-501.14 Cooling
+```
+
+</details>
+
+#### `A115` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Foods are not contaminated. Foods and food-contact surfaces are protected from potential microbiological, physical and chemical hazards. Examples of such hazards include but are not limited to: raw animal products above ready-to-eat foods, commingling raw animal species, thumbtacks, chemicals, medicines or first aid supplies stored above food or food-contact surfaces. When tasting food during preparation, utensils are used only once.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:BONELESS/TENDER PRODUCTS HANDLINGTo avoid cross contamination, the boneless products transfer containers must be stored directly on the shelf in the boneless freezer when not in use.If the container is stored properly on the shelf in the freezer, the cook can portion the wings with tongs into the container, drop wings in fryer basket, drop basket in oil, press timer, then wash handsIf the container is not stored properly on the shelf in the freezer (ex. the container is stored sitting on bags or boxes of chicken in the freezer), the cook can portion the wings with tongs into the container, drop wings in fryer basket, but then MUST wash hands before dropping basket in oil and pressing timer. If hands are not washed first, DOCUMENT here.The red tongs must always be stored in the transfer container and must only be used to handle raw/frozen chicken products.If the transfer containers or tongs come into contact with any other surfaces, including storage containers/bags/boxes/product/shelving, cross contamination will occur.CLASSIC CHICKEN HANDLINGThe chicken bucket system is strictly used to hold raw chicken and must not be used to store any other product.The red chicken bucket system (including lid) is considered contaminated at all times and therefore cannot come into contact with any other surfaces other than the chicken table, the chicken reach in cooler and the designated storage spot. If there are dishes that need to be washed place the chicken bucket system under the sink and wash it after all other dishes have been cleaned.When setting up the classic chicken station, the buddy system must be used at appropriate times to minimize the risk of cross contamination.The chicken sanitizer bucket system can only be used to clean that area to avoid cross contamination.Standard Policy:Mark as Not Compliant for all observations of actual contamination.Notify the manager immediately and recommend the product be discarded.Some examples include but are not limited to:Hazardous (microbiological, physical and chemical) contamination known to have affected the foodUtensils are used more than once when tasting food during preparationInsects and rodents (dead or alive) or signs of rodents (droppings, hair, etc.) in foodLive pests in food (moths in a bag of flour, ants in a bag of sugar, grain beetles in a bag of rice, etc.)Raw animal species commingledMark as Not Compliant for all observations of potential contamination.If at least one of the products is in hermetically sealed (watertight) packaging, there is no risk of contamination.Some examples include but are not limited to:Raw animal products stored above ready-to-eat foodRaw animal products not properly segregatedRaw animal products stored above ready-to-eat foodRaw poultry stored above other raw animal species/eggs.Physical hazards that would present an imminent health hazard, such as push pins used directly above food prep surfacesChemicals stored above food or food-contact surfacesMedicines or first-aid supplies are stored where they may contaminate food, utensils and equipmentWhy This is Important:There is an almost unlimited number of things that could fall, drip, spray or splash into food or onto food-contact surfaces. And often the contamination is not easily visible after it happens. This is true both in the back of house and out where customers could contact or sneeze or cough on the food. The only solution is to prevent it with adequate protection such as covers, lids or appropriate placement so that an item is not below or next to a risk.Trending:N/ACross-reference:For unshielded lights above exposed food or food-contact surfaces, mark C341 as Not Compliant.Mark A117 as Not Compliant for:Foods on salad bars, buffet tables, etc. not protected from contaminationIce used for cooling is reused as food.Mark C307 as Not Compliant for:Uncovered food, condensationTouching the food-contact or lip-contact surfaces of cups or utensilsPotential contamination from the environment, such as dripping condensation, chipping paint on the ceiling above exposed food, etc.Heavy build-up of frost/ice on foodsSanitizer buckets stored on the floorFlies landing on RTE foodsFUELSS stored on trashcansCut fruit stored in waterIf chemical containers are re-used for food, mark A129 as Not Compliant.For actual product contamination by live pests in food, (e.g., moths in a bag of flour, ants in a bag of sugar, grain beetles in a bag of rice, etc.), mark this item AND A143 (pest activity) as Not Compliant.For gnawed packages of food, mark A143 as Not Compliant.For food-contact items that are not clean due to the condition of the surface (e.g.: debris visible in score marks of cutting boards after cleaning), mark A125 as Not Compliant.For food-contact surfaces that are not smooth, easily cleanable and in good condition, mark B215 as Not Compliant.For other personal items stored improperly, mark C330 as Not Compliant.Food Code References:3-301.12 Preventing Contamination When Tasting3-303.11 Ice used as Exterior Coolant, Prohibited as Ingredient3-302.11(A)(1-2) (B) Packaged and Unpackaged Food - Separation, Packaging, and Segregation3-306.11 Food Display3-306.13 (A) Consumer Self-Service Operations3-307.11 Miscellaneous Sources of Contamination7-201.11 Separation7-207.12 Refrigerated Medicines, Storage7-208.11 (B) Storage7-203.11 Poisonous or Toxic Material Containers
+```
+
+</details>
+
+#### `A115a` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** WIC dunnage racks used for chicken only. Chicken stored with printed received label facing outward or manufacturer's sticker facing outward to track shelf life.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Note: This standard does not apply to the walk-in freezer.Wingstop only permits raw chicken to be stored on dunnage racks. Document if separate dunnage racks are used to hold bulk carrots/celery, etc. These items should be stored on shelving, not dunnage racks.Document if chicken cases are stored on rack other than dunnage rack.Cases of chicken must be stored on dunnage racks with either the Zenput received printed label facing outward OR the manufacturer's label facing outward with the received date written on the box.Cross-reference:Document item A115 if other foods are stored on the same dunnage rack with raw chicken. This item specifically addresses separate dunnage racks used for products other than raw chicken.
+```
+
+</details>
+
+#### `A119` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Foods that require time/temperature control for safety (TCS) are not held or sold past expiration date.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:IMPORTANT: there are 2 options for labeling (this does not apply to chicken, use manufacturers label to asses chicken shelf life)date alone is usedproduct prep date counts as day 1 and product expires on the last day of the shelf lifeEx. ranch dressing has a 4 day shelf life and was prepped on 11/1, the ranch would expire at the end of the day on 11/4date and time are usedproduct prep date and time are taken into consideration when assessing number of days for the shelf lifeEx. ranch dressing has a 4 day shelf life and was prepared on 11/1 at 5pm, the ranch would not be considered expired until 11/5 at 5pmThe following items must not be held or sold past expiration date.Classic wings fresh - for wings, the pack day is day 0 so they have x number of days past the pack date (ex. if pack date is 8/31, the store has through 9/14 end of day to sell)Tyson - 21 days from pack datePeco - 17 days from pack dateHarrison Poultry - 14 days from pack dateKoch - 14 days from pack dateMountaire - 16 days from pack dateSimmons - 18 days from pack dateWayne- Sanderson - 10 days from pack datePilgrim's - 17 days from pack dateGeorge's - 10 days from pack dateAmick - 14 days from pack dateCase Farms - 14 days from pack dateHouse of Raeford - 14 days from pack dateClassic wings frozen - 1 yearBoneless wings - 1 yearTenders - 1 yearGehl's cheeseRanch dressingBleu cheese dressingBleu cheese crumblesBlanched friesOtherLink to Master Shelf Life chart: https://drive.google.com/drive/folders/15ntdZfkjrpmBK24_eoT2NnlwTlTFf_y5?usp=sharing
+```
+
+</details>
+
+#### `A119a` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Foods that do not require time/temperature control for safety (TCQ) are not held or sold past expiration.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Wingstop refers to their non-TCS foods as TCQ.Labeling: IMPORTANT: there are 2 options for labelingdate alone is usedproduct prep date counts as day 1 and product expires on the last day of the shelf lifeEx. if carrots have a 5 days shelf life and they were prepped on 11/1, the carrots would expire at the end of the day on 11/5date and time are usedproduct prep date and time are taken into consideration when assessing number of days for the shelf lifeEx. if carrots have a 5 days shelf life and they are prepared on 11/1 at 5pm, the carrots would not be considered expired until 11/6 at 5pmThe following items must not be held or sold past expiration date.Thawing corn - 1 dayPrepped corn - 2 daysCarrot sticks - 5 daysBulk carrots - 14 daysCelery sticks - 5 daysBulk celery - 14 daysSauces on the line - 7 daysPrepared sauces - 7 daysBaked rolls - 2 daysProofing rolls - 2 daysTriple chocolate brownies - 3 daysCut lemons and limes - 1 dayBulk lemons and limes - 14 daysSeasonings - 6 monthsPotatoes - 14 daysBrewed tea - 8 hoursHoney mustard dressingSoda bibsOtherLink to shelf life chart: https://drive.google.com/drive/folders/15ntdZfkjrpmBK24_eoT2NnlwTlTFf_y5?usp=sharingCross-reference:TCS products that are not labeled or held past shelf life are documented under item A119.
+```
+
+</details>
+
+#### `A121` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Foods are from commercial suppliers. Foods and packaging are in sound condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop does not allow product to be purchased at a grocery store. Products must come from approved suppliers. See Master Shelf Life chart below for approved suppliers.Link to approved vendor list: https://drive.google.com/drive/folders/15ntdZfkjrpmBK24_eoT2NnlwTlTFf_y5?usp=sharing
+```
+
+</details>
+
+#### `B207` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** WRI blanching storage procedures are being followed.  Proper cooling methods (placing foods in shallow pans, using chill blasters or cooling wands, etc.) are used for foods that require time/temperature control for safety (TCS).
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:WRI blanching storage procedures are being followed.Transfer2 large baskets or 3 small baskets of blanched fries per one perforated pan.4 pans = 1 caseUse approved plastic tong (beige or black) to evenly distribute the fries for proper cooling.When adding new trays of freshly blanched potatoes to the fry cart, leave a gap between each level of trays to allow steam to escape.Do not cover fry carts until fries cooled to 40F. Document if fry cover has condensation.Restaurants that use approved gray tubs for storing blanched fries must not overfill the tubs to allow proper cooling.Standard Policy:Mark as Not Compliant if proper methods are not used when cooling (e.g.: placing foods in shallow pans, covering loosely, etc.).Why This Is Important:Taking foods quickly through the Temperature Danger Zone during the cooling process can be difficult. Proper methods ensure that it happens safely. Reducing the thickness of the food by cutting up large pieces or by pouring liquids into shallow pans shortens the distance from the surface of the food to the middle of the food allowing cool air to penetrate more quickly and speeding the cooling process.Trending:N/ACross-reference:For improper cooling of hot TCS foods, mark A111 as Not Compliant.If blanched fries are not covered once they reach 40F, document item C307.Food Code References:3-501.15(A) Cooling Methods
+```
+
+</details>
+
+#### `B225` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Date label is applied at time of preparation to foods that require time/temperature control for safety (TCS), ready-to-eat and are prepared on site.  Chicken boxes have manufacturer's label on the box.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop requires all prepared food to have date marking for the specific shelf life to that product.Document TCS foods that are not labeled.Wingstop chicken cases must be labeled from the manufacturer.If the majority of boxes are labeled, do not score if label is missing from a few boxes.Product required to be dated (prepared items) or have manufacturers label (chicken products)Classic chickenBoneless wingsTendersRanch dressingBleu cheese dressingBlanched friesGehl's cheeseOtherStandard Policy:N/AWhy This Is Important:Some bacteria can grow even when the food is refrigerated. Because of that, foods that will support bacterial growth must be used or discarded in no more than 7 days from the time they are prepared or opened. (The day it is opened or prepared counts as Day One.) The bacteria in refrigerated foods grow slowly and won't reach dangerous levels before the expiration date.Trending:N/ACross-reference:For TCS foods held or sold past expiration (manufacturer date or date label), mark A119 as Not Compliant.For non-TCS food held or sold past expiration, mark A119a as Not Compliant.Food Code References:3-501.17(A-D) RTE, TCS (Time/Temperature Control for Safety Food), Date Marking
+```
+
+</details>
+
+#### `B225a` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Date label is applied at time of preparation for all TCQ foods.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop calls non-TCS foods TCQ foods.Wingstop requires all non-TCS foods to have date marking for the specific shelf life to that product.Document non-TCS foods that are not labeled.The following items must have date label.Thawing cornPrepped cornHoney mustardCarrot sticksBulk carrotsCelery sticksBulk celerySauces on the linePrepared saucesBaked rollsProofing rollsTriple chocolate browniesCut lemons and limesBulk lemons and limesSeasoningsPotatoesBrewed teaHot sauce bottle on lineOtherStandard Policy:N/ATrending:N/ACross-reference:For TCS foods held or sold past expiration (manufacturer date or date label), mark A119 as Not Compliant.For non-TCS food held or sold past expiration, mark A119a as Not Compliant.
+```
+
+</details>
+
+#### `B225b` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All products dated with a received date, if outside of original case each unit is labeled with received date.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:All products, TCS and non-TCS should be marked with a received date.If item is removed from original case, each unit is labeled with received date.Exception:Bottled water is not required to be dated with a received dateFrozen fries removed from case do not need to be labeled
+```
+
+</details>
+
+#### `B225c` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All products once opened, have open date present.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Products once opened, have open date present.  Ex. honey mustard dressing, sauces, etc.Exceptions:Soda bibs are not required to have opened date/labelChicken on line in red bucket is not required to have label
+```
+
+</details>
+
+#### `B225d` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Is the restaurant using Zenput printer labels to label products that are received, opened, and prepped?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client policy:Document how the location is labeling products- received, opened and prepped.Unopened received products can be labeled with Zenput labels but are not required; a permanent marker is still an acceptable form of dating received productsIf the restaurant’s printer is not working, the restaurant can write on the labels until their printer is back up and runningIf a restaurant is using printed labels that are a different brand than Zenput, mark as compliant and notate the brand they are usingZenput Labels are required to be used on all products that are opened and/or preppedRecord how the location is labeling their products: received,opened, and prepped:Yes, the location is using Zenput labels for received, opened and prepped productsYes, the location is using Zenput labels for opened and prepped products. Location is handwriting received datesLocation is using Zenput and handwritten labels for opened and prepped productsLocation is using an alternative printed labeling system to label their productsMark as non-compliant if:No, the location is not using Zenput labels for opened and prepped productsLocation is using handwritten and zenput labels for open and prepped products when the printer is observed functional.
+```
+
+</details>
+
+#### `B226` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Prepped brownies have nutritional information label on the back. Pre-packaged food for sale and bulk food for self-service are labeled with their common name, ingredients (if more than one), net weight or volume, name and address of the manufacturer, packer, or distributor, any of the 9 major allergens present, and nutrition labeling if health claims are made. Ready-to-eat foods for self-service are provided with utensils or dispensing methods that prevent contamination.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop brownies must have a nutrition label.Standard Policy:Mark as Not Compliant if "grab-and-go" food items are not properly labeled with the following. ("Grab-and-go" refers to food items that are pre-packaged or packaged in the food establishment or retail store that are placed out for the customer to get for themselves and take to the register to purchase such as sandwiches, salads, etc. in a self-service display case where the customer can grab the item and bring to the cash register.)common name of the foodingredients (and sub-ingredients) if there is more than onenet weight or volume of the foodname and address of the manufacturer, packer or distributorallergen information if the food contains any of the 9 major allergens (milk, eggs, fish, Crustacean shellfish, tree nuts, peanuts, wheat, soybeans or sesame)nutrition labeling if any health claims are madeWhy This Is Important:Food labels help consumers make informed decisions about food selections. Appropriate labels on pre-packaged food and self-service bulk food are an important source of information for consumers to answer questions about ingredients, allergens, weight and the manufacturer, especially when there may not be an employee available to assist in answering these questions.Self-service operations of ready-to-eat foods provide an opportunity for contamination by consumers. The risk of contamination can be reduced by supplying clean utensils and dispensers.Trending:N/ACross-reference:For foods not labeled with a common name, mark C311 as Not Compliant.Food Code References:3-602.11 Food Labels.3-306.13(B) Consumer Self-Service Operations.
+```
+
+</details>
+
+#### `C303` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Slacking/water thawing procedures being followed. Foods that require time/temperature control for safety (TCS) are thawed under refrigeration, completely submerged under cool running water, in a microwave if cooked immediately afterward, or as part of the cooking process.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Procedure for slack thawing:Write ‘Frozen’ on the case and date the product with the date the product is moved from the freezer to the cooler.Once completely slack thawed (this may take up to 4 days), previously frozen product has a 4 day shelf life. (Maximum 8 days after thawing process is begun.)Procedure for water thawing:Wash, rinse, and sanitize the sink before placing the frozen chicken into one side of the sink.Place frozen chicken in sink and allow cold water to run over the chicken.About halfway through thawing break the chicken apart.Once thawed, place thawed chicken in the chicken reach-in cooler for immediate use.Water thawed chicken must be used the same day it is thawed.Standard Policy:Mark as Not Compliant if TCS foods are not properly thawed: under refrigeration at 40°F or below, completely submerged under cool running water that is 70°F or below, in a microwave oven if it is to be cooked immediately after thawing, or as part of the cooking process.Mark as Not Compliant if ROP fish is not properly thawed:Removed from ROP packaging before thawing under refrigerationIf thawed by completely submerging under cool running water, the fish must be removed from ROP packaging before thawing or immediately upon completion of thawingWhy This Is Important:Freezing doesn't destroy most bacteria. It just stops them from multiplying. Most proper thawing methods prevent the food from going in the Temperature Danger Zone or ensure it doesn't end up there for long. This reduces the risk that these surviving bacteria can begin to grow again and cause illness.With a microwave oven, the heating is uneven and it's not possible to keep all of the food out of the Temperature Danger Zone. To keep the food safe, microwave thawing must be followed immediately by cooking the food.As an added safeguard to prevent the possibility of C. botulinum toxin formation, ROP fish should be kept frozen until use or completely removed from the ROP environment or package.Trending:N/ACross-reference:If the item thawing is TCS and the internal temperature exceeds 41°F, mark A101 or A105 as Not Compliant.For frozen foods that are not solidly frozen, mark C305 as Not Compliant.Food Code Reference:3-501.13 Thawing
+```
+
+</details>
+
+#### `C307` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Foods are properly protected from contamination. Foods in storage are properly covered unless cooling. Foods are protected from contamination during preparation and serving. No condensation is present above exposed food or food-contact surfaces. Sanitizer buckets are not stored directly on the floor. Proper serving practices are observed so that hands do not touch the food-contact or lip-contact surfaces of cups or utensils.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Food held in storage not covered to protect from contamination. Items may be left uncovered or loosely covered during the cooling process only. Whole fruits and vegetables that will be washed or peeled do not have to be covered.Potential contamination from the environment, such as dripping condensation, chipping paint on the ceiling above exposed food, etc.Items in freezers with heavy build-up of frost/ice on the exterior.Sanitizer buckets are stored on the floorFlies landing on RTE foodFood, utensils, food-contact packaging, sheet trays, etc. are stored or held (no matter how temporary) on trashcansService employees touch the food-contact or lip-contact surfaces of cups or utensilsCut fruit stored in water.Why This Is Important:There is an almost unlimited number of things that could fall, drip, spray or splash into food. Germs can be transferred by humans touching, sneezing or coughing on food. Even airborne dust may carry germs such as mold spores. Often such contamination is not easily visible after it happens. The only solution is prevention such as covers, lids or appropriate placement so that an item is not below or next to a risk.Sanitizer buckets stored at floor level are much more likely to be contaminated by trash, dust, dirt, etc. Excessive debris could inactivate the sanitizer and the wiping cloths could potentially spread the debris during their next use.Even thorough handwashing does not remove all bacteria and viruses. Bare hands could transfer germs to the food-contact or lip-contact surfaces of cups and utensils.Trending:N/ACross-reference:For glasses, cups with no handle, bowls being used as scoops, etc., mark C323 as Not Compliant.For damaged glasses, cups, bowls used as scoops, mark B215 as Not Compliant.For styrofoam cups and similar items used as scoops, mark B215 as Not Compliant.For actual or potential cross-contamination of food, mark A115 as Not Compliant.Food Code References:3-305.11(A-B) Food Storage3-303.12 Storage or Display of Food in Contact with Water or Ice3-305.14 Food Preparation3-306.11 Food Display;3-306.12 Condiments, Protection3-307.11 Miscellaneous Sources of Contamination3-304.16(A) Using Clean Tableware for Second Portions and Refills
+```
+
+</details>
+
+#### `C309` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Vegetables are properly washed prior to processing and serving.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:If the location is using lemons and limes, these must be washed before processing.Standard Policy:Mark as Not Compliant if raw fruits and vegetables are not washed before processing.Why This Is Important:Many types of contamination can be present on the surfaces of fruits and vegetables: bacteria, viruses, dirt, insects, pesticides, etc. Washing produce flushes away physical debris and germs, and it dilutes chemical contamination. This must be done before the food is cut so that the blade does not carry the surface contamination to the interior of the food.Trending:N/ACross-reference:For cut fruit stored in water, mark C309 as Not Compliant.Food Code Reference:3-302.15 Washing Fruits and Vegetables
+```
+
+</details>
+
+#### `C311` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Starch wash and Magnesol properly labeled for identification of product.  Foods are properly identified with the common name of the product on the container.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop requires the starch wash to be labeled.Wingstop requires Magnesol to be labeled.Shakers on the line are not required to be labeled.Standard Policy:Mark as Not Compliant if:Bulk ingredient containers are not labeled with the common name of the product inside unless it is obvious (e.g.: rice)Spray bottles of food (e.g.: cooking oil, water, etc.) are not labeled with the common name of the product insideWhy This Is Important:It is easy to confuse foods and ingredients after they are removed from their original packaging. New or temporary employees may struggle even more than those who are accustomed to the kitchen. Using the wrong ingredient or food could cause severe medical issues for the consumer, such as allergic reactions or chemical poisoning.Foodborne illness and even death have resulted from the use of unlabeled salt, instead of sugar, in infant formula and special dietary foods. Liquid and granular foods may resemble cleaning compounds and the lack of a regular labeling program could lead to disastrous mix-ups.Trending:Document all observations as they are made. The system will determine the point value and the comment will appear on the report even if points are not deducted.Points will be deducted for two or more observations.Cross-reference:For issues with labels on pre-packaged and bulk consumer self-service products, mark B226 as Not Compliant.Food Code References:3-302.12 Food Storage Containers, Identified with Common Name of Food
+```
+
+</details>
+
+#### `C313` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Foods and food-contact packaging are stored at least six inches off the floor.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if food, equipment, utensils, linens, single-use and single-service items are stored less than six inches off the floor.Do not score items stored in pressurized beverage containers, cased food in waterproof containers such as bottles or cans, and milk containers in plastic crates for being less than 6 inches off the floor.Why This Is Important:Floors are notoriously dirty because shoes carry contamination into the kitchen from restrooms, garbage areas, outside the building, etc. Food and food contact packaging must be stored off the floor to protect them. This six-inch space also provides the added benefit of allowing easy monitoring of cleanliness and pest issues.Trending:N/ACross-reference:If floor is soiled beneath milk crates used as shelving, mark C335 as Not Compliant.Food Code References:3-305.11(A)(3) Food Storage.
+```
+
+</details>
+
+### Equipment & Utensils
+
+#### `A123` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Food-contact surfaces of equipment and utensils are made of safe materials, non-toxic and durable. Food equipment lubricants that may contact food are approved as food additives.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Food-contact surfaces are not made of materials that are safe, corrosion resistant, and nonabsorbentApproved materials include, but not limited to:Food-grade plasticNon-reactive metals such as stainless steelHard maple, bamboo or equivalently hard, close-grained wood (cutting boards, cutting blocks, baker's tables, rolling pins, salad bowls, chopsticks, etc.)Food equipment lubricants that may contact food are not approved as food additivesWhy This Is Important:If items are not durable enough for their intended purpose, they may become difficult to clean, providing a place for germs and larger pests to live. If items are not sturdily constructed, pieces of them could also break off and end up in food where they could injure consumers.Trending:Document all observations as they are made. The system will determine the point value and the comment will appear on the report even if points are not deducted.Points will be deducted for two or more observations.Points will be deducted for a single occurrence of improper food lubricantCross-reference:For food-contact surfaces that are not clean due to the condition of the surface (e.g.: debris visible in score marks of cutting boards), mark A125 as Not Compliant.For food-contact surfaces that are not smooth, easily cleanable and in good condition, mark B215 as Not Compliant.Food Code References:4-401.11(A) Characteristics7-205.11 Incidental Food Contact, Criteria4-101.13 Lead4-101.14 Copper4-101.15 Galvanized Metal
+```
+
+</details>
+
+#### `A125` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Food-contact surfaces are properly cleaned and sanitized (at least every 4 hours during continuous use at room temperature with foods that require time/temperature control for safety (TCS)).
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:When assessing the ice machine, if build-up is observed- 1. take a photo of the inside of the ice machine where the mold is observed AND 2. if the photo does not clearly show the mold OR it looks like the buildup could be a stain, use an alcohol swab (not paper towel) to wipe the buildup and take a 2nd photo of the buildup on the alcohol swab.
+```
+
+</details>
+
+#### `B215` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Food-contact surfaces are smooth, easily cleanable, and in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if food-contact surfaces are not:smooth and easily cleanablein good condition to facilitate cleaning and prevent physical contamination of the food (e.g.: cracks, chips, flaking pieces that could become physical contamination, broken wires on fryer baskets and sifters, cutting boards with fraying plastic or splintered wood, etc.)Mark as Not Compliant if foam cups or items made of similar material are being used as scoops.Why This Is Important:Food-contact surfaces that cannot be easily cleaned provide a potential harbor for foodborne pathogens. Even small cracks, chips, and pits in a surface may be enough to allow bacteria to grow. If items are not in good condition or not built to withstand their intended use, pieces of them could break off and end up in food where they could injure consumers.Utensils with missing handles (as well as bowls and cups being used as scoops) are a contamination risk because the portion that contacts the hand one time may end up down in the food the next time, potentially transferring germs from the hands to the food.Trending:NACross-reference:For food-contact surfaces that are not made of safe material, non-toxic and durable, mark A123 as Not Compliant.For food-contact items that are not clean due to the condition of the surface (e.g.: debris visible in score marks of cutting boards after cleaning), mark A125 as Not Compliant.For utensils such as cups, glasses, bowls, etc. with no handle that are being used as a scoop, mark C323 as Not Compliant.If cups, glasses, bowls, etc. are used as scoops AND are damaged, mark this item as Not Compliant AND also C323.Food Code References:4-202.11 (A)(1-4) Food-Contact Surfaces
+```
+
+</details>
+
+#### `B239` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Sanitizer test kits are open and readily available for use and within shelf life.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Document if the test kit is expired.Standard Policy:Mark as Not Compliant if test kits for each chemical sanitizer used are not readily available. Test kits that are buried in drawers or that are still in the original aluminum foil wrap are not considered readily available or used.Why This Is Important:It's impossible to tell by looking whether sanitizer is at the proper concentration. And improper sanitizer concentration could allow germs to survive on utensils and equipment. Best practice is to test each batch of sanitizer. To encourage this practice, the test kits must be easily available, not still wrapped in boxes or buried in some unknown desk drawer.Trending:N/ACross-reference:For issues with sanitizer concentration, mark A127 as Not Compliant.Food Code References:4-302.14 Sanitizing Solutions, Testing Devices.4-501.116 Warewashing Equipment, Determining Chemical Sanitizer Concentration.
+```
+
+</details>
+
+#### `C321` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Clean utensils, equipment and food-contact packaging are stored in a sanitary manner. Storage containers such as canisters, bins and drawers are maintained clean. Utensil handles all point up for vertical storage or all point in the same direction for horizontal storage.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Issues with clean utensils and equipment that are stored for later use. These items must be stored in a manner to prevent recontamination.Shelving or containers holding clean utensils, equipment or food-contact packaging is soiledItems are stacked while still wet or wet items that are stacked nested so that they cannot drip dryDrawers, tubs and buckets holding clean utensils are not clean and organized so that utensil handles point the same directionHandles of utensils stored in buckets/containers do not point up.Items stored in stacks are not inverted to prevent dust and debris from collecting insideWhy This Is Important:To avoid having to re-clean and re-sanitize equipment and utensils, they must be protected by storing them in clean containers, away from splash or drippage. Where practical, inverting items may help prevent contamination of the food contact surface by foreign objects, dust, and aerosols from food prep. Handles of all items in a container should point in the same direction so that hands reaching for one item do not contaminate the food-contact end of other items.Trending:N/ACross-reference:For cleanliness of food-contact surfaces, mark A125 as Not Compliant.For cleanliness of nonfood-contact surfaces, mark C325 as Not Compliant.Food Code References:4-903.11 Equipment, Utensils, Linens, and Single-Service and Single-Use Articles4-904.11(B) Kitchen and Tableware
+```
+
+</details>
+
+#### `C323` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** In-use utensils (including ice scoops) are properly handled and stored in a sanitary manner. Handles of utensils that are stored in the product do not touch the product and extend out of the container for foods that require time/temperature control for safety.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Any issues with utensils that are currently in use, including utensils that are stored in food waiting to be used and ice scoops, shovels and paddles.For non-TCS items, scoops may be stored with the product inside covered containers so long as the handle extends out of the product.For TCS items, the scoop must extend completely out of the container.Utensils such as cups and bowls with no handles that are being used as a scoopUtensils stored at room temperature in containers of sanitizer.Surface that holds utensils that are kept at room temperature and used for TCS foods not cleaned every 4 hours (ex. a ladle stored on the counter next to cook line, the counter would need to be cleaned and sanitized every 4 hours).Do not mark items stored on the floor while waiting to be washed as Not Compliant.Why This Is Important:Utensils used with foods or ingredients are often used repeatedly. That means they can transfer germs to many products or meals, risking a large foodborne illness outbreak. The utensil must be stored safely, usually in the food, on a clean sanitary surface (and cleaned regularly), in hot water, or under constantly running water to flush away food particles. Special care must be given to controlling the handle to prevent transferring germs from the hands into the food. Ice scoops stored in the machine may become buried under new ice, allowing the handle to contact ice, which is a food.Trending:N/ACross-reference:For damaged or foam cups, bowls, etc. being used as scoops, mark B215 as Not Compliant.Food Code References:3-304.12 In-Use Utensils, Between-Use Storage.4-602.11(D)(7) Equipment Food-Contact Surfaces and Utensils.
+```
+
+</details>
+
+#### `C325` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Nonfood-contact surfaces of equipment and utensils are properly cleaned, such as door handles and gaskets, sliding door tracks, shelves, racks, etc.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if nonfood-contact surfaces are not cleaned regularly to maintain a sanitary environment. Examples include but are not limited to:caulk around sinks (compartment, prep, handsinks), prep tables, etc.surfaces of prep sinks that do not come in direct contact with foodgaskets on cooler and freezer doorstracks of sliding doors on ice machinesexterior of ice machinesexterior/sides of food containerson/off switches of food processing equipmenthandles to cooler doorsshelves and racks for foodetc.Why This Is Important:The presence of food debris on nonfood contact surfaces may allow germs to accumulate and can attract insects and rodents to the food area. Also, workers who inadvertently touch these surfaces can transfer the germs to food.Trending:N/ACross-reference:For cleanliness of dishwashing machine, mark C317 as Not Compliant.For issues with cleanliness or condition of warewashing sinks not related to caulk (interior, exterior, drainboards, faucet, sprayer nozzle), mark C319 as Not Compliant.For issues with condition of caulk around prep sinks, handwashing sinks and warewashing sinks, mark C327 as Not Compliant.If shelving or containers holding clean utensils, equipment or food-contact packaging is soiled, mark C321 as Not Compliant.Food Code References:4-202.16 Nonfood-Contact Surfaces4-501.11 (A-B) Good Repair and Proper Adjustment4-601.11(B-C) Equipment, Food-Contact Surfaces, Nonfood-Contact Surfaces, and Utensils4-602.13 Nonfood-Contact Surfaces
+```
+
+</details>
+
+#### `C327` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Nonfood-contact surfaces of equipment and utensils are durable, non-toxic, easily cleanable and in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Nonfood-contact surfaces of utensils and equipment in the food preparation area are not made of materials that are safe, corrosion resistant, nonabsorbent, smooth and easily cleanableNonfood-contact surfaces are not in good condition to facilitate cleaning and to prevent physical contamination of the foodCaulk around sinks (compartment, prep, handsinks), prep tables, etc. is not in good conditionWhy This Is Important:Surfaces that are difficult to clean may allow germs to accumulate and can attract insects and rodents to the food area. Surfaces in poor condition may also become a physical contamination risk if pieces break or chip off and fall onto other surfaces or into food.Trending:N/ACross-reference:For cleanliness of dishwashing machine, mark C317 as Not Compliant.For issues with cleanliness or condition of warewashing sinks not related to caulk (interior, exterior, drainboards, faucet, sprayer nozzle), mark C319 as Not Compliant.For issues with cleanliness of caulk around prep sinks, handwashing sinks and warewashing sinks, mark C325 as Not Compliant.Food Code References:4-202.16 Nonfood-Contact Surfaces4-205.10 Food Equipment, Certification and Classification
+```
+
+</details>
+
+#### `C351` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** No unapproved equipment observed.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Toasters are approved for new chicken sandwhiches.
+```
+
+</details>
+
+### Cleaning & Sanitizing
+
+#### `A127` — Critical First Priority, First Priority — 5 pts (repeat: 5)
+
+**Title:** Sanitizer must be available at all times.  Chemical sanitizer solutions for manual use (such as sinks and buckets) are maintained at proper concentration and temperature per label instructions.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:NO sanitizer in the facility is an imminent health hazard that will result in an automatic Unacceptable rating.Wingstop uses quat at a strength of 200 - 400ppmStandard Policy:Mark as Not Compliant if:Sanitizer in sinks and buckets in each area are not at proper concentrationsThere is no sanitizer available at all in the facilityWhy This Is Important:Chemical solutions at too low concentration may not kill enough microorganisms to effectively sanitize the surfaces. Chemical solutions at too high concentration may leave a dangerous chemical residue on the surfaces after use.In some cases, equipment may be installed to sanitize using hot water alone to raise the surface temperature of the items enough to sanitize them. Too low a temperature may not effectively sanitize the surfaces. Too high a temperature may damage the items being sanitized and creates a serious safety concern for the operator.Trending:N/ACross-reference:If test strips are not available, also mark item B239 as Not Compliant.Food Code References:4-501.111 Manual Warewashing Equipment, Hot Water Sanitization Temperatures4-501.114 Manual and Mechanical Warewashing Equipment, Chemical Sanitization-Temperature, pH, Concentration and Hardness4-703.11 Hot Water Chemical7-204.11 Sanitizers, Criteria7-204.14 Drying Agents, Criteria
+```
+
+</details>
+
+#### `A129` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Chemicals are used correctly and only for their intended purpose. Chemicals used to wash or peel raw, whole fruits and vegetables are approved and at the proper concentration. Containers previously used for chemicals are not used for storing, dispensing, or transporting food.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Containers previously used for chemicals are used for storing, dispensing, or transporting foodChemicals are not used according to the manufacturer's recommendation or for purposes other than intendedChemicals used for washing or peeling fruits and vegetables are not approved for that use, or are not at the proper concentrationWhy This Is Important:The rules for handling poisonous or toxic materials are intended both to keep workers safe from injury and to protect consumers from contaminated food. Residues of chemicals often cannot be seen or smelled easily, so preventive steps must be taken to ensure they never contaminate food or other items.Trending:N/ACross-reference:For actual or potential cross-contamination due to improperly stored chemicals, mark A115 as Not Compliant.If chemicals are not labeled, mark B233 as Not Compliant.Food Code References:7-201.11 Separation7-202.12 Conditions of Use7-203.11 Poisonous or Toxic Material Containers7-204.12 Boiler Water Additives, Criteria7-301.11 Separation7-204.12 (A-B) Chemicals for Washing, Treatment, Storage and Processing Fruits and Vegetables, Criteria
+```
+
+</details>
+
+#### `B235` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Cleaning and maintenance tools are not cleaned in food prep sinks, dishwashing machines, or dishwashing sinks.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if these items are cleaned or stored in food prep sinks, dish machines or dish sinks.Why This Is Important:Cleaning tools come in contact with a wide range of contamination. To avoid accidentally spreading this contamination to other items, the tools must be cleaned in designated areas such as mop sinks and never at prep, warewash or hand sinks.Trending:N/ACross-reference:For wet mops and brooms that are not hung to dry, mark C343 as Not Compliant.If cleaning and maintenance tools are cleaned in handsinks, mark B217 as Not Compliant.For improperly stored cleaning tools, mark C315 as Not Compliant.Food Code References:6-501.15 Cleaning Maintenance Tools, Preventing Contamination.
+```
+
+</details>
+
+#### `B237` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Three-compartment sink basins are large enough to immerse the largest piece of equipment being cleaned and sanitized.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Basins are not large enough or filled high enough to immerse at least half of the largest piece of equipment being cleanedThree-compartment sink (or larger) is not present where neededWhy This Is Important:To be able to properly wash, rinse and sanitize in a three-compartment sink, the basin must be large enough to immerse all surfaces of the item. For example, sanitizers typically require several seconds of contact time, as specified on their label. It is not enough to simply dip or wipe sanitizer over the surface. To be effective, items must be immersed for the full amount of time specified. This can be done only if the basin is large enough.Trending:N/ACross-reference:For issues with sanitizer concentration or water temperature for non-chemical sanitizing in a compartment sink, mark A127 as Not Compliant.For issues with cleanliness or condition of warewashing sinks, mark C319 as Not Compliant.If warewashing sink is not supplied with detergent, mark C319 as Not Compliant.If the Wash-Rinse-Sanitize process is not occurring properly, mark C319 as Not Compliant.If warewashing sinks are used for dishwashing and for food preparation at the same time, mark C319 as Not Compliant.For issues with cleanliness of caulk around warewashing sinks, mark C325 as Not Compliant.For issues with condition of caulk around warewashing sinks, mark C327 as Not Compliant.Food Code References:4-301.12(B) Manual Warewashing, Sink Compartment Requirements.
+```
+
+</details>
+
+#### `C315` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** All cleaning tools are properly stored between uses to avoid contamination of other surfaces. Equipment used to clean food-contact surfaces is durable and appropriate for the task. Sponges are not used with clean and sanitized or in-use food-contact surfaces.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if cleaning tools are stored in direct contact with food, equipment, utensils, linens, and single-service or single-use articles.Why This Is Important:Cleaning tools come in contact with a wide range of contamination. To avoid accidentally spreading this contamination to other items, the tools must be stored in designated areas away from food and food contact surfaces.Equipment used to clean must be sturdy enough to withstand the task. For example, brittle steel wool can leave metal fibers behind, sponges can pull apart, non-commercial brushes can drop bristles. All of these may end up as physical hazards in food. Sponges are also notoriously difficult to clean and sanitize and cannot be used around clean or in-use food contact surfaces. To avoid these risks, use the many commercial-quality options available such as Industrial strength steel scrub pads and tightly woven plastic scrub pads.Trending:N/ACross-reference:For wet mops and brooms that are not hung to dry, mark C343 as Not Compliant.For cleaning and maintenance equipment being washed in prep sinks, warewashing sinks or dish machines, mark B235 as Not Compliant.Food Code References:4-101.16 Sponges, Use Limitation
+```
+
+</details>
+
+#### `C319` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Three-compartment/prep sink is clean, properly maintained and operated; sinks are not used for dishwashing and food prep at the same time and sanitized between processes.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Sinks used for manual dishwashing are not clean or not in good repair including:Sides of sinkInterior of sinkDrainboardsFaucetsSprayer nozzleSinks used for manual dishwashing are not properly stocked with detergentWash-Rinse-Sanitize process is not occurring properlySinks are used for dishwashing and for food preparation at the same timeDishwashing sinks are damaged such as bent drainboards that do not shed water properlyWhy This Is Important:Three-compartment sinks must be set up in a proper flow of wash, then rinse, then sanitize, then air dry. Each step is vital and must occur in the right order. Leaving heavy soil on after the wash step can prevent the sanitizer from reaching all surfaces. And carrying detergent over after the rinse step can neutralize the basin of sanitizer, even though it may look the same.If dish sinks are used for food prep such as produce washing or thawing, the sinks must be washed, rinsed and sanitized both before and after to ensure no contamination carries over to the food being prepped, or to the dishes being cleaned.Trending:N/ACross-reference:For issues with sanitizer concentration or water temperature for non-chemical sanitizing in a compartment sink, mark A127 as Not Compliant.For issues with cleanliness of caulk around warewashing sinks, mark C325 as Not Compliant.For issues with condition of caulk around warewashing sinks, mark C327 as Not Compliant.If warewashing basins are not large enough or filled high enough to immerse at least half of the largest piece of equipment being cleaned, mark B237 as Not Compliant.If a three-compartment sink (or larger) is not present where needed, mark B237 as Not Compliant.Food Code References:4-204.119 Warewashing Sinks and Drainboards, Self-Draining4-204.120 Equipment Compartments, Drainage4-301.12 (C-E) Manual Warewashing, Sink Compartment Requirements4-301.13 Drainboards4-501.14 Warewashing Equipment, Cleaning Frequency4-501.16 Warewashing Sinks, Use Limitation
+```
+
+</details>
+
+#### `C329` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Wiping cloths are kept clean and dry or else immersed in properly diluted sanitizer. Cloths used on surfaces that contact raw animal products are not used for other surfaces.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop allows a clean, damp, sanitized cloth to be placed under the cutting board for prep. Do not score wiping cloth under cutting board unless visibly soiled.Standard Policy:Mark as Not Compliant if:Wiping cloths are not kept clean and dry or else fully immersed in properly diluted sanitizerSeparate cloths are not used for surfaces that contact raw animal foodsWhy This Is Important:Soiled wiping cloths can support the growth of dangerous bacteria unless fully immersed in sanitizer between uses. A contaminated cloth could then spread the bacteria to many other surfaces. When dry cloths are used they must be changed when soiled since there is no sanitizer to prevent the growth of bacteria and they are in the Temperature Danger Zone.Trending:N/ACross-reference:For improper sanitizer concentration, mark A127 as Not Compliant.For sanitizer buckets stored directly on the floor, mark C307 as Not Compliant.Food Code References:3-304.14 Wiping Cloths, Use Limitation
+```
+
+</details>
+
+### Personal Hygiene
+
+#### `A131` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Hands that may have become contaminated are washed using hot water and soap for 20 seconds and dried using disposable towels or a heated-air hand drying device. Hands are washed each time before donning gloves. Care is taken after washing to avoid recontaminating hands by touching faucet or towel dispenser handles.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop does not require paper towels to be dispensed prior to handwashing. Coach to regularly sanitize the paper towel dispenser handle.Standard Policy:Mark as Not Compliant if:Food handlers are not washing hands at required times including the activity that occurred before and after the handwash was requiredHands are not washed between glove changes if the employee changes tasksHands are not washed using proper technique:hot water not usedsoap not usedhands not washed for required amount of time (do not document unless entire handwash process is clearly less than 10 seconds)hands not dried using disposable towel or heated-air hand drying devicere-contaminating hands by touching faucet (e.g., towel not used to turn off the faucet handles)Why This Is Important:Many foodborne illnesses are caused by germs that were transferred from hands to food. Scrubbing hands using soap and warm water greatly reduces the number of germs on the skin. Using disposable towels or a heated-air drying device helps prevent recontamination of cleaned hands.Trending:NACross-reference:If product is actually contaminated because of improper hand washing, mark A115 as Not Compliant.Food Code References:2-301.11 Clean Condition2-301.12 Cleaning Procedure2-301.14 When to Wash3-304.15 (A) Gloves, Use Limitation
+```
+
+</details>
+
+#### `A133` — First Priority — 5 pts (repeat: 5)
+
+**Title:** No bare-hand contact occurs with ready-to-eat foods. Disposable gloves are worn over other types of gloves (cut-resistant gloves, cloth gloves, etc.) when handling ready-to-eat foods.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Ready-to-eat foods are handled with bare hands. Coach only for incidental contact (i.e.: brushing against an item).Disposable gloves are not worn over cut-resistant gloves, cloth gloves, etc., when handling ready-to-eat foods. (Note: This does not apply if cut-resistant gloves are smooth, durable, AND nonabsorbent.)This item should not be mark as Not Compliant if bare-hand contact with RTE food occurs and the RTE food is being added to raw animal food that will be properly cooked or the RTE food will be cooked to a minimum of 145°F (63°C).Why This Is Important:Even thorough handwashing does not remove all bacteria and viruses. If the food will be cooked later, the risk is reduced. For ready-to-eat foods that will not be cooked, full separation is necessary between hands and the food (typically by using utensils, serving papers, gloves, etc.)Trending:N/ACross-reference:For improper use of gloves, mark B221 as Not Compliant.Food Code References:3-301.11(B) Preventing Contamination from Hands3-801.11(D) Pasteurized Foods, Prohibited Re-Service and Prohibited Food (applies to serving Highly Susceptible Population)
+```
+
+</details>
+
+#### `A135` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Persons displaying symptoms such as vomiting, diarrhea, jaundice or sore throat with fever are excluded from the establishment. Persons with exposed pustular lesions or persistent sneezing, coughing, or a runny nose that causes discharges from the eyes, nose, or mouth, are restricted from working around exposed food or food-contact surfaces.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for food handlers with open sores on their hands or forearmsMark as Not Compliant if employees volunteer that they have symptoms of foodborne illness and have not been properly excluded or restricted, but do not question employees.Be aware of signs of illness (e.g.: bottles of medication, employees making frequent trips to the restroom).Bring any concerns to the manager's attention and have the manager question the employee so that privacy laws are not violated.Why This Is Important:Food handlers come in contact with the food for many consumers every day. So one sick worker can cause a widespread outbreak of illness. To prevent this, workers with symptoms typical of foodborne illness must report those symptoms to their manager. The manager who will determine the appropriate actions to take.Trending:N/ACross-reference:For bodily fluid cleanup kits, mark B223 as Not Compliant.Food Code References:2-201.11 Responsibility of Permit Holder, Person in Charge, and Conditional Employees2-201.12 Exclusions and Restrictions2-201.13 Removal, Adjustment, or Retention of Exclusions and Restrictions
+```
+
+</details>
+
+#### `B217` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Handwashing facilities are located convenient to food handling and 3-compartment sink area, and are maintained accessible at all times. Handwashing facilities in food handling areas are used only for that purpose and only designated handwashing sinks are used for handwashing.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant:For an obviously inadequate number of handwashing sinks. Assess the preparation, service, and dish areas. If the adequacy is questionable, document the concern as a detailed General Comment instead.If anything must be moved from in front of or inside the sink in order to use it for handwashing, regardless of how easy it is to move the objectIf handwashing sinks are used for any other purpose than handwashingFood handlers wash their hands in any sink other than a designated handwashing sinkWhy This Is Important:To encourage food handlers to wash their hands as frequently as necessary, the process must be as easy as necessary. If there is always a sink that is close by and easily accessible, then people are more likely to use it. This helps control germs and keep both workers and consumers healthy.Trending:N/ACross-reference:For cleanliness of handwash sinks in food prep areas, mark B219 as Not Compliant.For no hot water temperature at handwash sinks in food prep areas, mark B219 as Not Compliant.If handwashing sinks in food prep areas are not properly stocked, mark B219 as Not Compliant.For issues with handwashing sinks in restrooms used by food handlers, mark C333 as Not Compliant.For issues with cleanliness of caulk around handwashing sinks, mark C325 as Not Compliant.For issues with condition of caulk around handwashing sinks, mark C327 as Not Compliant.Food Code Reference:5-203.11(A) Handwashing Sinks6-301.10 Minimum Number5-204.11 Handwashing Sinks5-205.11 Using a Handwashing Sink2-301.15 Where to Wash2-301.16 Hand Antiseptics
+```
+
+</details>
+
+#### `B219` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Handwashing facilities in food handling areas are maintained clean at all times; supplied with readily available hot water, soap, disposable towels or heated-air hand drying device; and signed to remind employees to wash hands.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Handwashing sink is not clean including sides, interior and faucetSoap and single-use towels or a hot air dryer are not immediately available. Hand sanitizer may be available in addition to, but not in place of soap.Hot water does not reach at least 100°F at the faucet in a reasonable length of time. (Steritech standard is 60 seconds.)There is not a sign at each hand sink reminding employees to wash their handsA trash can is not present in the general area for disposal of paper towels (when applicable)Self-closing, slow-closing or metering faucet does not provide a flow of water for at least 15 seconds without the need to reactivate the faucetWhy This Is Important:To encourage food handlers to wash their hands as frequently as necessary, the process must be as easy as necessary. If the hand sink is always clean and fully stocked, then people are more likely to use it. This helps control germs and keep both workers and consumers healthy.Cold water can discourage people from washing their hands, and when there are not disposable towels or heated-air drying devices, people tend to wipe their hands on anything nearby, including clothing, which could recontaminate the hands.Signs help remind employees of proper handwashing technique, including which sink to use. Prep sinks and dish sinks are not always clean and could actually contaminate hands if they are used for handwashing. They also may not have easy access to soap and hand drying facilities.Trending:N/ACross-reference:For issues with handwashing sinks in restrooms used by food handlers, mark C333 as Not Compliant.For an inadequate number of handwash sinks, mark B217 as Not Compliant.If handwashing sinks are not easily accessible, mark B217 as Not Compliant.If handwashing sinks are used for other purposes, mark B217 as Not Compliant.If employees wash their hands in sinks other than designated handwashing sinks, mark B217 as Not Compliant.If cleaning and maintenance tools are cleaned or stored in handwashing sinks, mark B217 as Not Compliant.For issues with cleanliness of caulk around handwashing sinks, mark C325 as Not Compliant.For issues with condition of caulk around handwashing sinks, mark C327 as Not Compliant.FOOD CODE REFERENCE:5-202.12 Handwashing Sink, Installation.6-301.11 Handwashing Cleanser, Availability.6-301.12 Hand Drying Provision.6-301.14 Handwashing Signage.6-301.20 Disposable Towels, Waste Receptacle.
+```
+
+</details>
+
+#### `B221` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Gloves are changed whenever damaged or torn. When handling exposed food, gloves are worn over bandages, finger cots, finger stalls, fingernail polish or artificial nails. Fingernails are kept trimmed.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Gloves are not changed whenever they are contaminated, damaged or tornA food handler has a bandage, finger cot or finger stall on his or her hand that is not covered by a gloveA food handler is wearing nail polish that is not covered by a glove.Why This Is Important:Winter gloves are worn to protect the hands from cold weather, but food service gloves are worn to protect the food, not the hands. Gloves keep bare skin from coming in contact with ready-to-eat food. This is necessary because even thoroughly washed hands still have some germs on the skin.Anything on the hand that might contaminate the food (bandages, nail polish, etc.) must be covered by a glove. And fingernails must be kept trim so they do not puncture the glove.Trending:N/ACross-reference:For improper handwashing, mark A131 as Not Compliant.For bare-hand contact with ready-to-eat foods, mark A133 as Not Compliant.For personal hygiene and jewelry, mark C331 as Not Compliant.Food Code Reference:2-302.11 Maintenance. (Fingernails)2-401.13 Use of Bandages, Finger Cots, or Finger Stalls
+```
+
+</details>
+
+#### `B221a` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Single use gloves used during food prep.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Team members must wear gloves whilepreppingall “ready to eat” foods.This is referring to everything they prep in location. All items in our recipe guide must be handled with gloves. Applies to: veggies, corn, rolls, brownies, dips.This requirement DOES NOT apply to saucing wings or bagging fries. Gloves are not required.
+```
+
+</details>
+
+#### `B223` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Bodily Fluid Clean-up kits and written instructions for the clean-up of vomiting and diarrheal events are available.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Ask the PIC to show you the blood and bodily fluid clean-up kit. It does not have to be a specific kit.If the location has a pre-packaged/purchased, sealed kit, do not open the kit. Mark as Compliant.If the location has a kit that is not sealed or has put together their own kit, check for:written instructionsall supplies listed in the instructions are presentMark as Not Compliant if:No kit availableNo written instructions for the clean-up of vomiting and diarrheal eventsAny supplies necessary to complete all steps of the written instructions are not available.Why is this important:When an employee or customer vomits or has a diarrheal event in a food establishment, there is a real potential for the spread of harmful pathogens in the establishment. Putting the proper response into action in a timely manner can help reduce the likelihood that food may become contaminated and that others may become ill as a result of the accident.Once a vomiting or diarrheal event occurs, timely effective clean-up is imperative. The key to achieving an appropriate, timely response is availability and access to a written plan to reference.Noroviruses can be highly contagious. Employees and customers are at risk of contracting Norovirus illness from direct exposure to or exposure to airborne Norovirus from vomit. Exposed food employees are at risk of contracting Norovirus illness and subsequently transferring the virus to RTE food items served to customers.Trending:N/ACross-reference:For sick employees, mark A135 as Not Compliant.FOOD CODE REFERENCE:2-501.11 Clean-up of Vomiting and Diarrheal Events.
+```
+
+</details>
+
+#### `C330` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Eating, drinking and tobacco use are restricted to nonfood areas. Drinking is allowed from closed containers, such as a cup with a lid and straw, and handled to prevent contamination of hands or food-contact surfaces. Personal items are properly stored in designated areas away from food, utensils and equipment.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Eating, gum chewing or tobacco use (including smoking and vaping) in areas with exposed food, food-contact surfaces, food-contact packaging, etc.Improperly stored personal food or beverage not in a designated area separate from or at least below food for sale to the publicImproper personal beverage container in a food area (e.g., uncovered, open)Beverage containers must be handled to prevent contamination of the employee's hands, the container itself and exposed food, food-contact surfaces, food-contact packaging, etc.Improperly stored personal items in contact with or above exposed food, food-contact surfaces, food-contact packaging, etc.Examples include but are not limited to: clothing, bags, keys, accessories, electronics, etc.Why This Is Important:Hands involved in eating, drinking or tobacco use may be contaminated by the food or saliva. A drink from a covered container is allowed because the hands do not contact the lip-contact surface of the container.Trending:N/ACross-reference:For improper storage of medicine and first aid supplies, mark A115 as Not Compliant instead.Food Code References:2-401.11 Eating, Drinking, or Using Tobacco6-403.11 Designated Areas
+```
+
+</details>
+
+#### `C331` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Good personal hygiene practices are followed; clean outer clothing is worn; hair restraints are used around exposed food and food-contact surfaces. Jewelry on the hands and wrists is limited to a plain ring with no set stones.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client PolicyNail Length: Nails must be no longer than 1/4 inch.Polish: Nail polish is permitted for all team members in both FOH and BOH. (if not covered by glove document item B221)Standard Policy:Mark as Not Compliant if:Employees handling food or food-contact surfaces are not wearing an effective hair restraintEmployees handling food or food-contact surfaces are not wearing an effective beard guard for facial hair longer than 1 inchEmployees are not wearing clean outer clothing or uniformsJewelry on the hands is not limited to a plain band with no set stones or else covered by a gloveNail length is longer than ¼ inchNails include embellishments such as jewels, rhinestones, or any other additions that could detachWhy This Is Important:Food handlers could transfer germs from dirty clothes to the food by inadvertently touching the clothes or accidentally allowing the clothes to contact the food directly. Hair harbors bacteria and unrestrained or ineffectively restrained hair can fall into food, come into direct contact with food while employees lean, bend or move, or get knocked into food when employees move or touch hair that is not well restrained. Jewelry can potentially cause both a physical hazard if it accidentally gets into the food and a microbiological hazard as germs build up in the moisture and food debris that accumulate on and under the jewelry.Trending:N/ACross-reference:For painted or artificial nails not covered by gloves under, mark B221 as Not Compliant.For improper uniform standards, mark the appropriate item in Brand Standard dept, OF204.Food Code References:2-302.11 Maintenance. (Fingernails)2-303.11 Prohibition. (Jewelry)2-304.11 Clean Condition. (Outer Clothing)2-402.11 Effectiveness. (Hair Restraints)
+```
+
+</details>
+
+### Facilities & Controls
+
+#### `A139` — Critical First Priority, First Priority — 5 pts (repeat: 5)
+
+**Title:** Sewage back-up prevented. Air gaps/backflow prevention devices are in place where required. Sewage disposal systems, including grease traps, are operating properly. At least 1 working toilet is available.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Sewage back-up in the facility will result in an automatic Unacceptable rating.Standard Policy:Mark as Not Compliant for:Any issues where sewage is backing up into the restaurant.Lack of air gap or backflow prevention devices on pressurized fixtures (water supply inlet such as faucets, hose, spray nozzle, etc.) that are connected directly to the water supply and may be subject to negative pressure that could draw contaminated water back into the potable water supply. Such fixtures must stop at least one inch above the floodline of the sink (or twice the diameter of the pipe) or else have an approved mechanical backflow prevention device installed.Air gap (or air break) is not present at a gravity-fed floor drain where there is no risk of negative pressureThere is not at least 1 working toilet in the restaurantLeaking pipesREMINDER: Imminent health hazards such as sewage backup and no working toilet must be escalated immediately to both the facility manager and the Steritech Account Manager.Why This Is Important:Anytime a water supply fixture (faucet, hose, spray nozzle, etc.) extends below the floodline of a sink, there is a risk that standing water in the sink could be drawn up and contaminate the water supply. To prevent this, fixtures should be mounted so that they cannot extend below the floodline of the sink, or they must be equipped with a mechanical backflow prevention device.Another kind of backflow occasionally happens when sewage backs up through the pipes and comes up the floor drains or sink drains. This kind of backflow could contaminate food or equipment. Sewage carries a high risk of organisms that can cause diseases. For this reason, a facility cannot operate with a sewage backup.Trending:Points will not be deducted for leaking pipes.Cross-reference:If plumbing does not provide adequate pressure, mark B241 as Not Compliant.Food Code References:5-402.10 Establishment Drainage System5-402.13 Conveying Sewage5-403.11 Approved Sewage Disposal System5-202.13 Backflow Prevention, Air Gap5-202.14 Backflow Prevention Device, Design Standard5-203.14 Backflow Prevention Device, When Required5-203.15 Backflow Prevention Device, Carbonator5-205.12 Prohibiting a Cross Connection5-205.15 System Maintained in Good Repair5-402.11 (A) Backflow Prevention
+```
+
+</details>
+
+#### `A141` — Critical First Priority, First Priority — 5 pts (repeat: 5)
+
+**Title:** Potable water is available from a public water system or a non-public system that is properly maintained.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:No water in the facility will result in an Unacceptable rating on the evaluation.Standard Policy:Mark as Not Compliant if:Water is not from an approved sourceNo potable water is available in the facilityA boil water advisory in effect and not being observedWhy This Is Important:Water must be available for most food businesses to function, including washing hands as well as washing equipment, utensils and other surfaces. Water from an unsafe supply can be a source of contamination which would then be spread to food, equipment and hands, potentially causing widespread illness.Trending:N/ACross-reference:Mark B241 as Not Compliant if:water from non-public system is not tested at least annuallythere is not enough hot and cold water to meet peak demandplumbing does not provide adequate pressurewater is not supplied through an approved, sanitary source during temporary interruptionsFood Code References:5-101.11 Approved System5-101.12 System Flushing and Disinfection5-102.11 Standards5-201.11 Approved5-202.11 (A) Approved System and Cleanable Fixtures5-102.13 Private water supply tested minimum 1X per year
+```
+
+</details>
+
+#### `A143` — Critical First Priority, First Priority — 5 pts (repeat: 5)
+
+**Title:** Pest prevention program is effective.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Live rodents or roaches will result in an automatic Unacceptable rating.Standard Policy:Mark as Not Compliant for all observations of pest activity. Include type, number, location, and life stage(s) of all pests observed.Cockroaches:Active (alive and crawling around) cockroaches in food prep or storage areas, even if it's just one.Live roaches in traps or on glue boardsDead cockroaches on the floor.Rodents: Any active rodents (alive and crawling around) rodents in food prep or storage areas, even if it's just one.Live or freshly killed rodents in traps or on glue boardsEvidence of rodentsDroppings may be considered an indication of an inadequate pest prevention program if they are freshPackages of food gnawed open by rodentsInactive rodent nests, signs of rodent nests, or grease marks as an active rodent infestationFlies:All observations of adult flies or evidence of flies breeding.Birds:Any number of birds inside a buildingBirds nesting outside the building and their droppings are landing on grocery carts, exterior food displays, deliveries, etc.Ants:An excessive number of ants (more than 10 n the same area) or trailing ants within the food areas.Stored product insects (moths, beetles, etc.)Occasional invaders:Live insects including in traps or on glue boardsDead insects on the floorWhy This Is Important:Insects and other pests are known to transmit disease to humans by contaminating food and food-contact surfaces. Pests that may breed in the facility (especially flies, cockroaches and rodents) present the greatest risk and must be carefully controlled. Pests observed by consumers will severely damage their perception of the establishment. And pests also cause financial damage because contaminated products must be discarded and replaced.Trending:Document all observations as they are made. The system will determine the point value and the comment will appear on the report even if points are not deducted.Points will be deducted for more than 5 small or large flies in a small area.Points will not be deducted for:Inactive rodent nests, signs of rodent nests, or grease marks as an active rodent infestationLive roaches or other insects in traps or on glue boardsDead cockroaches on the floorOccasional invadersCross-reference:For live pests in food (e.g.: moths in a bag of flour, ants in a bag of sugar, grain beetles in a bag of rice, etc.), mark BOTH item A143 AND A115 (for actual product contamination) as Not Compliant.For rodents - dead or alive - or signs of rodents (feces, urine, hair) in food, mark BOTH item A143 AND A115 (for actual product contamination) as Not Compliant.For gnawed packages of food, only mark this item (A143).For dead insects (including occasional invaders) actually in containers of food (e.g.: dead small flies floating in a bottle of liquor), mark A115 (for actual product contamination) as Not Compliant.For flies or occasional invaders landing on exposed food, mark C307 as Not Compliant. (If the insect is a cockroach or more than 5 of the same type of fly, mark BOTH C307 AND A143 as Not Compliant.)For excessive dead insects on the floor causing a sanitation issue, mark C335 as Not Compliant.For decayed rodents in traps or on glue boards, mark C345 as Not Compliant.For issues with pest control devices, mark C345 as Not Compliant.Food Code References:7-206.11 Restricted Use Pesticides, Criteria7-206.12 Rodent Bait Stations7-206.13 Tracking Powders, Pest Control and Monitoring
+```
+
+</details>
+
+#### `B201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Person-in-charge is certified by an accredited Food Protection Manager Certification Program.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:If a ServSafe certificate looks falsified, try to confirm the authenticity using the QR code on the certificate or going to the ServSafe website. If you cannot confirm the certificate is falsified, do not score as falsified. A falsified ServSafe certificate does not require escalation.Link: https://www.servsafe.com/access/SS/Certifications/SearchStandard Policy:⁠Mark as Not Compliant if the Person in Charge present during the assessment does not have a current and accredited Certified Food Safety Manager (CFSM) certification.The following programs are all national ANSI-accredited programs that meet the standard, but additional programs not listed here may be acceptable based on local regulations or requirements:360training.com, Inc. - Learn2Serve® Food Protection Manager Certification ProgramAboveTraining/StateFoodSafety.com - Certified Food Protection Manager (CFPM) ExamNational Registry of Food Safety Professionals - Food Protection Manager Certification Program or International Certified Food Safety ManagerNational Restaurant Association: ServSafe® Food Protection Manager Certification ProgramPrometric Inc. - Food Protection Manager Certification ProgramThe Always Food Safe Company, LLC - Food Protection Manager CertificationWhy This Is Important:Food Protection Manager Certification helps ensure that the person in charge has the knowledge and skills to run the location in a way that will avoid foodborne illness. More and more jurisdictions are requiring this certification, and there are a number of studies that show locations with a manager that has completed this certification are less likely to have high-risk food safety issues.Trending:N/ACross-reference:N/AFood Code References:2-102.12 Certified Food Protection Manager2-102.20 Food Protection Manager Certification
+```
+
+</details>
+
+#### `B227` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Live animals are not permitted in areas where food and food-contact items are used, prepared, or stored.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for live animals in areas with food, equipment, utensils, linens, single-service items or single-use items (FEULSS).Why This Is Important:Animals carry many disease-causing organisms and can transfer them to people through direct or indirect contact. The people, in turn, can transfer the contamination to food and food-contact surfaces. Animal hair can also become a physical contaminate.Trending:N/ACross-reference:N/AFood Code References:2-403.11 Handling Prohibition-Animals6-501.111 (C) Controlling Pests6-501.115 Prohibiting Animals
+```
+
+</details>
+
+#### `B233` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Original containers of toxic materials have a legible manufacturer's label. Working containers of cleaners and sanitizers are labeled with the common name of the product. Only chemicals that are required for the operation and maintenance of the facility are present. Restricted pesticides are applied by a certified applicator or someone under their direct supervision. First aid supplies, personal care items such as lotions and creams, and employee medicines are properly labeled.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop buckets do not need to be labeled unless a different chemical is used in a red or green bucket. DO Not score a red or green bucket not having a label for red bucket with sanitizer or green bucket with detergent. If a chemical other than what is permitted is used in the bucket then the bucket must be labeled. Red = sanitizerGreen = detergentStandard Policy:Mark as Not Compliant if:Any chemicals are not accurately labeled.Original containers must have a legible manufacturer's label.Working containers such as spray bottles must be labeled with common names such as "Sanitizer" or "Window Cleaner".Chemicals not required for operation are observed in the restaurantRestricted pesticides are applied by anyone other than a certified applicator or someone supervised by a certified applicatorFirst aid supplies, personal care items such as lotions and creams or employee medicines are not properly labeledWhy This Is Important:Many different kinds of potentially toxic products are necessary to run a food establishment. Prominent and distinct labeling helps ensure that all materials, including personal items, are properly used. Any mix-up could lead to serious health consequences for workers or consumers.Trending:N/ACross-reference:For actual or potential cross-contamination due to improperly stored chemicals, mark A115 as Not Compliant.If first aid supplies or medicines are improperly stored, mark A115 as Not Compliant.For unlabeled spray bottles containing food such as water, cooking oil, etc., mark C311 as Not Compliant.Food Code References:6-501.111 (C) Controlling Pests7-101.11 Identifying Information, Prominence7-102.11 Common Name7-202.11 Restriction7-202.12 Conditions of Use7-207.11 (B) Restriction and Storage
+```
+
+</details>
+
+#### `B241` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Hot and cold water is sufficient to meet peak demand. Plumbing provides adequate pressure and water is available at all sinks. Water from non-public systems tested at least annually. During a temporary interruption of the water system, water is supplied through an approved, sanitary source such as commercially bottled drinking water.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Plumbing provides an obviously inadequate pressure during working hoursAny handwashing sinks or dishwashing facilities do not have readily available waterThere is not readily available water in at least 1 restroomThe location is not served by municipal water supplies, and water is not tested for contamination at least annuallyThere is not enough hot/cold water to meet peak demandsNOTE: We should not be taking the hot water temperature of the 3-comp sink to confirm it reaches 110F. Score this item if not hot water is available at any of the handwash sinks.Why This Is Important:Without adequate water pressure many sanitizer dispensers and dish machines will not work correctly, leading to equipment and utensils that are not properly cleaned and sanitized despite the efforts of workers trying to do so.Municipal water systems test their water frequently, but wells and other types of individual water supplies may become contaminated through faulty equipment or contamination of the groundwater. They must be tested at least annually to ensure they remain safe.During an interruption of the water supply, it may be permitted to use temporary water sources. The temporary source must be from a potable water supply, such as commercially bottled water, and protected to prevent accidental contamination. In such situations, many activities that require water will have to be stopped, restricted or adjusted so that food, food handlers and consumers are protected from germs that may cause illness.Trending:N/ACross-reference:For no hot water at handwash sinks in food prep areas, mark B219 as Not Compliant.For no hot water at handwash sinks in the restrooms, mark C333 as Not Compliant.Food Code References:5-102.13 Sampling5-103.11 Capacity5-104.11 System5-103.12 Pressure
+```
+
+</details>
+
+#### `C333` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Restrooms used by food handlers are maintained with plumbing fixtures that are clean and in good repair. Handwash sinks are supplied with readily available hot water (100F/38C), soap, disposable towels or heated-air hand drying device, trash can/hygiene receptacle, and a sign to remind employees to wash hands. Toilet paper available in stalls. Restroom doors leading directly into food preparation areas are self-closing.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Wingstop only requires a hygiene receptacle or trash can, no cover is required.Standard Policy:Mark as Not Compliant if:Restroom doors leading directly into food preparation areas are not self-closingHandwashing sinks in restrooms used by food handlers if:not properly stocked with readily available hot water, soap, disposable towels or heated-air hand drying deviceno sign posted reminding employees to wash their handshot water does not reach at least 100°F at the faucet in a reasonable length of time (60 seconds)Toilet tissue is not available at each toiletWhy This Is Important:To encourage hand washing, the process must be as easy as possible. If the hand sink is always clean and fully stocked, then people are more likely to use it. This helps control germs and keep both workers and consumers healthy.Cold water can discourage people from washing their hands, and if there are not disposable towels or heated-air drying devices, people tend to wipe their hands on anything nearby, including clothing, which could recontaminate the hands.Signs help remind employees of proper handwashing technique. Self-closing doors help prevent flies from spreading microbes from the toilet area to the food prep area. Covered receptacles for sanitary napkins are required in the female restroom.Trending:N/ACross-reference:For handwash facilities in food preparation areas, mark B219 as Not Compliant.If there is not at least 1 working toilet in the restaurant, mark A139 as Not Compliant.For improper handwashing, mark A131 as Not Compliant.For restroom cleanliness, condition and graffiti that is not covered here, mark the appropriate Brand Standard items 83 - 85.Food Code References:5-202.12 Handwashing Sink, Installation.6-301.11 Handwashing Cleanser, Availability.6-301.12 Hand Drying Provision.6-301.14 Handwashing Signage.6-301.20 Disposable Towels, Waste Receptacle.5-202.11 Approved System and Cleanable Fixtures.5-501.17 Toilet Room Receptacle, Covered.6-202.14 Toilet Rooms, Enclosed.6-302.11 Toilet Tissue, Availability.
+```
+
+</details>
+
+#### `C335` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Floors, walls, and ceilings are free of excessive dust, debris and standing water.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Issues with general cleanliness of the structure, especially under counters, at floor/wall junctions and floor drainsSoiled doors and windowsPuddling/standing water if it is not mopped up or pushed to a drain with a squeegee immediatelyFloor beneath inverted milk crates is soiled.Excessive dead insects on the floorWhy This Is Important:Pests may be attracted to surfaces that are not properly cleaned and sanitized as well as standing water. Puddles can also be slip and fall hazards. Heavy debris build-up on surfaces can even become a contamination concern if it can drip or fall into food or onto food contact surfaces.Trending:N/ACross-reference:For damaged floors, walls, ceilings, mark C337 as Not Compliant.For cleanliness of vents, fan guards and filters, mark C339 as Not Compliant.For issues with lighting on ceilings, mark C341 as Not Compliant.Food Code References:6-102.11 Surface Characteristics.6-501.12(A) Cleaning, Frequency and Restrictions.
+```
+
+</details>
+
+#### `C337` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Floors, walls and ceilings are smooth, easily cleanable, and in good repair.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:NOTE: For polished concrete floors, only score if there is a crack in the concrete that is a tripping hazard. Because cracks require the concrete to be jackhammered up and it is an expensive process to fix, Wingstop has asked us not to score unless there is a tripping hazard. Below is an example of cracks that DO NOT cause a tripping hazard so they WOULD NOT be scored.If scored, make sure the photo clearly shows that the cracked concrete shows a tripping hazard.example of cracked concrete that WOULD NOT be scoredStandard Policy:Mark as Not Compliant for:Floors, walls and ceilings in food production areas that are not durable and easily cleanable.Any inappropriate construction materials or designs that make cleaning difficult, such as carpeting in production areas or pipes that run along the floorAny significant structural damage to the facilityWhy This Is Important:Surfaces that are difficult to clean rarely get fully cleaned. This may lead to pooling water or build-up of food debris which, in turn, cause mold and pest issues. Also, damage to surfaces may allow water to seep deeper into the structure and increase the problem.Trending:Document all observations as they are made. The system will determine the point value and the comment will appear on the report even if points are not deducted. Points will be deducted for two or more observations.Cross-reference:For cleanliness of floors, walls and ceilings, mark C335 as Not Compliant.For cleanliness of vents, fan guards and filters, mark C339 as Not Compliant.For issues with lighting on ceilings, mark C341 as Not Compliant.Food Code References:6-501.11 Repairing. (Premises, Structures, Attachments, and Fixtures-Methods)
+```
+
+</details>
+
+#### `C339` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Ventilation is adequate; vents, fan guards and filters are clean.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if fans, ceiling vents, air returns, fan guards and exhaust hoods have soil build-up or excessive dust build-up.Do not assess dining room or restroom vents.Why This Is Important:Inadequate ventilation may cause grease and condensate to build up on floors, walls and ceilings. This may lead to deterioration of the surfaces, it may attract pests, and it even may present a possible fire hazard.Trending:N/ACross-reference:For damage to vents, guards and filters, mark C337 as Not Compliant.For cleanliness ceilings, mark C335 as Not Compliant.For damaged ceilings, mark C337 as Not Compliant.Food Code References:4-202.18 Ventilation Hood Systems, Filters.4-204.11 Ventilation Hood Systems, Drip Prevention.4-301.14 Ventilation Hood Systems, Adequacy.6-501.14 Cleaning Ventilation Systems, Nuisance and Discharge Prohibition.
+```
+
+</details>
+
+#### `C341` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Lighting is adequate for cleaning and food handling tasks; lights are shielded or shatterproof above exposed food and food-contact surfaces, and above packaged food if the package integrity could be affected by broken glass.  All light fixtures must be clean and in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Lights in food prep and storage areas are not bright enough to see to clean surfaces effectively and to properly identify productsLights are not shielded or shatterproof above exposed food, equipment, utensils, linens, and single-service and single-use articles. This does not include lights above items that are in containers that broken glass cannot enter, such as cans, sealed cardboard boxes, etc.Tube shields are missing end capsWhy This Is Important:Sufficient light is necessary for proper cleaning. It is also essential for reading labels to identify products and rotate dates. Cleaning up the glass shards from a broken light bulb is a difficult and time-consuming challenge. It may derail the business while any exposed food in the area is discarded and all equipment and utensil surfaces are cleaned in minute detail or possibly discarded. To avoid such an incident, light bulbs should be shielded or coated to be shatter-resistant.Trending:N/ACross-reference:For actual contamination or other potential physical contamination not due to lighting, mark A115 as Not Compliant.Mark C307 as Not Compliant for:Uncovered food, condensationPotential contamination from the environment, such as dripping condensation, chipping paint on the ceiling above exposed food, etc.Food Code References:6-202.11 Light Bulbs, Protective Shielding
+```
+
+</details>
+
+#### `C343` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** No pest entry points exist, such as gaps larger than 1/4 inch beneath exterior doors. No pest harborage sites exist, such as dirty mop heads that are not hung to dry after use.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant for:Any unprotected entry points for pests such as gaps larger than 1/4 inch beneath exterior doors (both swinging and roll up)Excessively disordered areas where insects could breedWet mop or a wet broom not hung to dry when it is stored after useWhy This Is Important:Mice can pass under a door with a gap as small as 1/4 inch. Insects can crawl under openings even smaller. Both can damage food and begin breeding once they get inside the facility. Sweeps and weather stripping can be used to protecting outer openings. When no light is visible under or around the closed door, pests cannot enter.Wet mop heads that are not hung to dry become an ideal breeding ground for flies. To prevent this from happening, squeeze mops and then hang them to dry after each use. Avoid piling used mop heads in the mop sink.Trending:N/ACross-reference:For active rodent nests under item, mark A143 as Not Compliant.For excessive dead cockroaches or other insects on the floor, mark C335 as Not Compliant.For pest activity, mark A143 as Not Compliant.For flies or occasional invaders landing on exposed food, mark C307 as Not Compliant.For contamination of food by live pests, mark BOTH items A143 and A115 as Not Compliant.For gnawed packages of food, mark A143 as Not Compliant.For contamination of food by dead pests/insects, mark A115 as Not Compliant.Food Code References:6-501.111 Controlling Pests6-501.112 Removing Dead or Trapped Birds, Insects, Rodents and other Pest
+```
+
+</details>
+
+#### `C345` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Pest control devices are working properly and installed so that they will not contaminate food or food-contact surfaces. If present, UV lights must be kept clean and clear.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant ifInterior or exterior pest control devices are not correctly placed in a manner to efficiently control pests and to prevent contamination of food or food-contact surfaces.This does not include devices that may have been accidentally knocked out of place due to sweeping or mopping.Pest control devices are not emptied regularly so they do not become an attractant for other pestsDecayed rodents in traps or on glue boardsInterior traps and bait stations are smashed or otherwise no longer effective, are open or can no longer keep rodents inside or protect the bait insideInterior bait stations are not securely closed, poison is laid out in plastic pouches, open pellets of poison are observed, etc.Electrocution type ILTs and unprotected glue boards and sticky fly strips are mounted above food, equipment, utensils, linens, single-service items or single-use items (FEULSS)Tracking powder pesticides and rodenticides are being used in the facility.ILTs and air curtains are not required; however, if present, mark as Not Compliant if:Insect light traps are not plugged in or turned on, or if they are inactive or damaged.Air curtains are not turned on, do not come on when the back door is opened or do not blow air down and out the door.If it is cold outside (meaning less than 55°F) do not mark as Not Compliant if air curtains are not turned on unless you actually see flies inside the facility.Why This Is Important:Pest control devices that are not maintained may not prevent the pest issues they are intended to control. For example, rodents run along walls, so catch stations not positioned against the wall will not help. Fly lights with dusty, burned-out or even just out-of-date bulbs may not attract flies. Glue boards that are covered with dead flies may not have any stick surface left to catch flies. And catch trays full of dead flies may attract cockroaches and other pests.Electrocution fly units should not be placed over exposed food or equipment because the electrocution process may cause pieces of insects to be scattered outside of the unit and possibly onto food contact surfaces or food.Trending:N/ACross-reference:For excessive dead cockroaches or other insects on the floor, mark C335 as Not Compliant.For pest activity, mark A143 as Not Compliant.For flies or occasional invaders landing on exposed food, mark C307 as Not Compliant.For rodent nests that are not active or signs of nesting, mark C343 as Not Compliant.For contamination of food by live pests, mark BOTH items A143 and A115 as Not Compliant.For contamination of food by dead pests/insects, mark A115 as Not Compliant.For gnawed packages of food, mark A143 as Not Compliant.Food Code References:6-202.13 Insect Control Devices, Design and Installation
+```
+
+</details>
+
+#### `C347` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Interior garbage containers are cleaned and emptied as needed.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Garbage containers are not leak-proof, rodent-proof, and watertightGarbage containers are overflowingGarbage containers are soiled on the outsideGarbage containers are soiled beneath the liner, if presentCardboard boxes are used as containers for refuseWhy This Is Important:Overflowing trash cans can cause sanitation issues on the nearby walls and floors, requiring even more work to correct. Cans that are not cleaned and emptied regularly can also become a breeding site for pests as well as a source of foul odors.Trending:N/ACross-reference:For cleanliness and maintenance of exterior garbage containers/dumpster, mark C349 as Not Compliant.Food Code References:5-501.13 Receptacles.5-502.11 Frequency.
+```
+
+</details>
+
+#### `C349` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Exterior garbage storage is covered and doors kept closed between uses. Containers are emptied as necessary and the surrounding area is maintained clean to avoid attracting pests.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:N/AStandard Policy:Mark as Not Compliant if:Exterior garbage bins are overflowing or heavily encrusted with debrisDrain plugs used to keep liquid waste from leaking out of the bin are missingLids and doors are not closed after each useIf exterior garbage container is used by other units, only document if we have knowledge the issue was related to the client (ex. client logo'd garbage, saw employee leave doors or lid open, etc)Why This Is Important:Open dumpster doors as well as spills and debris in the area can attract birds, flies and rodents. In addition, foul odors may result and negatively impact customer perception of your operation.Trending:N/ACross-reference:For cleanliness of interior garbage containers, mark C347 as Not Compliant.Food Code References:5-501.15 Outside Receptacles.5-501.112 Outside Storage Prohibitions.5-501.113(B) Covering Receptacles.5-501.114 Using Drain Plugs.5-501.115 Maintaining Refuse Areas and Enclosures.
+```
+
+</details>
+
+---
+
+## Brand Standards
+
+### Exterior
+
+#### `EX201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Curb appeal: parking spaces, curb, sidewalks, and patio area are kept clean, neat, and free of trash, gum, cigarette butts, stains, and weeds.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:The parking spaces, curb, sidewalk and patios must be free of trash, litter, gum, cigarette butts and weeds.Only score if 2 or more pieces of trash, gum or cigarette butts total are observedNOTE: If the restaurant is in a shopping center, the sidewalk in front of the restaurant is from window to window, door to window or window to door depending on the setup.The sidewalk in front of the restaurant must be free of "new" stains and sticky spills and be cleaned as stains occurThe parking spaces and the curb in front of them must be in good condition without safety hazards presentScore if: Parking curb is crumbling with wire sticking outNOTE: Existing stains that have been cleaned, but part of normal wear and tear are ok.Mark as Not Compliant if:Outside sidewalk areas observed with:Trash, bird droppings, cigarette butts, gum, overgrown weeds, stains, excessive debrisPatio furniture:Rusted, chipping paint, discolored, weather beaten, not clean, not neatWingstop brand trash present anywhereWire observed sticking out from crumbling parking stop
+```
+
+</details>
+
+#### `EX202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Exterior signage, outside lights, neon lights and paint are clean, in working order and in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+CLIENT POLICY:Wingstop:Exterior signage must be in clean and in good repair.Exterior signage/Wingstop sign on the building must be turned on by duskOutside lights must be in clean and in good repair.Neon open signs must be turned on by the time the restaurant opensAll neon and regular lighting must be in working order.Paint must be in good condition without any chippingOnly score if paint chipping is larger than a softball.Bird or insect nests, excessive dust, dead bugs or signs of animal droppings are not present
+```
+
+</details>
+
+#### `EX203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Front door/windows/ledges/decals: Clean and free of excessive fingerprints, smudges, tape, and dust build up.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:The front doors, windows, ledges and decals must be clean.Windows must be free of fingerprints, smudges and tape.February 2023: Training locations will have a sticker on their front door. This is approved.
+```
+
+</details>
+
+### Dining Room
+
+#### `DR201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Temperature set between 68F and 78F.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Thermostat must be set within between 68-78°F (+/-2F)The ambient temperature in the Dining Room must be between 68-78°FNOTE: The ambient temperature must come from the temperature on the thermostat. Do not use the thermopen to capture ambient room temperature.HVAC should be operational and set at the appropriate temperature.The temperature can directly affect whether a guest is comfortable in the dining area or lobby. This could have a negative impact on the overall guest satisfaction.A photo is required of the thermostatMark as Not Compliant if:The temperature in the dining room is above 78°FThe temperature in the dining room is below 68°FThe thermostat is not working
+```
+
+</details>
+
+#### `DR202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Dining Room walls, ceiling, baseboards, floors and ledges clean.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Dining Room walls, ceilings, baseboards, floors, and ledges must be clean and free of build-upNOTE: Wingstop has decor that includes rusted look awnings and walls. This should NOT be scored.IMPORTANT:Include comments if a photo can not accurately capture an observation that fully details the opportunity.
+```
+
+</details>
+
+#### `DR203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Dining Room walls, ceiling, baseboards, floors and ledges in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The walls, ceilings, baseboards, floors and ledges must be free of scratches, scuffs and knicksScore for 5 or more scratches, scuffs or knicks combinedOnly approved paint colors are allowed and must have a professional appearanceNOTE: Wingstop has decor that included rusted look awnings and walls. This should NOT be scored.
+```
+
+</details>
+
+#### `DR204` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Team members are prioritizing guests' needs by cleaning tables, restocking self-serve, expoing orders, etc. before completing other tasks like prep, etc.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Team members must prioritize guests' needs by making them a priority to receive their order, ensuring tables are clean after the guest is done eating, re-stocking self-serve, etc.Team members must stop other tasks and attend to the guests, as neededTasks like prep must be completed secondary to taking care of the guests' needsMark as non-compliant if:Team members are observed completing prep instead of greeting/ taking care of guests.Team members are observed not cleaning tables or restocking after guests have left (Allow for 10 minutes before scoring)DO NOT SCORE IF:Team members are actively helping other guests/ completing orders instead of cleaning/ restocking. This item should only be scored if team members are observed not completing these tasks with no guests or orders observed.
+```
+
+</details>
+
+#### `DR301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Dining Room and Self-Serve set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The Dining Room must be set up to serve guests when the restaurant opensAll chairs must be flipped and set up under each tableSelf-serve must be stocked with:strawsdrink lidspaper towelsMats must be set out with one in front of the door and the other in front of the soda machineTrash cans are not allowed in the Dining Room. However, self-serve can have a small stainless-steel trash can on the counter.NOTE: Some states, cities and/or counties do not allow some condiments to be placed on self-serve and the guest must request them.Mark as Not Compliant if:Chairs are observed not flipped down underneath tablesSelf-serve station is missing a required pieceMats are observed not at the front door and infront of the soda machineTrash can (other than a small stainless trash-can at the self-service station) is observed in the dining room (example: a large BOH style trashcan observed in the dining room).
+```
+
+</details>
+
+#### `DR302` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Restaurant atmosphere meets the standard and includes music playing from an approved source and TVs working and set to sports.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:Music must be provided by an authorized source and must be a paid subscription service (some examples: paid Spotify, DirectTV, Apple Music, etc.)Continuous music must be playing and music must be commercial and DJ freeWe should not ask the mgr to prove what music source they use, but should listen for continuous music with no commercials and DJ freeMusic must be played at a volume that allows conversation and be a style that is acceptable to the general public, no offensive language permitted.All TVs in the restaurant must in working order and turned onTelevision volume must be muted except for televised emergencies and guest requests.NOTE: In the event that the tv volume is turned up, the music volume must be turned down, but never turned offTV's can use a streaming service, but they must be tuned to sportsTV must always be tuned to a sporting event or sporting news (movies and TV shows are not permitted)Guests may request a specific sporting event to watch and it is up to management to determine if the channel can be changedMark as Not Compliant if:TV not tuned to a sporting event or sporting newsTelevision volume not muted (and a guest did not request the volume to be turned up)All TVs in the restaurant not turned onAll TVs in the restaurant not workingMusic not provided by an authorized source - commercials playingMusic too loudMusic has offensive languageNo music playing and dining room is open to guests
+```
+
+</details>
+
+#### `DR303` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** 90% of Dining Room lights working properly and all light covers/cords are clean and free of dust.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:90% of the lights in the Dining Room must be turned on, working and in good conditionAll light fixture covers and cords must be clean and free of dust or build-upMark as non-compliant if:Light fixture covers and cords not clean and free of dust or build-up90% of the lights in the dining room are not in good condition90% of the lights in the dining room are not working90% of the lights in the dining room are not turned on
+```
+
+</details>
+
+#### `DR304` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** 90% of Dining Room tables and chairs are clean, balanced, and damage free (including legs, bases and tablecloths). Tables/chairs must be free of rips/tears and fading.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:90% of the tables/chairs must be clean and in good repairNOTE: Minimal scuffs on chair legs is acceptable and considered normal wear and tear.Tables/chairs must be properly balanced and cannot be balanced using napkins, cardboard, etc. in place of adjustable feet.Mark as non-compliant if:Tables/chairs observed being balanced with paper towel, cardboard, etc.Tables/chairs observed not balanced90% of the tables/chairs not in good repair90% of the tables/chairs not clean
+```
+
+</details>
+
+#### `DR305` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Wet floor signs present and put out when there is a spill, it is raining, etc. and clean when used.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Wet floor signs must be used when there is a spill or when it is raining.Wet floor sign must be clean when used.Wet floor signs must be put away once the spill has been cleaned and floor is dry or once it has stopped raining and floors are dry.Mark as non-compliant if:Wet floor sign is not cleanSpill on the floor but no wet floor sign presentRaining outside but no wet floor sign presentFloors are totally dry and wet floor sign still present
+```
+
+</details>
+
+#### `DR306` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** A minimum of two high chairs are available, clean and in good condition with active three-point restraint, permanent T-bar restraint, warning labels and is stable/in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:High chairs must be clean, free of buildup and in good working orderHigh chair must have active three-point restraint, a permanent T-bar restraint and warning labelsStrap on the front end of the high chair must be attached to the front bar, buckles and three point harness must be in clean working conditionTwo high chairs are required and must match in style/colorMArk as non-complaint if:High chairs do not match in style/colorTwo high chairs are not availableThe strap on the front end of the high chair is not attached to the front barThe high chair is not in good conditionThe high chair not clean and free of build-upHigh chair does not have an active three-point restraint, a permanent T-bar restraint, and/or warning labels
+```
+
+</details>
+
+### Front Counter
+
+#### `FC201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Restaurant POP (menu boards, decals and signage) is correct, placed in the correct place, current, not handwritten and in good condition.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:Restaurant menu boards, signage and POP must match the merchandising guidesAll signage must be professionally printed and cannot be handwrittenRestaurant menu boards, signage and POP must be in good conditionAll interior menu boards must be:present and in the correct order (A, B, C, D, etc.)clean and free of residuein good condition and free of tearsscore for window cling with tear of 2" or longer andmagnets have a tear for 1" or largercounter cards/insert/brochure have tear larger than 1"All lights above the menu boards must be in good condition and workingMark as non-compliant if:Menu board not in correct order (A, B, C, D, etc)Menu board not clean and free of residueMenu board not in good condition and free of tearsLights above menu board not workingLights above menu board not in good conditionMenu board, signage and/or POP do not match merchandising guideSignage and/or POP not cleanSignage and/or POP not in good conditionUPDATE POP 9.1.2024
+```
+
+</details>
+
+#### `FC202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All menu items are available for sale including food, beverages and gift cards.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:All menu items must be available for sale including LTOsEx. Corn/brownies observed frozen and cannot be served to guests because they need time to thawEx. No Ranch dressing availableAll soda machines must be operational with the following drink choices available:CokeDiet CokeSpriteDr. Pepper1 carbonated beverage choice1 uncarbonated beverage choiceNOTE: Due to some locations with 6 fountain heads being automatically set up with 2 uncarbonated beverage flavors, we should not document if the location has 2 uncarbonated beverages (instead of 1 uncarbonated beverage choice and 1 carbonated beverage choice)WaterNOTE: If the machine is broken, bottled drinks must be available to serve in replacementIf the location has a tea tower - Gold Peak brand Sweet, Unsweet, and 2 additional flavors are required for saleNOTE: If location has 2 tea tower, they must have sweet and unsweet tea.Gift card must be available
+```
+
+</details>
+
+#### `FC203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Guests are greeted within 5 seconds of entering the restaurant.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:Guest acknowledged within 5 seconds of guest entering the restaurant if another guest is not being attended to by the FOH team member.
+```
+
+</details>
+
+#### `FC204` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Guests name used when giving guest their order.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:Guest's name must be used when giving guest their order.Observe orders as they are presented to see if guest names are used when the order is handed over.Mark as non-compliant if:Guest names not used when giving guests their order.
+```
+
+</details>
+
+#### `FC205` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Team members complete suggestive selling during guests transaction.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:Guest Service Expert (Navigator) must suggest or upsell at least once during all transactions.Mark as non-compliant if:No upsell or additional items were offered during the transaction.
+```
+
+</details>
+
+#### `FC206` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Managers available as needed to address guests needs, recover guests, etc.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:In the event a guest requests the PIC/Managers attention, the Manager/PIC must make it a priority to address the guest in a timely manner by stopping the task they are working on to address the guest.
+```
+
+</details>
+
+#### `FC207` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Brownies are thawed and individually packaged before serving.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Brownies must be taken from bulk packaging and placed into individual packagingIndividually packaged brownies cannot be stored in the walk-in coolerBrownies cannot be refrozen once thawed Mark as non-compliant if:Brownies not packaged in individual packagingIndividually packaged brownies observed in the walk-in coolerBrownies observed refrozenBrownies are not sold at room temperatureCross-reference:If brownies do not have a nutritional label, document item B226 in Food Safety.
+```
+
+</details>
+
+#### `FC301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Guest Service Expert station (Front Counter) set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The Front Counter area must be set up and ready to serve guests with the following in place:Register assigned to a team member and till placed in registerCups stocked and in cup holders (cannot be stored on the counter, in boxes on the floor, etc.)If a location doesn’t have cup holders on the front counter, the cups can be stored on the counter or a pick-up shelf with a tray underneathNo tip jar on the counterMark as non-compliant if:Cups not stored in cup holdersCups not stockedTill not placed in registerRegister not assigned to a team memberTip jar present
+```
+
+</details>
+
+#### `FC302` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** To-go menus or digital download brochure available.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+WingStop:Restaurants must have to-go menus or digital download brochures available for guests
+```
+
+</details>
+
+### Restrooms
+
+#### `RR201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Restroom floors, walls, ceiling, lighting, vents and mirror are clean and restroom is odor free.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Restroom must be clean and odor free.FloorsWallsCeilingLightingVentsMirrorStall partitionTrash canBaby changing station (if available, they are not required)Mark as non-compliant if:Cross-reference:For plumbing fixtures that are not clean or in good repair, document Food Safety item C333.
+```
+
+</details>
+
+#### `RR202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Restroom floors, walls, ceiling, lighting, vents and mirror are in good condition and dispensers are working.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Restroom items must be in good conditionFloorsWallsCeilingMirrorVentsLightingBaby changing station (if available- they are not required)Stall partitionsMark as non-compliant if:Cross-reference:For plumbing fixtures in poor condition score Food Safety item C333.
+```
+
+</details>
+
+### Back of House
+
+#### `BH101` — First Priority — 5 pts (repeat: 5)
+
+**Title:** All items being sold are from approved vendors and on the master shelf-life sheet.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:During hours of operation, proprietary and non-replacement items must be available, see image below. None of these items can be purchased from outside vendor or grocery store.Proprietary products are made exactly to our specifications and are only available to Wingstop and purchased through Wingstop’s authorized vendors.Non-replacement products are brand name products that impact our flavors/brand to the extent that we do not allow other products to be used.Only WRI approved items are authorized to be sold.Master shelf life sheet Mark as Not Compliant if:Wingstop proprietary and non-replacement items not available during hours the restaurant is open for businessItems observed for sale that are not Wingstop approved itemsAll items being stored and sold must be listed on the master shelf-life sheet.Items from unapproved vendors are not allowed to be present and/or sold in the restaurant.An item is available for sale in a location that is not listed on the master shelf life sheet.
+```
+
+</details>
+
+#### `BH102` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** All present chemicals are approved.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Only approved chemicals are allowed to be used in restaurants.No bleach is permitted in restaurants.Approved chemicals:Wingstop uses SSDC brand chemicals. Mark as non-compliant if:Chemicals other than the approved SSDC are observed.Bleach is observed in the location
+```
+
+</details>
+
+#### `BH201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Safety Data Sheets (SDS) available for all chemicals present.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop:All chemicals in the restaurant must have an SDS sheet present and be available for all employees to accessNOTE: This includes chemicals substituted by OpCoInstructions:1. Identify at random two approved chemicals in the restaurant2. Identify where the SDS binder is located3. Open the binder and check to ensure the two identified chemicals have an SDS sheet presentMark as non-compliant if:SDS not availalbe for a certain chemical that is in the locationSDS not available for any chemical in the locationCross-reference:Score BH102 for unapproved chemicals instead if observed.
+```
+
+</details>
+
+#### `BH301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Fire extinguishers and fire suppression system: Inspections up to date. Inspection tags present.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Fire extinguishers and fire suppression systems must be in working order with inspection tags present and inspections up to date.Fire suppression systems must be serviced every 6 months.Fire extinguisher must be hung on the wall.Fire extinguishers must be serviced annuallyMark as non-compliant if:Fire extinguisher not hung on the wallFire suppression system expiredFire extinguisher expiredFire suppression system not taggedFire extinguisher not tagged
+```
+
+</details>
+
+#### `BH302` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** First-aid kit is easily accessible and stocked with blue bandages, medical burn cream/gel and individually wrapped medical gloves.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:A first aid kit must be available and accessible to all team members, not locked away where team members cannot easily accessFirst-aid kit must have the following stocked at all time: unexpired medical burn cream/gel/spray, blue bandages,and individually wrapped medical gloves.Only proper medical gloves are permitted. Restaurant, food-grade gloves may not be used in replacement of the medical gloves.Mark as non-compliant if:First-aid kit not readily availableBlue bandages not availableMedical burn cream/gel not availableIndividually wrapped medical gloves not availableFirst-aid kit not easily accessibleMedical burn cream/gel expired
+```
+
+</details>
+
+### Kitchen Line - Make (Pilot/Expo)
+
+#### `KM201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 1: Quote time for the order was met.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:IMPORTANT: When capturing quote times we MUST space out when we are documenting these orders so that we can get a more varied sample of times throughout the assessment. You will need to capture 3 quote times. I suggest doing this at the very start of the assessment, in the middle, and one more prior to assessing the dining room.Photos must be taken of the bag at the shelf or if the bag goes directly to the guest a photo of the ticket with an explanation is ok. DO NOT take a photo of the ticket on the rail.Observe three orders and record their completion and promise times.After the order has been placed on the shelf, record the promise time on the ticket.Record the time the order was placed on the shelf.**NOTE: If they are handing the orders directly to the guests and not placing them on the shelf, just ask to see the ticket off the bag. The locations usually keep the ticket and this is not given to the guests.Orders are considered complete when they are placed on the pick-up shelf. Or when they are handed directly to the guest and not placed on the shelf.Orders that meet the quote time are placed on the pick-up shelf no more than 5 minutes before/after the promise time.For orders that are placed via dine-in or call-in AND have a well done modifier on bone-in wings, add an additional 5 minutes to the promise time when calculating if the order was made too early, on time, or too lateIf a guest arrives before the promised time or is dining in, the restaurant may expedite the order. In such cases, it is acceptable to complete and hand the order to the guest earlier than the promised time.If no orders observed during the assessment mark N/O and leave comment.
+```
+
+</details>
+
+#### `KM202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 2: Quote time for the order was met.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:IMPORTANT: When capturing quote times we MUST space out when we are documenting these orders so that we can get a more varied sample of times throughout the assessment. You will need to capture 3 quote times. I suggest doing this at the very start of the assessment, in the middle, and one more prior to assessing the dining room.Photos must be taken of the bag at the shelf or if the bag goes directly to the guest a photo of the ticket with an explanation is ok. DO NOT take a photo of the ticket on the rail.Observe three orders and record their completion and promise times.After the order has been placed on the shelf, record the promise time on the ticket.Record the time the order was placed on the shelf.**NOTE: If they are handing the orders directly to the guests and not placing them on the shelf, just ask to see the ticket off the bag. The locations usually keep the ticket and this is not given to the guests.Orders are considered complete when they are placed on the pick-up shelf. Or when they are handed directly to the guest and not placed on the shelf.Orders that meet the quote time are placed on the pick-up shelf no more than 5 minutes before/after the promise time.For orders that are placed via dine-in or call-in AND have a well done modifier on bone-in wings, add an additional 5 minutes to the promise time when calculating if the order was made too early, on time, or too lateIf a guest arrives before the promised time or is dining in, the restaurant may expedite the order. In such cases, it is acceptable to complete and hand the order to the guest earlier than the promised time.If no orders observed during the assessment mark N/O and leave comment.
+```
+
+</details>
+
+#### `KM203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 3: Quote time for the order was met.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:IMPORTANT: When capturing quote times we MUST space out when we are documenting these orders so that we can get a more varied sample of times throughout the assessment. You will need to capture 3 quote times. I suggest doing this at the very start of the assessment, in the middle, and one more prior to assessing the dining room.Photos must be taken of the bag at the shelf or if the bag goes directly to the guest a photo of the ticket with an explanation is ok. DO NOT take a photo of the ticket on the rail.Observe three orders and record their completion and promise times.After the order has been placed on the shelf, record the promise time on the ticket.Record the time the order was placed on the shelf.**NOTE: If they are handing the orders directly to the guests and not placing them on the shelf, just ask to see the ticket off the bag. The locations usually keep the ticket and this is not given to the guests.Orders are considered complete when they are placed on the pick-up shelf. Or when they are handed directly to the guest and not placed on the shelf.Orders that meet the quote time are placed on the pick-up shelf no more than 5 minutes before/after the promise time.For orders that are placed via dine-in or call-in AND have a well done modifier on bone-in wings, add an additional 5 minutes to the promise time when calculating if the order was made too early, on time, or too lateIf a guest arrives before the promised time or is dining in, the restaurant may expedite the order. In such cases, it is acceptable to complete and hand the order to the guest earlier than the promised time.If no orders observed during the assessment mark N/O and leave comment.
+```
+
+</details>
+
+#### `KM204` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 1: All items present/order matches the ticket.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Every order must be made according to the ticket with all items present, all flavors correct, dips present and any extras included in the order.Orders must be packaged correctly with no more than 3 boxes stacked high and hot and cold items separated from each otherOrders must be checked against the ticket before being baggedSpecialists will check the order as the pilot is putting the order into the bagInstructions:1. Ask the team member for the ticket for an order that is ready to be bagged2. Ask the team member to show you all of the items on the ticket and confirm they are present and were set up to be bagged3. Count the number of dips, stix, etc. and confirm the team member places them into the bag after you've checked the other items4. Ensure the team member has checked the order before placing the order into the bagMark as non-compliant if:All items on ticket not present in bagOrder not packed correctlyOrder not checked against ticket before being bagged
+```
+
+</details>
+
+#### `KM205` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 2: All items present/order matches the ticket.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Every order must be made according to the ticket with all items present, all flavors correct, dips present and any extras included in the order.Orders must be packaged correctly with no more than 3 boxes stacked high and hot and cold items separated from each otherOrders must be checked against the ticket before being baggedSpecialists will check the order as the pilot is putting the order into the bagInstructions:1. Ask the team member for the ticket for an order that is ready to be bagged2. Ask the team member to show you all of the items on the ticket and confirm they are present and were set up to be bagged3. Count the number of dips, stix, etc. and confirm the team member places them into the bag after you've checked the other items4. Ensure the team member has checked the order before placing the order into the bagMark as non-compliant if:All items on the ticket not present in the bagOrder not packed correctlyOrder not checked against ticket before being bagged
+```
+
+</details>
+
+#### `KM206` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Order 3: All items present/order matches the ticket.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Every order must be made according to the ticket with all items present, all flavors correct, dips present and any extras included in the order.Orders must be packaged correctly with no more than 3 boxes stacked high and hot and cold items separated from each otherOrders must be checked against the ticket before being baggedSpecialists will check the order as the pilot is putting the order into the bagInstructions:1. Ask the team member for the ticket for an order that is ready to be bagged2. Ask the team member to show you all of the items on the ticket and confirm they are present and were set up to be bagged3. Count the number of dips, stix, etc. and confirm the team member places them into the bag after you've checked the other items4. Ensure the team member has checked the order before placing the order into the bagMark as non-compliant if:Order not checked against ticket before being baggedOrder not packed correctlyAll items on the ticket are not present in the bag
+```
+
+</details>
+
+#### `KM206a` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Dine-in, Takeout, and Delivery Orders are packaged correctly and according to standard.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:The following standards are required for Dine-in, Takeout, and Delivery orders. Local laws will supersede any standards below:Packaging:Bags:#57 large bags — any order containing a hoagie#25 medium bags — any order not containing a hoagieHot and cold items must be separated within the bagNo more than three hoagies stacked togetherFry packaging:Regular fries - #200 boat with a linerLarge fries - #300 boat with a linerFries must be packaged on top of hoagies in the bagsAll loaded fries (cheese fries, loaded buffalo ranch fries and loaded Louisiana voodoo) must be in a boat for dine-in order and for take-out/delivery in a boat and then the boat placed in a hoagieCarrots and celery:STX = 5 carrots and 5 celeryCAR = 10 carrotsCEL = 10 celery1 – 2 orders — #200 boat3 – 4 orders — #300 boatDine-in – packaged with a liner in a boatTake-out – wrapped in a liner and placed in a boatChicken packaging:No more than 2 flavors per hoagie and one-liner is required to separate the flavorsTakeout Orders:All takeout bags must be neatly folded down twiceThe guest’s name must be written on the bagIf there is more than one bag, #1, #2, #3, etc. must be written on the bagThe kitchen chit must be taped to the side of the bag and removed before handing the guest their orderBags must be free of grease and/or water. If grease has soaked through the bag, the bag must be replaced the standards above must be followed again.Delivery Orders:Delivery orders follow the same packaging as Takeout orders, but additionally require:One wrapped straw for each drinkOne utensil packet for each 10 wings/combo orderOne Dip &amp; Squeeze ketchup for each regular fry and two for each large fryEach delivery order bag must be sealed with a delivery bag stickerDrinks for delivery orders must be made by the team member and sealed with a security stickerDine-in Orders:All items must be packaged in a boat with a liner when delivered to the guestsAll flavors must be separated with a liner and packaged in a boatBAGGING EXAMPLES:
+```
+
+</details>
+
+#### `KM207` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Corn thawed before cooking.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Corn must be fully thawed before being stocked in the sandwich cooler for cooking.Take the temperature of the corn in the sandwich cooler to verify it is not still frozen.Mark as non-compliant if:Corn not fully thawed before being stocked in the sandwich cooler for cooking
+```
+
+</details>
+
+#### `KM208` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Corn cooked correctly and for correct amount of time.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Corn is cooked for 1 minute and 30 seconds and is always cooked to order.Mark as non-compliant if:Corn is not cooked for 1 minute and 30 secondsCorn not cooked to order
+```
+
+</details>
+
+#### `KM209` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Corn seasoned correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Corn must be seasoned in a metal bowl designated for the type of seasoning.Corn must be evenly coated in the seasoning.NOTE: Parmesan is added after the corn is put into a boat or hoagieMark as non-compliant if:Corn not seasoned properly according to seasoning specsCorn not evenly coated in seasoning
+```
+
+</details>
+
+#### `KM210` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Carrots and celery stored in water.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Carrots and celery must be stored and covered in water.Score if: 3 or more pieces of celery observed above water and/or 3 or more pieces of carrots above waterMark as non-compliant if:Score if: 3 or more pieces of celery observed above water and/or 3 or more pieces of carrots above waterCarrots on the line not stored in waterCelery on the line not stored in waterCarrots in the walk-in cooler not stored in waterCelery in the walk-in cooler not stored in water
+```
+
+</details>
+
+#### `KM211` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Carrots and celery made to order and packaged correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Carrots and celery must be packaged to order and cannot be pre-portioned and stored.Mark as non-compliant if:Carrots/celery not made/packaged to order
+```
+
+</details>
+
+#### `KM212` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** One backup of Louisiana Rub, Lemon Pepper, Mild, Garlic Parmesan and Hot Honey must be prepped and stored for 24 hours before being used.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:One backup of Louisiana Rub, Lemon Pepper, Mild, and Garlic Parmesan must be prepped and stored for use to be used after marrying for 24 hours.Mark as non-compliant if:These sauces do not have at least one backup availableHot Honey (starting July 8th 2024)Louisiana RubLemon PepperGarlic ParmesanMIld
+```
+
+</details>
+
+#### `KM213` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Sandwich made correctly with bun toasted, pickles added as needed and packed in a small hoagie.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The sandwich bun must be toasted to a light golden brown and placed in a small hoagie.After the filet is sauced and tossed, the filet must be moved from the sauce bowl to the sandwich bun using metal tongs.Then, pickles must be added to the sandwich using plastic tongs. (unless guest requests no picklesThe hoagie must be closed to place the top bun on the sandwichNOTE: All sandwiches are packaged in a small hoagie for dine-in and to-go orders.Mark as non-compliant if:Observe a sandwich being built if possible. Score if:The sandwich bun was not toasted to a light golden brown colorHoagie is not closed to place bun on top of the sandwichFilet was not moved from the sauce bowl to the sandwich bun using metal tongsPickles were not added to the sandwich using plastic tongs
+```
+
+</details>
+
+#### `KM301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Pilot station set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The pilot station must be set up correctly with at minimum the following:Sandwich cooler stocked with carrots, celery, thawed corn, pickles and ranch squeeze bottleSandwich cooler stocked with ranch, bleu cheese and honey mustard dips in the reach-in coolerpickles (These are permitted to be in an ice bath at the sandwich cooler)To-go bagsMark as non-compliant if:To-go bags not stockedThe sandwich cooler is not stocked with the required itemscarrotscelerythawed cornpickles (these need to be at the station either in an ice bath or stocked in the cooler but are not required to be in the cold well).ranch squeeze bottleIn the reach-in cooler: these dips should be availableranchbleu cheesehoney mustard
+```
+
+</details>
+
+### Kitchen Line - Sauce and Toss (Wingman)
+
+#### `KL201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Tongs are used to transfer products as required for each specific process/food item.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Sandwich bun, filets, boneless, classic wings, fries, etc.NOTE: Raw classic wings are not required to be dropped with tongs, they can be dropped with bare hands.Mark as non-compliant if:Products that should be handled with tongs are observed handled with some other method (i.e. gloved hand).Cross-reference:Score A133 if bare-hand contact is observed with RTE foods.
+```
+
+</details>
+
+#### `KL202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** New batches and old batches (fries dropped at different times) cannot be mixed together.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Fries must be cooked for 3 minutes;Well done for 4 minutes and 30 secondsFries cannot be reheatedNew and old fries cannot be mixed together when they come upMark as non-compliant if:Fries not cooked for 3 minutesWell done fries not cooked for 4 minutes and 30 secondsCooked fries observed reheatedNew and old fries observed mixed together
+```
+
+</details>
+
+#### `KL203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Fries are wasted when required.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Fries must be wasted in the fries waste basket when they have been held for more than 3 minutes.Mark as non-compliant if:Fries not wasted after being held for 3 minutesFries served after being held for 3 minutesFries not wasted in fry waste basket
+```
+
+</details>
+
+#### `KL205` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Cheese, Voodoo and Buffalo Ranch fries are made correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Loaded fries include cheese fries, buffalo ranch fries, and Louisiana voodoo fries.Cheese friesRegular: 10oz fries + 5 light shakes of fry seasoning + 2oz Gehls cheese (evenly coat fry surface)Large: 18oz fries + 10 light shakes of fry seasoning + 3oz Gehls cheese (evenly coat fry surface)Buffalo Ranch friesRegular: 10oz fries + 5 light shakes of fry seasoning + 1oz hot sauce + streak 1/3 surface area in RanchLarge: 18oz fries + 10 light shakes of fry seasoning + 1oz hot sauce + streak 1/3 surface area in RanchLouisiana Voodoo friesRegular: 10oz fries + 5 light shakes of cajun seasoning + 2oz Gehls cheese (evenly coat fry surface) + streak 1/3 surface area in Ranch; dust cajun seasoningLarge: 18oz fries + 10 light shakes of cajun seasoning + 3oz Gehls cheese (evenly coat fry surface) + streak 1/3 surface area in Ranch; dust cajun seasoningMark as non-compliant if:Louisiana Voodoo fries are not made correctlyBuffalo Ranch fries are not made correctlyCheese fries are not made correctlyNOTE: If a customer requested the modification do not score.
+```
+
+</details>
+
+#### `KL206` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Fries are cut to correct and consistent shape/size and there are no "wedges".
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Fries must be consistent in shape and not have a "wedge" like shapeScore if more than 2 fries observed wedge shapeThe photo below shows fries that are the correct shape.
+```
+
+</details>
+
+#### `KL207` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All dips are made according to recipe and to quality standards.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Dips are filled into individual souffle cupsDips are filled to the line on the cupDips are filled neat and clean with the exterior of the cup and lid cleanDips are made following Wingstop's recipeInstructions:1. Open the sandwich cooler and grab2 of each dip(Ranch, Bleu Cheese and Honey Mustard)2. Check to make sure the dips are all filled to the line on the cup3. Ensure all dips are neat and clean with the exterior of the cup and lid cleanDocument if any of the 6 observed are out of complianceMark as no-compliant if:Dips not filled into individual soufflé cupsDips not filled to the line on the cupDips not filled neat and clean with the exterior of the cup and lid cleanDips not made following Wingstop's recipeRecipes:Ranch dip recipe:Ranch Dip (single batch):1 gallon Wingstop Heavy Duty Mayonnaise2 half‐gallon jugs of Wingstop Buttermilk3, 3.2 oz. packets Hidden Valley Ranch Dressing Mix1. Pour 1 gallon Wingstop Heavy Duty Mayonnaise into a large mixing bowl.2. Pour first ½ gallon Wingstop Buttermilk in with the mayonaise.3. Use a wire whisk to blend ingredients until smooth.4. Pour in 3, 3.2 oz. packets Hidden Valley Ranch Dressing Mix.5. Pour in 2nd ½ gallon of Wingstop Buttermilk. 6. Whisk until all ingredients are evenly blended.Bleu cheese recipe:Bleu cheese (single batch):1 gallon Wingstop Heavy Duty Mayonnaise2 half‐gallon jugs of Wingstop ButtermilkWorcestershire SauceWingstop Bleu Cheese Dry SeasoningBleu cheese crumbles1. Pour 1 gallon Wingstop Heavy Duty Mayonnaise into a large mixing bowl.2. Pour first ½ gallon Wingstop Buttermilk in with the mayonaise.3. Use a wire whisk to blend ingredients until smooth.4. Add ½ cup Worcestershire Sauce.5. Add Wingstop Bleu Cheese Dry Seasoning packet. 6. Pour 2nd 1/2 gallon Wingstop Buttermilk and whisk until blended well.7. Weigh 2½ pounds of Bleu Cheese Crumbles.8. Add fresh blue cheese crumbles in mixture and fold in with spatula.
+```
+
+</details>
+
+#### `KL208` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Proteins sauced and tossed to standard.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Classic wings can be sauced and tossed immediately after they are done cookingBoneless wings, tenders and filets must sit for 1 minute after cooking before they can be sauced and tossedClassic and boneless products must be tossed in the bowl with the sauce until they are evenly coated and bald spots do not existScore if bald spot larger than dime observedExample of filet toss with too little sauce and too much sauce:
+```
+
+</details>
+
+#### `KL209` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Sandwich buns are kept frozen and only thawed at room temperature.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Sandwich buns must be stored in the freezer until the restaurant is ready to thaw themSandwich buns must be thawed at room temperature for a minimum of 4 hoursMark as non-compliant if:Sandwich buns not stored in the freezer until ready to useSandwich buns not thawed at room temperature for 4 hours before useSandwich buns observed in the cooler
+```
+
+</details>
+
+#### `KL301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Gunner station set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The Gunner station must be set up correctly and at minimum include the following:Fry transfer containerTongs for transferring friesTongs for tossing and portioning friesScaleBus tub with fries (unless frozen fries are used)Gehl's Cheese machineHot sauce (held at room temperature)CheeseFry seasoningBowl for seasoning and portioning friesFry waste containerSeasoning must be stored in the gunner area in plastic shakers with appropriately sized metal lids. Shaker bodies cannot be glass or metal.Fry Seasoning, lid with small holesCajun Seasoning, lid with small holesLemon Pepper Seasoning, lid with small holesParmesan Cheese, lid with large holesNo glass is allowed on the line to eliminate risk of a physical contaminant in our food. The metal body of the shaker is not allowed since the sodium content coupled with the humid environment of our kitchen can result in rust. **The shaker lids is metal, DO NOT SCORE for metal lid.**Mark as non-compliant:Gunner station missing a required item:Fry waste containerFry transfer containerTongs for transferring friesTongs for tossing and portioning friesScaleBus tub with fries (unless frozen fries are used)Gehl's Cheese machineCheeseFry seasoningBowl for seasoning and portioning friesUnapproved shaker used (glass or metal shaker body)Incorrect shaker lid used
+```
+
+</details>
+
+#### `KL302` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Wingman station set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:NOTE: If the location is DELCO (delivery and take out only) or a ghost kitchen, boats are not required at the Wingman station.The Wingman station is set up correctly with at minimum the following:A sauce bowl for each flavorCorrect ladle in each sauce2 oz. Ladle – Atomic – Mango Habanero – Original Hot – Mild – Hickory Smoked BBQ – Hawaiian – Spicy Korean Q1 oz. Ladle – Lemon Pepper – Garlic Parmesan- Hot Honey½ oz. Ladle - Louisiana RubEach sauce set up on the lineTongsHoagiesBoatsLinersMark as non-compliant if:Liners not availableBoats not availableHoagies not availableSauce bowl not available for each flavorCorrect ladle not available in each sauceEach sauce not set up on the lineTongs not available
+```
+
+</details>
+
+### Kitchen Line - Cook (Gunner & Bombardier)
+
+#### `KC201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Fryer oil is good quality and not foaming/bubbling, excessively dark in color, smoking and does not smell burnt.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Shortening must not be foaming, extremely dark in color or excessively smoking.INSTRUCTIONS: Use the ladle test method to check the oil quality and determine if it is still usableAsk the manager to take a 2 oz ladle and fill with oil from fryer 1.If the shortening is transparent and you can see light reflection, then there is still good clarity of the oilIf the shortening is too dark to see the bottom of the ladle, it is no longer at the desired quality to continue to cook productPoor quality of shortening is also verified by smoke, foaming, darkened color, smell and taste. For reference, the fryers are numbered 1 through 5.Fryer #1 is always where the classic chicken is cooked and is located next to the chicken cooler, although they may also use fryers #2 and #3.NOTE: If the ladle test shows the shortening is not compliant, the ladle test must be shown in the photo.
+```
+
+</details>
+
+#### `KC202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Classic wings cooked correctly and to a temperature of 200F - 210F.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Cooked classic wings must be cooked to a temperature of 200-210° FTake the internal temperature of a classic wing immediately after cooking.Mark as non-compliant if:Cooked classic wings not cooked to a temperature of 200-210° FCross-reference:If the chicken is not cooked to at least 165° F, score item A109 in the Food Safety department as well as scoring here.
+```
+
+</details>
+
+#### `KC203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Boneless proteins cooked correctly and to a temperature of 175F - 210F.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Boneless wings, tenders, and filets must be cooked to 175°F - 210°F.Take the temperature of boneless wings, tenders or filet after resting 1 minute (after cooking) to allow the juices to distribute through the chicken and have an even temperature. Mark as non-compliant if:Cross-reference:If the chicken is not cooked to at least 165°F, score item A109 in Food Safety dept as well as scoring here.
+```
+
+</details>
+
+#### `KC204` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Classic wings wasted when needed for hold time, and quality.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Classic wings can be held for a maximum of 13 minutes and cannot be served afterwardClassic wings must be wasted in the classic wings waste bucket for the following reasons:Miscuts with excessive bone showing or broken bones in the wingWing has been held for 13 minutesMark as non-compliant:Wings not wasted in the waste bucketWings held for 13 minutes or longerMiscuts with excessive bone showing or broken bones in the wing
+```
+
+</details>
+
+#### `KC205` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Boneless products wasted when needed for hold time, and quality.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Boneless products must be wasted in the boneless wings waste basket for the following reasons:Boneless wings and tenders held for more than 6.5 minutes and cannot be served afterwardFilets held for more than 8 minutes and cannot be served afterwardMark as non-compliant if:Boneless wings and tenders held for more than 6.5 minutesFilets held for more than 8 minutes
+```
+
+</details>
+
+#### `KC301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Hood vent area is professionally cleaned quarterly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:Professional cleanings must be performed at a minimum every quarter and must be up to date with the service sticker and date present.Exception: Corporate locations can have their hood professionally cleaned minimum every 6 months.Mark as non-compliant if:The location says professional cleaning occurs every quarter but there is no service sticker presentProfessional cleaning not performed minimum every quarter
+```
+
+</details>
+
+#### `KC302` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Bombardier station set up correctly.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:The bombardier station must set up correctly and include at minimum the following:Two waste buckets - one for classic and one for boneless wingsTongsRed/ White chicken bucket systemStacked bucket system with ice in the bottom bucket with raw chicken wings in the top bucket.Lid is required when wings are not being dropped and when not in peak time frames.NOTE: During slower time periods, the restaurant may have the chicken bucket stored in the reach-in cooler to keep chicken cold. - do not document if the chicken bucket system is placed in the reach-in during slow periodsMark as non-compliant if:Two waste buckets - one for classic and one for boneless wingsTongsRed chicken bucket systemNOTE: During slower time periods, the restaurant may have the chicken bucket stored in the reach-in cooler to keep chicken cold. - do not document if the chicken bucket system is placed in the reach-in during slow periods
+```
+
+</details>
+
+### Office and Admin
+
+#### `OF101` — First Priority — 5 pts (repeat: 5)
+
+**Title:** Restaurant is adhering to approved posted hours of operations.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Business hours and days of operation must be in accordance with the Wingstop system standards (Sunday - Saturday 11am - 12am midnight).The hours of operations decal/take out menus/online hours of operation must always be updated with WRI approved hours.If a restaurant must close for inclement weather, power outages, or an emergency, the FBC must be contacted and informed of the situation.Wingstop hours of operation sign must be present on the door.IMPORTANT: If the location has a professional Wingstop signage with hours posted that are not the standard 11am - 12pm, do not document. The stores have to get permission to get these professional signs so the hours will have already been approved. If the location has any handmade adjustments to professional Wingstop sign, document. Mark as Not Compliant if:Wingstop hours of operation not present on the doorBusiness hours/days of operation not in accordance with Wingstop system standardsIMPORTANT: If the location has professional Wingstop signage with hours posted that are not the standard 11am - 12pm, do not document. The stores have to get permission to get these professional signs so the hours will have already been approved. Acceptable hours - even though not 12amUnapproved hours- handmade sign adjustment
+```
+
+</details>
+
+#### `OF201` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Restaurant has a minimum of 6 team members enrolled in WingYou.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Ask the GM/SL to log into their training modules. A minimum of 6 current team members must be entered in WingYou.Mark as Not Compliant if:Store does not have a minimum of 6 team members documented in WingYouPIC could not log in to WingYou to confirm at least 6 team members documented
+```
+
+</details>
+
+#### `OF202` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Person in Charge (Manager completing walk) can access the Operations Manual.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:Let the manager/PIC know at the beginning of the evaluation that you will need to access the Ops Manual on WingYou (hosted by PlayerLync). This is important because if the incorrect password is entered when logging in, the system locks for 30 minutes.IMPORTANT: Team member in charge that you request login access must be able to access WingYou and navigate to the Operations Manual. If the manager/PIC cannot access the Ops Manual when you request during the visit, document. Document if the manager/PIC needs to call, text, email, etc. someone to log in for them (ex. DM, FBC, AM, etc). The manager/PIC working should be able to access WingYou.The Ops Manual is very important because it is a reference to WRI brand standards, operational procedures, training guides, etc.This can be accessed via the restaurant’s tablet/computer, or a personal phone.Instructions:1. Ask the manager in charge to log into WingYou and pull up the Operations ManualScore if the PIC cannot log into WingYou or PIC cannot show you the Operations ManualMark as non-compliant if:Team member in charge not able to access the Operation Manual on WingYou via computer, tablet or phone
+```
+
+</details>
+
+#### `OF203` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** Chicken counts are regularly completed for each delivery over a 30 day period.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:NOTE: you may see the chicken counts documented differently, they just need to have the chicken counts at least 2x per week.A minimum of 2 cases of classic wings must be counted per week and entered into the NBO Daily Sales Report (DSR). Must have minimum of 8 entries in 30 days, 2 per week required.IMPORTANT: The restaurants have been instructed to count 2 cases daily, so we should encourage this practice, but we are only checking that 2 checks have been completed per week.Ask the manager to show you the Daily Sales Report that shows where wings are countedThe count must include all usable and unusable pieces. Miscuts are tracked and entered separately, but are still included in the overall count.Look for extremely small and extraneously large counts that aren't likely correct. For example, 25 wings or 500 wings.Mark as non-compliant if:Minimum of 2 cases of classic wings not counted per week and entered into the NBO Daily Sales Report (DSR)Manager/PIC could not bring up Daily Sales Report to show that wings are being counted
+```
+
+</details>
+
+#### `OF204` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All Managers and Team Members are wearing brand-approved uniforms.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:SEE images under policy:Mark as non-compliant if:Managers:Jeans:Jeans must be well fitting and worn above hips, clean and wrinkle free with no excessive stains or bleach stains.Jeans must be hemmed and cannot have tears, holes, frays, patches or studs.Jeans must be dark blue or black, may not be excessively faded.Jeans must be denim. Shorts or capris are not allowed.Shirt:Manager in charge must wear a manager polo that is clean and wrinkle free with no excessive stains, bleach stains or holes.Undershirts are optional, but if worn they must clean and wrinkle free, black or white, short sleeve, crew neck or v-neck and without a frayed collar and tucked in;In cold weather, a long-sleeve black undershirt can be worn following the same guidelines as above by FOH team members onlyVisor/hat:All managers are required to wear a Wingstop branded and approved hat or visor with the bill facing forwardTattoos/language:Tattoos with words or images of harassment or discrimination, racial slurs, racial symbols, gang symbols are not permitted.Offensive language or topics are not permitted.Team Members:Jeans:Jeans must be well fitting and worn above hips, clean and wrinkle free with no excessive stains or bleach stains.Jeans must be hemmed and cannot have tears, holes, frays, patches or studs. Jeans are preferred to be dark blue or black, may not be excessively faded.Jeans must be denim.Khaki, Spandex, leggings, and sweatpants are not authorized.Shorts or capris are not allowed.Shirt:Team members must wear a Wingstop t-shirt, camp shirt or chef’s coat that is clean and wrinkle free without excessive stains, bleach stains or holesCamp shirts can have up to two buttons unbuttoned from the topUndershirts are optional, but if worn they must clean and wrinkle free, black or white, short sleeve, crew neck or v-neck and without a frayed collar and tucked inIn cold weather, a long-sleeve black undershirt can be worn following the same guidelines as above by FOH team members onlyVisor/hat:All team members are required to wear a Wingstop branded and approved hat or visor with the bill facing forwardTattoos/language:Tattoos with words or images of harassment or discrimination, racial slurs, racial symbols, gang symbols are not permitted.Offensive language or topics are not permitted.Uniform shirts &amp; visor/hat
+```
+
+</details>
+
+#### `OF205` — Second Priority — 3 pts (repeat: 3)
+
+**Title:** All employees are wearing non-slip shoes.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop policy:All employees are required to wear all black, non-slip shoes.Open-toe and open-back shoes (a strap is considered open back) and non-slip shoe covers are not approved.Mark as non-compliant if:Employee wearing open-front shoesEmployee wearing open-back shoesEmployee wearing slip-resistant shoe covers, not slip-resistant shoesEmployee not wearing all black slip-resistant shoes
+```
+
+</details>
+
+#### `OF301` — Third Priority — 1 pts (repeat: 1)
+
+**Title:** Technology box closed and locked.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:The technology box must be closed, secured, and locked with all items and cords stored inside of the box.Mark as non-compliant if:Box not lockedBox not secure - keys left out in an unsecured areaCords not stored inside the box
+```
+
+</details>
+
+### Information Only
+
+#### `IN112` — Informational — 0 (information only)
+
+**Title:** Did you confirm with the PIC you are at the correct location?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Confirm with the PIC that you are at the correct location.
+```
+
+</details>
+
+#### `IN113` — Informational — 0 (information only)
+
+**Title:** Did you open the exception report and confirm this location was not scored for an item listed on the exception report?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:The exception report should be opened at the beginning of each assessment to identify any scoring exceptions the location has. Link to exception report: Wingstop Exception Report
+```
+
+</details>
+
+#### `IN101` — Informational — 0 (information only)
+
+**Title:** Take a photo of the front of the building.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Client Policy:Take a clear photo of the front of the building. See examples below of photos Wingstop is looking for.
+```
+
+</details>
+
+#### `IN110` — Informational — 0 (information only)
+
+**Title:** Starch wash is present in the location?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Wingstop Policy:If you do not see starch wash, ask the PIC to show you the starch wash to confirm the restaurant has it. Starch wash is required for their fries so if they do not have it they are not following blanching procedures.
+```
+
+</details>
+
+#### `IN120` — Informational — 0 (information only)
+
+**Title:** Sweet BBQ Blaze orders are being sauced with the correct amount of sauce (2oz for every 10 wings) and it is not pooling in the packaging.
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Observe chicken being sauced with new Sweet BBQ Blaze sauce. 2oz of sauce should be used for every 10 wingsSauce should not be pooling in the packaging*Do not document if the guest asks for extra sauceDocument if:Too much sauceToo little sauceSauce pooling in packagingWrong ladle size used
+```
+
+</details>
+
+#### `IN121` — Informational — 0 (information only)
+
+**Title:** Sweet BBQ Blaze orders are receiving the seasoning shake in the bowl and in the packaging with the correct amount (3 shakes in bowl plus 3 shakes in packaging).
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Sweet BBQ Blaze orders must have the seasoning shake in the bowl and in the packaging with the correct amount of shakes (3 shakes in bowl plus 3 shakes in packaging).Document if:Not being seasoned in bowlNot being seasoned in packagingOver seasonedUnder seasonedNot seasoned correctly - did not season season with 3 shakes in bowl and 3 shakes in packaging
+```
+
+</details>
+
+#### `IN122` — Informational — 0 (information only)
+
+**Title:** How are team members moving seasoning shakers (up and down or side to side)?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Observe how team members are moving the seasoning shakers (up and down or side to side). Document.Side to side is preferred because the seasoning doesn't compact in the lid.
+```
+
+</details>
+
+#### `IN123` — Informational — 0 (information only)
+
+**Title:** How many chicken sandwiches are being sauced in a mixing bowl at one time?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Observe the number of chicken sandwich filets that are being sauced in a mixing bowl at one time.Document the quantity of chicken sandwich filets being sauced.Document the number of chicken sandwich’s being made.Standard: Filets are sauced and tossed no more than two per bowl at a time.
+```
+
+</details>
+
+#### `IN124` — Informational — 0 (information only)
+
+**Title:** Are correct number of chicken sandwich filets are being cooked in a fryer basket at one time?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Observe the number of chicken sandwich filets are being cooked in a fryer basket at one time.Document the basket size being used. Small or Large.Document the quantity of chicken sandwich filets being cooked.Standard: Filets are cooked no more than 6 filets per small basket and 8 filets per large basket.
+```
+
+</details>
+
+#### `IN125` — Informational — 0 (information only)
+
+**Title:** Are team members aware of what comes with the chicken sandwich by default?
+
+<details><summary>Policy / Scoring Guidance</summary>
+
+```text
+Policy:Ask a team member what comes by default with a chicken sandwich, both a la carte and combo.Document the team member’s response.Coach team member if response is not a small side of ranch.Standard:Chicken sandwiches are served by default with a small side of ranch. Chicken sandwich combo is served with a small side of ranch and fries by default.
+```
+
+</details>
+
+---
+
+## Implementation Notes for Claude Code
+
+### Priorities for v1
+
+1. Seed migration that loads the question bank above into `audit_questions` (version 1). Parse this markdown or — better — ship the data as a JSON/CSV fixture derived from the same xlsx so the question text stays in sync with the source of truth.
+2. External-audit flow end-to-end (start → answer → finalize → report → PDF export).
+3. Internal-audit flow with the 7 seeded templates.
+4. Scoring engine + auto-unacceptable rules + rating bands.
+5. Repeat-finding detection (lookup previous completed **external** audit for same location).
+
+### Cross-reference linking
+
+Many policy texts reference other codes (e.g., 'also mark A115 as Not Compliant'). At seed time, parse the policy for code patterns matching `^[A-Z]{1,2}\d{3}[a-z]?` and store the resulting list in a `cross_refs text[]` column on `audit_questions`. The audit UI uses this to render tappable chips.
+
+### Photos
+
+Several questions explicitly require a photo (search policy text for 'photo is required', 'take a photo', 'Photo must be taken'). Mark those with `photo_required = true` on `audit_questions` and enforce at finalize time.
+
+### Version bumps
+
+When Wingstop publishes a new QSC spec, bump `version`, insert the new rows, and do not retroactively update existing audits. Audit rows pin `question_version`, so historical audits render with the question text they were completed against.
+
+### Permissions
+
+- External audits: only users with role `evaluator` or `admin` can create or finalize.
+- Internal audits: any user with access to the location can create; only the creator or an admin can finalize.
+- Admin-only: reopen completed audits, edit question bank, edit templates marked 'system'.
+
+### Testing
+
+- Unit tests for scoring engine: cover each risk level, repeat flag, auto-unacceptable triggers, and rating bands.
+- Snapshot test that ensures seed migration produces exactly 150 scored questions + 10 information-only, matching the codes listed in this spec.
+- Integration test: complete an external audit with pre-set NC answers → assert exact score and rating.
+
+### Out of scope for v1
+
+- Auditor scheduling / assignment workflow.
+- Automatic escalation emails to FBC / Account Manager for imminent health hazards (policy mentions this for A139/A141/A143) — log the event now, wire the email integration later.
+- Trend analytics across multiple audits (dashboards, heatmaps).

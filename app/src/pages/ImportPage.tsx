@@ -218,6 +218,34 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
     } catch { return {} }
   }
 
+  // The template endpoint is behind requireAuth, so a bare <a href> download
+  // fails with a 401 and the browser shows a generic "file not available"
+  // error. Fetch with the Auth0 bearer token, convert to blob, and trigger
+  // a programmatic download.
+  const downloadTemplate = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/import/template`, { headers: await authHeader() })
+      if (!res.ok) {
+        const msg = res.status === 401
+          ? 'Session expired — please sign in again to download the template.'
+          : `Template download failed (HTTP ${res.status})`
+        setParseError(msg)
+        return
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = 'cogs-import-template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Template download failed')
+    }
+  }
+
   const [step,        setStep]        = useState<Step>('upload')
   const [importPath,  setImportPath]  = useState<ImportPath>('ai')
   const [file,        setFile]        = useState<File | null>(null)
@@ -233,6 +261,64 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
   const [dbCountries,   setDbCountries]   = useState<DbCountry[]>([])
   const [filterDups,    setFilterDups]    = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // ── Staged-import resume panel ─────────────────────────────────────────────
+  interface PendingJob {
+    id: number
+    user_email: string | null
+    source_file: string | null
+    status: 'staging' | 'ready' | 'importing' | 'done' | 'failed'
+    created_at: string
+    updated_at: string
+    ingredient_count: number
+    vendor_count: number
+    quote_count: number
+    recipe_count: number
+    menu_count: number
+  }
+  const [pendingJobs, setPendingJobs] = useState<PendingJob[]>([])
+  const [pendingLoading, setPendingLoading] = useState(false)
+
+  const loadPendingJobs = useCallback(async () => {
+    try {
+      setPendingLoading(true)
+      const h = await authHeader()
+      const res = await fetch(`${API_BASE}/import/jobs?mine=1&status=staging,ready,failed&limit=10`, { headers: h })
+      if (!res.ok) { setPendingJobs([]); return }
+      const data = await res.json()
+      setPendingJobs(Array.isArray(data) ? data : [])
+    } catch { setPendingJobs([]) }
+    finally { setPendingLoading(false) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { if (step === 'upload') loadPendingJobs() }, [step, loadPendingJobs])
+
+  // Resume a staged job: fetch its full staged_data and jump to the right step,
+  // same flow as the ?job=<id> URL deep-link from Pepper.
+  const resumeJob = async (id: number) => {
+    try {
+      const h = await authHeader()
+      const res = await fetch(`${API_BASE}/import/${id}`, { headers: h })
+      if (!res.ok) { setParseError(`Could not load job #${id}`); return }
+      const data = await res.json()
+      if (!data?.staged_data) { setParseError('Job has no staged data'); return }
+      setJobId(String(data.id))
+      setStaged(data.staged_data)
+      const hasMappings = Object.keys(data.staged_data.category_mapping || {}).length > 0
+      setStep(hasMappings ? 'mapping' : 'review')
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Failed to resume job')
+    }
+  }
+
+  // Delete a staged job (e.g. abandoned imports cluttering the list).
+  const discardPendingJob = async (id: number) => {
+    try {
+      const h = await authHeader()
+      await fetch(`${API_BASE}/import/${id}`, { method: 'DELETE', headers: h })
+      setPendingJobs(prev => prev.filter(j => j.id !== id))
+    } catch { /* non-fatal — list will refresh next time */ }
+  }
 
   // Load categories
   useEffect(() => {
@@ -450,6 +536,63 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         </div>
       )}
 
+      {/* Staged imports — "Continue a staged import" panel. Shows jobs
+          attributed to the current user that haven't been committed yet
+          (status = staging / ready / failed). Staging is what Pepper hands
+          over via the start_import tool; ready means the user saved amends
+          and is about to execute; failed means they hit an error and can
+          retry. Terminal "done" jobs don't appear here. */}
+      {pendingJobs.length > 0 && (
+        <div className="mb-6 p-4 rounded-xl border border-accent/30" style={{ background: 'var(--accent-dim)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-semibold text-sm" style={{ color: 'var(--accent)' }}>
+              📥 Continue a staged import
+            </div>
+            <button type="button" onClick={loadPendingJobs} disabled={pendingLoading}
+                    className="text-xs underline hover:opacity-80" style={{ color: 'var(--accent)' }}>
+              {pendingLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+          <div className="space-y-2">
+            {pendingJobs.map(j => {
+              const total = j.ingredient_count + j.vendor_count + j.quote_count + j.recipe_count + j.menu_count
+              const statusColor = j.status === 'failed' ? '#DC2626' : j.status === 'ready' ? 'var(--accent)' : 'var(--text-3)'
+              const summary = [
+                j.ingredient_count && `${j.ingredient_count} ingredient${j.ingredient_count === 1 ? '' : 's'}`,
+                j.vendor_count     && `${j.vendor_count} vendor${j.vendor_count === 1 ? '' : 's'}`,
+                j.quote_count      && `${j.quote_count} quote${j.quote_count === 1 ? '' : 's'}`,
+                j.recipe_count     && `${j.recipe_count} recipe${j.recipe_count === 1 ? '' : 's'}`,
+                j.menu_count       && `${j.menu_count} menu${j.menu_count === 1 ? '' : 's'}`,
+              ].filter(Boolean).join(', ') || 'empty'
+              return (
+                <div key={j.id} className="flex items-center gap-3 p-3 rounded-lg bg-white border border-border">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm truncate" style={{ color: 'var(--text-1)' }}>
+                      {j.source_file || 'Untitled import'}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
+                      <span style={{ color: statusColor, fontWeight: 600 }}>{j.status}</span>
+                      {' · '}{summary}
+                      {' · '}{new Date(j.created_at).toLocaleString()}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => resumeJob(j.id)}
+                          disabled={total === 0}
+                          className="btn-primary text-xs py-1.5 px-3 whitespace-nowrap">
+                    Continue →
+                  </button>
+                  <button type="button" onClick={() => discardPendingJob(j.id)}
+                          title="Discard this staged job"
+                          className="text-xs text-text-3 hover:text-red-500 px-1.5">
+                    ✕
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Path selector */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {(['ai','template'] as ImportPath[]).map(p => (
@@ -472,7 +615,7 @@ export default function ImportPage({ hideHeader }: { hideHeader?: boolean } = {}
         <div className="mb-4 p-3 rounded-lg flex items-center gap-3 text-sm" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
           <span>📥</span>
           <span className="flex-1">First time? Download the blank template.</span>
-          <a href={`${API_BASE}/import/template`} download className="font-semibold underline">Download template.xlsx</a>
+          <button type="button" onClick={downloadTemplate} className="font-semibold underline hover:opacity-80">Download template.xlsx</button>
         </div>
       )}
 

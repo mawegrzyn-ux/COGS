@@ -142,3 +142,6 @@ vite.config.ts.timestamp-*
 kanban/api/node_modules/
 kanban/app/node_modules/
 kanban/app/dist/
+
+# Claude Code worktrees (temporary isolated agent working directories)
+.claude/worktrees/

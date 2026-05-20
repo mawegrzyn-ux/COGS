@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // Ensure the settings row exists
 async function ensureRow() {
@@ -37,6 +38,7 @@ router.put('/', async (req, res) => {
       `UPDATE mcogs_settings SET data = $1, updated_at = NOW() WHERE id = 1 RETURNING data`,
       [JSON.stringify(req.body)]
     );
+    logAudit(pool, req, { action: 'update', entity_type: 'settings', entity_id: 1, entity_label: 'global' });
     res.json(rows[0].data);
   } catch (err) {
     console.error(err);
@@ -55,6 +57,7 @@ router.patch('/', async (req, res) => {
        RETURNING data`,
       [JSON.stringify(req.body)]
     );
+    logAudit(pool, req, { action: 'update', entity_type: 'settings', entity_id: 1, entity_label: 'global' });
     res.json(rows[0].data);
   } catch (err) {
     console.error(err);

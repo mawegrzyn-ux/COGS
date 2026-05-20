@@ -1,5 +1,8 @@
-const router = require('express').Router();
-const pool   = require('../db/pool');
+const router    = require('express').Router();
+const pool      = require('../db/pool');
+const Anthropic = require('@anthropic-ai/sdk');
+const { logAudit, diffFields } = require('../helpers/audit');
+const aiConfig  = require('../helpers/aiConfig');
 const { loadQuoteLookup, calcRecipeCost } = require('./cogs');
 
 // Helper: fetch a single scenario with joined name fields
@@ -225,6 +228,7 @@ router.post('/push-prices', async (req, res) => {
       `, [menu_sales_item_id, price_level_id, sell_price]);
     }
     await client.query('COMMIT');
+    logAudit(pool, req, { action: 'update', entity_type: 'scenario', entity_id: null, entity_label: 'push prices to menu', context: { items_pushed: overrides.length } });
     res.json({ pushed: overrides.length });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -256,6 +260,7 @@ router.post('/', async (req, res) => {
       notes?.trim() || null,
     ]);
     const row = await fetchScenario(inserted.id);
+    logAudit(pool, req, { action: 'create', entity_type: 'scenario', entity_id: inserted.id, entity_label: name.trim() });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -287,6 +292,7 @@ router.put('/:id', async (req, res) => {
     ]);
     if (!rowCount) return res.status(404).json({ error: { message: 'Scenario not found' } });
     const row = await fetchScenario(req.params.id);
+    logAudit(pool, req, { action: 'update', entity_type: 'scenario', entity_id: Number(req.params.id), entity_label: name.trim() });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -297,11 +303,217 @@ router.put('/:id', async (req, res) => {
 // ── DELETE /scenarios/:id ─────────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_menu_scenarios WHERE id=$1', [req.params.id]);
     await pool.query(`DELETE FROM mcogs_menu_scenarios WHERE id=$1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'scenario', entity_id: Number(req.params.id), entity_label: old?.name || `Scenario #${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete scenario' } });
+  }
+});
+
+// ── POST /scenarios/smart — AI-powered scenario analysis ────────────────────
+// Accepts a natural language prompt, loads the current menu data, calls Claude
+// Haiku for analysis, and returns structured price change proposals.
+router.post('/smart', async (req, res) => {
+  const { menu_id, scenario_id, price_level_id, prompt } = req.body;
+  if (!menu_id) return res.status(400).json({ error: { message: 'menu_id is required' } });
+  if (!prompt?.trim()) return res.status(400).json({ error: { message: 'prompt is required' } });
+
+  try {
+    // 1. Load current menu + country data
+    const { rows: [menu] } = await pool.query(`
+      SELECT m.*, c.currency_code, c.currency_symbol, c.exchange_rate, c.name AS country_name
+      FROM mcogs_menus m JOIN mcogs_countries c ON c.id = m.country_id
+      WHERE m.id = $1
+    `, [menu_id]);
+    if (!menu) return res.status(404).json({ error: { message: 'Menu not found' } });
+
+    // 2. Load menu sales items, price levels, and per-item prices
+    const { rows: items } = await pool.query(`
+      SELECT msi.id AS menu_item_id, si.name, si.item_type,
+             COALESCE(si.display_name, si.name) AS display_name,
+             cat.name AS category,
+             si.recipe_id, si.ingredient_id, si.manual_cost,
+             r.yield_qty
+      FROM mcogs_menu_sales_items msi
+      JOIN mcogs_sales_items si ON si.id = msi.sales_item_id
+      LEFT JOIN mcogs_categories cat ON cat.id = si.category_id
+      LEFT JOIN mcogs_recipes r ON r.id = si.recipe_id
+      WHERE msi.menu_id = $1
+      ORDER BY msi.sort_order, msi.id
+    `, [menu_id]);
+
+    const { rows: levels } = await pool.query('SELECT id, name FROM mcogs_price_levels ORDER BY name');
+
+    const msiIds = items.map(i => i.menu_item_id);
+    const { rows: prices } = msiIds.length ? await pool.query(`
+      SELECT msip.menu_sales_item_id, msip.price_level_id, msip.sell_price,
+             pl.name AS level_name
+      FROM mcogs_menu_sales_item_prices msip
+      JOIN mcogs_price_levels pl ON pl.id = msip.price_level_id
+      WHERE msip.menu_sales_item_id = ANY($1::int[])
+    `, [msiIds]) : { rows: [] };
+
+    // 3. Load scenario overrides if scenario_id provided
+    let scenarioOverrides = {};
+    if (scenario_id) {
+      const { rows: [sc] } = await pool.query(
+        'SELECT price_overrides FROM mcogs_menu_scenarios WHERE id = $1', [scenario_id]
+      );
+      if (sc?.price_overrides) scenarioOverrides = sc.price_overrides;
+    }
+
+    // 4. Build concise data structure for AI context
+    const priceMap = {};
+    for (const p of prices) {
+      if (!priceMap[p.menu_sales_item_id]) priceMap[p.menu_sales_item_id] = {};
+      priceMap[p.menu_sales_item_id][p.price_level_id] = {
+        sell_price: Number(p.sell_price),
+        level_name: p.level_name,
+      };
+    }
+
+    // Load cost data via COGS module
+    const exchangeRate = Number(menu.exchange_rate) || 1;
+    const recipeIds = [...new Set(items.filter(i => i.recipe_id).map(i => Number(i.recipe_id)))];
+    let quoteLookup = {}, recipeItemsMap = {};
+    try {
+      const { loadAllRecipeItemsDeep } = require('./cogs');
+      [quoteLookup, recipeItemsMap] = await Promise.all([
+        loadQuoteLookup(),
+        loadAllRecipeItemsDeep(recipeIds),
+      ]);
+    } catch { /* silent — costs will be 0 */ }
+
+    // NOTE: sell_price in mcogs_menu_sales_item_prices is stored in the menu's
+    // local currency context (not USD). Do NOT multiply by exchange_rate.
+    // The dispRate conversion is handled by the frontend when displaying.
+    const menuData = {
+      menu_name: menu.name,
+      currency: menu.currency_code,
+      country: menu.country_name,
+      price_levels: levels.map(l => ({ id: l.id, name: l.name })),
+      items: items.map(item => {
+        const itemPrices = priceMap[item.menu_item_id] || {};
+        const perLevel = {};
+        for (const [lid, data] of Object.entries(itemPrices)) {
+          const ovKey = `${item.menu_item_id}_l${lid}`;
+          const ovPrice = scenarioOverrides[ovKey];
+          const currentPrice = ovPrice != null ? Number(ovPrice) : data.sell_price;
+          perLevel[lid] = {
+            level_name: data.level_name,
+            current_price: Math.round(currentPrice * 100) / 100,
+            is_overridden: ovPrice != null,
+          };
+        }
+        // Calculate cost per portion in local currency
+        let costLocal = 0;
+        try {
+          if (item.item_type === 'recipe' && item.recipe_id) {
+            const rItems = recipeItemsMap[item.recipe_id] || [];
+            const recipe = { id: item.recipe_id, yield_qty: item.yield_qty || 1 };
+            const { cost } = calcRecipeCost(recipe, rItems, menu.country_id, quoteLookup, {}, recipeItemsMap);
+            costLocal = Math.round(cost * exchangeRate * 100) / 100;
+          } else if (item.item_type === 'ingredient' && item.ingredient_id) {
+            const q = quoteLookup[item.ingredient_id]?.[menu.country_id];
+            if (q) costLocal = Math.round(q.price_per_base_unit * exchangeRate * 100) / 100;
+          } else if (item.item_type === 'manual') {
+            costLocal = Math.round(Number(item.manual_cost || 0) * exchangeRate * 100) / 100;
+          }
+        } catch { /* silent */ }
+
+        return {
+          menu_item_id: item.menu_item_id,
+          name: item.display_name || item.name,
+          category: item.category || 'Uncategorised',
+          item_type: item.item_type,
+          cost: costLocal,
+          prices: perLevel,
+        };
+      }),
+    };
+
+    // 5. Build restricted system prompt
+    const systemPrompt = `You are a menu pricing analyst for "${menu.name}" (${menu.currency_code}). You can propose changes to sell prices AND cost assumptions for menu items.
+
+STRICT RULES:
+- You can ONLY suggest changes to sell prices or cost assumptions for the items listed below
+- You CANNOT modify price quotes, ingredients, recipes, vendors, stock, or any other data
+- You CANNOT perform searches, file operations, or any actions outside scenario analysis
+- If the user asks for anything other than pricing/cost scenario analysis, respond ONLY with: {"error": "I can only help with menu pricing scenarios. Try asking something like: increase all prices by 5%, increase chicken cost by 3%, or set wings to 28% COGS target."}
+- You MUST respond with ONLY valid JSON — no markdown, no explanation outside the JSON
+- All values are in ${menu.currency_code}
+- Each item has a "cost" field (current cost per portion) and per-level "current_price" fields
+- COGS% = cost / (price / (1 + tax_rate)) × 100. When targeting a COGS%, solve for price.
+
+Response format:
+{
+  "summary": "Brief description of changes proposed",
+  "changes": [
+    {
+      "menu_item_id": 123,
+      "level_id": 1,
+      "field": "price",
+      "item_name": "Chicken Wings",
+      "level_name": "Dine In",
+      "old_value": 10.50,
+      "new_value": 10.82,
+      "reason": "3% increase applied"
+    }
+  ]
+}
+
+The "field" must be "price" (for sell price changes) or "cost" (for cost assumption changes).
+For cost changes, use level_id: null and omit level_name.
+
+If no changes are needed: {"summary": "No changes needed", "changes": []}
+
+Current menu data (prices in ${menu.currency_code}):
+${JSON.stringify(menuData, null, 2)}`;
+
+    // 6. Obtain Anthropic client
+    const apiKey = aiConfig.get('ANTHROPIC_API_KEY');
+    if (!apiKey) return res.status(503).json({ error: { message: 'AI is not configured. Set an Anthropic API key in Settings → AI.' } });
+    const anthropic = new Anthropic({ apiKey });
+
+    // 7. Call Claude Haiku (single response, no tools, no streaming)
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: prompt.trim() }],
+    });
+
+    // 8. Parse the structured response
+    const text = response.content?.[0]?.text || '';
+    let parsed;
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch?.[0] || text);
+    } catch {
+      parsed = { summary: 'Could not parse AI response', changes: [], raw: text };
+    }
+
+    // 9. Log the AI call to mcogs_ai_chat_log
+    try {
+      await pool.query(`
+        INSERT INTO mcogs_ai_chat_log (user_sub, messages, tools_called, input_tokens, output_tokens)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        req.user?.sub || null,
+        JSON.stringify([{ role: 'user', content: prompt }, { role: 'assistant', content: text }]),
+        JSON.stringify(['smart_scenario']),
+        response.usage?.input_tokens || 0,
+        response.usage?.output_tokens || 0,
+      ]);
+    } catch { /* silent — don't fail the response if logging fails */ }
+
+    res.json(parsed);
+  } catch (err) {
+    console.error('[smart-scenario]', err);
+    res.status(500).json({ error: { message: 'Failed to analyse scenario' } });
   }
 });
 

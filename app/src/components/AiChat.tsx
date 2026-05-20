@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback, RefObject } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
+import { useVoiceInput } from '../hooks/useVoiceInput'
+import { useVoiceOutput } from '../hooks/useVoiceOutput'
+import { usePermissions } from '../hooks/usePermissions'
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
@@ -13,6 +16,8 @@ interface Message {
   fileName?: string
   /** Set when an Excel export was triggered during this message */
   downloadFile?: { filename: string }
+  /** BACK-2566 — model id that produced this assistant message (Haiku / Opus / etc.) */
+  modelId?: string
 }
 
 interface ChatSession {
@@ -26,6 +31,8 @@ interface ChatSession {
 
 interface MyUsage {
   period_tokens: number
+  /** BACK-2568 — period tokens split by model tier */
+  by_tier?:      { default: number; premium: number }
   limit:         number
   remaining:     number | null
   exceeded:      boolean
@@ -95,7 +102,14 @@ function CogIcon({ size = 24, color = '#fff' }: { size?: number; color?: string 
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
-function renderMd(text: string): string {
+function renderMd(text: string, isUser = false): string {
+  // Colour tokens — user messages inherit parent white; assistant uses design tokens
+  const textColor  = isUser ? 'color:inherit' : 'color:var(--text-1)'
+  const mutedColor = isUser ? 'color:inherit;opacity:0.85' : 'color:var(--text-2)'
+  const dimColor   = isUser ? 'color:inherit;opacity:0.7' : 'color:var(--text-3)'
+  const codeBg     = isUser ? 'rgba(255,255,255,0.12)' : 'var(--accent-dim)'
+  const blockBg    = isUser ? 'rgba(255,255,255,0.1)' : 'var(--surface-2)'
+  const borderClr  = isUser ? 'rgba(255,255,255,0.25)' : 'var(--border)'
   // Escape HTML entities (applied before inline formatting)
   const esc = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -103,7 +117,7 @@ function renderMd(text: string): string {
   // Inline markdown – input is already HTML-escaped
   const inline = (s: string): string =>
     s.replace(/`([^`\n]+)`/g, (_, c) =>
-        `<code style="background:var(--accent-dim);padding:1px 4px;border-radius:3px;font-size:0.75em;font-family:ui-monospace,SFMono-Regular,monospace">${c}</code>`)
+        `<code style="background:${codeBg};padding:1px 4px;border-radius:3px;font-size:0.75em;font-family:ui-monospace,SFMono-Regular,monospace">${c}</code>`)
      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
      .replace(/_([^_\n]+)_/g, '<em>$1</em>')
@@ -125,9 +139,9 @@ function renderMd(text: string): string {
       }
       i++ // skip closing ```
       out.push(
-        `<pre style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;` +
+        `<pre style="background:${blockBg};border:1px solid ${borderClr};border-radius:6px;` +
         `padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:0.72rem;font-family:ui-monospace,` +
-        `SFMono-Regular,monospace;line-height:1.55;white-space:pre-wrap;color:var(--text-2)">${body.join('\n')}</pre>`
+        `SFMono-Regular,monospace;line-height:1.55;white-space:pre-wrap;${mutedColor}">${body.join('\n')}</pre>`
       )
       continue
     }
@@ -137,10 +151,10 @@ function renderMd(text: string): string {
     if (hm) {
       const lvl = hm[1].length
       const style = lvl === 1
-        ? 'font-size:0.9rem;font-weight:800;margin:10px 0 3px;color:var(--text-1)'
+        ? `font-size:0.9rem;font-weight:800;margin:10px 0 3px;${textColor}`
         : lvl === 2
-        ? 'font-size:0.85rem;font-weight:700;margin:8px 0 2px;color:var(--text-1)'
-        : 'font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:6px 0 2px;color:var(--text-3)'
+        ? `font-size:0.85rem;font-weight:700;margin:8px 0 2px;${textColor}`
+        : `font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:6px 0 2px;${dimColor}`
       out.push(`<div style="${style}">${inline(esc(hm[2]))}</div>`)
       i++; continue
     }
@@ -156,18 +170,18 @@ function renderMd(text: string): string {
         rows.push(parseRow(lines[i]))
         i++
       }
-      let tbl = '<div style="overflow-x:auto;margin:6px 0;border-radius:6px;border:1px solid var(--border)">'
+      let tbl = `<div style="overflow-x:auto;margin:6px 0;border-radius:6px;border:1px solid ${borderClr}">`
       tbl += '<table style="width:100%;border-collapse:collapse;font-size:0.72rem">'
-      tbl += '<thead><tr style="background:var(--surface-2)">'
+      tbl += `<thead><tr style="background:${blockBg}">`
       for (const h of headers)
-        tbl += `<th style="padding:5px 10px;text-align:left;font-weight:600;color:var(--text-2);` +
-               `border-bottom:2px solid var(--border);white-space:nowrap">${inline(esc(h))}</th>`
+        tbl += `<th style="padding:5px 10px;text-align:left;font-weight:600;${mutedColor};` +
+               `border-bottom:2px solid ${borderClr};white-space:nowrap">${inline(esc(h))}</th>`
       tbl += '</tr></thead><tbody>'
       rows.forEach((row, ri) => {
-        tbl += `<tr style="background:${ri % 2 === 1 ? 'var(--surface-2)' : 'transparent'}">`
+        tbl += `<tr style="background:${ri % 2 === 1 ? blockBg : 'transparent'}">`
         headers.forEach((_, hi) => {
           const cell = row[hi] ?? ''
-          tbl += `<td style="padding:4px 10px;color:var(--text-1);border-top:1px solid var(--border)">${inline(esc(cell))}</td>`
+          tbl += `<td style="padding:4px 10px;${textColor};border-top:1px solid ${borderClr}">${inline(esc(cell))}</td>`
         })
         tbl += '</tr>'
       })
@@ -181,7 +195,7 @@ function renderMd(text: string): string {
       const items: string[] = []
       while (i < lines.length && /^[-*•]\s/.test(lines[i].trim())) {
         items.push(
-          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^[-*•]\s+/, '')))}</li>`
+          `<li style="${textColor};padding-left:2px">${inline(esc(lines[i].trim().replace(/^[-*•]\s+/, '')))}</li>`
         )
         i++
       }
@@ -194,7 +208,7 @@ function renderMd(text: string): string {
       const items: string[] = []
       while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
         items.push(
-          `<li style="color:var(--text-1);padding-left:2px">${inline(esc(lines[i].trim().replace(/^\d+[.)]\s+/, '')))}</li>`
+          `<li style="${textColor};padding-left:2px">${inline(esc(lines[i].trim().replace(/^\d+[.)]\s+/, '')))}</li>`
         )
         i++
       }
@@ -209,7 +223,7 @@ function renderMd(text: string): string {
     }
 
     // ── Regular text ──────────────────────────────────────────────────────────
-    out.push(`<div style="line-height:1.6;color:var(--text-1)">${inline(esc(line))}</div>`)
+    out.push(`<div style="line-height:1.6;${textColor}">${inline(esc(line))}</div>`)
     i++
   }
 
@@ -219,13 +233,7 @@ function renderMd(text: string): string {
 const ACCEPTED_TYPES  = '.csv,.txt,.pdf,.xlsx,.xls,.docx,.pptx,image/png,image/jpeg,image/webp'
 const MAX_FILE_BYTES  = 10 * 1024 * 1024   // 10 MB — must match multer limit in ai-upload.js
 
-export type PepperMode = 'float' | 'docked-left' | 'docked-right'
-
-const FLOAT_SIZE_KEY  = 'pepper-float-size'
-const MIN_FLOAT_W = 300
-const MAX_FLOAT_W = 800
-const MIN_FLOAT_H = 380
-const MAX_FLOAT_H = 900
+export type PepperMode = 'docked-left' | 'docked-right' | 'docked-bottom'
 
 // ── HistoryPanel — module-level component (stable identity across renders) ────
 
@@ -319,6 +327,7 @@ interface ChatPanelProps {
   input: string
   inputRef: RefObject<HTMLTextAreaElement>
   fileInputRef: RefObject<HTMLInputElement>
+  cameraInputRef: RefObject<HTMLInputElement>
   bottomRef: RefObject<HTMLDivElement>
   onInputChange: (val: string) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
@@ -326,17 +335,33 @@ interface ChatPanelProps {
   onSend: () => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onFilePickerClick: () => void
+  onCameraClick: () => void
   onRemoveFile: () => void
   onScreenshot: () => void
   canSend: boolean
+  /** Mobile-specific polish: bigger tap targets, larger font. */
+  isMobile: boolean
+  /** Push-to-talk voice input. */
+  voiceAvailable: boolean
+  voiceRecording: boolean
+  onVoiceStart:   () => void
+  onVoiceStop:    () => void
 }
 
 function ChatPanel({
   messages, streaming, toolLabel, attachedFile, attachedFilePreview, input,
-  inputRef, fileInputRef, bottomRef,
-  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onRemoveFile, onScreenshot,
-  canSend,
+  inputRef, fileInputRef, cameraInputRef, bottomRef,
+  onInputChange, onKeyDown, onPaste, onSend, onFileChange, onFilePickerClick, onCameraClick, onRemoveFile, onScreenshot,
+  canSend, isMobile,
+  voiceAvailable, voiceRecording, onVoiceStart, onVoiceStop,
 }: ChatPanelProps) {
+  // Mobile gets bigger tap targets (44px ≈ iOS HIG min) and larger font so
+  // the chat is usable with greasy kitchen fingers without zooming in.
+  const iconBtn    = isMobile ? 'w-11 h-11' : 'w-7 h-7'
+  const sendBtn    = isMobile ? 'w-12 h-12' : 'w-8 h-8'
+  const textareaCls = isMobile
+    ? 'flex-1 resize-none bg-transparent text-base outline-none leading-relaxed'
+    : 'flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed'
   return (
     <>
       {/* Messages */}
@@ -377,6 +402,16 @@ function ChatPanel({
                   ))}
                 </div>
               ) : null}
+              {/* BACK-2566 — per-assistant-message model badge */}
+              {msg.role === 'assistant' && msg.modelId && (
+                <div className="mb-1">
+                  <span
+                    className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(0,0,0,0.05)', color: 'var(--text-3)' }}
+                    title={msg.modelId}
+                  >{msg.modelId.includes('opus') ? '✨ Opus' : msg.modelId.includes('sonnet') ? 'Sonnet' : 'Haiku'}</span>
+                </div>
+              )}
               {msg.downloadFile && (
                 <div className="flex items-center gap-1.5 mt-1.5 mb-0.5 text-xs px-2 py-1 rounded"
                   style={{ background: 'rgba(20,106,52,0.12)', color: 'var(--accent-dark)' }}>
@@ -391,7 +426,7 @@ function ChatPanel({
                 </div>
               )}
               {msg.content ? (
-                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content) }} />
+                <span dangerouslySetInnerHTML={{ __html: renderMd(msg.content, msg.role === 'user') }} />
               ) : (
                 streaming && i === messages.length - 1 ? (
                   <span className="flex items-center gap-1.5 py-0.5">
@@ -441,19 +476,48 @@ function ChatPanel({
         <div className="flex items-end gap-2 rounded-lg px-3 py-2"
           style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
           <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden" onChange={onFileChange} />
+          {/* Dedicated camera input — `capture="environment"` asks the native
+              camera app on iOS / Android rather than the file picker. On
+              desktop it falls back to the file picker automatically. */}
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onFileChange} />
           {/* Attach file */}
           <button onClick={onFilePickerClick} disabled={streaming}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
+            className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70`}
             style={{ color: 'var(--text-3)' }} title="Attach file" aria-label="Attach file">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
             </svg>
           </button>
-          {/* Screenshot page */}
-          <button onClick={onScreenshot} disabled={streaming}
-            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70"
-            style={{ color: 'var(--text-3)' }} title="Attach screenshot of current page" aria-label="Screenshot page">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {/* Voice — push-to-talk. Hidden entirely if no voice backend. */}
+          {voiceAvailable && (
+            <button
+              onPointerDown={e => { e.preventDefault(); onVoiceStart() }}
+              onPointerUp={e => { e.preventDefault(); onVoiceStop() }}
+              onPointerLeave={() => { if (voiceRecording) onVoiceStop() }}
+              disabled={streaming}
+              className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-colors disabled:opacity-40 ${voiceRecording ? 'bg-red-100' : 'hover:opacity-70'}`}
+              style={{ color: voiceRecording ? '#DC2626' : 'var(--text-3)', touchAction: 'none' }}
+              title="Press and hold to talk"
+              aria-label="Voice input (push and hold)"
+              aria-pressed={voiceRecording}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="2" width="6" height="12" rx="3" fill={voiceRecording ? 'currentColor' : 'none'}/>
+                <path d="M5 10v2a7 7 0 0 0 14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+              </svg>
+            </button>
+          )}
+          {/* Context-aware camera button.
+              - Desktop: calls onScreenshot (html2canvas of the current page — existing behaviour)
+              - Mobile:  triggers the native camera via `capture="environment"` on cameraInputRef
+              One button, one camera icon — no more "two screenshot icons" confusion. */}
+          <button onClick={isMobile ? onCameraClick : onScreenshot} disabled={streaming}
+            className={`flex-shrink-0 ${iconBtn} flex items-center justify-center rounded transition-opacity disabled:opacity-40 hover:opacity-70`}
+            style={{ color: 'var(--text-3)' }}
+            title={isMobile ? 'Take a photo' : 'Attach screenshot of current page'}
+            aria-label={isMobile ? 'Take a photo' : 'Screenshot page'}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
               <circle cx="12" cy="13" r="4"/>
             </svg>
@@ -464,14 +528,14 @@ function ChatPanel({
             onChange={e => onInputChange(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={attachedFile ? 'Add a message… (optional)' : 'Ask anything… (Enter to send)'}
+            placeholder={attachedFile ? 'Add a message… (optional)' : (voiceRecording ? 'Listening…' : 'Ask anything… (Enter to send)')}
             disabled={streaming}
             rows={1}
-            className="flex-1 resize-none bg-transparent text-sm outline-none leading-relaxed"
+            className={textareaCls}
             style={{ color: 'var(--text-1)', maxHeight: '120px', overflowY: 'auto' }}
           />
           <button onClick={onSend} disabled={!canSend}
-            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40"
+            className={`flex-shrink-0 ${sendBtn} rounded-lg flex items-center justify-center transition-opacity disabled:opacity-40`}
             style={{ background: 'var(--accent)', color: '#fff' }} aria-label="Send">
             {streaming
               ? <span className="flex items-center gap-0.5">
@@ -494,12 +558,33 @@ function ChatPanel({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloatToggle }: {
+export default function AiChat({ mode = 'docked-right', onModeChange, pepperOpen, onToggle, isMobile = false }: {
   mode?: PepperMode; onModeChange?: (m: PepperMode) => void
-  /** When provided, AppLayout/Sidebar controls the float open state externally */
-  floatOpen?: boolean; onFloatToggle?: () => void
+  pepperOpen?: boolean; onToggle?: () => void
+  isMobile?: boolean
 }) {
   const { user, getAccessTokenSilently } = useAuth0()
+  const { user: meUser } = usePermissions()
+  const hasPremium = !!meUser?.ai_premium_access
+  const aiModelsCfg = meUser?.ai_models || { default: 'claude-haiku-4-5-20251001', premium: 'claude-opus-4-7' }
+
+  // BACK-2566 — selected model tier (default | premium). Persists to
+  // localStorage so the picker remembers the user's preference across reloads.
+  // Hidden entirely when the user does not have premium access.
+  const [modelTier, setModelTier] = useState<'default' | 'premium'>(() => {
+    try {
+      const stored = window.localStorage.getItem('pepper-model-tier')
+      return stored === 'premium' ? 'premium' : 'default'
+    } catch { return 'default' }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('pepper-model-tier', modelTier) } catch { /* ignore */ }
+  }, [modelTier])
+  // If the admin revokes premium mid-session, snap back to default so the
+  // server does not 403 every chat request.
+  useEffect(() => {
+    if (!hasPremium && modelTier === 'premium') setModelTier('default')
+  }, [hasPremium, modelTier])
 
   // Returns { Authorization: 'Bearer <token>' } for every authenticated fetch
   const authHeader = useCallback(async () => {
@@ -511,11 +596,8 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     }
   }, [getAccessTokenSilently])
   const location   = useLocation()
+  const navigate   = useNavigate()
 
-  const [open,               setOpen]               = useState(false)
-  // When externally controlled (sidebar button), defer to floatOpen prop
-  const isOpen     = floatOpen !== undefined ? floatOpen : open
-  const toggleOpen = onFloatToggle ?? (() => setOpen(o => !o))
   const [view,               setView]               = useState<PanelView>('chat')
   const [messages,           setMessages]           = useState<Message[]>([])
   const [input,              setInput]              = useState('')
@@ -528,20 +610,54 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   const [sessionsLoad,       setSessionsLoad]       = useState(false)
   const [myUsage,            setMyUsage]            = useState<MyUsage | null>(null)
 
-  const [floatSize, setFloatSize] = useState<{ w: number; h: number }>(() => {
-    try {
-      const s = localStorage.getItem(FLOAT_SIZE_KEY)
-      if (s) return JSON.parse(s)
-    } catch { /* ignore */ }
-    return { w: 390, h: 600 }
-  })
-  const floatSizeRef = useRef(floatSize)
-  useEffect(() => { floatSizeRef.current = floatSize }, [floatSize])
+  const bottomRef      = useRef<HTMLDivElement>(null)
+  const inputRef       = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef   = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
+  const wasStreaming   = useRef(false)
 
-  const bottomRef    = useRef<HTMLDivElement>(null)
-  const inputRef     = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const wasStreaming = useRef(false)
+  // ── Voice input (push-to-talk) ────────────────────────────────────────────
+  // Stash the user's pre-voice input so a short hold doesn't wipe what they
+  // were typing — we append the transcript instead.
+  const preVoiceInputRef = useRef('')
+  // Set when push-to-talk was activated via keyboard shortcut: when the
+  // transcript callback fires, auto-send instead of leaving it in the input.
+  const autoSendOnTranscriptRef = useRef(false)
+  // Forward-reference to sendCore so the voice hook can call it; populated
+  // after sendCore is defined further down the component body.
+  const sendCoreRef = useRef<((text?: string, file?: File | null) => Promise<void>) | null>(null)
+  const voice = useVoiceInput({
+    lang: 'en-GB',
+    apiBase: API_BASE,
+    authHeader,
+    onTranscript: (text) => {
+      if (!text) return
+      const base = preVoiceInputRef.current
+      const merged = base ? `${base} ${text}` : text
+      setInput(merged)
+      if (autoSendOnTranscriptRef.current) {
+        autoSendOnTranscriptRef.current = false
+        // Defer one tick so React commits the input update before send fires.
+        setTimeout(() => { sendCoreRef.current?.(merged) }, 0)
+      }
+    },
+    onError: (_err) => { /* swallow — mic permission denial is user-visible */ },
+  })
+
+  // ── Voice output (sentence-buffered TTS) ──────────────────────────────────
+  const tts = useVoiceOutput({ lang: 'en-GB' })
+
+  // ── Kitchen mode — applies a body class that scales up fonts + tap targets
+  //    across the whole app for greasy-fingers use. Persisted across sessions. */
+  const [kitchenMode, setKitchenMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('pepper-kitchen-mode') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('pepper-kitchen-mode', kitchenMode ? '1' : '0') } catch { /* ignore */ }
+    if (typeof document !== 'undefined') {
+      document.body.classList.toggle('kitchen-mode', kitchenMode)
+    }
+  }, [kitchenMode])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -550,16 +666,26 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
 
   // Focus input when chat opens or view switches back to chat
   useEffect(() => {
-    if (open && view === 'chat') setTimeout(() => inputRef.current?.focus(), 150)
-  }, [open, view])
+    if (pepperOpen && view === 'chat') setTimeout(() => inputRef.current?.focus(), 150)
+  }, [pepperOpen, view])
 
   // Restore focus when streaming completes
   useEffect(() => {
-    if (wasStreaming.current && !streaming && open && view === 'chat') {
+    if (wasStreaming.current && !streaming && pepperOpen && view === 'chat') {
       setTimeout(() => inputRef.current?.focus(), 100)
     }
     wasStreaming.current = streaming
-  }, [streaming, open, view])
+  }, [streaming, pepperOpen, view])
+
+  // Listen for pepper-focus event (keyboard shortcut when already open)
+  useEffect(() => {
+    function onFocus() {
+      if (view !== 'chat') setView('chat')
+      setTimeout(() => inputRef.current?.focus(), 80)
+    }
+    window.addEventListener('pepper-focus', onFocus)
+    return () => window.removeEventListener('pepper-focus', onFocus)
+  }, [view])
 
   // Fetch monthly usage when panel opens and after each response completes
   const refreshUsage = useCallback(async () => {
@@ -570,12 +696,12 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   }, [authHeader])
 
   useEffect(() => {
-    if (open) refreshUsage()
-  }, [open, refreshUsage])
+    if (pepperOpen) refreshUsage()
+  }, [pepperOpen, refreshUsage])
 
   useEffect(() => {
     // Refresh after each streaming turn completes
-    if (!streaming && open) refreshUsage()
+    if (!streaming && pepperOpen) refreshUsage()
   }, [streaming]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── New Chat ──────────────────────────────────────────────────────────────
@@ -654,6 +780,7 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
         form.append('context',   JSON.stringify(context))
         form.append('history',   JSON.stringify(history))
         form.append('sessionId', sessionId)
+        form.append('model',     modelTier)
         if (user?.email)   form.append('userEmail',  user.email)
         if (user?.sub)     form.append('userSub',    user.sub)
         res = await fetch(`${API_BASE}/ai-upload`, { method: 'POST', body: form, headers: await authHeader() })
@@ -666,6 +793,7 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
             sessionId,
             userEmail: user?.email ?? null,
             userSub:   user?.sub   ?? null,
+            model:     modelTier,
           }),
         })
       }
@@ -713,6 +841,19 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
                 msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: msgs[msgs.length - 1].content + event.text }
                 return msgs
               })
+              // Feed sentence-buffered TTS so voice output tracks the stream
+              // in real time. Hook is a no-op when toggle is off.
+              tts.feed(event.text)
+            }
+            if (event.type === 'model') {
+              // BACK-2566 — server announces which model is producing this
+              // response. Stamp the in-flight assistant message so the per-
+              // message badge appears before the first text token arrives.
+              setMessages(prev => {
+                const msgs = [...prev]
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], modelId: event.model }
+                return msgs
+              })
             }
             if (event.type === 'tool') {
               setToolLabel(event.name)
@@ -751,28 +892,88 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
                 return msgs
               })
             }
+            if (event.type === 'navigate' && typeof event.path === 'string') {
+              // Pepper-driven page navigation. Server emits this from
+              // navigate_to_page tool. Only relative paths are accepted to
+              // prevent injection of external URLs through prompt manipulation.
+              const path = event.path
+              if (path.startsWith('/') && !path.startsWith('//')) {
+                navigate(path)
+              }
+            }
             if (event.type === 'done') setToolLabel(null)
           } catch { /* ignore parse errors */ }
         }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error'
+      // Log to console so the user can paste the full stack/cause when
+      // debugging PWA-only failures (silent-iframe token refresh, SW races,
+      // CSP) — "fetch error" in chat alone doesn't say WHY.
+      console.error('[pepper] chat request failed:', err)
       setMessages(prev => {
         const msgs = [...prev]
         msgs[msgs.length - 1] = { role: 'assistant', content: `Error: ${msg}` }
         return msgs
       })
     } finally {
+      // Flush any partial sentence buffered by the TTS hook so nothing is
+      // left unspoken when the response ends without a trailing full stop.
+      tts.flush()
       setStreaming(false)
       setToolLabel(null)
     }
-  }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user])
+  }, [input, attachedFile, streaming, messages, location.pathname, sessionId, user, tts, authHeader])
 
   const send        = useCallback(() => sendCore(),          [sendCore])
+
+  // Keep the ref in sync so the voice hook (which is set up earlier in the
+  // component body, before sendCore exists) can call the latest sendCore.
+  useEffect(() => { sendCoreRef.current = sendCore }, [sendCore])
 
   const handleKey = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }, [send])
+
+  // ── Push-to-talk keyboard shortcut (Alt+Space) ─────────────────────────────
+  // Hold Alt+Space anywhere in the app to record. Release auto-sends the
+  // transcript without needing to click Send. Skipped when the chat panel is
+  // closed or voice isn't available on this device.
+  useEffect(() => {
+    if (!voice.available) return
+    let active = false  // local guard: only fire on the *first* keydown, ignore OS auto-repeat
+
+    function isMatch(e: KeyboardEvent) { return e.altKey && e.code === 'Space' }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (!isMatch(e)) return
+      if (e.repeat || active) { e.preventDefault(); return }
+      // Don't fight a focused input — let users hold Alt+Space without
+      // accidentally triggering inside another text field.
+      const t = e.target as HTMLElement | null
+      if (t?.isContentEditable) return
+      e.preventDefault()
+      active = true
+      preVoiceInputRef.current = inputRef.current?.value ?? ''
+      autoSendOnTranscriptRef.current = true
+      voice.start()
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (!active) return
+      // Stop on either key release (Alt or Space).
+      if (e.code === 'Space' || e.key === 'Alt') {
+        active = false
+        e.preventDefault()
+        voice.stop()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [voice])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
@@ -792,6 +993,21 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     fileInputRef.current?.click()
   }, [])
 
+  // Dedicated camera trigger — on mobile this opens the native camera app
+  // (via the `capture="environment"` hint on the hidden input); on desktop
+  // it falls back to a file picker.
+  const handleCameraClick = useCallback(() => {
+    cameraInputRef.current?.click()
+  }, [])
+
+  // Push-to-talk: stash whatever's currently in the input so the transcript
+  // appends rather than overwrites, then start the chosen voice backend.
+  const handleVoiceStart = useCallback(() => {
+    preVoiceInputRef.current = input
+    voice.start()
+  }, [voice, input])
+  const handleVoiceStop = useCallback(() => { voice.stop() }, [voice])
+
   const handleRemoveFile = useCallback(() => setAttachedFile(null), [])
 
   const handleScreenshot = useCallback(async () => {
@@ -810,40 +1026,6 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
       )
       if (file) setAttachedFile(file)
     } catch { /* silent */ }
-  }, [])
-
-  // ── Float panel resize ────────────────────────────────────────────────────
-  // Panel is pinned to bottom-right, so dragging the top-left corner
-  // moves the top (height) and left (width) edges.
-
-  const startFloatResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const startX = e.clientX
-    const startY = e.clientY
-    const startW = floatSizeRef.current.w
-    const startH = floatSizeRef.current.h
-
-    function onMove(ev: MouseEvent) {
-      // Moving left → panel grows wider (right edge is fixed)
-      const w = Math.max(MIN_FLOAT_W, Math.min(MAX_FLOAT_W, startW - (ev.clientX - startX)))
-      // Moving up → panel grows taller (bottom edge is fixed)
-      const h = Math.max(MIN_FLOAT_H, Math.min(MAX_FLOAT_H, startH - (ev.clientY - startY)))
-      floatSizeRef.current = { w, h }
-      setFloatSize({ w, h })
-    }
-    function onUp() {
-      localStorage.setItem(FLOAT_SIZE_KEY, JSON.stringify(floatSizeRef.current))
-      document.body.style.cursor     = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup',   onUp)
-    }
-
-    document.body.style.cursor     = 'nw-resize'
-    document.body.style.userSelect = 'none'
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup',   onUp)
   }, [])
 
   // Generate / revoke object URL for image previews
@@ -874,20 +1056,20 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     function onAsk(e: Event) {
       const { message, screenshotFile } = (e as CustomEvent<{ message: string; screenshotFile?: File | null }>).detail
       if (!message) return
-      setOpen(true)
+      if (!pepperOpen) onToggle?.()
       setView('chat')
       // Small delay to ensure panel is mounted/visible before sending
       setTimeout(() => sendCore(message, screenshotFile ?? null), 80)
     }
     window.addEventListener('pepper-ask', onAsk)
     return () => window.removeEventListener('pepper-ask', onAsk)
-  }, [sendCore])
+  }, [sendCore, pepperOpen, onToggle])
 
   // ── pepper-screenshot: right-click "Screenshot & Ask" — attaches file, opens panel, user types
   useEffect(() => {
     function onScreenshot(e: Event) {
       const { screenshotFile } = (e as CustomEvent<{ screenshotFile: File | null }>).detail
-      setOpen(true)
+      if (!pepperOpen) onToggle?.()
       setView('chat')
       if (screenshotFile) setAttachedFile(screenshotFile)
       // Focus textarea so user can type their question
@@ -895,13 +1077,11 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
     }
     window.addEventListener('pepper-screenshot', onScreenshot)
     return () => window.removeEventListener('pepper-screenshot', onScreenshot)
-  }, [])
+  }, [pepperOpen, onToggle])
 
   const canSend = !streaming && (input.trim().length > 0 || attachedFile !== null)
 
   // ── Shared panel content ──────────────────────────────────────────────────
-
-  const docked = mode !== 'float'
 
   // Usage bar values
   const usagePct      = myUsage?.limit ? Math.min(100, Math.round((myUsage.period_tokens / myUsage.limit) * 100)) : 0
@@ -910,44 +1090,100 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
   const fmtTok        = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n/1_000).toFixed(0)}k` : String(n)
 
   const panelHeader = (
-    <div className={`flex-shrink-0 ${!docked ? 'rounded-t-xl' : ''}`}
+    <div className="flex-shrink-0"
       style={{ background: 'var(--accent)', color: '#fff' }}>
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2.5">
           <CogIcon size={26} color="#fff" />
           <div>
             <div className="font-semibold text-sm leading-tight">Pepper</div>
-            <div className="text-xs opacity-75">Powered by Claude</div>
+            <div className="text-xs opacity-75">
+              {hasPremium ? (
+                <>{modelTier === 'premium' ? '✨ Smart' : 'Fast'} — {modelTier === 'premium' ? aiModelsCfg.premium : aiModelsCfg.default}</>
+              ) : (
+                <>Powered by Claude</>
+              )}
+            </div>
           </div>
         </div>
       <div className="flex items-center gap-1">
-        {/* Dock-mode toggles */}
-        <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
-          {/* Dock left */}
-          <button onClick={() => onModeChange?.('docked-left')} title="Dock to left"
-            className={`p-1.5 transition-colors ${mode === 'docked-left' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="1" y="1" width="5" height="14" rx="1" opacity="1"/>
-              <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+        {/* BACK-2566 — model tier picker (only visible when premium granted) */}
+        {hasPremium && (
+          <select
+            value={modelTier}
+            onChange={(e) => setModelTier(e.target.value as 'default' | 'premium')}
+            disabled={streaming}
+            className="text-[11px] font-semibold rounded px-1.5 py-1 mr-1 cursor-pointer border-0"
+            style={{ background: 'rgba(255,255,255,0.18)', color: '#fff' }}
+            title={`Active: ${modelTier === 'premium' ? aiModelsCfg.premium : aiModelsCfg.default}`}
+          >
+            <option value="default" style={{ color: '#000' }}>Fast</option>
+            <option value="premium" style={{ color: '#000' }}>✨ Smart</option>
+          </select>
+        )}
+        {/* Dock-mode toggles — hidden on mobile (full-viewport sheet only) */}
+        {!isMobile && (
+          <div className="flex items-center rounded overflow-hidden mr-1" style={{ background: 'rgba(255,255,255,0.15)' }}>
+            {/* Dock left */}
+            <button onClick={() => onModeChange?.('docked-left')} title="Dock to left"
+              className={`p-1.5 transition-colors ${mode === 'docked-left' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1" y="1" width="5" height="14" rx="1" opacity="1"/>
+                <rect x="7" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+            {/* Dock right */}
+            <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
+              className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
+                <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+            {/* Dock bottom */}
+            <button onClick={() => onModeChange?.('docked-bottom')} title="Dock to bottom"
+              className={`p-1.5 transition-colors ${mode === 'docked-bottom' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1" y="10" width="14" height="5" rx="1" opacity="1"/>
+                <rect x="1" y="1" width="14" height="8" rx="1" opacity="0.4"/>
+              </svg>
+            </button>
+          </div>
+        )}
+        {/* TTS toggle — only shown when the browser supports speechSynthesis */}
+        {tts.available && (
+          <button onClick={tts.toggle}
+            className={`p-1.5 rounded transition-colors ${tts.enabled ? 'bg-white/30' : 'hover:bg-white/20'}`}
+            title={tts.enabled ? 'Voice output on — click to mute' : 'Voice output off — click to enable'}
+            aria-label="Toggle voice output"
+            aria-pressed={tts.enabled}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              {tts.enabled ? (
+                <>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </>
+              ) : (
+                <line x1="23" y1="9" x2="17" y2="15"/>
+              )}
             </svg>
           </button>
-          {/* Float */}
-          <button onClick={() => onModeChange?.('float')} title="Floating panel"
-            className={`p-1.5 transition-colors ${mode === 'float' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="4" y="4" width="10" height="10" rx="1.5"/>
-              <path d="M2 2h4v4H2z" fill="currentColor" stroke="none" opacity="0.5"/>
-            </svg>
-          </button>
-          {/* Dock right */}
-          <button onClick={() => onModeChange?.('docked-right')} title="Dock to right"
-            className={`p-1.5 transition-colors ${mode === 'docked-right' ? 'bg-white/30' : 'hover:bg-white/20'}`}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="10" y="1" width="5" height="14" rx="1" opacity="1"/>
-              <rect x="1" y="1" width="8" height="14" rx="1" opacity="0.4"/>
-            </svg>
-          </button>
-        </div>
+        )}
+        {/* Kitchen mode toggle — bigger type, higher contrast across the app */}
+        <button onClick={() => setKitchenMode(v => !v)}
+          className={`p-1.5 rounded transition-colors ${kitchenMode ? 'bg-white/30' : 'hover:bg-white/20'}`}
+          title={kitchenMode ? 'Kitchen mode on — click to switch back' : 'Kitchen mode off — click for bigger type and tap targets'}
+          aria-label="Toggle kitchen mode"
+          aria-pressed={kitchenMode}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 13V4a2 2 0 1 1 4 0v9"/>
+            <path d="M8 13v8"/>
+            <path d="M17 3l-1 10h3l-1 8"/>
+          </svg>
+        </button>
         {/* History button */}
         <button onClick={view === 'history' ? () => setView('chat') : openHistory}
           className="p-1.5 rounded hover:bg-white/20 transition-colors"
@@ -966,10 +1202,10 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
         </button>
         {/* Close button — always visible */}
         <button
-          onClick={docked ? () => onModeChange?.('float') : () => setOpen(false)}
+          onClick={() => onToggle?.()}
           className="p-1.5 rounded hover:bg-white/20 transition-colors ml-0.5"
-          title={docked ? 'Close panel' : 'Close'}
-          aria-label={docked ? 'Close panel' : 'Close Pepper'}
+          title="Close panel"
+          aria-label="Close Pepper"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <path d="M18 6L6 18M6 6l12 12"/>
@@ -1016,10 +1252,17 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
         <ChatPanel
           messages={messages} streaming={streaming} toolLabel={toolLabel}
           attachedFile={attachedFile} attachedFilePreview={attachedFilePreview}
-          input={input} inputRef={inputRef} fileInputRef={fileInputRef} bottomRef={bottomRef}
+          input={input} inputRef={inputRef}
+          fileInputRef={fileInputRef} cameraInputRef={cameraInputRef} bottomRef={bottomRef}
           onInputChange={setInput} onKeyDown={handleKey} onPaste={handlePaste}
           onSend={send} onFileChange={handleFileChange} onFilePickerClick={handleFilePickerClick}
+          onCameraClick={handleCameraClick}
           onRemoveFile={handleRemoveFile} onScreenshot={handleScreenshot} canSend={canSend}
+          isMobile={isMobile}
+          voiceAvailable={voice.available}
+          voiceRecording={voice.recording}
+          onVoiceStart={handleVoiceStart}
+          onVoiceStop={handleVoiceStop}
         />
       )}
     </div>
@@ -1027,49 +1270,12 @@ export default function AiChat({ mode = 'float', onModeChange, floatOpen, onFloa
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  // Docked mode — fills the slot provided by AppLayout
-  if (docked) {
-    return (
-      <div className="pepper-ui h-full flex flex-col print:hidden"
-        style={{ background: 'var(--surface)' }}>
-        {panelHeader}
-        {panelBody}
-      </div>
-    )
-  }
-
-  // Float mode — FAB (only when not sidebar-controlled) + fixed popup
+  // All modes are docked — fills the slot provided by AppLayout
   return (
-    <>
-      {floatOpen === undefined && (
-        <button onClick={toggleOpen}
-          className="pepper-ui fixed bottom-6 right-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110 print:hidden overflow-hidden"
-          style={{ background: 'var(--accent)', color: '#fff' }}
-          title="Pepper" aria-label="Toggle AI chat">
-          {isOpen ? <span className="text-lg font-bold">✕</span> : <CogIcon size={30} color="#fff" />}
-        </button>
-      )}
-      {isOpen && (
-        <div className="pepper-ui fixed bottom-20 right-6 z-50 flex flex-col rounded-xl shadow-2xl print:hidden"
-          style={{ width: floatSize.w, height: floatSize.h, background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          {/* Resize handle — top-left corner (panel is bottom-right anchored) */}
-          <div
-            onMouseDown={startFloatResize}
-            className="absolute top-0 left-0 z-10 rounded-tl-xl"
-            style={{ width: 24, height: 24, cursor: 'nw-resize' }}
-            title="Drag to resize"
-          >
-            {/* Grip dots */}
-            <svg width="10" height="10" viewBox="0 0 10 10" className="absolute top-1.5 left-1.5 opacity-30">
-              {[1,4,7].flatMap(x => [1,4,7].map(y => (
-                <circle key={`${x}-${y}`} cx={x} cy={y} r="0.9" fill="var(--text-3)" />
-              )))}
-            </svg>
-          </div>
-          {panelHeader}
-          {panelBody}
-        </div>
-      )}
-    </>
+    <div className="pepper-ui h-full flex flex-col print:hidden"
+      style={{ background: 'var(--surface)' }}>
+      {panelHeader}
+      {panelBody}
+    </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
+import MediaLibrary from './MediaLibrary'
 
 const API_BASE  = import.meta.env.VITE_API_URL || '/api'
 const MAX_BYTES = 5 * 1024 * 1024 // 5 MB
@@ -8,12 +9,14 @@ interface Props {
   value:    string | null
   onChange: (url: string | null) => void
   label?:   string
+  formKey?: string
 }
 
-export default function ImageUpload({ value, onChange, label }: Props) {
+export default function ImageUpload({ value, onChange, label, formKey }: Props) {
   const { getAccessTokenSilently } = useAuth0()
-  const [uploading, setUploading] = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
+  const [uploading,    setUploading]    = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+  const [libraryOpen,  setLibraryOpen]  = useState(false)
   const ref = useRef<HTMLInputElement>(null)
 
   async function handleFile(file: File) {
@@ -81,6 +84,14 @@ export default function ImageUpload({ value, onChange, label }: Props) {
             ) : value ? 'Change Image' : 'Upload Image'}
           </button>
 
+          <button
+            type="button"
+            onClick={() => setLibraryOpen(true)}
+            className="btn-outline text-sm py-1.5 px-3"
+          >
+            Browse Library
+          </button>
+
           {value && (
             <button
               type="button"
@@ -105,6 +116,13 @@ export default function ImageUpload({ value, onChange, label }: Props) {
           if (e.target.files?.[0]) handleFile(e.target.files[0])
           e.target.value = '' // allow re-selecting same file
         }}
+      />
+
+      <MediaLibrary
+        open={libraryOpen}
+        onClose={() => setLibraryOpen(false)}
+        formKey={formKey}
+        onInsert={(url) => { onChange(url); setLibraryOpen(false) }}
       />
     </div>
   )

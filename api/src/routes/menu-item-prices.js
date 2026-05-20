@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { logAudit } = require('../helpers/audit');
 
 // GET /menu-item-prices?menu_item_id=X  or  ?menu_id=X
 router.get('/', async (req, res) => {
@@ -43,6 +44,7 @@ router.post('/', async (req, res) => {
                     tax_rate_id = EXCLUDED.tax_rate_id
       RETURNING *
     `, [menu_item_id, price_level_id, Number(sell_price) || 0, tax_rate_id || null]);
+    logAudit(pool, req, { action: 'create', entity_type: 'menu_item_price', entity_id: row.id, entity_label: `item:${menu_item_id} level:${price_level_id}` });
     res.json(row);
   } catch (err) {
     console.error(err);
@@ -54,6 +56,7 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     await pool.query(`DELETE FROM mcogs_menu_item_prices WHERE id = $1`, [req.params.id]);
+    logAudit(pool, req, { action: 'delete', entity_type: 'menu_item_price', entity_id: Number(req.params.id), entity_label: `id:${req.params.id}` });
     res.status(204).end();
   } catch (err) {
     console.error(err);

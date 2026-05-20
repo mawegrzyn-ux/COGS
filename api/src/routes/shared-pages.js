@@ -11,6 +11,7 @@
 const router    = require('express').Router();
 const pool      = require('../db/pool');
 const crypto    = require('crypto');
+const { logAudit, diffFields } = require('../helpers/audit');
 
 const {
   loadQuoteLookup,
@@ -22,11 +23,19 @@ const {
   loadComboData,
   calcComboCost,
   resolveItemTax,
+  loadModifierCostAdders,
 } = require('./cogs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const HMAC_SECRET = process.env.SHARED_PAGE_SECRET || 'mcogs-shared-page-secret-change-me';
+// SECURITY: No fallback — if the secret is missing, generate a random one at startup.
+// This means tokens won't survive a restart (users re-enter shared page passwords),
+// but it's safe. A persistent secret should be set in .env for production.
+const HMAC_SECRET = process.env.SHARED_PAGE_SECRET || (() => {
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.warn('[shared-pages] WARNING: SHARED_PAGE_SECRET not set in .env — using random secret. Shared page tokens will not survive a server restart. Set SHARED_PAGE_SECRET in your .env file for persistent tokens.');
+  return generated;
+})();
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -149,6 +158,7 @@ router.post('/', async (req, res) => {
         expires_at  || null,
         notes       || null]);
 
+    logAudit(pool, req, { action: 'create', entity_type: 'shared_page', entity_id: row.id, entity_label: row.name });
     res.status(201).json({ ...row, url: `/share/${slug}` });
   } catch (err) {
     console.error(err);
@@ -202,6 +212,7 @@ router.put('/:id', async (req, res) => {
       notes      !== undefined ? (notes      || null)  : existing.notes,
     ]);
 
+    logAudit(pool, req, { action: 'update', entity_type: 'shared_page', entity_id: row.id, entity_label: row.name, field_changes: diffFields(existing, row, ['slug', 'mode', 'is_active', 'expires_at']) });
     res.json({ ...row, url: `/share/${row.slug}` });
   } catch (err) {
     console.error(err);
@@ -212,10 +223,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/shared-pages/:id
 router.delete('/:id', async (req, res) => {
   try {
+    const { rows: [old] } = await pool.query('SELECT * FROM mcogs_shared_pages WHERE id=$1', [req.params.id]);
     const { rowCount } = await pool.query(
       `DELETE FROM mcogs_shared_pages WHERE id = $1`, [req.params.id]
     );
     if (!rowCount) return res.status(404).json({ error: { message: 'Not found' } });
+    logAudit(pool, req, { action: 'delete', entity_type: 'shared_page', entity_id: old?.id, entity_label: old?.name });
     res.json({ deleted: true });
   } catch (err) {
     console.error(err);
@@ -395,12 +408,26 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
     );
     const oldValue = oldRow ? Number(oldRow.sell_price) : null;
 
+    const roundedPrice = Math.round(sell_price * 10000) / 10000;
+
     await pool.query(`
       INSERT INTO mcogs_menu_sales_item_prices (menu_sales_item_id, price_level_id, sell_price)
       VALUES ($1, $2, $3)
       ON CONFLICT (menu_sales_item_id, price_level_id)
       DO UPDATE SET sell_price = EXCLUDED.sell_price
-    `, [menu_item_id, price_level_id, Math.round(sell_price * 10000) / 10000]);
+    `, [menu_item_id, price_level_id, roundedPrice]);
+
+    // If the shared page is pinned to a scenario, also update the scenario's
+    // price_overrides so the new price is reflected on next data load
+    // (scenario overrides take priority over the live price table).
+    if (page.scenario_id) {
+      const ovKey = `${menu_item_id}_l${price_level_id}`;
+      await pool.query(`
+        UPDATE mcogs_menu_scenarios
+        SET    price_overrides = COALESCE(price_overrides, '{}'::jsonb) || $2::jsonb
+        WHERE  id = $1
+      `, [page.scenario_id, JSON.stringify({ [ovKey]: roundedPrice })]);
+    }
 
     // Log the change
     const { rows: [miRow] } = await pool.query(`
@@ -423,7 +450,7 @@ publicRouter.post('/:slug/price', requirePublicToken, async (req, res) => {
       miRow?.display_name || null,
       miRow?.level_name   || null,
       oldValue,
-      Math.round(sell_price * 10000) / 10000,
+      roundedPrice,
     ]);
 
     res.json({ saved: true });
@@ -823,6 +850,7 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
              si.ingredient_id,
              si.manual_cost,
              si.combo_id,
+             si.image_url   AS si_image_url,
              CASE WHEN si.item_type = 'combo'
                   THEN COALESCE(combo_cat.name, cat.name)
                   ELSE cat.name
@@ -853,7 +881,17 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
       });
     }
 
-    const { rows: levels } = await pool.query(`SELECT * FROM mcogs_price_levels ORDER BY name`);
+    // Scope to the menu's country so levels disabled per-country (see
+    // mcogs_country_price_levels) don't leak into the public shared view.
+    const { rows: levels } = await pool.query(
+      `SELECT p.*
+       FROM   mcogs_price_levels p
+       LEFT   JOIN mcogs_country_price_levels cpl
+              ON cpl.price_level_id = p.id AND cpl.country_id = $1
+       WHERE  COALESCE(cpl.is_enabled, TRUE) = TRUE
+       ORDER  BY name`,
+      [countryId]
+    );
 
     // All level prices in one query (from menu-sales-item prices table)
     const msiIds = items.map(i => i.id);
@@ -898,6 +936,15 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
 
     const defaultTaxMap = {};
     for (const r of defaultTaxRows) defaultTaxMap[r.country_id] = { rate: Number(r.rate), name: r.name };
+
+    // Modifier-cost adders for the "Include modifier cost" toggle in shared
+    // view. priceLevelId=null because shared items expose a single base cost
+    // field (per-level `cogs_pct` is computed downstream).
+    const _siIdsShared = [...new Set(items.map(i => Number(i.sales_item_id)))];
+    const { bySi: modAdderBySi, byCombo: modAdderByCombo } =
+      await loadModifierCostAdders(_siIdsShared, comboIds, {
+        countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId: null,
+      });
 
     const taxRateCache = {};
 
@@ -959,6 +1006,14 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         };
       }
 
+      // Modifier adder in market currency × qty.
+      const qtyN = Number(item.qty || 1);
+      const siAdderUsd    = modAdderBySi[item.sales_item_id] || 0;
+      const comboAdderUsd = (itemType === 'combo' && item.combo_id)
+        ? (modAdderByCombo[Number(item.combo_id)] || 0)
+        : 0;
+      const modifierCostAdder = Math.round((siAdderUsd + comboAdderUsd) * exchangeRate * qtyN * 10000) / 10000;
+
       return {
         menu_item_id: item.id,   // = menu_sales_item_id
         nat_key:      `si_${item.sales_item_id}`,
@@ -966,6 +1021,10 @@ publicRouter.get('/:slug/data', requirePublicToken, async (req, res) => {
         item_type:    itemType,
         category:     item.category || '',
         cost:         cpp,
+        modifier_cost_adder: modifierCostAdder,
+        // BUG-1181 — sales item image, used by the Grid view in
+        // SharedMenuPage to render a thumbnail above each tile.
+        image_url:    item.si_image_url || null,
         levels:       rowLevels,
       };
     }));

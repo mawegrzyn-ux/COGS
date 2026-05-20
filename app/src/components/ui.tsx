@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useId, cloneElement, isValidElement } from 'react'
 import { createPortal } from 'react-dom'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
@@ -19,10 +19,15 @@ export function Modal({ title, onClose, children, width = 'max-w-lg' }: ModalPro
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className={`relative bg-surface rounded-xl shadow-modal w-full ${width} max-h-[90vh] flex flex-col`}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={`relative bg-surface rounded-xl shadow-modal w-full ${width} max-h-[90vh] flex flex-col`}
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="text-base font-bold text-text-1">{title}</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-surface-2 text-text-3 hover:text-text-1 transition-colors">
+          <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-surface-2 text-text-3 hover:text-text-1 transition-colors">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M18 6L6 18M6 6l12 12"/>
             </svg>
@@ -292,14 +297,299 @@ interface FieldProps {
 }
 
 export function Field({ label, hint, error, required, children }: FieldProps) {
+  // Auto-wire htmlFor + id so Playwright's getByLabel() resolves and so
+  // screen-readers announce the right label when the input is focused.
+  //
+  // Strategy:
+  //  - Generate a stable id via useId()
+  //  - If `children` is a single React element that doesn't already have an
+  //    `id` prop, clone it and inject the generated id
+  //  - For Fragments / arrays / complex children the label's htmlFor is left
+  //    off (same behaviour as before — those call sites can opt in later)
+  const autoId = useId()
+  const canWire =
+    isValidElement(children) &&
+    !(children as { props?: { id?: string } }).props?.id
+  const wiredId = canWire ? autoId : undefined
+  const wiredChildren = canWire
+    ? cloneElement(children as React.ReactElement<{ id?: string }>, { id: autoId })
+    : children
+
   return (
     <div className="mb-4">
-      <label className="block text-sm font-semibold text-text-2 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label htmlFor={wiredId} className="block text-sm font-semibold text-text-2 mb-1.5">
+        {label}
+        {required && (
+          // aria-hidden so the asterisk isn't appended to the label's accessible
+          // name. Screen readers should surface the required state via the
+          // input's `required`/`aria-required` attribute, not a visual marker,
+          // and tests using getByLabel('Name') shouldn't have to match 'Name*'.
+          <span aria-hidden="true" className="text-red-500 ml-0.5">*</span>
+        )}
       </label>
       {hint && <p className="text-xs text-text-3 mb-1.5 -mt-1">{hint}</p>}
-      {children}
+      {wiredChildren}
       {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+    </div>
+  )
+}
+
+// ── CalcInput — number field that evaluates basic math on blur ───────────────
+// Supports: + - * / ( ) and decimal numbers
+// Usage: <CalcInput className="input w-full" value={form.qty} onChange={v => setForm({...form, qty: v})} />
+//
+// While typing, the raw expression is shown (e.g. "24*0.5"). On blur, the
+// expression is evaluated and the result replaces the text (e.g. "12").
+// If the expression is invalid, the last valid value is preserved.
+
+interface CalcInputProps {
+  value: string
+  /** Live, fires on every keystroke for plain numeric input AND on blur after
+   *  expression evaluation. Use `onCommit` instead when you only want the
+   *  final value (e.g. inline-save handlers that PUT to the API and would
+   *  otherwise re-render+remount the row on every digit). */
+  onChange: (value: string) => void
+  /** Optional commit-only callback. Fires once on Enter and once on blur with
+   *  the evaluated value. Designed for inline-save cells where the parent
+   *  re-renders after each save: leave `onChange` as a no-op (or omit-style
+   *  setter) and wire `onCommit` to the save call. */
+  onCommit?: (value: string) => void
+  className?: string
+  placeholder?: string
+  step?: string
+  min?: string
+  disabled?: boolean
+  /** Forwarded to the underlying <input> so <label htmlFor=""> pairs work. */
+  id?: string
+  /** Auto-focus on mount — forwarded directly to the <input>. */
+  autoFocus?: boolean
+  /** Pass-through for callers that need Enter-to-save / custom keystrokes.
+   *  Note: CalcInput evaluates the expression on Enter BEFORE calling this
+   *  handler, so by the time your onKeyDown runs the parent's `value` state
+   *  already holds the numeric result. */
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
+  /** Pass-through onBlur — fires AFTER CalcInput's internal evaluation. */
+  onBlur?: React.FocusEventHandler<HTMLInputElement>
+  /** Inline style forwarded to the outer wrapper (for grid-cell sizing etc.) */
+  style?: React.CSSProperties
+}
+
+function safeEval(expr: string): number | null {
+  const cleaned = expr.replace(/\s/g, '')
+  // Only allow digits, decimal points, +, -, *, /, (, )
+  if (!/^[0-9.+\-*/()]+$/.test(cleaned)) return null
+  if (!cleaned) return null
+  try {
+    // Use Function constructor instead of eval for slightly better isolation
+    // The regex above ensures only math chars reach this point
+    const result = new Function(`"use strict"; return (${cleaned})`)()
+    if (typeof result !== 'number' || !isFinite(result)) return null
+    return result
+  } catch {
+    return null
+  }
+}
+
+export function CalcInput({
+  value, onChange, onCommit, className = 'input w-full', placeholder, disabled, id,
+  autoFocus, onKeyDown, onBlur, style,
+}: CalcInputProps) {
+  const [rawText, setRawText] = useState(value)
+  const [focused, setFocused] = useState(false)
+
+  // Sync from parent when not focused
+  useEffect(() => {
+    if (!focused) setRawText(value)
+  }, [value, focused])
+
+  // Shared evaluator — called on blur AND on Enter. Returns true if a commit
+  // happened so the caller's onKeyDown can observe the updated parent value.
+  // Fires `onCommit` after `onChange` so inline-save callers (e.g. the recipe
+  // qty cell) can opt out of the per-keystroke onChange and only react to the
+  // final committed value.
+  const commit = () => {
+    const trimmed = rawText.trim()
+    if (!trimmed) { onChange(''); onCommit?.(''); return }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) { onChange(trimmed); onCommit?.(trimmed); return }
+    const result = safeEval(trimmed)
+    if (result !== null) {
+      const rounded = String(Math.round(result * 100000000) / 100000000)
+      setRawText(rounded)
+      onChange(rounded)
+      onCommit?.(rounded)
+    } else {
+      setRawText(value)
+    }
+  }
+
+  const handleBlur: React.FocusEventHandler<HTMLInputElement> = (e) => {
+    setFocused(false)
+    commit()
+    onBlur?.(e)
+  }
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
+    // Evaluate on Enter so callers that save on Enter see the final numeric
+    // value, not a raw expression like "5+3".
+    if (e.key === 'Enter') commit()
+    onKeyDown?.(e)
+  }
+
+  const hasExpression = focused && rawText.trim() !== '' && !/^-?\d*\.?\d*$/.test(rawText.trim())
+
+  return (
+    <div className="relative" style={style}>
+      <input
+        id={id}
+        type="text"
+        inputMode="decimal"
+        className={className}
+        value={rawText}
+        onChange={e => { setRawText(e.target.value); if (/^-?\d*\.?\d*$/.test(e.target.value)) onChange(e.target.value) }}
+        onFocus={() => setFocused(true)}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoFocus={autoFocus}
+      />
+      {hasExpression && (() => {
+        const preview = safeEval(rawText.trim())
+        return preview !== null ? (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-accent font-mono pointer-events-none">
+            = {Math.round(preview * 10000) / 10000}
+          </div>
+        ) : null
+      })()}
+    </div>
+  )
+}
+
+// ── CategoryPicker — select + inline "create new" affordance ─────────────────
+// Reusable across Recipes / Sales Items / Inventory / any other form that
+// needs to assign a category and might want to create one inline. The new
+// category gets `for_<scope>=true` by default so it appears in the relevant
+// dropdown straight away. Falls back to the parent calling `onCategoryCreated`
+// to refresh the list — the picker doesn't own the categories array.
+
+export type CategoryScope = 'for_ingredients' | 'for_recipes' | 'for_sales_items'
+
+interface CategoryPickerProps {
+  /** Selected category id as a string (matches existing form state shape). */
+  value:    string
+  onChange: (id: string) => void
+  /** All categories already loaded by the parent — pre-filtered to the right
+   *  scope where appropriate (e.g. `for_recipes=true`). */
+  categories: { id: number; name: string }[]
+  /** Which scope flag the new category should have on creation. The picker
+   *  doesn't infer — it's caller-side context (recipe form → for_recipes). */
+  scope: CategoryScope
+  /** Called after a successful POST /categories with the freshly-created row.
+   *  Parent should append to its categories state and trigger any reload. */
+  onCategoryCreated: (cat: { id: number; name: string }) => void
+  /** Auth0 bearer + Content-Type wrapper. Parent provides — we don't import
+   *  useApi here to keep ui.tsx free of app-level hook dependencies. */
+  apiPost: (path: string, body: unknown) => Promise<unknown>
+  className?:   string
+  placeholder?: string
+  disabled?:    boolean
+  required?:    boolean
+  /** Optional extra scope flags to also flip true on creation — e.g. recipe
+   *  forms that also want the new category visible in Sales Items. */
+  alsoSetScopes?: CategoryScope[]
+  /** Show the "+ New" inline-create button. Default true. Set false in
+   *  contexts where creating a category from the dropdown is overkill —
+   *  e.g. the recipe header, where a full categories admin already exists
+   *  one click away. */
+  allowCreate?: boolean
+}
+
+export function CategoryPicker({
+  value, onChange, categories, scope, onCategoryCreated, apiPost,
+  className = 'input w-full', placeholder = 'Select category…', disabled, required, alsoSetScopes,
+  allowCreate = true,
+}: CategoryPickerProps) {
+  const [creating, setCreating] = useState(false)
+  const [draft,    setDraft]    = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  async function commit() {
+    const name = draft.trim()
+    if (!name) { setError('Name required'); return }
+    if (categories.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+      setError('A category with that name already exists'); return
+    }
+    setSaving(true); setError(null)
+    try {
+      const body: Record<string, unknown> = { name, [scope]: true }
+      for (const s of alsoSetScopes || []) body[s] = true
+      const created = await apiPost('/categories', body) as { id: number; name: string }
+      onCategoryCreated({ id: created.id, name: created.name })
+      onChange(String(created.id))
+      setCreating(false); setDraft('')
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message
+      setError(msg || 'Failed to create category')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (creating) {
+    return (
+      <div className="space-y-1">
+        <div className="flex gap-1.5">
+          <input
+            className="input flex-1 text-sm"
+            placeholder="New category name…"
+            value={draft}
+            onChange={e => { setDraft(e.target.value); setError(null) }}
+            onKeyDown={e => {
+              if (e.key === 'Enter')  { e.preventDefault(); commit() }
+              if (e.key === 'Escape') { setCreating(false); setDraft(''); setError(null) }
+            }}
+            autoFocus
+            disabled={saving}
+          />
+          <button type="button"
+            className="btn-primary px-3 text-sm whitespace-nowrap"
+            onClick={commit}
+            disabled={saving || !draft.trim()}
+          >{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button"
+            className="btn-ghost px-2 text-sm whitespace-nowrap"
+            onClick={() => { setCreating(false); setDraft(''); setError(null) }}
+            disabled={saving}
+          >Cancel</button>
+        </div>
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex gap-1.5 items-center">
+      <select
+        className={className}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        required={required}
+      >
+        <option value="">{placeholder}</option>
+        {categories.map(c => (
+          <option key={c.id} value={String(c.id)}>{c.name}</option>
+        ))}
+      </select>
+      {allowCreate && (
+        <button type="button"
+          className="btn-ghost px-2 py-1 text-xs whitespace-nowrap border border-border rounded hover:bg-surface-2"
+          onClick={() => setCreating(true)}
+          disabled={disabled}
+          title="Create a new category"
+        >+ New</button>
+      )}
     </div>
   )
 }

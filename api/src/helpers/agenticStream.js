@@ -13,9 +13,18 @@
 // tool dispatch, done event, and res.end().
 // =============================================================================
 
-async function agenticStream({ anthropic, systemPrompt, messages, tools, executeTool, res }) {
+async function agenticStream({ anthropic, systemPrompt, messages, tools, executeTool, res, model }) {
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const keepalive = setInterval(() => res.write(': ping\n\n'), 10000);
+
+  // Caller can override the model (BACK-2565 — default vs premium tier).
+  // Falls back to the historical default so existing call sites keep working.
+  const modelId = model || 'claude-haiku-4-5-20251001';
+
+  // Surface which model is producing this response right at the top of the
+  // SSE stream so the frontend can render the per-message "Haiku" / "Opus"
+  // badge before the first text token arrives (Story 4 / BACK-2566).
+  res.write(`data: ${JSON.stringify({ type: 'model', model: modelId })}\n\n`);
 
   let responseText = '';
   const toolsCalled  = [];
@@ -30,7 +39,7 @@ async function agenticStream({ anthropic, systemPrompt, messages, tools, execute
 
     while (iterations++ < MAX_ITER) {
       const stream = anthropic.messages.stream({
-        model:      'claude-haiku-4-5-20251001',
+        model:      modelId,
         max_tokens: 4096,
         system:     systemPrompt,
         tools,
@@ -127,7 +136,7 @@ async function agenticStream({ anthropic, systemPrompt, messages, tools, execute
   send({ type: 'done' });
   res.end();
 
-  return { responseText, toolsCalled, tokensIn, tokensOut, errorMsg };
+  return { responseText, toolsCalled, tokensIn, tokensOut, errorMsg, modelId };
 }
 
 module.exports = { agenticStream };

@@ -5,19 +5,78 @@ const pool   = require('../db/pool');
 //  SHARED HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Costing methods supported for the non-preferred fallback. Preferred vendor
+// quote ALWAYS wins — the method only determines what to do when an ingredient
+// has no preferred vendor set for that country.
+//
+//   'best'    — cheapest active quote (current default, historical behaviour)
+//   'average' — arithmetic mean of all active quotes' price-per-base-unit
+//               (vendor FX-normalised). Useful when operators source from
+//               multiple vendors and want a blended market rate rather than a
+//               best-case figure.
+const COSTING_METHODS = ['best', 'average'];
+
+async function resolveCostingMethodFromSettings() {
+  try {
+    const { rows } = await pool.query(`SELECT data FROM mcogs_settings WHERE id = 1`);
+    const raw = rows[0]?.data?.costing_method;
+    if (COSTING_METHODS.includes(raw)) return raw;
+  } catch { /* settings row may not exist yet on first boot */ }
+  return 'best';
+}
+
 /**
  * Load all active quotes for every ingredient, keyed by ingredient_id → country_id.
- * Preferred vendor quote wins; cheapest active quote is the fallback.
+ * Preferred vendor quote always wins; the `method` argument picks how the
+ * fallback is computed when no preferred is set:
+ *   - 'best'    : cheapest active quote in the market (default)
+ *   - 'average' : mean of all active quotes in the market (amalgamated)
+ *
+ * When `method` is omitted the value is read from mcogs_settings.data.costing_method.
+ *
  * Returns: { [ingredientId]: { [countryId]: { price_per_base_unit, is_preferred } } }
  */
-async function loadQuoteLookup() {
+async function loadQuoteLookup(method) {
+  if (!COSTING_METHODS.includes(method)) {
+    method = await resolveCostingMethodFromSettings();
+  }
+
+  const fallbackCte = method === 'average'
+    ? `fallback AS (
+         SELECT pq.ingredient_id,
+                v.country_id,
+                AVG(
+                  (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+                  / COALESCE(NULLIF(vc.exchange_rate, 0), 1)
+                ) AS price_per_base_unit,
+                false AS is_preferred
+         FROM   mcogs_price_quotes pq
+         JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+         JOIN   mcogs_countries    vc ON vc.id = v.country_id
+         WHERE  pq.is_active = true AND pq.qty_in_base_units > 0
+         GROUP  BY pq.ingredient_id, v.country_id
+       )`
+    : `fallback AS (
+         SELECT DISTINCT ON (pq.ingredient_id, v.country_id)
+                pq.ingredient_id,
+                v.country_id,
+                (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+                  / COALESCE(NULLIF(vc.exchange_rate, 0), 1) AS price_per_base_unit,
+                false AS is_preferred
+         FROM   mcogs_price_quotes pq
+         JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
+         JOIN   mcogs_countries    vc ON vc.id = v.country_id
+         WHERE  pq.is_active = true
+         ORDER  BY pq.ingredient_id, v.country_id,
+                   (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
+       )`;
+
   const { rows } = await pool.query(`
     WITH preferred AS (
       SELECT pv.ingredient_id,
              pv.country_id,
-             pq.purchase_price,
-             pq.qty_in_base_units,
-             vc.exchange_rate AS vendor_exchange_rate,
+             (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0))
+               / COALESCE(NULLIF(vc.exchange_rate, 0), 1) AS price_per_base_unit,
              true AS is_preferred
       FROM   mcogs_ingredient_preferred_vendor pv
       JOIN   mcogs_price_quotes pq ON pq.id  = pv.quote_id
@@ -25,21 +84,7 @@ async function loadQuoteLookup() {
       JOIN   mcogs_countries    vc ON vc.id  = v.country_id
       WHERE  pq.is_active = true
     ),
-    fallback AS (
-      SELECT DISTINCT ON (pq.ingredient_id, v.country_id)
-             pq.ingredient_id,
-             v.country_id,
-             pq.purchase_price,
-             pq.qty_in_base_units,
-             vc.exchange_rate AS vendor_exchange_rate,
-             false AS is_preferred
-      FROM   mcogs_price_quotes pq
-      JOIN   mcogs_vendors      v  ON v.id  = pq.vendor_id
-      JOIN   mcogs_countries    vc ON vc.id = v.country_id
-      WHERE  pq.is_active = true
-      ORDER  BY pq.ingredient_id, v.country_id,
-                (pq.purchase_price / NULLIF(pq.qty_in_base_units, 0)) ASC
-    )
+    ${fallbackCte}
     SELECT * FROM preferred
     UNION ALL
     SELECT f.* FROM fallback f
@@ -48,17 +93,16 @@ async function loadQuoteLookup() {
       WHERE p.ingredient_id = f.ingredient_id AND p.country_id = f.country_id
     )
   `);
-  // Divide by vendor_exchange_rate to normalise from vendor's local currency → USD base.
-  // Callers multiply by the target market's exchange_rate to get the correct local display cost.
+
+  // price_per_base_unit is already FX-normalised in SQL (vendor's local →
+  // USD base). Callers multiply by the target market's exchange_rate to get
+  // the correct local display cost.
   const lookup = {};
   for (const q of rows) {
     if (!lookup[q.ingredient_id]) lookup[q.ingredient_id] = {};
-    const vendorRate = Math.max(Number(q.vendor_exchange_rate) || 1, 0.000001);
     lookup[q.ingredient_id][q.country_id] = {
-      price_per_base_unit: Number(q.qty_in_base_units) > 0
-        ? (Number(q.purchase_price) / Number(q.qty_in_base_units)) / vendorRate
-        : 0,
-      is_preferred: q.is_preferred,
+      price_per_base_unit: Number(q.price_per_base_unit) || 0,
+      is_preferred:        q.is_preferred,
     };
   }
   return lookup;
@@ -811,10 +855,24 @@ async function loadComboData(comboIds) {
   const stepIds = steps.map(s => s.id);
   const [optsResult, modsResult] = await Promise.all([
     pool.query(
+      // BUG-1180 — combo step options can also point at a sales_item (linked
+      // via cso.sales_item_id). Pull the linked sales item's resolved cost
+      // primitives so resolveOptionCost can route through si_* fields when
+      // cso.item_type === 'sales_item'. Recipe yield_qty also covers the
+      // case where the sales item itself wraps a recipe.
       `SELECT cso.*,
-              r.yield_qty AS recipe_yield_qty
+              r.yield_qty AS recipe_yield_qty,
+              si.item_type     AS si_item_type,
+              si.recipe_id     AS si_recipe_id,
+              si.ingredient_id AS si_ingredient_id,
+              si.manual_cost   AS si_manual_cost,
+              si.combo_id      AS si_combo_id,
+              si.qty           AS si_qty,
+              sr.yield_qty     AS si_recipe_yield_qty
        FROM   mcogs_combo_step_options cso
-       LEFT JOIN mcogs_recipes r ON r.id = cso.recipe_id
+       LEFT JOIN mcogs_recipes      r  ON r.id  = cso.recipe_id
+       LEFT JOIN mcogs_sales_items  si ON si.id = cso.sales_item_id
+       LEFT JOIN mcogs_recipes      sr ON sr.id = si.recipe_id
        WHERE  cso.combo_step_id = ANY($1::int[])
        ORDER BY cso.combo_step_id, cso.sort_order`,
       [stepIds]
@@ -860,8 +918,17 @@ async function loadComboData(comboIds) {
 }
 
 /**
- * Resolve cost for a single option (recipe/ingredient/manual).
+ * Resolve cost for a single option (recipe/ingredient/manual/sales_item).
  * Returns cost in USD base (caller applies exchange rate).
+ *
+ * BUG-1180 — `sales_item` is a real combo-step-option type: it points at
+ * an existing mcogs_sales_items row via opt.sales_item_id. We resolve by
+ * inspecting the linked sales item's own item_type (carried as si_*
+ * columns from the loadComboData JOIN) and recursing through the same
+ * primitives. Sales items wrapping a combo are NOT recursed into here —
+ * combos-inside-combos would explode the cost-graph; we conservatively
+ * treat them as 0 and surface the gap in a comment so future work can
+ * add proper recursion if the use case appears.
  */
 function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
   if (opt.item_type === 'manual') {
@@ -880,6 +947,32 @@ function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variatio
     );
     return cost;
   }
+  if (opt.item_type === 'sales_item') {
+    // Route through the linked sales item's own item_type. The si_* fields
+    // are populated by loadComboData's JOIN; if the option was synthesised
+    // elsewhere without those fields it falls through to 0 (safe default).
+    const siType = opt.si_item_type;
+    const siQty  = Number(opt.si_qty || 1);
+    if (siType === 'manual') {
+      return Number(opt.si_manual_cost || 0) * siQty;
+    }
+    if (siType === 'ingredient' && opt.si_ingredient_id) {
+      const q = quoteLookup[opt.si_ingredient_id]?.[countryId];
+      return (q ? q.price_per_base_unit : 0) * siQty;
+    }
+    if (siType === 'recipe' && opt.si_recipe_id) {
+      const rItems = recipeItemsMap[opt.si_recipe_id] || [];
+      const { cost } = calcRecipeCost(
+        { id: opt.si_recipe_id, yield_qty: opt.si_recipe_yield_qty || 1 },
+        rItems, countryId, quoteLookup, variationMap, recipeItemsMap, null,
+        priceLevelId, plVariationMap, marketPlVariationMap
+      );
+      return cost * siQty;
+    }
+    // siType === 'combo' would require nested combo recursion. Not
+    // supported here yet; treat as 0 and let the caller surface the gap.
+    return 0;
+  }
   return 0;
 }
 
@@ -889,7 +982,7 @@ function resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variatio
  * Each option can have modifier groups; their options also avg.
  * Returns cost in USD base (per portion, before exchange_rate).
  */
-function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) {
+function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId, multiplierEnabled = false) {
   let total = 0;
   for (const step of steps) {
     const opts = step.options || [];
@@ -899,7 +992,15 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
     for (const opt of opts) {
       let optCost = resolveOptionCost(opt, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
 
-      // Add avg modifier group cost for this option
+      // Modifier multiplier — when the global setting is enabled and this
+      // step option points at a recipe with a flagged ingredient, every
+      // attached modifier group's avg cost is scaled by the multiplier.
+      // Different options in the same step can have different multipliers.
+      const optM = (multiplierEnabled && opt.item_type === 'recipe' && opt.recipe_id)
+        ? resolveRecipeMultiplier(opt.recipe_id, recipeItemsMap, true)
+        : 1;
+
+      // Add avg modifier group cost for this option (× multiplier).
       if (opt.mod_options && opt.mod_options.length) {
         // Group by modifier_group_id to avg per group
         const groupMap = {};
@@ -910,7 +1011,7 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
         for (const groupOpts of Object.values(groupMap)) {
           const costs = groupOpts.map(mo => resolveOptionCost(mo, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId));
           const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
-          optCost += avg;
+          optCost += avg * optM;
         }
       }
 
@@ -920,6 +1021,199 @@ function calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationM
     total += stepCost / opts.length;
   }
   return total;
+}
+
+/**
+ * Load per-item modifier-cost adders for the "Include modifier cost" toggle.
+ *
+ * Returns:
+ *   {
+ *     bySi:    { [sales_item_id]: USD_adder },
+ *     byCombo: { [combo_id]:      USD_adder }
+ *   }
+ *
+ * The adder represents the *additional* cost to add to `cost_per_portion`
+ * when the toggle is on — i.e. it's a delta, not an absolute. Values are in
+ * USD base; caller multiplies by the menu's exchange_rate (and qty).
+ *
+ * - Sales-Item-level groups: full required cost (avg × min_select). NOT in
+ *   `cost_per_portion`, so add the whole thing.
+ * - Combo step option groups: delta over the avg×1 already embedded by
+ *   `calcComboCost`. avg × (min_select − 1) per group, averaged across
+ *   options within a step (matching calcComboCost's avg-per-step semantics),
+ *   summed across steps.
+ */
+/**
+ * Resolves the modifier multiplier for a recipe (M). The multiplier is the
+ * prep_qty of the recipe's flagged item (`is_modifier_multiplier = TRUE` on
+ * the global recipe items only — not variations). Used to scale modifier
+ * option qty/cost so a Bone-In 6 recipe with 6× wings flagged makes attached
+ * Flavour-Choice modifiers consume 6× sauce per portion.
+ *
+ * Returns 1 when:
+ *   - the global toggle is off (caller passes multiplierEnabled = false), OR
+ *   - the recipe has no flagged item, OR
+ *   - the recipe id is null/missing (e.g. ingredient or manual sales item)
+ */
+function resolveRecipeMultiplier(recipeId, recipeItemsMap, multiplierEnabled) {
+  if (!multiplierEnabled || !recipeId) return 1;
+  const items = recipeItemsMap[recipeId] || [];
+  const flagged = items.find(i =>
+    i.is_modifier_multiplier === true &&
+    i.variation_id == null &&
+    i.pl_variation_id == null &&
+    i.market_pl_variation_id == null
+  );
+  if (!flagged) return 1;
+  const m = Number(flagged.prep_qty);
+  return isFinite(m) && m > 0 ? m : 1;
+}
+
+async function loadModifierCostAdders(salesItemIds, comboIds, ctx) {
+  const {
+    countryId, quoteLookup, recipeItemsMap,
+    variationMap, plVariationMap, marketPlVariationMap, priceLevelId,
+    // multiplierForSi(salesItemId) → number; multiplierForOption(comboStepOptionId) → number.
+    // When omitted (older callers) both default to ()=>1 — toggle-off behaviour.
+    multiplierForSi      = () => 1,
+    multiplierForOption  = () => 1,
+  } = ctx;
+  const bySi = {};
+  const byCombo = {};
+
+  let siModRows = [];
+  let csoModRows = [];
+
+  // Pull both query result sets up front so we can collect every recipe id
+  // referenced by a modifier option before computing costs. The caller's
+  // recipeItemsMap only contains top-level + combo step option recipes —
+  // modifier-option recipes (e.g. flavour sub-recipes) are missing, which
+  // would silently make resolveOptionCost return 0 and zero out the adder.
+  if (salesItemIds.length) {
+    const r = await pool.query(
+      `SELECT simgj.sales_item_id, mg.id AS modifier_group_id, mg.min_select,
+              mo.id AS option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
+              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_sales_item_modifier_groups simgj
+       JOIN   mcogs_modifier_groups mg ON mg.id = simgj.modifier_group_id
+       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  simgj.sales_item_id = ANY($1::int[])`,
+      [salesItemIds]
+    );
+    siModRows = r.rows;
+  }
+  if (comboIds.length) {
+    const r = await pool.query(
+      `SELECT cs.combo_id, cso.combo_step_id, cso.id AS option_id,
+              mg.id AS modifier_group_id, mg.min_select,
+              mo.id AS mod_option_id, mo.item_type, mo.recipe_id, mo.ingredient_id,
+              mo.manual_cost, mo.qty, r.yield_qty AS recipe_yield_qty
+       FROM   mcogs_combo_step_option_modifier_groups csomgj
+       JOIN   mcogs_combo_step_options cso ON cso.id = csomgj.combo_step_option_id
+       JOIN   mcogs_combo_steps cs ON cs.id = cso.combo_step_id
+       JOIN   mcogs_modifier_groups mg ON mg.id = csomgj.modifier_group_id
+       LEFT JOIN mcogs_modifier_options mo ON mo.modifier_group_id = mg.id
+       LEFT JOIN mcogs_recipes r ON r.id = mo.recipe_id
+       WHERE  cs.combo_id = ANY($1::int[])`,
+      [comboIds]
+    );
+    csoModRows = r.rows;
+  }
+
+  // Augment recipeItemsMap with any modifier-option recipes that aren't
+  // already loaded. Mutates the caller's map so subsequent calls (and the
+  // caller's own logic) see the fuller picture.
+  const missingRecipeIds = new Set();
+  for (const row of siModRows) {
+    if (row.item_type === 'recipe' && row.recipe_id && !recipeItemsMap[row.recipe_id]) {
+      missingRecipeIds.add(Number(row.recipe_id));
+    }
+  }
+  for (const row of csoModRows) {
+    if (row.item_type === 'recipe' && row.recipe_id && !recipeItemsMap[row.recipe_id]) {
+      missingRecipeIds.add(Number(row.recipe_id));
+    }
+  }
+  if (missingRecipeIds.size) {
+    const extra = await loadAllRecipeItemsDeep([...missingRecipeIds]);
+    for (const [k, v] of Object.entries(extra)) {
+      if (!recipeItemsMap[k]) recipeItemsMap[k] = v;
+    }
+  }
+
+  if (salesItemIds.length) {
+    const siGroups = {};
+    for (const r of siModRows) {
+      const k1 = r.sales_item_id, k2 = r.modifier_group_id;
+      if (!siGroups[k1]) siGroups[k1] = {};
+      if (!siGroups[k1][k2]) siGroups[k1][k2] = { min_select: Number(r.min_select || 0), options: [] };
+      if (r.option_id != null) siGroups[k1][k2].options.push(r);
+    }
+    for (const siId of salesItemIds) {
+      const groups = siGroups[siId] || {};
+      // Multiplier resolved once per SI — every modifier group attached to
+      // this SI shares the same multiplier (the SI's recipe is the source).
+      const M = multiplierForSi(Number(siId)) || 1;
+      let adder = 0;
+      for (const g of Object.values(groups)) {
+        if (!g.options.length || !g.min_select) continue;
+        const costs = g.options.map(o => {
+          const unit = resolveOptionCost(o, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
+          return unit * Number(o.qty || 1);
+        });
+        const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+        adder += avg * g.min_select * M;
+      }
+      bySi[siId] = adder;
+    }
+  }
+
+  if (comboIds.length) {
+    const tree = {};
+    for (const r of csoModRows) {
+      const c = r.combo_id, s = r.combo_step_id, o = r.option_id, g = r.modifier_group_id;
+      tree[c] ??= {};
+      tree[c][s] ??= {};
+      tree[c][s][o] ??= {};
+      tree[c][s][o][g] ??= { min_select: Number(r.min_select || 0), options: [] };
+      if (r.mod_option_id != null) tree[c][s][o][g].options.push(r);
+    }
+    for (const comboId of comboIds) {
+      const steps = tree[comboId] || {};
+      let comboDelta = 0;
+      for (const stepId of Object.keys(steps)) {
+        const optionsTree = steps[stepId];
+        // Iterate with [optId, groupsByGroupId] so we can resolve each combo
+        // step option's own multiplier (its recipe_id flagged item) — different
+        // options in the same step can carry different multipliers.
+        const optionDeltas = Object.entries(optionsTree).map(([optId, groupsByGroupId]) => {
+          const M = multiplierForOption(Number(optId)) || 1;
+          let optDelta = 0;
+          for (const g of Object.values(groupsByGroupId)) {
+            if (!g.options.length) continue;
+            const costs = g.options.map(o => {
+              const unit = resolveOptionCost(o, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId);
+              return unit * Number(o.qty || 1);
+            });
+            const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+            // Total required modifier cost when the toggle is on = avg × min × M.
+            // calcComboCost has already embedded avg × M (see its multiplier
+            // logic below) when the global setting is enabled, so the delta
+            // we add here covers the remaining (min − 1) selections × M.
+            optDelta += avg * M * (Number(g.min_select) - 1);
+          }
+          return optDelta;
+        });
+        if (optionDeltas.length) {
+          comboDelta += optionDeltas.reduce((a, b) => a + b, 0) / optionDeltas.length;
+        }
+      }
+      byCombo[comboId] = comboDelta;
+    }
+  }
+
+  return { bySi, byCombo };
 }
 
 router.get('/menu-sales/:menu_id', async (req, res) => {
@@ -937,7 +1231,9 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
 
     const countryId = menu.country_id;
 
-    // All menu-sales-items for this menu
+    // All menu-sales-items for this menu. msi.* now includes tax_rate_id
+    // (BACK-2730 per-msi tax override) — used as the secondary priority below
+    // the per-level price-row tax_rate_id.
     const { rows: items } = await pool.query(`
       SELECT msi.*,
              si.name       AS sales_item_name,
@@ -950,6 +1246,8 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
              si.recipe_id,
              si.ingredient_id,
              si.manual_cost,
+             si.image_url,
+             si.description,
              r.yield_qty,
              r.name        AS recipe_name,
              ing.name      AS ingredient_name,
@@ -990,11 +1288,16 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
       loadComboData(comboIds),
     ]);
 
-    // Collect all recipe IDs from combo options too
+    // Collect all recipe IDs from combo options too. BUG-1180 — sales_item-
+    // typed step options can wrap a recipe via si_recipe_id; preload that
+    // too or calcRecipeCost ends up with empty rItems and returns 0.
     for (const steps of Object.values(comboData)) {
       for (const step of steps) {
         for (const opt of step.options || []) {
           if (opt.item_type === 'recipe' && opt.recipe_id) recipeIds.push(Number(opt.recipe_id));
+          if (opt.item_type === 'sales_item' && opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+            recipeIds.push(Number(opt.si_recipe_id));
+          }
           for (const mo of opt.mod_options || []) {
             if (mo.item_type === 'recipe' && mo.recipe_id) recipeIds.push(Number(mo.recipe_id));
           }
@@ -1047,6 +1350,48 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
     let totalCost = 0, totalSellNet = 0, totalSellGross = 0;
     const exchRate = Number(menu.exchange_rate) || 1;
 
+    // ── Modifier multiplier setting ────────────────────────────────────────
+    // Read once per request. When ON, modifier-option costs are scaled by
+    // the recipe's flagged item qty (resolveRecipeMultiplier). Default OFF
+    // so existing menus don't change cost silently.
+    const settingsRow = await pool.query(`SELECT data FROM mcogs_settings LIMIT 1`).catch(() => ({ rows: [] }));
+    const multiplierEnabled = settingsRow.rows[0]?.data?.modifier_multiplier_enabled === true;
+
+    // ── Modifier-cost adders (USD base) per item ───────────────────────────
+    // Used by the "Include modifier cost" toggle in Menu Engineer / Shared.
+    // See loadModifierCostAdders() above for the math (full × min_select × M
+    // for SI groups, delta-over-avg×M for combo step option groups).
+    const _siIds = [...new Set(items.map(i => Number(i.sales_item_id)))];
+
+    // Per-SI multiplier resolver — looks up the SI's recipe (if any) and
+    // returns its flagged item's prep_qty. Closes over `items` + recipeItemsMap.
+    const multiplierForSi = (siId) => {
+      if (!multiplierEnabled) return 1;
+      const it = items.find(i => Number(i.sales_item_id) === siId);
+      if (!it || it.item_type !== 'recipe' || !it.recipe_id) return 1;
+      return resolveRecipeMultiplier(it.recipe_id, recipeItemsMap, true);
+    };
+    // Per-combo-step-option multiplier — finds the option in comboData and
+    // resolves from its recipe_id.
+    const multiplierForOption = (optId) => {
+      if (!multiplierEnabled) return 1;
+      for (const steps of Object.values(comboData)) {
+        for (const step of steps) {
+          const opt = (step.options || []).find(o => Number(o.id) === optId);
+          if (!opt) continue;
+          if (opt.item_type !== 'recipe' || !opt.recipe_id) return 1;
+          return resolveRecipeMultiplier(opt.recipe_id, recipeItemsMap, true);
+        }
+      }
+      return 1;
+    };
+
+    const { bySi: modifierCostAdderBySi, byCombo: modifierCostAdderByComboId } =
+      await loadModifierCostAdders(_siIds, comboIds, {
+        countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId,
+        multiplierForSi, multiplierForOption,
+      });
+
     for (const item of items) {
       const itemType = item.item_type;
       const qty      = Number(item.qty || 1);
@@ -1067,24 +1412,41 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         cppUsd = cost * qty;
       } else if (itemType === 'combo') {
         const steps = comboData[Number(item.combo_id)] || [];
-        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId) * qty;
+        cppUsd = calcComboCost(steps, countryId, quoteLookup, recipeItemsMap, variationMap, plVariationMap, marketPlVariationMap, priceLevelId, multiplierEnabled) * qty;
       }
       const cpp = Math.round(cppUsd * exchRate * 10000) / 10000;
 
-      // Sell price
+      // Modifier-cost adder for the "Include modifiers" toggle. Combine SI-level
+      // groups (full × min_select) + combo step option groups delta (avg × (min−1)).
+      const siAdderUsd  = modifierCostAdderBySi[siId] || 0;
+      const comboAdderUsd = (itemType === 'combo' && item.combo_id)
+        ? (modifierCostAdderByComboId[Number(item.combo_id)] || 0)
+        : 0;
+      const modifierCostAdder = Math.round((siAdderUsd + comboAdderUsd) * exchRate * qty * 10000) / 10000;
+
+      // Sell price + tax priority chain (BACK-2730):
+      //   per-level price-row tax_rate_id → per-msi tax_rate_id (override) →
+      //   country_level_tax → country default → 0
+      // The msi-level override applies when the user hasn't set a per-level
+      // tax on a specific price-row. Per-level always wins so existing menus
+      // with row-level taxes don't change.
       const itemPrices = priceMap[item.id] || {};
       let sellGross = 0;
-      let useTaxRateId = null;
+      let useTaxRateId = item.tax_rate_id || null;   // per-msi default
       let isOverridden = false;
       if (priceLevelId && itemPrices[priceLevelId]) {
         const lp = itemPrices[priceLevelId];
         sellGross    = Number(lp.sell_price || 0);
-        useTaxRateId = lp.tax_rate_id || null;
+        if (lp.tax_rate_id) useTaxRateId = lp.tax_rate_id;
         isOverridden = !!lp.is_overridden;
       } else if (!priceLevelId) {
         // Use first price level available
         const first = Object.values(itemPrices)[0];
-        if (first) { sellGross = Number(first.sell_price || 0); useTaxRateId = first.tax_rate_id || null; isOverridden = !!first.is_overridden; }
+        if (first) {
+          sellGross = Number(first.sell_price || 0);
+          if (first.tax_rate_id) useTaxRateId = first.tax_rate_id;
+          isOverridden = !!first.is_overridden;
+        }
       }
 
       const { rate: taxRate, name: taxName } = await resolveItemTax(useTaxRateId, countryId, priceLevelId, defaultTaxMap, taxRateCache);
@@ -1109,9 +1471,23 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
         display_name:       display,
         recipe_name:        display,
         category:           item.category || '',
+        // BACK-2717 — kiosk product tiles need the sales item's image
+        // and description; both columns are already SELECTed but were
+        // dropped on the way out.
+        image_url:          item.image_url   || null,
+        description:        item.description || null,
+        // BACK-2730 — per-msi tax override id, separate from useTaxRateId
+        // (which is the resolved id used to compute the rate). The frontend
+        // renders an amber tint on the tax cell when this is set.
+        msi_tax_rate_id:    item.tax_rate_id || null,
         qty,
         base_unit_abbr:     item.base_unit_abbr || '',
         cost_per_portion:   cpp,
+        // Cost to ADD when the "include modifiers" toggle is on. Already in
+        // market currency × qty. For non-combo items it's the full required
+        // modifier cost; for combo items it's the delta beyond the avg×1
+        // already embedded in cost_per_portion.
+        modifier_cost_adder: modifierCostAdder,
         sell_price_gross:   Math.round(sellGross * 10000) / 10000,
         sell_price_net:     Math.round(sellNet   * 10000) / 10000,
         tax_rate:           taxRate,
@@ -1146,4 +1522,203 @@ router.get('/menu-sales/:menu_id', async (req, res) => {
   }
 });
 
-module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax };
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GET /cogs/menu-coverage/:menu_id  (BACK-2926 — Dashboard Menu Coverage widget)
+//
+//  Per-sales-item quote coverage report for one menu. For each non-manual
+//  sales item, walks its ingredient tree (recipe items + sub-recipes for
+//  recipe-backed items, combo step options for combos, the direct ingredient
+//  for ingredient-backed items) and reports how many of those ingredients
+//  have an active price quote in the menu's market.
+//
+//  Manual sales items are excluded entirely — they have no ingredients to
+//  check, so they'd skew the overall %. Modifier groups attached to sales
+//  items / combo step options are also excluded for v1: they're optional
+//  add-ons, not part of the base item's recipe.
+//
+//  Response:
+//    {
+//      menu:   { id, name, country_id },
+//      items:  [
+//        { menu_sales_item_id, sales_item_id, sales_item_name, item_type,
+//          total_ingredients, quoted_ingredients, coverage_pct,
+//          missing_ingredient_names: [...] },
+//        ...
+//      ],
+//      overall: { total_ingredients, quoted_ingredients, coverage_pct }
+//    }
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/menu-coverage/:menu_id', async (req, res, next) => {
+  try {
+    const menuId = Number(req.params.menu_id);
+    if (!Number.isFinite(menuId)) return res.status(400).json({ error: { message: 'menu_id must be numeric' } });
+
+    // Menu lookup (need country_id for the quote check)
+    const { rows: [menu] } = await pool.query(
+      'SELECT id, name, country_id FROM mcogs_menus WHERE id = $1', [menuId]
+    );
+    if (!menu) return res.status(404).json({ error: { message: 'Menu not found' } });
+    const countryId = menu.country_id;
+
+    // All sales items on the menu — exclude manual at the query level.
+    const { rows: msis } = await pool.query(`
+      SELECT msi.id          AS msi_id,
+             msi.sales_item_id,
+             msi.sort_order,
+             si.name         AS sales_item_name,
+             si.item_type,
+             si.recipe_id,
+             si.ingredient_id,
+             si.combo_id
+      FROM   mcogs_menu_sales_items msi
+      JOIN   mcogs_sales_items si ON si.id = msi.sales_item_id
+      WHERE  msi.menu_id = $1
+        AND  si.item_type <> 'manual'
+      ORDER  BY msi.sort_order, msi.id
+    `, [menuId]);
+
+    // Collect top-level recipe + combo ids.
+    const topRecipeIds = new Set();
+    const comboIds     = new Set();
+    for (const m of msis) {
+      if (m.item_type === 'recipe' && m.recipe_id) topRecipeIds.add(m.recipe_id);
+      if (m.item_type === 'combo'  && m.combo_id)  comboIds.add(m.combo_id);
+    }
+
+    // Cost method doesn't affect coverage — coverage cares about quote
+    // EXISTENCE, not which quote wins the pricing race. Pass 'best' which is
+    // the cheapest path (no AVG aggregation, fastest query).
+    const [quoteLookup, recipeItemsMap, comboData] = await Promise.all([
+      loadQuoteLookup('best'),
+      topRecipeIds.size ? loadAllRecipeItemsDeep([...topRecipeIds]) : Promise.resolve({}),
+      comboIds.size     ? loadComboData([...comboIds])              : Promise.resolve({}),
+    ]);
+
+    // Combo step options can reference recipes too (and sales_item-typed
+    // options can wrap a recipe). Pull those in so collectFromRecipe sees
+    // their items.
+    const comboRecipeIds = new Set();
+    for (const steps of Object.values(comboData)) {
+      for (const step of steps) {
+        for (const opt of step.options || []) {
+          if (opt.item_type === 'recipe' && opt.recipe_id) comboRecipeIds.add(opt.recipe_id);
+          if (opt.item_type === 'sales_item' && opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+            comboRecipeIds.add(opt.si_recipe_id);
+          }
+        }
+      }
+    }
+    const missingFromMap = [...comboRecipeIds].filter(id => !recipeItemsMap[id]);
+    if (missingFromMap.length) {
+      const extra = await loadAllRecipeItemsDeep(missingFromMap);
+      for (const [k, v] of Object.entries(extra)) {
+        if (!recipeItemsMap[k]) recipeItemsMap[k] = v;
+      }
+    }
+
+    // Walk a recipe's items recursively, returning the Set of ingredient_ids
+    // it references. Cycle guard prevents infinite loops if a sub-recipe ever
+    // points back at an ancestor.
+    function collectFromRecipe(recipeId, visited = new Set()) {
+      const out = new Set();
+      if (!recipeId || visited.has(recipeId)) return out;
+      visited.add(recipeId);
+      const items = recipeItemsMap[recipeId] || [];
+      for (const it of items) {
+        if (it.item_type === 'ingredient' && it.ingredient_id) {
+          out.add(it.ingredient_id);
+        } else if (it.item_type === 'recipe' && it.recipe_item_id) {
+          for (const id of collectFromRecipe(it.recipe_item_id, visited)) out.add(id);
+        }
+      }
+      return out;
+    }
+
+    function collectFromSalesItem(m) {
+      const out = new Set();
+      if (m.item_type === 'ingredient' && m.ingredient_id) {
+        out.add(m.ingredient_id);
+      } else if (m.item_type === 'recipe' && m.recipe_id) {
+        for (const id of collectFromRecipe(m.recipe_id)) out.add(id);
+      } else if (m.item_type === 'combo' && m.combo_id) {
+        const steps = comboData[m.combo_id] || [];
+        for (const step of steps) {
+          for (const opt of step.options || []) {
+            if (opt.item_type === 'ingredient' && opt.ingredient_id) {
+              out.add(opt.ingredient_id);
+            } else if (opt.item_type === 'recipe' && opt.recipe_id) {
+              for (const id of collectFromRecipe(opt.recipe_id)) out.add(id);
+            } else if (opt.item_type === 'sales_item') {
+              // Recurse through the linked sales item one level (combo→sales_item→combo
+              // is not supported — too easy to explode).
+              if (opt.si_item_type === 'ingredient' && opt.si_ingredient_id) {
+                out.add(opt.si_ingredient_id);
+              } else if (opt.si_item_type === 'recipe' && opt.si_recipe_id) {
+                for (const id of collectFromRecipe(opt.si_recipe_id)) out.add(id);
+              }
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    // Compute coverage per item.
+    const items = [];
+    const missingIds = new Set();
+    let allTotal = 0, allQuoted = 0;
+
+    for (const m of msis) {
+      const ids = collectFromSalesItem(m);
+      const total = ids.size;
+      let quoted = 0;
+      const itemMissing = [];
+      for (const id of ids) {
+        const q = quoteLookup[id]?.[countryId];
+        if (q) quoted++;
+        else { itemMissing.push(id); missingIds.add(id); }
+      }
+      allTotal  += total;
+      allQuoted += quoted;
+      items.push({
+        menu_sales_item_id: m.msi_id,
+        sales_item_id:      m.sales_item_id,
+        sales_item_name:    m.sales_item_name,
+        item_type:          m.item_type,
+        total_ingredients:  total,
+        quoted_ingredients: quoted,
+        coverage_pct:       total === 0 ? null : Math.round((quoted / total) * 1000) / 10,
+        _missing_ids:       itemMissing,
+      });
+    }
+
+    // Resolve names for the missing list in one batch query.
+    const nameMap = {};
+    if (missingIds.size) {
+      const { rows } = await pool.query(
+        'SELECT id, name FROM mcogs_ingredients WHERE id = ANY($1::int[])',
+        [[...missingIds]]
+      );
+      for (const r of rows) nameMap[r.id] = r.name;
+    }
+    for (const it of items) {
+      it.missing_ingredient_names = it._missing_ids
+        .map(id => nameMap[id] || `Ingredient #${id}`)
+        .sort((a, b) => a.localeCompare(b));
+      delete it._missing_ids;
+    }
+
+    res.json({
+      menu:    { id: menu.id, name: menu.name, country_id: menu.country_id },
+      items,
+      overall: {
+        total_ingredients:  allTotal,
+        quoted_ingredients: allQuoted,
+        coverage_pct:       allTotal === 0 ? null : Math.round((allQuoted / allTotal) * 1000) / 10,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+module.exports = { router, loadQuoteLookup, calcRecipeCost, loadAllRecipeItemsDeep, loadVariationItemsMap, loadPlVariationItemsMap, loadMarketPlVariationItemsMap, loadComboData, calcComboCost, resolveItemTax, loadModifierCostAdders, resolveRecipeMultiplier };

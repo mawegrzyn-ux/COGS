@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
-import { Field, Spinner, Modal, Toast } from '../components/ui'
+import { Field, Spinner, Modal, Toast, CategoryPicker } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 import ImageUpload from '../components/ImageUpload'
+import ReturnToMenuBuilderBanner from '../components/ReturnToMenuBuilderBanner'
+import { setPendingAttach, getHandoff } from '../lib/menuBuilderHandoff'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Country    { id: number; name: string }
@@ -22,7 +26,7 @@ interface ModifierOption {
 }
 interface ModifierGroup {
   id: number; name: string; display_name?: string | null; description: string | null
-  min_select: number; max_select: number; option_count?: number
+  min_select: number; max_select: number; allow_repeat_selection?: boolean; default_auto_show?: boolean; option_count?: number
   options?: ModifierOption[]
 }
 interface ComboStepOption {
@@ -32,6 +36,8 @@ interface ComboStepOption {
   ingredient_id: number | null; ingredient_name?: string; ingredient_unit_abbr?: string
   sales_item_id: number | null; sales_item_name?: string; sales_item_type?: string
   manual_cost: number | null; price_addon: number; qty: number; sort_order: number
+  // BACK-2729 — kiosk customise tile image. Optional; null when unset.
+  image_url?: string | null
   modifier_groups?: { modifier_group_id: number; name: string }[]
 }
 interface ComboStep {
@@ -59,7 +65,7 @@ interface SalesItem {
   qty: number
   modifier_group_count?: number
   markets?: SalesItemMarket[]
-  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number }[]
+  modifier_groups?: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]
 }
 
 // ── Combo panel edit target ────────────────────────────────────────────────────
@@ -114,17 +120,23 @@ function ComboFormModal({ mode, initial, onSave, saving, onClose }: {
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
         </Field>
         <Field label="Category">
-          <select className="input w-full" value={form.category_id}
-            onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-            <option value="">No category…</option>
-            {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={categories}
+            scope="for_sales_items"
+            onCategoryCreated={cat => setCategories(prev =>
+              [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+            )}
+            apiPost={(p, b) => api.post(p, b)}
+            placeholder="No category…"
+          />
         </Field>
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="sales_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -266,15 +278,22 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
           </Field>
         )}
         <Field label="Category">
-          <select className="input w-full" value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
-            <option value="">No category…</option>
-            {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <CategoryPicker
+            value={form.category_id}
+            onChange={v => setForm(f => ({ ...f, category_id: v }))}
+            categories={siCategories}
+            scope="for_sales_items"
+            onCategoryCreated={cat => setSiCategories(prev =>
+              [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+            )}
+            apiPost={(p, b) => api.post(p, b)}
+            placeholder="No category…"
+          />
         </Field>
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="sales_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -287,9 +306,35 @@ function SalesItemModal({ mode, initial, defaultType, recipes, ingredients, comb
 }
 
 // ── Main SalesItemsPage ────────────────────────────────────────────────────────
-export default function SalesItemsPage() {
+// BACK-2793 — when SalesItemsPage is embedded inside MenuEntryPage the
+// parent owns the top-level tab bar, so we accept an external override of
+// activeTab and a flag to hide the page header (title + tab bar).
+export default function SalesItemsPage({
+  embeddedTab,
+  hideHeader,
+}: {
+  embeddedTab?: 'items' | 'combos' | 'modifiers'
+  hideHeader?: boolean
+} = {}) {
   const api = useApi()
-  const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>('items')
+  const [activeTab, setActiveTab] = useState<'items' | 'combos' | 'modifiers'>(embeddedTab ?? 'items')
+  // Keep internal state in lockstep with the external override when the
+  // parent flips its top tab. Local setActiveTab calls still work for
+  // single-page mode and deep links.
+  useEffect(() => {
+    if (embeddedTab && embeddedTab !== activeTab) setActiveTab(embeddedTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embeddedTab])
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // ── Items-tab view mode — 'list' = existing dense table, 'excel' = editable
+  //     spreadsheet grid with frozen Name/Type/Category + a column per price
+  //     level + a column per country for market visibility. Persists per
+  //     browser so a user's preference survives a reload.
+  const [viewMode, setViewMode] = useState<'list' | 'excel'>(() => {
+    try { return (localStorage.getItem('sales-items-view-mode') as 'list' | 'excel') || 'list' } catch { return 'list' }
+  })
+  useEffect(() => { try { localStorage.setItem('sales-items-view-mode', viewMode) } catch {} }, [viewMode])
 
   // ── Shared data ────────────────────────────────────────────────────────────
   const [salesItems,     setSalesItems]     = useState<SalesItem[]>([])
@@ -301,6 +346,8 @@ export default function SalesItemsPage() {
   const [siCategories,   setSiCategories]   = useState<{id: number; name: string}[]>([])
   const [loading,        setLoading]        = useState(true)
   const [toast,          setToast]          = useState<{msg: string} | null>(null)
+  // Cells currently writing back to the server — key is "<itemId>:<fieldKey>".
+  const [savingCells, setSavingCells] = useState<Set<string>>(new Set())
   const showToast = (msg: string) => setToast({ msg })
 
   const load = useCallback(async () => {
@@ -330,9 +377,82 @@ export default function SalesItemsPage() {
       .catch(() => {})
   }, [api])
 
+  // ── Inline-save helpers for the Excel view ──────────────────────────────────
+  // Each cell edit is persisted independently, with a little ⟳ spinner on the
+  // cell while the PUT is in flight. Optimistic updates in state; a failed
+  // save rolls back and shows a toast. Keeps the UI feeling like Excel
+  // (commit on blur / Enter) instead of a big save-all button.
+
+  const markSaving = useCallback((itemId: number, field: string, on: boolean) => {
+    setSavingCells(prev => {
+      const next = new Set(prev)
+      const key = `${itemId}:${field}`
+      if (on) next.add(key); else next.delete(key)
+      return next
+    })
+  }, [])
+
+  const saveCoreField = useCallback(async (itemId: number, patch: Partial<SalesItem>, label: string) => {
+    const prev = salesItems.find(s => s.id === itemId)
+    if (!prev) return
+    markSaving(itemId, label, true)
+    // Optimistic
+    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, ...patch } : s))
+    try {
+      const updated: SalesItem = await api.put(`/sales-items/${itemId}`, patch)
+      // Merge server response so computed fields (category_name etc.) refresh
+      setSalesItems(list => list.map(s => s.id === itemId ? { ...s, ...updated } : s))
+    } catch (err) {
+      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
+      showToast(`Save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      markSaving(itemId, label, false)
+    }
+  }, [api, salesItems, markSaving])
+
+  const toggleMarket = useCallback(async (itemId: number, countryId: number, active: boolean) => {
+    const prev = salesItems.find(s => s.id === itemId)
+    if (!prev) return
+    const label = `market_${countryId}`
+    markSaving(itemId, label, true)
+
+    const existingMkts: SalesItemMarket[] = Array.isArray(prev.markets) ? prev.markets : []
+    // Active country_ids after toggle: markets are "active if present in array
+    // and is_active=true"; the PUT /markets endpoint treats the supplied array
+    // as the full list of active countries for the item (upserts TRUE, others
+    // get FALSE or removed).
+    const activeIds = new Set(existingMkts.filter(m => m.is_active).map(m => m.country_id))
+    if (active) activeIds.add(countryId); else activeIds.delete(countryId)
+
+    // Rebuild optimistic markets array — mark every country's is_active flag
+    const nextMkts: SalesItemMarket[] = countries.map(c => {
+      const existing = existingMkts.find(m => m.country_id === c.id)
+      return {
+        country_id:   c.id,
+        country_name: c.name,
+        is_active:    activeIds.has(c.id),
+        ...(existing || {}),
+        is_active_override: undefined,   // not a real field, just shape guarantee
+      } as SalesItemMarket
+    })
+    setSalesItems(list => list.map(s => s.id === itemId ? { ...s, markets: nextMkts } : s))
+
+    try {
+      await api.put(`/sales-items/${itemId}/markets`, { country_ids: Array.from(activeIds) })
+    } catch (err) {
+      setSalesItems(list => list.map(s => s.id === itemId ? prev : s))
+      showToast(`Market save failed: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      markSaving(itemId, label, false)
+    }
+  }, [api, salesItems, countries, markSaving])
+
   // ── Create / edit / delete ─────────────────────────────────────────────────
   const [siModal,       setSiModal]       = useState<'new' | null>(null)
   const [newComboMode,  setNewComboMode]  = useState(false)
+  // BACK-2652 — pre-select 'manual' when arriving from Menu Builder via
+  // ?new=manual so the user lands on the right tab inside the SalesItemModal.
+  const [newManualMode, setNewManualMode] = useState(false)
   const [saving,        setSaving]        = useState(false)
   const [deleting,      setDeleting]      = useState<SalesItem | null>(null)
 
@@ -347,7 +467,15 @@ export default function SalesItemsPage() {
       const full: SalesItem = await api.get(`/sales-items/${created.id}`)
       setSalesItems(prev => [...prev, full].sort((a, b) => a.name.localeCompare(b.name)))
       showToast('Sales Item created')
-      setSiModal(null); setNewComboMode(false)
+      setSiModal(null); setNewComboMode(false); setNewManualMode(false)
+      // BACK-2652 — flip the ReturnToMenuBuilderBanner into "+ Add to menu"
+      // state for the manual flow. (Combo is handled in saveCombo since the
+      // user creates the combo entity first; the sales-item wrapper is
+      // created by the banner click itself.)
+      const handoff = getHandoff()
+      if (handoff?.item_type === 'manual' && full.item_type === 'manual') {
+        setPendingAttach({ type: 'sales_item', id: full.id, name: full.name })
+      }
     } catch { showToast('Save failed') } finally { setSaving(false) }
   }
 
@@ -403,7 +531,7 @@ export default function SalesItemsPage() {
   const [panelComboOpen,     setPanelComboOpen]     = useState(false)
   const [panelMarkets,     setPanelMarkets]     = useState<number[]>([])
   const [panelMktSaving,   setPanelMktSaving]   = useState(false)
-  const [panelTab,         setPanelTab]         = useState<'details' | 'markets' | 'modifiers'>('details')
+  const [panelTab,         setPanelTab]         = useState<'details' | 'markets' | 'modifiers' | 'translations'>('details')
 
   // Populate form when selection changes
   useEffect(() => {
@@ -494,6 +622,32 @@ export default function SalesItemsPage() {
   const [comboDetailLoading, setComboDetailLoading] = useState(false)
   const [expandedStep,       setExpandedStep]       = useState<number | null>(null)
   const [comboModal,         setComboModal]         = useState<'new' | null>(null)
+
+  // BACK-2652 — when arriving from Menu Builder via ?new=combo or ?new=manual,
+  // auto-open the matching create modal. The handoff guard ensures a stray
+  // ?new= from elsewhere is a no-op so the user isn't surprised by a popped
+  // modal. Single-shot — params are stripped from the URL after consumption.
+  const newDeepLinkAppliedRef = useRef(false)
+  useEffect(() => {
+    if (newDeepLinkAppliedRef.current) return
+    const newParam = searchParams.get('new')
+    if (!newParam) return
+    if (!getHandoff()) return
+    newDeepLinkAppliedRef.current = true
+    if (newParam === 'combo') {
+      setActiveTab('combos')
+      setComboModal('new')
+    } else if (newParam === 'manual') {
+      setActiveTab('items')
+      setNewComboMode(false)
+      setNewManualMode(true)
+      setSiModal('new')
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
   // ── Combo side panel ─────────────────────────────────────────────────────
   const [comboPanelWidth,    setComboPanelWidth]    = useState(360)
   const [comboEditTarget,    setComboEditTarget]    = useState<ComboEditTarget>(null)
@@ -515,6 +669,12 @@ export default function SalesItemsPage() {
 
   const [duplicatingCombo, setDuplicatingCombo] = useState(false)
 
+  // BACK-2835 — drag-drop step reorder state. dragStepId = the step currently
+  // being dragged; dropStepId = the hover target. Releasing fires the batch
+  // reorder API call.
+  const [dragStepId, setDragStepId] = useState<number | null>(null)
+  const [dropStepId, setDropStepId] = useState<number | null>(null)
+
   useEffect(() => {
     // Reset panel state whenever the selected combo changes
     setComboEditTarget(null)
@@ -529,6 +689,25 @@ export default function SalesItemsPage() {
       .catch(() => setComboDetail(null))
       .finally(() => setComboDetailLoading(false))
   }, [selectedComboId, api])
+  // Note: cost display in the Combos catalog tab was removed (replaced
+  // BUG-1186's per-option cost cell). The cost was computed by a parallel
+  // engine in /combos/:id/costs that diverged from calcComboCost for
+  // sales-item-wrapped recipes (over-multiplied by si_qty). Operators see
+  // the authoritative cost in the Menu Builder tab + Menu Engineer.
+
+  // BACK-2835 — batch step reorder. Optimistically updates local state, then
+  // POSTs; rolls back via a fresh fetch on error.
+  const persistStepReorder = useCallback(async (newSteps: ComboStep[]) => {
+    if (!selectedComboId) return
+    const updated = newSteps.map((s, i) => ({ ...s, sort_order: i }))
+    setComboDetail(d => d ? { ...d, steps: updated } : d)
+    try {
+      await api.post(`/combos/${selectedComboId}/steps/reorder`, { order: updated.map(s => s.id) })
+    } catch {
+      showToast('Failed to reorder steps')
+      reloadComboDetail()
+    }
+  }, [selectedComboId, api, /* showToast / reloadComboDetail defined later */])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const reloadComboDetail = useCallback(async () => {
     if (!selectedComboId) return
@@ -545,6 +724,13 @@ export default function SalesItemsPage() {
       setSelectedComboId(created.id)
       showToast('Combo created')
       setComboModal(null)
+      // BACK-2652 — let the user keep building combo steps + options + mods
+      // at their own pace. The banner flips into the "+ Add to menu" state
+      // immediately so they can attach whenever they're ready; the wrapping
+      // sales-item with item_type='combo' is created by the banner click.
+      if (getHandoff()?.item_type === 'combo' && created?.id) {
+        setPendingAttach({ type: 'combo', id: created.id, name: created.name })
+      }
     } catch { showToast('Save failed') } finally { setSavingCombo(false) }
   }
 
@@ -688,7 +874,7 @@ export default function SalesItemsPage() {
   }
 
   // ── Sales Item — modifier group assignment ────────────────────────────────
-  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number }[]>>({})
+  const [siMgData,      setSiMgData]      = useState<Record<number, { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]>>({})
   const [siMgLoading,   setSiMgLoading]   = useState<Set<number>>(new Set())
   const [siMgAddOpen,   setSiMgAddOpen]   = useState<number | null>(null)
   const [siMgAddPos,    setSiMgAddPos]    = useState<{ top: number; left: number } | null>(null)
@@ -704,12 +890,19 @@ export default function SalesItemsPage() {
     }
   }
 
-  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number }[]) => {
+  const saveSiModifiers = async (siId: number, groups: { modifier_group_id: number; name: string; sort_order: number; min_select?: number; auto_show?: boolean | null }[]) => {
     try {
-      await api.put(`/sales-items/${siId}/modifier-groups`, { modifier_group_ids: groups.map(g => g.modifier_group_id) })
+      await api.put(`/sales-items/${siId}/modifier-groups`, {
+        groups: groups.map(g => ({ modifier_group_id: g.modifier_group_id, auto_show: g.auto_show !== false }))
+      })
       setSiMgData(prev => ({ ...prev, [siId]: groups }))
       setSalesItems(prev => prev.map(s => s.id === siId ? { ...s, modifier_group_count: groups.length } : s))
     } catch { showToast('Failed to save modifiers') }
+  }
+
+  const toggleAutoShow = (siId: number, mgId: number, newVal: boolean) => {
+    const current = siMgData[siId] || []
+    saveSiModifiers(siId, current.map(g => g.modifier_group_id === mgId ? { ...g, auto_show: newVal } : g))
   }
 
   const removeSiModifier = (siId: number, mgId: number) => {
@@ -720,7 +913,7 @@ export default function SalesItemsPage() {
   const addSiModifier = (siId: number, mg: ModifierGroup) => {
     const current = siMgData[siId] || []
     if (current.some(g => g.modifier_group_id === mg.id)) return
-    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length }])
+    saveSiModifiers(siId, [...current, { modifier_group_id: mg.id, name: mg.name, sort_order: current.length, min_select: mg.min_select, auto_show: null }])
     setSiMgAddOpen(null)
   }
 
@@ -734,13 +927,13 @@ export default function SalesItemsPage() {
   // ── Modifiers tab ──────────────────────────────────────────────────────────
   const [expandedMgId,    setExpandedMgId]    = useState<number | null>(null)
   const [expandedOptions, setExpandedOptions] = useState<Record<number, ModifierOption[]>>({})
-  const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1 })
+  const [newMgForm,       setNewMgForm]       = useState({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false })
   const [mgSaving,        setMgSaving]        = useState(false)
   const [showNewMgModal,  setShowNewMgModal]  = useState(false)
   const [mgEditTarget,    setMgEditTarget]    = useState<MgEditTarget>(null)
   const [mgPanelWidth,    setMgPanelWidth]    = useState(360)
   const [mgPanelSaving,   setMgPanelSaving]   = useState(false)
-  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number } | null>(null)
+  const [mpGroupForm,     setMpGroupForm]     = useState<{ name: string; display_name: string; min_select: number; max_select: number; allow_repeat_selection: boolean; default_auto_show?: boolean | null } | null>(null)
   const [mpOptForm,       setMpOptForm]       = useState<{ name: string; display_name: string; item_type: 'recipe' | 'ingredient' | 'manual'; recipe_id: number | null; ingredient_id: number | null; manual_cost: number | null; qty: number; sort_order: number; image_url: string | null } | null>(null)
   const [mpOptRecipeSearch, setMpOptRecipeSearch] = useState('')
   const [mpOptIngSearch,    setMpOptIngSearch]    = useState('')
@@ -762,7 +955,7 @@ export default function SalesItemsPage() {
     try {
       const created = await api.post('/modifier-groups', { ...newMgForm, display_name: newMgForm.display_name || null })
       setModifierGroups(prev => [...prev, { ...created, option_count: 0 }])
-      setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 })
+      setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false })
     } catch { showToast('Failed') } finally { setMgSaving(false) }
   }
 
@@ -796,7 +989,7 @@ export default function SalesItemsPage() {
     if (!mgEditTarget) { setMpGroupForm(null); setMpOptForm(null); return }
     if (mgEditTarget.type === 'group') {
       const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
-      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select })
+      setMpGroupForm({ name: g.name, display_name: g.display_name ?? '', min_select: g.min_select, max_select: g.max_select, allow_repeat_selection: g.allow_repeat_selection ?? false, default_auto_show: g.default_auto_show ?? true })
       setMpOptForm(null)
     } else {
       const { opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
@@ -843,8 +1036,9 @@ export default function SalesItemsPage() {
       if (mgEditTarget.type === 'group' && mpGroupForm) {
         const g = (mgEditTarget as { type: 'group'; group: ModifierGroup }).group
         await api.put(`/modifier-groups/${g.id}`, { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null })
-        setModifierGroups(prev => prev.map(mg => mg.id === g.id ? { ...mg, ...mpGroupForm, display_name: mpGroupForm.display_name || null } : mg))
-        setMgEditTarget({ type: 'group', group: { ...g, ...mpGroupForm, display_name: mpGroupForm.display_name || null } })
+        const merged = { ...mpGroupForm, display_name: mpGroupForm.display_name || null, default_auto_show: mpGroupForm.default_auto_show ?? undefined }
+        setModifierGroups(prev => prev.map(mg => mg.id === g.id ? { ...mg, ...merged } : mg))
+        setMgEditTarget({ type: 'group', group: { ...g, ...merged } })
         showToast('Group saved')
       } else if (mgEditTarget.type === 'option' && mpOptForm) {
         const { groupId, opt } = mgEditTarget as { type: 'option'; groupId: number; opt: ModifierOption | null }
@@ -888,13 +1082,42 @@ export default function SalesItemsPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Sales Items</h1>
-            <p className="text-sm text-gray-500 mt-0.5">POS catalog — recipes, ingredients, manual items, and combos</p>
+      <ReturnToMenuBuilderBanner />
+      {/* Header — hidden when embedded inside MenuEntryPage (parent owns
+          the title + tab bar). The contextual + New button is moved to a
+          slim action strip below so it stays accessible in both modes. */}
+      {!hideHeader && (
+        <div className="px-6 pt-5 pb-0 border-b border-gray-200 bg-white">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Sales Items</h1>
+              <p className="text-sm text-gray-500 mt-0.5">POS catalog — recipes, ingredients, manual items, and combos</p>
+            </div>
+            {activeTab === 'items' && (
+              <button className="btn btn-primary" onClick={() => { setNewComboMode(false); setSiModal('new') }}>+ New Sales Item</button>
+            )}
+            {activeTab === 'combos' && (
+              <button className="btn btn-primary" onClick={() => setComboModal('new')}>+ New Combo</button>
+            )}
+            {activeTab === 'modifiers' && (
+              <button className="btn btn-primary" onClick={() => setShowNewMgModal(true)}>+ New Modifier Group</button>
+            )}
           </div>
+          <div className="flex gap-1">
+            {(['items', 'combos', 'modifiers'] as const).map(t => (
+              <button key={t} onClick={() => setActiveTab(t)}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                {t === 'items' ? 'Sales Items' : t === 'combos' ? 'Combos' : 'Modifiers'}
+                {t === 'items' && nonComboItems.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{nonComboItems.length}</span>}
+                {t === 'combos' && combos.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{combos.length}</span>}
+                {t === 'modifiers' && modifierGroups.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{modifierGroups.length}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {hideHeader && (
+        <div className="flex items-center justify-end px-6 py-2 border-b border-gray-200 bg-white">
           {activeTab === 'items' && (
             <button className="btn btn-primary" onClick={() => { setNewComboMode(false); setSiModal('new') }}>+ New Sales Item</button>
           )}
@@ -905,26 +1128,28 @@ export default function SalesItemsPage() {
             <button className="btn btn-primary" onClick={() => setShowNewMgModal(true)}>+ New Modifier Group</button>
           )}
         </div>
-        <div className="flex gap-1">
-          {(['items', 'combos', 'modifiers'] as const).map(t => (
-            <button key={t} onClick={() => setActiveTab(t)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === t ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-              {t === 'items' ? 'Sales Items' : t === 'combos' ? 'Combos' : 'Modifiers'}
-              {t === 'items' && nonComboItems.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{nonComboItems.length}</span>}
-              {t === 'combos' && combos.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{combos.length}</span>}
-              {t === 'modifiers' && modifierGroups.length > 0 && <span className="ml-1.5 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{modifierGroups.length}</span>}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* ── ITEMS TAB ─────────────────────────────────────────────────────────── */}
       {activeTab === 'items' && (
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 overflow-auto p-5">
-            <div className="flex gap-2 mb-4">
-              <input className="input input-sm w-64" placeholder="Search by name or category…" value={itemSearch} onChange={e => setItemSearch(e.target.value)} />
-              <select className="input py-1 text-xs" value={typeFilter} onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}>
+            {/* Constrained-width filters on the left, pushed-right meta/actions.
+                `ml-auto` on the items count creates the gap; a fixed-width
+                select stops the native dropdown from stretching to fill and
+                squashing the view-toggle into a single-letter "E…" badge. */}
+            <div className="flex flex-wrap gap-2 mb-4 items-center">
+              <input
+                className="input input-sm w-64 flex-shrink-0"
+                placeholder="Search by name or category…"
+                value={itemSearch}
+                onChange={e => setItemSearch(e.target.value)}
+              />
+              <select
+                className="input py-1 text-xs w-36 flex-shrink-0"
+                value={typeFilter}
+                onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}
+              >
                 <option value="">All Types</option>
                 <option value="recipe">Recipe</option>
                 <option value="ingredient">Ingredient</option>
@@ -932,16 +1157,57 @@ export default function SalesItemsPage() {
                 <option value="manual">Manual</option>
               </select>
               {bulkSelected.size > 0 && (
-                <button className="text-xs text-text-3 hover:text-text-1 transition-colors ml-1"
+                <button className="text-xs text-text-3 hover:text-text-1 transition-colors flex-shrink-0"
                   onClick={() => setBulkSelected(new Set())}>
                   Clear {bulkSelected.size} selected
                 </button>
               )}
-              <span className="text-sm text-gray-400 self-center ml-auto">{nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}</span>
+              <span className="text-xs text-gray-400 self-center ml-auto whitespace-nowrap flex-shrink-0">
+                {nonComboItems.length} item{nonComboItems.length !== 1 ? 's' : ''}
+              </span>
+              {/* View-mode toggle — same three-button pattern as the Menu
+                  Engineer Excel view on SharedMenuPage, minus the Grid option
+                  (card-tiles wouldn't add anything over the existing list). */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden flex-shrink-0" role="group" aria-label="View mode">
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === 'list' ? 'bg-accent-dim text-accent' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                  title="List view"
+                  aria-pressed={viewMode === 'list'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/>
+                  </svg>
+                  <span className="hidden sm:inline">List</span>
+                </button>
+                <button
+                  onClick={() => setViewMode('excel')}
+                  className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${viewMode === 'excel' ? 'bg-accent-dim text-accent' : 'bg-white text-gray-400 hover:bg-gray-50'}`}
+                  title="Excel view — dense editable grid"
+                  aria-pressed={viewMode === 'excel'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M3 6h18M3 18h18M8 6v12M16 6v12"/>
+                  </svg>
+                  <span className="hidden sm:inline">Excel</span>
+                </button>
+              </div>
             </div>
 
             {nonComboItems.length === 0 ? (
               <div className="py-16 text-center text-sm text-gray-400">No sales items yet. Click "+ New Sales Item" to create one.</div>
+            ) : viewMode === 'excel' ? (
+              <ExcelView
+                items={nonComboItems}
+                countries={countries}
+                siCategories={siCategories}
+                savingCells={savingCells}
+                onSaveCore={saveCoreField}
+                onToggleMarket={toggleMarket}
+                onSelect={id => setSelectedSiId(id)}
+                onDelete={si => setDeleting(si)}
+                selectedSiId={selectedSiId}
+              />
             ) : (
               <div className="card overflow-hidden">
                 <table className="w-full text-sm">
@@ -1149,10 +1415,10 @@ export default function SalesItemsPage() {
 
                 {/* Panel tab bar */}
                 <div className="flex border-b border-border bg-white shrink-0">
-                  {(['details', 'markets', 'modifiers'] as const).map(t => (
+                  {(['details', 'markets', 'modifiers', 'translations'] as const).map(t => (
                     <button key={t} onClick={() => setPanelTab(t)}
                       className={`flex-1 py-2 text-xs font-medium transition-colors border-b-2 ${panelTab === t ? 'border-accent text-accent' : 'border-transparent text-text-3 hover:text-text-1'}`}>
-                      {t === 'details' ? 'Details' : t === 'markets' ? 'Markets' : 'Modifiers'}
+                      {t === 'details' ? 'Details' : t === 'markets' ? 'Markets' : t === 'modifiers' ? 'Modifiers' : 'Translations'}
                     </button>
                   ))}
                 </div>
@@ -1296,11 +1562,18 @@ export default function SalesItemsPage() {
                     {/* Category */}
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
-                      <select className="input w-full text-sm" value={panelForm.category_id}
-                        onChange={e => setPanelForm(f => f ? { ...f, category_id: e.target.value } : f)}>
-                        <option value="">No category…</option>
-                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                      </select>
+                      <CategoryPicker
+                        value={panelForm.category_id}
+                        onChange={v => setPanelForm(f => f ? { ...f, category_id: v } : f)}
+                        categories={siCategories}
+                        scope="for_sales_items"
+                        onCategoryCreated={cat => setSiCategories(prev =>
+                          [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                        )}
+                        apiPost={(p, b) => api.post(p, b)}
+                        className="input w-full text-sm"
+                        placeholder="No category…"
+                      />
                     </div>
 
                     {/* Description */}
@@ -1311,7 +1584,7 @@ export default function SalesItemsPage() {
                     </div>
 
                     {/* Image */}
-                    <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} />
+                    <ImageUpload label="Image" value={panelForm.image_url} onChange={url => setPanelForm(f => f ? { ...f, image_url: url } : f)} formKey="sales_item" />
                   </div>
                   )}{/* end details tab */}
 
@@ -1370,13 +1643,27 @@ export default function SalesItemsPage() {
                           {panelMgGroups.map(mg => (
                             <div key={mg.modifier_group_id}
                               className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-blue-50 border border-blue-100 rounded text-xs">
-                              <span className="font-medium text-blue-800">{mg.name}</span>
-                              <button className="text-blue-300 hover:text-red-500 transition-colors" title={`Remove ${mg.name}`}
-                                onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-                                </svg>
-                              </button>
+                              <span className="font-medium text-blue-800 flex-1 min-w-0 truncate">{mg.name}</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {(mg.min_select === 0 || mg.min_select === undefined) && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); toggleAutoShow(selectedSiId, mg.modifier_group_id, !mg.auto_show) }}
+                                    title={mg.auto_show !== false ? 'Shown automatically in POS' : 'Hidden in POS (optional — tap to add)'}
+                                    className={`p-1 rounded transition-colors ${mg.auto_show !== false ? 'text-accent hover:text-accent-mid' : 'text-gray-300 hover:text-gray-500'}`}>
+                                    {mg.auto_show !== false ? (
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    ) : (
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                                    )}
+                                  </button>
+                                )}
+                                <button className="text-blue-300 hover:text-red-500 transition-colors" title={`Remove ${mg.name}`}
+                                  onClick={() => removeSiModifier(selectedSiId, mg.modifier_group_id)}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                                  </svg>
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1415,6 +1702,17 @@ export default function SalesItemsPage() {
                     )}
                   </div>
                   )}{/* end modifiers tab */}
+
+                  {/* ── TRANSLATIONS TAB ── */}
+                  {panelTab === 'translations' && (
+                    <div className="p-4">
+                      <TranslationEditor
+                        entityType="sales_item"
+                        entityId={selectedSiId}
+                        fields={['name', 'display_name', 'description']}
+                      />
+                    </div>
+                  )}
 
                   </div>
                 )}
@@ -1496,10 +1794,41 @@ export default function SalesItemsPage() {
                   </div>
                   {(comboDetail.steps || []).length === 0 && <p className="text-sm text-gray-400">No steps yet.</p>}
                   <div className="space-y-2">
-                    {(comboDetail.steps || []).map((step, stepIdx) => (
-                      <div key={step.id} className={`border rounded transition-colors ${comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id ? 'border-accent' : 'border-gray-200'}`}>
+                    {(comboDetail.steps || []).map((step, stepIdx) => {
+                      // BACK-2835 — drag-drop reorder. Uses native HTML5 DnD;
+                      // arrow buttons stay as keyboard fallback.
+                      const isDragging = dragStepId === step.id
+                      const isDropTarget = dropStepId === step.id && dragStepId !== null && dragStepId !== step.id
+                      const isPanelTarget = comboEditTarget?.type === 'step' && (comboEditTarget as { type: 'step'; step: ComboStep }).step.id === step.id
+                      return (
+                      <div
+                        key={step.id}
+                        draggable
+                        onDragStart={() => setDragStepId(step.id)}
+                        onDragOver={e => { e.preventDefault(); if (dragStepId !== null && dragStepId !== step.id) setDropStepId(step.id) }}
+                        onDragLeave={() => { if (dropStepId === step.id) setDropStepId(null) }}
+                        onDrop={e => {
+                          e.preventDefault()
+                          const fromId = dragStepId
+                          setDragStepId(null); setDropStepId(null)
+                          if (fromId == null || fromId === step.id || !comboDetail) return
+                          const steps = [...(comboDetail.steps || [])]
+                          const fromIdx = steps.findIndex(s => s.id === fromId)
+                          const toIdx   = steps.findIndex(s => s.id === step.id)
+                          if (fromIdx < 0 || toIdx < 0) return
+                          const [moved] = steps.splice(fromIdx, 1)
+                          steps.splice(toIdx, 0, moved)
+                          persistStepReorder(steps)
+                        }}
+                        onDragEnd={() => { setDragStepId(null); setDropStepId(null) }}
+                        className={`border-l-4 border rounded transition-all ${
+                          isPanelTarget ? 'border-l-accent border-accent' :
+                          isDropTarget  ? 'border-l-accent border-accent ring-2 ring-accent/30' :
+                                          'border-l-accent/40 border-gray-200'
+                        } ${isDragging ? 'opacity-40' : ''} bg-white`}
+                      >
                         {/* Step header row — click to expand + open step in side panel */}
-                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-t"
+                        <div className="flex items-center justify-between px-3 py-2 cursor-pointer bg-gray-100 hover:bg-gray-200 rounded-t"
                           onClick={() => {
                             if (expandedStep === step.id) {
                               setExpandedStep(null)
@@ -1512,6 +1841,12 @@ export default function SalesItemsPage() {
                             }
                           }}>
                           <div className="flex items-center gap-2 flex-wrap">
+                            {/* BACK-2835 — drag handle */}
+                            <span
+                              className="text-gray-400 hover:text-accent cursor-grab active:cursor-grabbing select-none px-0.5"
+                              title="Drag to reorder"
+                              onClick={e => e.stopPropagation()}
+                            >⋮⋮</span>
                             <span className="text-xs text-gray-400">{expandedStep === step.id ? '▼' : '▶'}</span>
                             <span className="text-sm font-medium text-gray-800">{step.name}</span>
                             {step.display_name && <span className="text-xs text-gray-400 italic">"{step.display_name}"</span>}
@@ -1521,11 +1856,11 @@ export default function SalesItemsPage() {
                             {step.allow_repeat && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded" title="Same option can be chosen multiple times">repeat ✓</span>}
                             {step.auto_select && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded" title="Option is auto-selected">auto ✓</span>}
                             <button className="text-xs text-accent hover:text-accent-dark px-1.5 py-0.5 rounded hover:bg-accent-dim transition-colors"
-                              onClick={e => { e.stopPropagation(); setExpandedStep(step.id); setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'manual', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } }) }}>
+                              onClick={e => { e.stopPropagation(); setExpandedStep(step.id); setComboEditTarget({ type: 'option', stepId: step.id, opt: { id: 0, combo_step_id: step.id, name: '', display_name: null, item_type: 'recipe', recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null, price_addon: 0, qty: 1, sort_order: (step.options || []).length } }) }}>
                               + Add Option
                             </button>
                           </div>
-                          {/* Step action icons — sort ↑↓, duplicate, trash */}
+                          {/* Step action icons — sort ↑↓ (keyboard fallback for drag-drop), duplicate, trash */}
                           <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
                             <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-30" title="Move up"
                               disabled={stepIdx === 0} onClick={() => reorderComboStep(stepIdx, 'up')}>
@@ -1552,10 +1887,10 @@ export default function SalesItemsPage() {
 
                         {/* Options list */}
                         {expandedStep === step.id && (
-                          <div className="p-2 space-y-1">
+                          <div className="p-2 pl-6 space-y-1 border-l-2 border-l-accent/20 ml-2">
                             {(step.options || []).length === 0 && <p className="text-xs text-gray-400 px-1">No options yet — click "+ Add Option" above.</p>}
                             {(step.options || []).map(opt => (
-                              <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40' : 'hover:bg-gray-50'}`}
+                              <div key={opt.id} className={`group flex items-center gap-2 px-2 py-1.5 text-sm rounded cursor-pointer transition-colors border-l-2 ${comboEditTarget?.type === 'option' && (comboEditTarget as { type: 'option'; stepId: number; opt: ComboStepOption }).opt.id === opt.id ? 'bg-accent-dim/40 border-l-accent' : 'hover:bg-gray-50 border-l-transparent'}`}
                                 onClick={() => setComboEditTarget({ type: 'option', stepId: step.id, opt })}>
                                 <span className="font-medium text-gray-800 truncate">{opt.display_name || opt.name}</span>
                                 {opt.display_name && <span className="text-xs text-gray-400 italic shrink-0">({opt.name})</span>}
@@ -1576,7 +1911,6 @@ export default function SalesItemsPage() {
                                     {opt.sales_item_type && <span className={`text-xs px-1 py-0.5 rounded ${TYPE_BADGE[opt.sales_item_type] || ''}`}>{TYPE_LABEL[opt.sales_item_type] || opt.sales_item_type}</span>}
                                   </span>
                                 )}
-                                {opt.item_type === 'manual' && opt.manual_cost != null && <span className="text-xs text-gray-400 shrink-0">${Number(opt.manual_cost).toFixed(4)}</span>}
                                 {(opt.modifier_groups || []).length > 0 && (
                                   <div className="flex flex-wrap gap-1 ml-1">
                                     {(opt.modifier_groups || []).map(mg => (
@@ -1584,6 +1918,10 @@ export default function SalesItemsPage() {
                                     ))}
                                   </div>
                                 )}
+                                {/* Cost display removed — the catalog Combos tab is not menu-scoped
+                                    and the parallel /combos/:id/costs engine over-multiplied
+                                    sales-item-wrapped recipes by si_qty. See Menu Builder tab
+                                    for authoritative cost. */}
                                 <div className="flex gap-1 shrink-0 ml-auto" onClick={e => e.stopPropagation()}>
                                   <button className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
                                     title="Delete option" onClick={() => deleteOption(step.id, opt.id)}>
@@ -1597,7 +1935,7 @@ export default function SalesItemsPage() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </section>
               </div>
@@ -1648,25 +1986,36 @@ export default function SalesItemsPage() {
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Category</label>
-                      <select className="input w-full text-sm" value={cpComboForm.category_id}
-                        onChange={e => setCpComboForm(f => f ? { ...f, category_id: e.target.value } : f)}>
-                        <option value="">No category…</option>
-                        {siCategories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                      </select>
+                      <CategoryPicker
+                        value={cpComboForm.category_id}
+                        onChange={v => setCpComboForm(f => f ? { ...f, category_id: v } : f)}
+                        categories={siCategories}
+                        scope="for_sales_items"
+                        onCategoryCreated={cat => setSiCategories(prev =>
+                          [...prev, cat].sort((a, b) => a.name.localeCompare(b.name))
+                        )}
+                        apiPost={(p, b) => api.post(p, b)}
+                        className="input w-full text-sm"
+                        placeholder="No category…"
+                      />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Description</label>
                       <textarea className="input w-full text-sm" rows={3} value={cpComboForm.description}
                         onChange={e => setCpComboForm(f => f ? { ...f, description: e.target.value } : f)} />
                     </div>
-                    <div>
-                      <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Image URL</label>
-                      <input className="input w-full text-sm" placeholder="https://…" value={cpComboForm.image_url ?? ''}
-                        onChange={e => setCpComboForm(f => f ? { ...f, image_url: e.target.value || null } : f)} />
-                      {cpComboForm.image_url && (
-                        <img src={cpComboForm.image_url} alt="" className="mt-2 w-full max-h-32 object-contain rounded border border-border" onError={e => (e.currentTarget.style.display = 'none')} />
-                      )}
-                    </div>
+                    {/* Use the shared ImageUpload component (browse the
+                        media library or upload fresh) for parity with every
+                        other image field on this page — sales item form,
+                        modifier option form, and the panel detail form all
+                        use ImageUpload; only the combo form was still on a
+                        raw URL input. */}
+                    <ImageUpload
+                      label="Image"
+                      value={cpComboForm.image_url}
+                      onChange={url => setCpComboForm(f => f ? { ...f, image_url: url } : f)}
+                      formKey="combo"
+                    />
                   </>
                 )}
 
@@ -1716,6 +2065,40 @@ export default function SalesItemsPage() {
                   const filteredSis  = salesItems.filter(s => s.item_type !== 'combo' && s.name.toLowerCase().includes(cpOptSiSearch.toLowerCase())).slice(0, 50)
                   return (
                     <>{comboPanelOptTab === 'details' && (<>
+                      {/* BUG-1185 — option type selector. Moved to top of the
+                          form (it determines every downstream field) and
+                          rendered as a 4-button segmented control so it can't
+                          be missed. */}
+                      <div className="bg-accent-dim/30 border border-accent/30 rounded-lg p-2.5 -mx-1">
+                        <label className="text-xs font-semibold text-text-1 block mb-1.5">Option type *</label>
+                        <div className="grid grid-cols-4 gap-1">
+                          {(['recipe', 'ingredient', 'manual', 'sales_item'] as const).map(t => {
+                            const active = cpOptForm.item_type === t
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => {
+                                  if (active) return
+                                  setCpOptForm(f => f ? { ...f, item_type: t, recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null } : f)
+                                  setCpOptRecipeSearch(''); setCpOptIngSearch(''); setCpOptSiSearch('')
+                                }}
+                                className={`text-xs font-medium px-1 py-1.5 rounded transition-colors border ${
+                                  active
+                                    ? 'bg-accent text-white border-accent shadow-sm'
+                                    : 'bg-white text-text-2 border-border hover:border-accent hover:text-accent'
+                                }`}
+                              >{TYPE_LABEL[t]}</button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-[10px] text-text-3 mt-1.5">
+                          {cpOptForm.item_type === 'recipe'     && 'Cost resolves from the linked recipe\'s ingredients and yield.'}
+                          {cpOptForm.item_type === 'ingredient' && 'Cost resolves from the preferred vendor quote.'}
+                          {cpOptForm.item_type === 'manual'     && 'Cost is entered directly below.'}
+                          {cpOptForm.item_type === 'sales_item' && 'Inherits cost from the linked Sales Item.'}
+                        </p>
+                      </div>
                       <div>
                         <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Name *</label>
                         <input className="input w-full text-sm" value={cpOptForm.name}
@@ -1726,19 +2109,6 @@ export default function SalesItemsPage() {
                         <input className="input w-full text-sm" placeholder="Leave blank to use name"
                           value={cpOptForm.display_name ?? ''}
                           onChange={e => setCpOptForm(f => f ? { ...f, display_name: e.target.value || null } : f)} />
-                      </div>
-                      <div>
-                        <label className="text-xs font-semibold text-text-3 uppercase tracking-wide block mb-1">Type</label>
-                        <select className="input w-full text-sm" value={cpOptForm.item_type}
-                          onChange={e => {
-                            setCpOptForm(f => f ? { ...f, item_type: e.target.value as ComboStepOption['item_type'], recipe_id: null, ingredient_id: null, sales_item_id: null, manual_cost: null } : f)
-                            setCpOptRecipeSearch(''); setCpOptIngSearch(''); setCpOptSiSearch('')
-                          }}>
-                          <option value="manual">Manual cost</option>
-                          <option value="recipe">Recipe</option>
-                          <option value="ingredient">Ingredient</option>
-                          <option value="sales_item">Sales Item</option>
-                        </select>
                       </div>
 
                       {cpOptForm.item_type === 'recipe' && (
@@ -1833,6 +2203,14 @@ export default function SalesItemsPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* BACK-2729 — image shown on the kiosk customise tile. */}
+                      <ImageUpload
+                        label="Image (kiosk tile)"
+                        value={cpOptForm.image_url ?? null}
+                        onChange={url => setCpOptForm(f => f ? { ...f, image_url: url } : f)}
+                        formKey="combo_step_option"
+                      />
 
                     </>)}{/* end details tab */}
                       {comboPanelOptTab === 'modifiers' && (
@@ -2095,6 +2473,24 @@ export default function SalesItemsPage() {
                           onChange={e => setMpGroupForm(f => f ? { ...f, max_select: Number(e.target.value) } : f)} />
                       </div>
                     </div>
+                    <label className="flex items-center gap-2 mt-1 p-2 bg-surface-2 rounded-lg border border-border cursor-pointer">
+                      <input type="checkbox" checked={mpGroupForm.allow_repeat_selection}
+                        onChange={e => setMpGroupForm(f => f ? { ...f, allow_repeat_selection: e.target.checked } : f)} className="rounded" />
+                      <div>
+                        <span className="text-xs font-medium text-text-1">Allow repeat selection</span>
+                        <p className="text-[10px] text-text-3">Same option can be selected multiple times (e.g. extra toppings)</p>
+                      </div>
+                    </label>
+                    {Number(mpGroupForm.min_select) === 0 && (
+                      <label className="flex items-center gap-2 mt-1 p-2 bg-surface-2 rounded-lg border border-border cursor-pointer">
+                        <input type="checkbox" checked={mpGroupForm.default_auto_show ?? true}
+                          onChange={e => setMpGroupForm(f => f ? { ...f, default_auto_show: e.target.checked } : f)} className="rounded" />
+                        <div>
+                          <span className="text-xs font-medium text-text-1">Show automatically in POS</span>
+                          <p className="text-[10px] text-text-3">When off, this modifier appears as an optional button in the POS. Can be overridden per sales item.</p>
+                        </div>
+                      </label>
+                    )}
                   </>
                 )}
 
@@ -2196,7 +2592,7 @@ export default function SalesItemsPage() {
                       </div>
                     )}
                     <ImageUpload label="Photo" value={mpOptForm.image_url}
-                      onChange={url => setMpOptForm(f => f ? { ...f, image_url: url } : f)} />
+                      onChange={url => setMpOptForm(f => f ? { ...f, image_url: url } : f)} formKey="modifier_option" />
                   </>
                 )}
               </div>
@@ -2246,7 +2642,7 @@ export default function SalesItemsPage() {
           <div className="flex gap-2 justify-end pt-4 mt-2 border-t border-border">
             <button className="btn btn-ghost" onClick={() => setShowNewMgModal(false)}>Cancel</button>
             <button className="btn btn-primary" disabled={!newMgForm.name.trim() || mgSaving}
-              onClick={() => createMg().then(() => { setShowNewMgModal(false); setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1 }) })}>
+              onClick={() => createMg().then(() => { setShowNewMgModal(false); setNewMgForm({ name: '', display_name: '', min_select: 0, max_select: 1, allow_repeat_selection: false }) })}>
               {mgSaving ? 'Creating…' : '+ Create Group'}
             </button>
           </div>
@@ -2258,10 +2654,10 @@ export default function SalesItemsPage() {
         <SalesItemModal
           mode="new"
           initial={null}
-          defaultType={newComboMode ? 'combo' : undefined}
+          defaultType={newComboMode ? 'combo' : newManualMode ? 'manual' : undefined}
           recipes={recipes} ingredients={ingredients} combos={combos}
           onSave={saveSalesItem} saving={saving}
-          onClose={() => { setSiModal(null); setNewComboMode(false) }}
+          onClose={() => { setSiModal(null); setNewComboMode(false); setNewManualMode(false) }}
         />
       )}
 
@@ -2305,5 +2701,248 @@ export default function SalesItemsPage() {
 
       {toast && <Toast message={toast.msg} onClose={() => setToast(null)} />}
     </div>
+  )
+}
+
+// ── Excel view ────────────────────────────────────────────────────────────────
+// Dense spreadsheet-like grid with frozen left columns (Name / Type / Category),
+// inline edit on every editable cell, per-price-level columns, per-country
+// market toggles, and a trailing Actions column.
+//
+// Visual language mirrors the Menu Engineer Excel view on SharedMenuPage —
+// gray header band, 12px body text, 1px #e5e7eb borders, amber cell background
+// while a save is in flight. The CSS `position: sticky` pattern is what pins
+// the left columns in place during horizontal scroll; it needs
+// `border-collapse: separate` on the table to avoid border bleed.
+
+interface ExcelViewProps {
+  items:         SalesItem[]
+  countries:     Country[]
+  siCategories:  { id: number; name: string }[]
+  savingCells:   Set<string>
+  onSaveCore:    (itemId: number, patch: Partial<SalesItem>, fieldKey: string) => void | Promise<void>
+  onToggleMarket:(itemId: number, countryId: number, active: boolean) => void | Promise<void>
+  onSelect:      (id: number) => void
+  onDelete:      (si: SalesItem) => void
+  selectedSiId:  number | null
+}
+
+function ExcelView({
+  items, countries, siCategories,
+  savingCells, onSaveCore, onToggleMarket,
+  onSelect, onDelete, selectedSiId,
+}: ExcelViewProps) {
+  // Local draft state so the user can type freely before blurring. One map
+  // keyed by "<itemId>:<field>" so draft edits don't interfere across rows.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const draftKey = (id: number, field: string) => `${id}:${field}`
+  const getDraft = (id: number, field: string, fallback: string) => {
+    const k = draftKey(id, field)
+    return k in drafts ? drafts[k] : fallback
+  }
+  const setDraft = (id: number, field: string, value: string) =>
+    setDrafts(prev => ({ ...prev, [draftKey(id, field)]: value }))
+  const clearDraft = (id: number, field: string) =>
+    setDrafts(prev => { const next = { ...prev }; delete next[draftKey(id, field)]; return next })
+
+  const isSaving = (id: number, field: string) => savingCells.has(`${id}:${field}`)
+
+  // Commit a draft text field back via onSaveCore, only if it actually changed.
+  const commitText = async (item: SalesItem, field: 'name' | 'display_name', currentValue: string) => {
+    const k    = draftKey(item.id, field)
+    if (!(k in drafts)) return
+    const next = drafts[k]
+    clearDraft(item.id, field)
+    if (next.trim() === (currentValue ?? '').trim()) return
+    // `display_name` accepts empty string (falls back to `name` in rendering),
+    // `name` doesn't — keep a minimum of 1 char.
+    if (field === 'name' && !next.trim()) return
+    await onSaveCore(item.id, { [field]: next.trim() } as Partial<SalesItem>, field)
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded overflow-hidden" style={{ fontSize: 12 }}>
+      {/* The overflow-x container provides the horizontal scroll; sticky
+          columns pin to its left edge. `max-height` caps the table so
+          vertical scrolling kicks in on long catalogs. */}
+      <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+        <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
+          <thead className="sticky top-0 z-20" style={{ background: '#f0f0f0' }}>
+            <tr>
+              {/* Frozen: Name */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 0, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 200, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Name</th>
+              {/* Frozen: Display name */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 200, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 180, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Display</th>
+              {/* Frozen: Type */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 380, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 80, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+              >Type</th>
+              {/* Frozen: Category */}
+              <th
+                className="text-left font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                style={{ position: 'sticky', left: 460, zIndex: 21, background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 160, borderRight: '2px solid #9ca3af', borderBottom: '1px solid #d1d5db' }}
+              >Category</th>
+              {/* Markets — one column per country. Muted blue header band.
+                  Prices intentionally omitted: operators set per-item prices
+                  via the Menu Engineer (menu-specific overrides), not on the
+                  catalog itself — the default price layer was confusing
+                  users. See mcogs_menu_sales_item_prices for the canonical
+                  price source. */}
+              {countries.map(c => (
+                <th key={`c-h-${c.id}`}
+                  className="text-center font-semibold text-gray-700 uppercase tracking-wide whitespace-nowrap"
+                  style={{ background: '#dce1e8', padding: '6px 10px', fontSize: 10, minWidth: 60, borderRight: '1px solid #d1d5db', borderBottom: '1px solid #d1d5db' }}
+                  title={c.name}
+                >{c.name}</th>
+              ))}
+              {/* Actions */}
+              <th className="text-center font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap"
+                  style={{ background: '#e8e8e8', padding: '6px 10px', fontSize: 10, minWidth: 60, borderBottom: '1px solid #d1d5db' }}
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => {
+              const rowBg       = selectedSiId === item.id ? '#e8f5ed' : (idx % 2 === 0 ? '#fff' : '#fafafa')
+              const cellBase    = { padding: '3px 6px', borderRight: '1px solid #e5e7eb', borderBottom: '1px solid #f0f0f0' } as const
+              const frozenCell  = (left: number, extra: React.CSSProperties = {}) => ({
+                position: 'sticky' as const, left, zIndex: 10, background: rowBg, ...cellBase, ...extra,
+              })
+              return (
+                <tr key={item.id} style={{ background: rowBg }} onClick={() => onSelect(item.id)}>
+                  {/* Name (editable) */}
+                  <td style={frozenCell(0)}>
+                    <CellInput
+                      value={getDraft(item.id, 'name', item.name ?? '')}
+                      onChange={v => setDraft(item.id, 'name', v)}
+                      onCommit={() => commitText(item, 'name', item.name ?? '')}
+                      saving={isSaving(item.id, 'name')}
+                    />
+                  </td>
+                  {/* Display name (editable) */}
+                  <td style={frozenCell(200)}>
+                    <CellInput
+                      value={getDraft(item.id, 'display_name', item.display_name ?? '')}
+                      onChange={v => setDraft(item.id, 'display_name', v)}
+                      onCommit={() => commitText(item, 'display_name', item.display_name ?? '')}
+                      saving={isSaving(item.id, 'display_name')}
+                      placeholder={item.name ?? ''}
+                    />
+                  </td>
+                  {/* Type (read-only — changing type via this grid would
+                      require a linked-item re-pick, not meaningful inline) */}
+                  <td style={frozenCell(380)}>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${TYPE_BADGE[item.item_type]}`}>
+                      {TYPE_LABEL[item.item_type]}
+                    </span>
+                  </td>
+                  {/* Category (editable select) */}
+                  <td style={frozenCell(460, { borderRight: '2px solid #9ca3af' })}>
+                    <select
+                      className="w-full bg-transparent text-xs focus:outline-none focus:ring-1 focus:ring-accent rounded"
+                      value={item.category_id ?? ''}
+                      onChange={e => {
+                        const v = e.target.value ? Number(e.target.value) : null
+                        onSaveCore(item.id, { category_id: v }, 'category_id')
+                      }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <option value="">—</option>
+                      {siCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    {isSaving(item.id, 'category_id') && <SpinnerDot />}
+                  </td>
+                  {/* Markets */}
+                  {countries.map(c => {
+                    const mk     = (item.markets || []).find(m => m.country_id === c.id)
+                    const active = !!mk?.is_active
+                    const key    = `market_${c.id}`
+                    const saving = isSaving(item.id, key)
+                    return (
+                      <td key={`m-${item.id}-${c.id}`}
+                          style={{ ...cellBase, background: rowBg, textAlign: 'center' }}
+                          onClick={e => e.stopPropagation()}
+                      >
+                        <label className="inline-flex items-center justify-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            disabled={saving}
+                            onChange={e => onToggleMarket(item.id, c.id, e.target.checked)}
+                          />
+                          {saving && <SpinnerDot />}
+                        </label>
+                      </td>
+                    )
+                  })}
+                  {/* Actions */}
+                  <td style={{ ...cellBase, background: rowBg, textAlign: 'center' }}
+                      onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => onDelete(item)}
+                      className="p-1 rounded text-red-300 hover:text-red-600 hover:bg-red-50"
+                      title="Delete"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-3 py-1.5 text-[10px] text-gray-400 border-t border-gray-100 bg-gray-50">
+        {items.length} item{items.length === 1 ? '' : 's'}
+        {' · '}Click any cell to edit · changes save automatically on blur / Enter
+      </div>
+    </div>
+  )
+}
+
+// Single-cell editable input — plain text, amber background while saving,
+// commits on blur or Enter. Extracted so each table cell stays tight.
+function CellInput({ value, onChange, onCommit, saving, align = 'left', placeholder }: {
+  value:       string
+  onChange:    (v: string) => void
+  onCommit:    () => void
+  saving:      boolean
+  align?:      'left' | 'right'
+  placeholder?:string
+}) {
+  return (
+    <div className={`relative flex items-center ${align === 'right' ? 'justify-end' : ''}`}
+         style={saving ? { background: 'rgba(251, 191, 36, 0.15)' } : undefined}>
+      <input
+        type="text"
+        className={`w-full bg-transparent focus:outline-none focus:ring-1 focus:ring-accent rounded px-1 py-0.5 font-mono tabular-nums ${align === 'right' ? 'text-right' : 'text-left'}`}
+        style={{ fontSize: 12 }}
+        value={value}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        onBlur={onCommit}
+        onKeyDown={e => {
+          if (e.key === 'Enter')  { e.preventDefault(); (e.target as HTMLInputElement).blur() }
+          if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
+        }}
+      />
+      {saving && <SpinnerDot />}
+    </div>
+  )
+}
+
+function SpinnerDot() {
+  return (
+    <span className="inline-block w-2 h-2 rounded-full ml-1 align-middle"
+          style={{ background: '#f59e0b', animation: 'pepper-dot 1.2s ease-in-out infinite' }} />
   )
 }

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { useApi } from '../hooks/useApi'
 import { PageHeader, Modal, Field, EmptyState, Spinner, ConfirmDialog, DateConfirmDialog, Toast, Badge, PepperHelpButton } from '../components/ui'
+import IntegrationStatusList from '../components/IntegrationStatusList'
 import ImportPage from './ImportPage'
 import { usePermissions } from '../hooks/usePermissions'
 import type { Feature, AccessLevel } from '../hooks/usePermissions'
@@ -27,9 +28,18 @@ interface AppSettings {
   base_currency?:   { code: string; symbol: string; name: string }
   cogs_thresholds?: { excellent: number; acceptable: number }
   target_cogs?:     number
+  /** How the ingredient cost fallback is resolved when no preferred vendor is set for
+   *  that ingredient+country. Preferred vendor quote ALWAYS wins. */
+  costing_method?:  'best' | 'average'
+  /** When true, modifier group cost displays multiply the per-pick avg by the
+   *  group's min_select so the cost reflects the actual expected total cost
+   *  per portion. Default false — preserves the historical per-pick average. */
+  modifier_cost_uses_min_select?: boolean
 }
 
-type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles'
+type CostingMethod = 'best' | 'average'
+
+type Tab = 'units' | 'price-levels' | 'currency' | 'thresholds' | 'test-data' | 'ai' | 'storage' | 'database' | 'import' | 'users' | 'roles' | 'templates'
 
 const UNIT_TYPES = ['mass', 'volume', 'count'] as const
 
@@ -37,7 +47,7 @@ const TAB_LABELS: Record<Tab, string> = {
   'units':        'Base Units',
   'price-levels': 'Price Levels',
   'currency':     'Currency',
-  'thresholds':   'COGS Thresholds',
+  'thresholds':   'COGS Calculation',
   'test-data':    'Test Data',
   'ai':           'AI',
   'storage':      'Storage',
@@ -45,13 +55,14 @@ const TAB_LABELS: Record<Tab, string> = {
   'import':       'Import',
   'users':        'Users',
   'roles':        'Roles',
+  'templates':    'Scope templates',
 }
 
 const TAB_TUTORIALS: Record<Tab, string> = {
   'units':        'How do measurement Units work in COGS Manager? Explain base units, purchase units, and prep units — and when I need to add a new unit.',
   'price-levels': 'What are Price Levels and how do they work? Give examples of how Eat-In, Takeout, and Delivery levels affect COGS calculations and sell prices differently.',
   'currency':     'How does the Currency settings tab work? Explain the base currency (USD default), the currency code/symbol/name fields, and how the Exchange Rates sync connects to Frankfurter API.',
-  'thresholds':   'What are COGS Thresholds? Explain the green, amber, and red target percentages and what typical good COGS% ranges look like for a restaurant.',
+  'thresholds':   'What is the COGS Calculation tab? Explain the COGS % thresholds (green/amber/red — typical good ranges for a restaurant), the Recipe Costing Method (Best price quote vs Market amalgamated quote, and when to pick each), the Modifier Multiplier toggle (and the × mod ingredient flag on recipes), and the Modifier Cost × Number of Choices toggle. Clarify that preferred vendor quotes always take priority regardless of costing method.',
   'test-data':    'Explain the Test Data tab. What do each of the four buttons do (Load Test Data, Load Small Data, Clear Database, Load Default Data), when should I use each one, the date-confirmation safeguard, and who can access it (dev flag).',
   'ai':           'What AI settings are available? Explain the Anthropic key, Brave Search API key, Voyage AI key, Concise Mode, Claude Code Integration key, and the Token Usage panel — what each does and when I would configure it.',
   'storage':      'Explain the Storage settings tab. What is the difference between Local storage and Amazon S3? What are the pros/cons of each, and what S3 fields do I need to fill in (bucket, region, access key, secret key, custom base URL)?',
@@ -59,6 +70,7 @@ const TAB_TUTORIALS: Record<Tab, string> = {
   'import':       'Walk me through the Settings Import tab. What file formats does it support, what data can I import (ingredients, recipes, menus?), and what are the steps in the import wizard?',
   'users':        'How does user management work? Explain the pending approval flow, roles, and brand partner scope — and what each status means (pending, active, disabled).',
   'roles':        'What are Roles in COGS Manager? Explain the three built-in roles (Admin, Operator, Viewer), how the permission matrix works (none/read/write per feature), and when I would create a custom role.',
+  'templates':    'What are Scope Templates? Explain how to save a user\'s scope as a reusable template, apply it to other users, and when this is useful (onboarding similar roles across markets).',
 }
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
@@ -92,6 +104,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
         {t === 'import'       && <ImportPage hideHeader />}
         {t === 'users'        && <UsersTab />}
         {t === 'roles'        && <RolesTab />}
+        {t === 'templates'    && <ScopeTemplatesTab />}
       </>
     )
   }
@@ -111,7 +124,7 @@ export default function SettingsPage({ embedded, initialTab }: { embedded?: bool
       <PageHeader
         title="Settings"
         subtitle="Units, price levels, currency and more"
-        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Currency, COGS Thresholds, and AI — and which should I configure first when setting up a new account?"
+        tutorialPrompt="Walk me through the Settings page. What are the tabs for — Base Units, Price Levels, Currency, COGS Calculation, and AI — and which should I configure first when setting up a new account?"
       />
 
       <div className="flex gap-1 px-6 pt-4 bg-surface border-b border-border overflow-x-auto">
@@ -470,8 +483,138 @@ function PriceLevelsTab() {
         />
       )}
 
+      {/* Per-country enablement matrix — lets admins hide specific price levels in specific markets */}
+      <div className="mt-10">
+        <CountryPriceLevelsMatrix />
+      </div>
+
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </>
+  )
+}
+
+// ── Country × Price-level enablement matrix ──────────────────────────────────
+// Lets an admin disable a specific price level for a specific country. Every
+// component that renders a country-scoped price list (Menus, Menu Engineer,
+// Shared pages, POS tester, dashboard charts) respects this by calling
+// GET /price-levels?country_id=X.
+
+type CplRow = {
+  country_id:       number
+  country_name:     string
+  price_level_id:   number
+  price_level_name: string
+  is_enabled:       boolean
+}
+
+function CountryPriceLevelsMatrix() {
+  const api = useApi()
+  const [rows, setRows]       = useState<CplRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [toast, setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true)
+      const data = await api.get('/country-price-levels') as CplRow[] | null
+      setRows(data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => { load() }, [load])
+
+  async function toggle(countryId: number, levelId: number, next: boolean) {
+    const key = `${countryId}-${levelId}`
+    setSavingKey(key)
+    // Optimistic update — revert if the server rejects.
+    const prev = rows
+    setRows(rows.map(r =>
+      r.country_id === countryId && r.price_level_id === levelId
+        ? { ...r, is_enabled: next }
+        : r
+    ))
+    try {
+      await api.put(`/country-price-levels/${countryId}/${levelId}`, { is_enabled: next })
+    } catch (err: any) {
+      setRows(prev)
+      setToast({ message: err?.message || 'Failed to update', type: 'error' })
+    } finally {
+      setSavingKey(null)
+    }
+  }
+
+  if (loading) return <Spinner />
+
+  if (rows.length === 0) {
+    return (
+      <div className="text-sm text-text-3 p-4 bg-surface-2 rounded border border-border">
+        Add a country and a price level first, then come back to toggle enablement.
+      </div>
+    )
+  }
+
+  // Pivot: unique countries down the rows, unique price levels across the columns.
+  const countries = Array.from(
+    new Map(rows.map(r => [r.country_id, { id: r.country_id, name: r.country_name }])).values()
+  )
+  const levels = Array.from(
+    new Map(rows.map(r => [r.price_level_id, { id: r.price_level_id, name: r.price_level_name }])).values()
+  )
+  const byKey = new Map(rows.map(r => [`${r.country_id}-${r.price_level_id}`, r.is_enabled]))
+
+  return (
+    <div>
+      <div className="mb-3">
+        <h3 className="text-sm font-bold text-text-1">Per-country enablement</h3>
+        <p className="text-xs text-text-3 mt-0.5">
+          Uncheck a box to hide that price level from menus, scenarios and POS in the selected country.
+          Existing prices are preserved — disabling simply hides the column until you re-enable it.
+        </p>
+      </div>
+
+      <div className="bg-surface rounded-lg border border-border overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-200 border-b border-gray-300">
+              <th className="text-left px-4 py-2.5 font-semibold text-text-2 sticky left-0 bg-gray-200">Country</th>
+              {levels.map(l => (
+                <th key={l.id} className="text-center px-4 py-2.5 font-semibold text-text-2 whitespace-nowrap">{l.name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {countries.map(c => (
+              <tr key={c.id} className="border-b border-border last:border-0 hover:bg-surface-2">
+                <td className="px-4 py-2 font-medium text-text-1 sticky left-0 bg-surface">{c.name}</td>
+                {levels.map(l => {
+                  const key = `${c.id}-${l.id}`
+                  const checked = byKey.get(key) ?? true
+                  const saving = savingKey === key
+                  return (
+                    <td key={l.id} className="px-4 py-2 text-center">
+                      <label className={`inline-flex items-center justify-center ${saving ? 'opacity-50' : 'cursor-pointer'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving}
+                          onChange={e => toggle(c.id, l.id, e.target.checked)}
+                          className="w-4 h-4 accent-accent"
+                        />
+                      </label>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
   )
 }
 
@@ -732,6 +875,16 @@ function ThresholdsTab() {
   const [excellent, setExcellent]   = useState(28)
   const [acceptable, setAcceptable] = useState(35)
   const [targetCogs, setTargetCogs] = useState('')
+  const [costingMethod, setCostingMethod] = useState<CostingMethod>('best')
+  // Modifier multiplier — when on, modifier-option costs in Menu Engineer
+  // / Shared view scale by the qty of an ingredient flagged as "× mod" on
+  // the underlying recipe. Default off so existing menus don't shift.
+  const [multiplierEnabled, setMultiplierEnabled] = useState(false)
+  // Modifier cost × min_select — when on, the modifier group cost summary
+  // is the per-pick avg multiplied by the group's min_select, reflecting
+  // the actual expected cost per portion. Default off — preserves the
+  // historical per-pick avg display.
+  const [modCostUsesMinSelect, setModCostUsesMinSelect] = useState(false)
 
   useEffect(() => {
     api.get('/settings')
@@ -741,6 +894,15 @@ function ThresholdsTab() {
           setAcceptable(s.cogs_thresholds.acceptable ?? 35)
         }
         if (s?.target_cogs != null) setTargetCogs(String(s.target_cogs))
+        if (s?.costing_method === 'average' || s?.costing_method === 'best') {
+          setCostingMethod(s.costing_method)
+        }
+        if (typeof (s as any)?.modifier_multiplier_enabled === 'boolean') {
+          setMultiplierEnabled((s as any).modifier_multiplier_enabled)
+        }
+        if (typeof s?.modifier_cost_uses_min_select === 'boolean') {
+          setModCostUsesMinSelect(s.modifier_cost_uses_min_select)
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -756,8 +918,11 @@ function ThresholdsTab() {
       await api.patch('/settings', {
         cogs_thresholds: { excellent, acceptable },
         target_cogs: targetCogs ? Number(targetCogs) : null,
+        costing_method: costingMethod,
+        modifier_multiplier_enabled: multiplierEnabled,
+        modifier_cost_uses_min_select: modCostUsesMinSelect,
       })
-      setToast({ message: 'Thresholds saved', type: 'success' })
+      setToast({ message: 'Saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
     } finally {
@@ -830,6 +995,127 @@ function ThresholdsTab() {
         />
         <p className="text-xs text-text-3 mt-1">Used for benchmark line on dashboard charts.</p>
       </Field>
+
+      {/* ── Recipe Costing Method ─────────────────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Recipe Costing Method</h2>
+        <p className="text-sm text-text-3">
+          How ingredient cost is resolved when an ingredient has <strong>no preferred vendor</strong> set for a market.
+          Preferred vendor quotes always take priority and are unaffected by this setting.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 border-b border-border cursor-pointer hover:bg-surface-2 ${costingMethod === 'best' ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="radio"
+            name="costing-method"
+            value="best"
+            checked={costingMethod === 'best'}
+            onChange={() => setCostingMethod('best')}
+            className="mt-1 accent-[#146A34]"
+          />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-text-1">Best price quote</span>
+              <span className="text-[10px] font-bold text-text-3 bg-surface-2 border border-border rounded px-1.5 py-0.5 uppercase tracking-wide">Default</span>
+            </div>
+            <p className="text-xs text-text-3 mt-0.5">Use the cheapest active quote in the market. Optimistic view — reflects best-case sourcing.</p>
+          </div>
+        </label>
+
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${costingMethod === 'average' ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="radio"
+            name="costing-method"
+            value="average"
+            checked={costingMethod === 'average'}
+            onChange={() => setCostingMethod('average')}
+            className="mt-1 accent-[#146A34]"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">Market amalgamated quote</span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Use the arithmetic mean of all active quotes in the market. Blended view —
+              useful when ingredients are sourced from multiple vendors and no single
+              vendor is clearly preferred.
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* ── Modifier Multiplier ──────────────────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Modifier Multiplier</h2>
+        <p className="text-sm text-text-3">
+          When on, modifier costs in Menu Engineer / Shared view scale by the qty of an ingredient flagged as
+          <strong className="font-semibold"> × mod</strong> on the underlying recipe. Example: a Bone-In 6 recipe
+          with the Bone-In Wing line flagged (qty 6) → attached Flavour Choice modifier costs are multiplied by 6
+          to reflect 6× sauce per portion.
+        </p>
+        <p className="text-xs text-text-3 mt-2">
+          Affects displayed COGS% in Menu Engineer / Shared view, kiosk, and combo cost embedding. Does <em>not</em> change
+          stored prices, stock movements, or anything else. Default off — menus that haven't flagged any ingredient
+          see no change either way.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${multiplierEnabled ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="checkbox"
+            checked={multiplierEnabled}
+            onChange={e => setMultiplierEnabled(e.target.checked)}
+            className="mt-1 accent-[#146A34] cursor-pointer"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">
+              Apply modifier multiplier when computing modifier costs
+            </span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Set the flag on individual recipe ingredient rows under <strong>Recipes → ingredient table → × mod</strong>.
+              One flag per recipe. Items can also be marked while this toggle is off — they only take effect once it's on.
+            </p>
+          </div>
+        </label>
+      </div>
+
+      {/* ── Modifier cost × number of choices ─────────────────────────────── */}
+      <div className="mt-8 mb-2">
+        <h2 className="text-base font-bold text-text-1 mb-1">Modifier Cost × Number of Choices</h2>
+        <p className="text-sm text-text-3">
+          By default the displayed cost of a modifier group is the per-pick <em>average</em> (e.g.
+          <strong> avg ₹1.03</strong> for a DIPS group with three options). When this toggle is on, the displayed
+          cost is multiplied by the group's <strong>Min select</strong> so it reflects the actual expected
+          cost per portion (e.g. <strong>₹2.06</strong> for a "choose 2" group).
+        </p>
+        <p className="text-xs text-text-3 mt-2">
+          Min 1 / Max 1 stays at 1×, Min 2 / Max 2 becomes 2×, Min 1 / Max 2 stays at 1× (we use the
+          guaranteed minimum, not an optimistic range). Affects modifier group and combo-step cost summaries
+          everywhere they're rendered (Menu Builder tab, Combos tab, Menu Engineer). Default off — turning
+          it on does not change stored prices or COGS calculations, only the displayed cost summary.
+        </p>
+      </div>
+
+      <div className="bg-surface border border-border rounded-xl overflow-hidden mb-6">
+        <label className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 ${modCostUsesMinSelect ? 'bg-accent-dim/40' : ''}`}>
+          <input
+            type="checkbox"
+            checked={modCostUsesMinSelect}
+            onChange={e => setModCostUsesMinSelect(e.target.checked)}
+            className="mt-1 accent-[#146A34] cursor-pointer"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-text-1">
+              Multiply modifier group cost by Min select
+            </span>
+            <p className="text-xs text-text-3 mt-0.5">
+              Headers in the Menu Builder / Combos / Menu Engineer change from "avg ₹X" to "cost ₹X" with the
+              total reflected. The detailed range "₹min–₹max" is preserved underneath when min ≠ max.
+            </p>
+          </div>
+        </label>
+      </div>
 
       <div className="flex justify-end pt-2">
         <button className="btn-primary px-5 py-2 text-sm" onClick={handleSave} disabled={saving}>
@@ -943,10 +1229,26 @@ function TestDataTab() {
     <div className="max-w-2xl">
       <div className="mb-6">
         <h2 className="text-base font-bold text-text-1 mb-1">Test Data</h2>
-        <p className="text-sm text-text-3">
+        <p className="text-sm text-text-3 mb-3">
           Load a full set of realistic dummy data to explore and test the app, or wipe the database to start fresh.
           All operations run inside a transaction and roll back on error.
         </p>
+        {/* Destructive-action warning — every button on this tab wipes the
+            entire database before doing anything else. Loud red banner on
+            top so it can't be missed. */}
+        <div className="border-2 border-red-500 bg-red-50 rounded-lg px-4 py-3 flex items-start gap-3">
+          <svg className="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div className="text-sm">
+            <p className="font-bold text-red-700">⚠ Destructive actions on this page</p>
+            <p className="text-red-700 mt-0.5">
+              Every button below <strong>wipes the entire database</strong> before doing anything else.
+              You will lose all production data — users, recipes, menus, scenarios, audit log, everything.
+              Confirmation requires typing today's date in <code className="font-mono bg-red-100 px-1 rounded">ddmmyyyy</code> format.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Load Test Data card */}
@@ -1174,6 +1476,12 @@ interface AiKeyStatus {
   claude_code_key_set: boolean
   github_pat_set:      boolean
   github_repo_set:     boolean
+  jira_base_url_set:   boolean
+  jira_email_set:      boolean
+  jira_token_set:      boolean
+  jira_project_set:    boolean
+  mapbox_token_set:    boolean
+  openai_key_set:      boolean
 }
 
 interface UsageSummary {
@@ -1202,12 +1510,50 @@ interface StorageCfg {
   s3_base_url?:  string
 }
 
+function FixLocalUrlsButton() {
+  const api = useApi()
+  const [running, setRunning] = useState(false)
+  const [result,  setResult]  = useState<{ fixed: number; total: number } | null>(null)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null)
+    try {
+      const data = await api.post('/media/fix-local-urls', {})
+      setResult(data)
+    } catch (e: any) {
+      setError(e.message || 'Request failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <button className="btn-outline px-4 text-sm" onClick={run} disabled={running}>
+        {running ? 'Fixing…' : '🔧 Fix Image URLs'}
+      </button>
+      {result && (
+        <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
+          ✅ Fixed {result.fixed} of {result.total} local items
+        </span>
+      )}
+      {error && (
+        <span className="text-xs font-medium text-red-600">{error}</span>
+      )}
+    </div>
+  )
+}
+
 function StorageTab() {
   const api                 = useApi()
   const [loading, setLoading] = useState(true)
   const [saving,  setSaving]  = useState(false)
   const [toast,   setToast]   = useState<{ msg: string; type?: 'success' | 'error' } | null>(null)
   const [cfg,     setCfg]     = useState<StorageCfg>({ type: 'local' })
+  const [migrating,   setMigrating]   = useState(false)
+  const [migrateLog,  setMigrateLog]  = useState<string[]>([])
+  const [migrateDone, setMigrateDone] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
 
   useEffect(() => {
@@ -1231,6 +1577,45 @@ function StorageTab() {
 
   const set = (k: keyof StorageCfg) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setCfg(prev => ({ ...prev, [k]: e.target.value } as StorageCfg))
+
+  const startMigration = async () => {
+    setMigrating(true)
+    setMigrateLog([])
+    setMigrateDone(false)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/media/migrate-to-s3`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.body) { setMigrateLog(['No response stream']); return }
+      const reader = res.body.getReader()
+      const dec    = new TextDecoder()
+      let buf      = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue
+          try {
+            const d = JSON.parse(line.slice(5).trim())
+            if (d.complete)    { setMigrateDone(true); setMigrateLog(p => [...p, `✅ Migration complete — ${d.migrated} items migrated`]) }
+            else if (d.error)       setMigrateLog(p => [...p, `❌ ${d.error}`])
+            else if (d.error_item)  setMigrateLog(p => [...p, `⚠ Item ${d.error_item}: ${d.reason}`])
+            else if (d.skip)        setMigrateLog(p => [...p, `⏭ Item ${d.skip} skipped: ${d.reason}`])
+            else if (d.done != null) setMigrateLog(p => [...p, `[${d.done}/${d.total}] ${d.filename}`])
+            else if (d.message)     setMigrateLog(p => [...p, d.message])
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+    } catch (e: unknown) {
+      setMigrateLog(p => [...p, `Error: ${e instanceof Error ? e.message : String(e)}`])
+    } finally {
+      setMigrating(false)
+    }
+  }
 
   if (loading) return <Spinner />
 
@@ -1318,6 +1703,46 @@ function StorageTab() {
       </button>
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Fix-local-URLs — one-shot migration for images stored with old absolute URLs */}
+      <div className="mt-6 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
+        <h4 className="font-semibold text-sm mb-1" style={{ color: 'var(--text-1)' }}>Fix Image URLs</h4>
+        <p className="text-xs mb-3" style={{ color: 'var(--text-3)' }}>
+          If images in the Media Library show as broken (e.g. after a domain change), click this to rewrite
+          all locally-stored image paths to the current format. Safe to run multiple times.
+        </p>
+        <FixLocalUrlsButton />
+      </div>
+
+      {cfg.type === 's3' && cfg.s3_bucket && (
+        <div className="mt-6 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
+          <h4 className="font-semibold text-sm mb-2" style={{ color: 'var(--text-1)' }}>Migrate existing files to S3</h4>
+          <p className="text-xs mb-3" style={{ color: 'var(--text-3)' }}>
+            Moves all locally-stored media library items to S3. New uploads already go to S3 once the settings above are saved.
+            This is a one-time operation for existing files.
+          </p>
+          <button
+            onClick={startMigration}
+            disabled={migrating}
+            className="btn-outline px-4 text-sm"
+          >
+            {migrating ? '⏳ Migrating…' : '☁ Migrate local files → S3'}
+          </button>
+          {migrateLog.length > 0 && (
+            <div
+              className="mt-3 max-h-40 overflow-y-auto rounded-lg p-3 font-mono text-xs space-y-0.5"
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text-2)' }}
+            >
+              {migrateLog.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+          )}
+          {migrateDone && (
+            <p className="mt-2 text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+              All done! Refresh the page to see updated storage indicators.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1957,16 +2382,47 @@ function AiTab() {
   const api = useApi()
   const [loading,      setLoading]      = useState(true)
   const [saving,       setSaving]       = useState(false)
-  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false })
+  const [status,       setStatus]       = useState<AiKeyStatus>({ anthropic_key_set: false, voyage_key_set: false, brave_key_set: false, claude_code_key_set: false, github_pat_set: false, github_repo_set: false, jira_base_url_set: false, jira_email_set: false, jira_token_set: false, jira_project_set: false, mapbox_token_set: false, openai_key_set: false })
   const [anthropic,    setAnthropic]    = useState('')
   const [voyage,       setVoyage]       = useState('')
   const [brave,        setBrave]        = useState('')
   const [githubPat,    setGithubPat]    = useState('')
   const [githubRepo,   setGithubRepo]   = useState('')
+  const [jiraUrl,      setJiraUrl]      = useState('')
+  const [jiraEmail,    setJiraEmail]    = useState('')
+  const [jiraToken,    setJiraToken]    = useState('')
+  const [jiraProject,  setJiraProject]  = useState('')
+  const [jiraTesting,  setJiraTesting]  = useState(false)
+  const [jiraTestResult, setJiraTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [mapboxToken,  setMapboxToken]  = useState('')
+  const [openaiKey,    setOpenaiKey]    = useState('')
   const [conciseMode,      setConciseMode]      = useState(false)
+  // Operator directives — free-form admin instructions loaded into Pepper's
+  // system prompt on every session ("never give explicit advice", "stay in
+  // COGS scope", etc.). Stored on mcogs_settings.data.pepper_directives.
+  const [directives,        setDirectives]        = useState('')
+  const [directivesSaved,   setDirectivesSaved]   = useState('')   // last persisted value, for dirty check
+  const [savingDirectives,  setSavingDirectives]  = useState(false)
+  // Auto-derived directives — generated nightly by the deriveDirectives.js
+  // cron job from chat history + pinned notes patterns. Read-only here; admin
+  // can re-run on demand or clear them entirely.
+  const [derivedDirectives, setDerivedDirectives] = useState<{
+    directives: { text: string; evidence_count: number; confidence: 'low' | 'medium' | 'high' }[];
+    derived_at: string | null;
+    stats: { conversations_scanned?: number; notes_scanned?: number; candidates_proposed?: number; candidates_kept?: number; distinct_users_chat?: number; distinct_users_notes?: number } | null;
+  }>({ directives: [], derived_at: null, stats: null })
+  const [runningDerivation, setRunningDerivation] = useState(false)
+  const [clearingDerived,   setClearingDerived]   = useState(false)
+  const [confirmClearDerived, setConfirmClearDerived] = useState(false)
   const [savingMode,       setSavingMode]       = useState(false)
   const [monthlyTokenLimit,  setMonthlyTokenLimit]  = useState<string>('0')
   const [savingLimit,        setSavingLimit]        = useState(false)
+  // BACK-2564 — configurable AI tier model IDs (default + premium).
+  const [modelDefault,      setModelDefault]      = useState<string>('claude-haiku-4-5-20251001')
+  const [modelPremium,      setModelPremium]      = useState<string>('claude-opus-4-7')
+  const [modelDefaultSaved, setModelDefaultSaved] = useState<string>('claude-haiku-4-5-20251001')
+  const [modelPremiumSaved, setModelPremiumSaved] = useState<string>('claude-opus-4-7')
+  const [savingModels,      setSavingModels]      = useState(false)
   const [claudeCodeKey,    setClaudeCodeKey]    = useState<string | null>(null)
   const [usage,            setUsage]            = useState<UsageData | null>(null)
   const [usageLoading,     setUsageLoading]     = useState(false)
@@ -1980,12 +2436,26 @@ function AiTab() {
       api.get('/ai-config'),
       api.get('/settings'),
       api.get('/ai-config/claude-code-key'),
+      api.get('/ai-config/derived-directives').catch(() => ({ directives: [], derived_at: null, stats: null })),
     ])
-      .then(([s, settings, keyData]) => {
+      .then(([s, settings, keyData, derived]) => {
         setStatus(s)
         setConciseMode(settings?.ai_concise_mode === true)
         setMonthlyTokenLimit(String(settings?.ai_monthly_token_limit ?? '0'))
+        const dir = typeof (settings as any)?.pepper_directives === 'string' ? (settings as any).pepper_directives : ''
+        setDirectives(dir)
+        setDirectivesSaved(dir)
         setClaudeCodeKey(keyData?.key ?? null)
+        const aiModels = (settings as { ai_models?: { default?: string; premium?: string } } | null)?.ai_models || {}
+        const md = aiModels.default || 'claude-haiku-4-5-20251001'
+        const mp = aiModels.premium || 'claude-opus-4-7'
+        setModelDefault(md); setModelDefaultSaved(md)
+        setModelPremium(mp); setModelPremiumSaved(mp)
+        setDerivedDirectives({
+          directives: Array.isArray(derived?.directives) ? derived.directives : [],
+          derived_at: derived?.derived_at || null,
+          stats: derived?.stats || null,
+        })
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -2027,6 +2497,93 @@ function AiTab() {
     }
   }
 
+  async function handleSaveModels() {
+    const md = modelDefault.trim()
+    const mp = modelPremium.trim()
+    if (!md.startsWith('claude-') || !mp.startsWith('claude-')) {
+      setToast({ message: 'Model IDs must look like Anthropic model IDs (claude-…)', type: 'error' })
+      return
+    }
+    setSavingModels(true)
+    try {
+      await api.patch('/settings', { ai_models: { default: md, premium: mp } })
+      setModelDefaultSaved(md)
+      setModelPremiumSaved(mp)
+      setToast({ message: 'AI tier models saved — applies to next chat session', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingModels(false)
+    }
+  }
+
+  async function handleSaveDirectives() {
+    setSavingDirectives(true)
+    try {
+      await api.patch('/settings', { pepper_directives: directives })
+      setDirectivesSaved(directives)
+      setToast({ message: directives.trim() ? 'Directives saved — applies to next chat session' : 'Directives cleared', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to save', type: 'error' })
+    } finally {
+      setSavingDirectives(false)
+    }
+  }
+
+  async function handleRunDerivation() {
+    setRunningDerivation(true)
+    try {
+      const result = await api.post('/ai-config/derived-directives/run', {})
+      if (result?.skipped) {
+        const reason = result.reason === 'no_api_key'   ? 'Anthropic API key not configured.'
+                     : result.reason === 'empty_corpus' ? 'No chat history or pinned notes to analyse yet.'
+                     : result.reason === 'parse_error'  ? 'AI response could not be parsed — try again.'
+                     : `Skipped: ${result.reason || 'unknown reason'}`
+        setToast({ message: reason, type: 'error' })
+      } else {
+        setDerivedDirectives({
+          directives: Array.isArray(result?.directives) ? result.directives : [],
+          derived_at: result?.derived_at || null,
+          stats: result?.stats || null,
+        })
+        setToast({ message: `Derived ${result?.stats?.candidates_kept ?? 0} directive(s) from ${result?.stats?.conversations_scanned ?? 0} conversations`, type: 'success' })
+      }
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to run derivation', type: 'error' })
+    } finally {
+      setRunningDerivation(false)
+    }
+  }
+
+  async function handleClearDerived() {
+    setConfirmClearDerived(false)
+    setClearingDerived(true)
+    try {
+      await api.delete('/ai-config/derived-directives')
+      setDerivedDirectives({ directives: [], derived_at: null, stats: null })
+      setToast({ message: 'Derived directives cleared', type: 'success' })
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to clear', type: 'error' })
+    } finally {
+      setClearingDerived(false)
+    }
+  }
+
+  function formatRelativeTime(iso: string | null): string {
+    if (!iso) return 'never'
+    const then = new Date(iso).getTime()
+    const now  = Date.now()
+    const diff = Math.max(0, now - then)
+    const min  = Math.floor(diff / 60000)
+    if (min < 1)    return 'just now'
+    if (min < 60)   return `${min}m ago`
+    const h = Math.floor(min / 60)
+    if (h < 24)     return `${h}h ago`
+    const d = Math.floor(h / 24)
+    if (d < 30)     return `${d}d ago`
+    return new Date(iso).toLocaleDateString()
+  }
+
   useEffect(() => { load() }, [load])
 
   async function handleSave() {
@@ -2036,6 +2593,12 @@ function AiTab() {
     if (brave.trim())      payload.BRAVE_SEARCH_API_KEY = brave.trim()
     if (githubPat.trim())  payload.GITHUB_PAT           = githubPat.trim()
     if (githubRepo.trim()) payload.GITHUB_REPO          = githubRepo.trim()
+    if (jiraUrl.trim())    payload.JIRA_BASE_URL        = jiraUrl.trim().replace(/\/+$/, '')
+    if (jiraEmail.trim())  payload.JIRA_EMAIL           = jiraEmail.trim()
+    if (jiraToken.trim())  payload.JIRA_API_TOKEN       = jiraToken.trim()
+    if (jiraProject.trim()) payload.JIRA_PROJECT_KEY    = jiraProject.trim().toUpperCase()
+    if (mapboxToken.trim()) payload.MAPBOX_ACCESS_TOKEN = mapboxToken.trim()
+    if (openaiKey.trim())   payload.OPENAI_API_KEY      = openaiKey.trim()
     if (!Object.keys(payload).length) return
     setSaving(true)
     try {
@@ -2046,6 +2609,7 @@ function AiTab() {
       setBrave('')
       setGithubPat('')
       setGithubRepo('')
+      setMapboxToken('')
       setToast({ message: 'Keys saved', type: 'success' })
     } catch (err: any) {
       setToast({ message: err.message || 'Save failed', type: 'error' })
@@ -2054,7 +2618,7 @@ function AiTab() {
     }
   }
 
-  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO') {
+  async function handleClear(key: 'ANTHROPIC_API_KEY' | 'VOYAGE_API_KEY' | 'BRAVE_SEARCH_API_KEY' | 'GITHUB_PAT' | 'GITHUB_REPO' | 'JIRA_BASE_URL' | 'JIRA_EMAIL' | 'JIRA_API_TOKEN' | 'JIRA_PROJECT_KEY' | 'MAPBOX_ACCESS_TOKEN' | 'OPENAI_API_KEY') {
     try {
       const updated: AiKeyStatus = await api.delete(`/ai-config/${key}`)
       setStatus(updated)
@@ -2096,7 +2660,16 @@ function AiTab() {
         </p>
       </div>
 
-      {/* Status cards */}
+      {/* ── Live integration health ──────────────────────────────────────────
+          Pings each configured integration with a cheap call (cached 60 s)
+          and reports reachability + latency. Same component is used by the
+          dashboard widget. */}
+      <div className="mb-6">
+        <h3 className="text-sm font-bold text-text-1 mb-2">Live status</h3>
+        <IntegrationStatusList cols={2} compact pollMs={60_000} />
+      </div>
+
+      {/* Static configured/not-configured cards (legacy summary) */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { label: 'Anthropic (Claude)', set: status.anthropic_key_set, key: 'ANTHROPIC_API_KEY'    as const },
@@ -2199,11 +2772,163 @@ function AiTab() {
         </Field>
       </div>
 
+      {/* ── Jira Integration ── */}
+      <div className="mt-6 pt-5 border-t border-border">
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="text-base font-bold text-text-1">Jira Integration</h2>
+          <span className={`w-2 h-2 rounded-full ${status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set ? 'bg-green-500' : 'bg-gray-300'}`} />
+          <span className="text-[10px] text-text-3">
+            {status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set ? 'Configured' : 'Not configured'}
+          </span>
+        </div>
+        <p className="text-sm text-text-3 mb-4">Sync bugs and backlog items to a Jira Cloud project. Requires a Jira API token from <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">id.atlassian.com</a>.</p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Jira Base URL">
+            <input
+              type="text"
+              className="input w-full font-mono text-sm"
+              value={jiraUrl}
+              onChange={e => setJiraUrl(e.target.value)}
+              placeholder={status.jira_base_url_set ? '(configured — leave blank to keep)' : 'https://yourteam.atlassian.net'}
+              autoComplete="off"
+            />
+            {status.jira_base_url_set && (
+              <button onClick={() => handleClear('JIRA_BASE_URL')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira Project Key">
+            <input
+              type="text"
+              className="input w-full font-mono text-sm uppercase"
+              value={jiraProject}
+              onChange={e => setJiraProject(e.target.value)}
+              placeholder={status.jira_project_set ? '(configured — leave blank to keep)' : 'COGS'}
+              autoComplete="off"
+            />
+            {status.jira_project_set && (
+              <button onClick={() => handleClear('JIRA_PROJECT_KEY')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira Account Email">
+            <input
+              type="email"
+              className="input w-full text-sm"
+              value={jiraEmail}
+              onChange={e => setJiraEmail(e.target.value)}
+              placeholder={status.jira_email_set ? '(configured — leave blank to keep)' : 'you@company.com'}
+              autoComplete="off"
+            />
+            {status.jira_email_set && (
+              <button onClick={() => handleClear('JIRA_EMAIL')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+
+          <Field label="Jira API Token">
+            <input
+              type="password"
+              className="input w-full font-mono text-sm"
+              value={jiraToken}
+              onChange={e => setJiraToken(e.target.value)}
+              placeholder={status.jira_token_set ? '••••••••  (leave blank to keep existing)' : 'ATATT3x…'}
+              autoComplete="off"
+            />
+            {status.jira_token_set && (
+              <button onClick={() => handleClear('JIRA_API_TOKEN')} className="text-[10px] text-red-500 hover:underline mt-0.5">Clear</button>
+            )}
+          </Field>
+        </div>
+
+        {status.jira_base_url_set && status.jira_email_set && status.jira_token_set && status.jira_project_set && (
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              className="btn-outline text-xs px-3 py-1.5"
+              onClick={async () => {
+                setJiraTesting(true)
+                setJiraTestResult(null)
+                try {
+                  const r = await api.post('/jira/test')
+                  setJiraTestResult({ ok: true, message: `Connected as ${r.displayName} (${r.emailAddress})` })
+                } catch (err: any) {
+                  setJiraTestResult({ ok: false, message: err?.body?.error?.message || err?.message || 'Connection failed' })
+                } finally { setJiraTesting(false) }
+              }}
+              disabled={jiraTesting}
+            >
+              {jiraTesting ? 'Testing…' : 'Test Connection'}
+            </button>
+            {jiraTestResult && (
+              <span className={`text-xs ${jiraTestResult.ok ? 'text-green-600' : 'text-red-600'}`}>
+                {jiraTestResult.ok ? '✓' : '✗'} {jiraTestResult.message}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Mapbox Integration ── */}
+      <div className="mt-6 pt-5 border-t border-border">
+        <h3 className="text-sm font-semibold text-text-1 mb-1 flex items-center gap-2">
+          <span>🗺️</span> Mapbox Integration
+        </h3>
+        <p className="text-xs text-text-3 mb-3">
+          Provides the tile + vector-boundary data for the Dashboard map widgets. Use a <strong>PUBLIC</strong> access token (starts with <code className="text-[10px] bg-surface-2 px-1 rounded">pk.</code>) from <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">account.mapbox.com</a>. Restrict the token to your production domain in the Mapbox dashboard for safety — it gets embedded in the browser by design.
+        </p>
+        <Field label="Public access token">
+          <input
+            type="password"
+            className="input w-full"
+            value={mapboxToken}
+            onChange={e => setMapboxToken(e.target.value)}
+            placeholder={status.mapbox_token_set ? '••••••••  (leave blank to keep existing)' : 'pk.eyJ1Ij…'}
+            autoComplete="off"
+          />
+          <div className="text-[10px] text-text-3 mt-0.5 flex items-center gap-2">
+            {status.mapbox_token_set
+              ? <span className="text-green-600">✓ Configured — maps use Mapbox tiles</span>
+              : <span>Not set — map widgets show a "configure token" prompt</span>}
+            {status.mapbox_token_set && (
+              <button onClick={() => handleClear('MAPBOX_ACCESS_TOKEN')} className="text-red-500 hover:underline">Clear</button>
+            )}
+          </div>
+        </Field>
+      </div>
+
+      {/* ── OpenAI — voice transcription fallback ───────────────────────────── */}
+      <div className="card p-5 mt-5">
+        <h3 className="text-base font-bold text-text-1 mb-2 flex items-center gap-2">
+          <span>🎙️</span> OpenAI Whisper (voice transcription)
+        </h3>
+        <p className="text-xs text-text-3 mb-3">
+          Optional. Only used when Pepper's mic button is pressed <em>on Safari or iOS</em> where the browser's built-in SpeechRecognition isn't available. Chromium-based browsers (Chrome, Edge, Samsung Internet) transcribe for free on-device and never hit this endpoint. Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">platform.openai.com</a>. Whisper is billed per minute of audio — light restaurant use typically costs a few $ / month.
+        </p>
+        <Field label="OpenAI API key">
+          <input
+            type="password"
+            className="input w-full"
+            value={openaiKey}
+            onChange={e => setOpenaiKey(e.target.value)}
+            placeholder={status.openai_key_set ? '••••••••  (leave blank to keep existing)' : 'sk-…'}
+            autoComplete="off"
+          />
+          <div className="text-[10px] text-text-3 mt-0.5 flex items-center gap-2">
+            {status.openai_key_set
+              ? <span className="text-green-600">✓ Configured — Safari / iOS voice input works</span>
+              : <span>Not set — Safari / iOS users see "Voice unavailable"; Chromium users still work</span>}
+            {status.openai_key_set && (
+              <button onClick={() => handleClear('OPENAI_API_KEY')} className="text-red-500 hover:underline">Clear</button>
+            )}
+          </div>
+        </Field>
+      </div>
+
       <div className="flex justify-end pt-4">
         <button
           className="btn-primary px-5 py-2 text-sm"
           onClick={handleSave}
-          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim())}
+          disabled={saving || (!anthropic.trim() && !voyage.trim() && !brave.trim() && !githubPat.trim() && !githubRepo.trim() && !jiraUrl.trim() && !jiraEmail.trim() && !jiraToken.trim() && !jiraProject.trim() && !mapboxToken.trim() && !openaiKey.trim())}
         >
           {saving ? 'Saving…' : 'Save Keys'}
         </button>
@@ -2237,6 +2962,189 @@ function AiTab() {
               }`}
             />
           </button>
+        </div>
+      </div>
+
+      {/* ── Operator directives ──────────────────────────────────────────────
+          Free-form admin instructions that get loaded into Pepper's system
+          prompt on every session. Useful for organisation-wide policy:
+          scope limiting, content policies, response style guardrails, etc.
+          The text lives on mcogs_settings.data.pepper_directives. */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">Pepper Directives</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Free-text instructions loaded into <strong>every</strong> Pepper session. Use this for organisation-wide
+          policy — scope limits, response style, content rules. Operator-set directives override Pepper's defaults
+          where they conflict, except for safety-critical rules (accuracy, write-confirmation, RBAC) which always apply.
+        </p>
+
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4 space-y-3">
+          <textarea
+            className="input w-full text-sm font-mono leading-relaxed"
+            rows={8}
+            placeholder={`Examples — enter one rule per line:\n\n- Never provide information outside the scope of COGS Manager.\n- Under no circumstances produce explicit or off-colour responses.\n- Always cite the source recipe / menu when quoting a price.\n- When asked to delete data, refuse and direct the user to a developer.`}
+            value={directives}
+            onChange={e => setDirectives(e.target.value)}
+            spellCheck
+          />
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-text-3">
+              {directives.length === 0
+                ? <>No directives set — Pepper uses its built-in defaults.</>
+                : <>{directives.length.toLocaleString()} characters · loaded into the system prompt on next session.</>}
+              {directives !== directivesSaved && (
+                <span className="ml-2 inline-flex items-center text-amber-600 font-medium">● unsaved changes</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {directives !== directivesSaved && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-sm"
+                  onClick={() => setDirectives(directivesSaved)}
+                  disabled={savingDirectives}
+                >Discard</button>
+              )}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm"
+                onClick={handleSaveDirectives}
+                disabled={savingDirectives || directives === directivesSaved}
+              >{savingDirectives ? 'Saving…' : 'Save directives'}</button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Auto-derived directives ──────────────────────────────────────
+            Read-only view of directives the nightly job has inferred from
+            chat history + pinned notes. Admin can re-run on demand or clear
+            the set entirely. RBAC-bypass / user-specific patterns are
+            filtered server-side at write time. */}
+        <div className="mt-6 rounded-xl border border-border bg-surface-2/30 px-4 py-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-1">Auto-derived directives</h3>
+              <p className="text-xs text-text-3 mt-0.5">
+                Inferred nightly from chat history + pinned notes. Loaded into the system prompt alongside your manual directives.
+                User-specific or RBAC-bypass patterns are filtered out automatically.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                className="btn-ghost px-3 py-1.5 text-xs"
+                onClick={handleRunDerivation}
+                disabled={runningDerivation || clearingDerived}
+                title="Re-run the derivation now instead of waiting for the nightly cron"
+              >{runningDerivation ? 'Running…' : 'Run now'}</button>
+              {derivedDirectives.directives.length > 0 && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50"
+                  onClick={() => setConfirmClearDerived(true)}
+                  disabled={clearingDerived || runningDerivation}
+                >{clearingDerived ? 'Clearing…' : 'Clear'}</button>
+              )}
+            </div>
+          </div>
+
+          {derivedDirectives.directives.length === 0 ? (
+            <div className="text-xs text-text-3 italic py-2">
+              {derivedDirectives.derived_at
+                ? <>No directives derived on the last run ({formatRelativeTime(derivedDirectives.derived_at)}). Corpus may be too thin or all candidates failed safety filtering.</>
+                : <>Has not run yet. Click <strong>Run now</strong> or wait for the 02:30 UTC nightly job.</>}
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {derivedDirectives.directives.map((d, idx) => (
+                <li key={idx} className="flex items-start gap-2 text-sm text-text-1 bg-surface rounded-lg border border-border px-3 py-2">
+                  <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+                    d.confidence === 'high'   ? 'bg-emerald-100 text-emerald-700' :
+                    d.confidence === 'medium' ? 'bg-amber-100  text-amber-700'  :
+                                                'bg-slate-100  text-slate-600'
+                  }`}>{d.confidence}</span>
+                  <span className="flex-1">{d.text}</span>
+                  <span className="shrink-0 text-[11px] text-text-3 font-mono">{d.evidence_count}× users</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {derivedDirectives.derived_at && (
+            <div className="mt-3 pt-3 border-t border-border text-[11px] text-text-3 flex items-center justify-between">
+              <span>Last derived <strong>{formatRelativeTime(derivedDirectives.derived_at)}</strong></span>
+              {derivedDirectives.stats && (
+                <span className="font-mono">
+                  {derivedDirectives.stats.conversations_scanned ?? 0} chats · {derivedDirectives.stats.notes_scanned ?? 0} notes · {derivedDirectives.stats.candidates_kept ?? 0}/{derivedDirectives.stats.candidates_proposed ?? 0} kept
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {confirmClearDerived && (
+        <ConfirmDialog
+          message="Clear auto-derived directives? They will regenerate on the next nightly run (or when you click Run now). Your manually-set directives are unaffected."
+          onConfirm={handleClearDerived}
+          onCancel={() => setConfirmClearDerived(false)}
+          danger
+        />
+      )}
+
+      {/* ── AI Model Tiers (BACK-2564) ──────────────────────────────────────
+          Two configurable tiers — default (cheap) and premium (newest). Tier
+          IDs are stored on mcogs_settings.data.ai_models so the deployment
+          owner can promote to whichever Anthropic flagship is current
+          without a code deploy. Per-user access to the premium tier is
+          granted from Configuration → Users & Roles. */}
+      <div className="mt-8 pt-6 border-t border-border">
+        <h2 className="text-base font-bold text-text-1 mb-1">AI Model Tiers</h2>
+        <p className="text-sm text-text-3 mb-4">
+          Pepper supports two model tiers. Users without premium access only see the default model. Promote to a newer Anthropic model here when one ships — no code deploy needed.
+        </p>
+        <div className="rounded-xl border border-border bg-surface-2/50 px-4 py-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-text-2 mb-1.5">Default tier (cheap, fast)</label>
+              <input
+                className="input w-full font-mono text-sm"
+                value={modelDefault}
+                onChange={e => setModelDefault(e.target.value)}
+                placeholder="claude-haiku-4-5-20251001"
+              />
+              <p className="text-[11px] text-text-3 mt-1">Used for every user. Burns the monthly token cap at the lowest rate.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-text-2 mb-1.5">Premium tier (newest, smart)</label>
+              <input
+                className="input w-full font-mono text-sm"
+                value={modelPremium}
+                onChange={e => setModelPremium(e.target.value)}
+                placeholder="claude-opus-4-7"
+              />
+              <p className="text-[11px] text-text-3 mt-1">Granted per-user via the AI Premium toggle in Users & Roles. ~5× cost per token.</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div className="text-xs text-text-3">
+              {modelDefault !== modelDefaultSaved || modelPremium !== modelPremiumSaved ? (
+                <span className="text-amber-600 font-medium">● unsaved changes</span>
+              ) : (
+                <>Saved. Applies to the next chat session each user opens.</>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {(modelDefault !== modelDefaultSaved || modelPremium !== modelPremiumSaved) && (
+                <button
+                  className="btn-ghost px-3 py-1.5 text-sm"
+                  onClick={() => { setModelDefault(modelDefaultSaved); setModelPremium(modelPremiumSaved) }}
+                  disabled={savingModels}
+                >Discard</button>
+              )}
+              <button
+                className="btn-primary px-4 py-1.5 text-sm"
+                onClick={handleSaveModels}
+                disabled={savingModels || (modelDefault === modelDefaultSaved && modelPremium === modelPremiumSaved)}
+              >{savingModels ? 'Saving…' : 'Save tier models'}</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2500,9 +3408,22 @@ interface AppUser {
   role_id:       number | null
   role_name:     string | null
   is_dev:        boolean
-  brand_partners: { id: number; name: string }[]
+  ai_premium_access: boolean
+  /** BACK-2364 — which IdP this user signed up through. Defaults to 'auth0' on legacy rows. */
+  auth_provider?: 'auth0' | 'cognito'
+  scope: ScopeRow[]
   created_at:    string
   last_login_at: string | null
+}
+
+interface ScopeRow {
+  id?:         number
+  scope_type:  'brand_partner' | 'country'
+  scope_id:    number
+  scope_name?: string | null
+  access_mode: 'grant' | 'deny'
+  role_id:     number | null
+  role_name?:  string | null
 }
 
 interface Role {
@@ -2514,8 +3435,15 @@ interface Role {
 }
 
 interface BrandPartner {
-  id:   number
-  name: string
+  id:         number
+  name:       string
+  countries?: { id: number; name: string }[]
+}
+
+interface CountryRef {
+  id:                number
+  name:              string
+  brand_partner_id?: number | null
 }
 
 const STATUS_LABELS: Record<AppUser['status'], string> = {
@@ -2536,27 +3464,31 @@ function UsersTab() {
   const [users, setUsers]   = useState<AppUser[]>([])
   const [roles, setRoles]   = useState<Role[]>([])
   const [bps,   setBps]     = useState<BrandPartner[]>([])
+  const [countries, setCountries] = useState<CountryRef[]>([])
   const [loading, setLoading] = useState(true)
 
   const [editing,    setEditing]    = useState<AppUser | null>(null)
   const [editRoleId, setEditRoleId] = useState<number | null>(null)
-  const [editBpIds,  setEditBpIds]  = useState<number[]>([])
+  const [editScope,  setEditScope]  = useState<ScopeRow[]>([])
   const [saving, setSaving] = useState(false)
 
   const [confirming, setConfirming] = useState<{ user: AppUser; action: 'disable' | 'enable' | 'delete' } | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [u, r, b] = await Promise.all([
+      const [u, r, b, c] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
         api.get('/brand-partners'),
+        api.get('/countries'),
       ])
       setUsers(u  || [])
       setRoles(r  || [])
       setBps(b    || [])
+      setCountries(c || [])
     } catch { /* handled by toast */ }
     finally { setLoading(false) }
   }, [api])
@@ -2572,16 +3504,23 @@ function UsersTab() {
   function openEdit(u: AppUser) {
     setEditing(u)
     setEditRoleId(u.role_id)
-    setEditBpIds(u.brand_partners.map(bp => bp.id))
+    setEditScope([...(u.scope || [])])
   }
 
   async function handleSaveEdit() {
     if (!editing) return
     setSaving(true)
     try {
-      await api.put(`/users/${editing.id}`, {
-        role_id:           editRoleId,
-        brand_partner_ids: editBpIds,
+      // Default role + status update
+      await api.put(`/users/${editing.id}`, { role_id: editRoleId })
+      // Scope replace — backend computes deltas + writes one audit entry per change
+      await api.put(`/users/${editing.id}/scope`, {
+        scope: editScope.map(s => ({
+          scope_type:  s.scope_type,
+          scope_id:    s.scope_id,
+          access_mode: s.access_mode,
+          role_id:     s.role_id ?? null,
+        })),
       })
       setToast({ message: 'User updated', type: 'success' })
       setEditing(null)
@@ -2631,13 +3570,92 @@ function UsersTab() {
     }
   }
 
-  function toggleBp(id: number) {
-    setEditBpIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  // BACK-2567 — toggle AI premium tier access. Same optimistic+rollback
+  // pattern as handleToggleDev.
+  async function handleTogglePremium(u: AppUser) {
+    const next = !u.ai_premium_access
+    setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ai_premium_access: next } : x))
+    try {
+      await api.put(`/users/${u.id}`, { ai_premium_access: next })
+      setToast({ message: next ? `${u.name || u.email} granted AI premium access` : `AI premium access removed from ${u.name || u.email}`, type: 'success' })
+    } catch (err: any) {
+      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ai_premium_access: u.ai_premium_access } : x))
+      setToast({ message: err.message || 'Failed to update AI premium access', type: 'error' })
+    }
   }
+
+  // ── Live preview: resolve editScope into a per-country effective role map ──
+  const previewRows = useMemo(() => {
+    if (!editing) return []
+    const bpToCountries = new Map<number, CountryRef[]>()
+    for (const c of countries) {
+      if (c.brand_partner_id) {
+        if (!bpToCountries.has(c.brand_partner_id)) bpToCountries.set(c.brand_partner_id, [])
+        bpToCountries.get(c.brand_partner_id)!.push(c)
+      }
+    }
+    const effective = new Map<number, { roleId: number | null; via: string }>()
+    // BP grants
+    for (const s of editScope) {
+      if (s.scope_type === 'brand_partner' && s.access_mode === 'grant') {
+        const cs = bpToCountries.get(s.scope_id) || []
+        for (const c of cs) effective.set(c.id, { roleId: s.role_id ?? editRoleId, via: `BP: ${s.scope_name || s.scope_id}` })
+      }
+    }
+    // BP denies → drop everything from that BP
+    for (const s of editScope) {
+      if (s.scope_type === 'brand_partner' && s.access_mode === 'deny') {
+        const cs = bpToCountries.get(s.scope_id) || []
+        for (const c of cs) effective.delete(c.id)
+      }
+    }
+    // Country grants
+    for (const s of editScope) {
+      if (s.scope_type === 'country' && s.access_mode === 'grant') {
+        effective.set(s.scope_id, { roleId: s.role_id ?? editRoleId, via: `Direct grant` })
+      }
+    }
+    // Country denies
+    for (const s of editScope) {
+      if (s.scope_type === 'country' && s.access_mode === 'deny') effective.delete(s.scope_id)
+    }
+    const out: { country_id: number; country_name: string; role_name: string; via: string }[] = []
+    for (const [cid, val] of effective) {
+      const c = countries.find(x => x.id === cid)
+      const role = roles.find(r => r.id === val.roleId)
+      out.push({
+        country_id:   cid,
+        country_name: c?.name || `country:${cid}`,
+        role_name:    role?.name || (val.roleId ? `role:${val.roleId}` : '— no role —'),
+        via:          val.via,
+      })
+    }
+    out.sort((a, b) => a.country_name.localeCompare(b.country_name))
+    return out
+  }, [editing, editScope, editRoleId, countries, roles])
 
   if (loading) return <Spinner />
 
   const pending = users.filter(u => u.status === 'pending')
+
+  // BACK-2364 — only show the IdP column once at least one user signed up via
+  // a non-Auth0 provider. Until Phase 2 of the Cognito work ships every user
+  // is 'auth0' and a column full of identical badges adds nothing.
+  const showIdpColumn = users.some(u => (u.auth_provider || 'auth0') !== 'auth0')
+  const colSpanEmpty  = (canWrite ? 6 : 5) + (showIdpColumn ? 1 : 0)
+
+  // Search across name, email, role, scope_name + scope_type. Plain string
+  // contains, case-insensitive — matches any column the user might be looking
+  // at. Disabled status, market labels, and emails all searchable.
+  const searchLc = search.trim().toLowerCase()
+  const filteredUsers = !searchLc ? users : users.filter(u => {
+    const haystack = [
+      u.name, u.email, u.status, u.role_name,
+      ...(u.scope || []).map(s => s.scope_name || ''),
+      ...(u.scope || []).map(s => s.role_name || ''),
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(searchLc)
+  })
 
   return (
     <div>
@@ -2652,6 +3670,31 @@ function UsersTab() {
         </div>
       )}
 
+      {/* Search bar — filters across name / email / role / scope labels */}
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 4a7 7 0 100 14 7 7 0 000-14z" />
+          </svg>
+          <input
+            className="input pl-8 w-full text-sm"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search name, email, role, market…"
+          />
+          {search && (
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1"
+              onClick={() => setSearch('')}
+              title="Clear search"
+            >✕</button>
+          )}
+        </div>
+        <span className="text-xs text-text-3">
+          {filteredUsers.length} of {users.length}
+        </span>
+      </div>
+
       <div className="bg-surface border border-border rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
@@ -2659,16 +3702,19 @@ function UsersTab() {
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">User</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Status</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Role</th>
+              {showIdpColumn && <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">IdP</th>}
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Market scope</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Joined</th>
               {canWrite && <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-3">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {users.length === 0 && (
-              <tr><td colSpan={canWrite ? 6 : 5} className="px-4 py-8 text-center text-sm text-text-3">No users yet</td></tr>
+            {filteredUsers.length === 0 && (
+              <tr><td colSpan={colSpanEmpty} className="px-4 py-8 text-center text-sm text-text-3">
+                {users.length === 0 ? 'No users yet' : `No users match "${search}"`}
+              </td></tr>
             )}
-            {users.map(u => (
+            {filteredUsers.map(u => (
               <tr key={u.id} className={`hover:bg-surface-2/50 ${u.id === me?.id ? 'bg-accent-dim/20' : ''}`}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2.5">
@@ -2691,10 +3737,28 @@ function UsersTab() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-text-2">{u.role_name || <span className="text-text-3 italic">None</span>}</td>
+                {showIdpColumn && (
+                  <td className="px-4 py-3">
+                    {(() => {
+                      const provider = (u.auth_provider || 'auth0') as 'auth0' | 'cognito'
+                      const cls = provider === 'cognito'
+                        ? 'bg-orange-50 text-orange-700 border-orange-200'
+                        : 'bg-accent-dim text-accent border-accent/30'
+                      const label = provider === 'cognito' ? 'Cognito' : 'Auth0'
+                      return (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
+                          {label}
+                        </span>
+                      )
+                    })()}
+                  </td>
+                )}
                 <td className="px-4 py-3">
-                  {u.brand_partners.length === 0
+                  {(u.scope?.length ?? 0) === 0
                     ? <span className="text-xs text-text-3">All markets</span>
-                    : <span className="text-xs text-text-2">{u.brand_partners.map(b => b.name).join(', ')}</span>
+                    : <span className="text-xs text-text-2">
+                        {u.scope.map(s => `${s.access_mode === 'deny' ? '✕ ' : ''}${s.scope_name || `${s.scope_type}:${s.scope_id}`}`).join(', ')}
+                      </span>
                   }
                 </td>
                 <td className="px-4 py-3 text-xs text-text-3">
@@ -2738,6 +3802,18 @@ function UsersTab() {
                       >
                         {'</>'}
                       </button>
+                      {/* BACK-2567 — AI Premium tier toggle */}
+                      <button
+                        className={`p-1.5 rounded transition-colors text-xs font-bold leading-none
+                          ${u.ai_premium_access
+                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                            : 'hover:bg-surface-2 text-text-3 hover:text-amber-600'
+                          }`}
+                        title={u.ai_premium_access ? 'Revoke AI premium access (premium model burns the monthly token cap ~5× faster)' : 'Grant AI premium access (lets the user pick the premium model in Pepper)'}
+                        onClick={() => handleTogglePremium(u)}
+                      >
+                        ✨
+                      </button>
                       <button
                         className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
                         title="Edit role & scope"
@@ -2768,48 +3844,20 @@ function UsersTab() {
       </div>
 
       {editing && (
-        <Modal title={`Edit — ${editing.name || editing.email}`} onClose={() => setEditing(null)}>
-          <div className="space-y-5">
-            <Field label="Role">
-              <select
-                className="input w-full"
-                value={editRoleId ?? ''}
-                onChange={e => setEditRoleId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">No role</option>
-                {roles.map(r => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Market scope" hint="Leave all unchecked for unrestricted access to all markets.">
-              <div className="border border-border rounded-xl overflow-hidden">
-                {bps.length === 0
-                  ? <p className="text-xs text-text-3 px-3 py-3">No brand partners configured</p>
-                  : bps.map(bp => (
-                    <label key={bp.id} className="flex items-center gap-3 px-3 py-2.5 border-b last:border-0 border-border cursor-pointer hover:bg-surface-2/50">
-                      <input
-                        type="checkbox"
-                        className="accent-accent"
-                        checked={editBpIds.includes(bp.id)}
-                        onChange={() => toggleBp(bp.id)}
-                      />
-                      <span className="text-sm text-text-1">{bp.name}</span>
-                    </label>
-                  ))
-                }
-              </div>
-              {editBpIds.length === 0 && (
-                <p className="text-xs text-text-3 mt-1.5">All markets accessible (no restriction)</p>
-              )}
-            </Field>
-            <div className="flex justify-end gap-2 pt-1">
-              <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary px-4 py-2 text-sm" onClick={handleSaveEdit} disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
+        <Modal title={`Edit — ${editing.name || editing.email}`} onClose={() => setEditing(null)} width="max-w-3xl">
+          <ScopeEditor
+            roles={roles}
+            bps={bps}
+            countries={countries}
+            defaultRoleId={editRoleId}
+            setDefaultRoleId={setEditRoleId}
+            scope={editScope}
+            setScope={setEditScope}
+            previewRows={previewRows}
+            onSave={handleSaveEdit}
+            onCancel={() => setEditing(null)}
+            saving={saving}
+          />
         </Modal>
       )}
 
@@ -2843,21 +3891,824 @@ function UsersTab() {
   )
 }
 
+// ── Scope Editor (used by UsersTab edit modal) ────────────────────────────────
+//
+// Lets the admin pick BP-level and country-level scope rows for a user, with
+// an optional per-row role override and grant/deny mode. Includes bulk-add
+// (multi-select pickers) and a live preview pane that resolves the scope
+// rows into a per-country effective role map. The default user role at the
+// top is the fallback for any scope row that doesn't override.
+
+function ScopeEditor({
+  roles, bps, countries,
+  defaultRoleId, setDefaultRoleId,
+  scope, setScope,
+  previewRows,
+  onSave, onCancel, saving,
+}: {
+  roles: Role[]
+  bps: BrandPartner[]
+  countries: CountryRef[]
+  defaultRoleId: number | null
+  setDefaultRoleId: (id: number | null) => void
+  scope: ScopeRow[]
+  setScope: (next: ScopeRow[] | ((prev: ScopeRow[]) => ScopeRow[])) => void
+  previewRows: { country_id: number; country_name: string; role_name: string; via: string }[]
+  onSave: () => void
+  onCancel: () => void
+  saving: boolean
+}) {
+  const api = useApi()
+  const [bpAddOpen,  setBpAddOpen]  = useState(false)
+  const [ctyAddOpen, setCtyAddOpen] = useState(false)
+  const [bpPicked,   setBpPicked]   = useState<Set<number>>(new Set())
+  const [ctyPicked,  setCtyPicked]  = useState<Set<number>>(new Set())
+
+  // ── User scope templates ────────────────────────────────────────────────
+  interface Template {
+    id:          number
+    name:        string
+    description: string | null
+    scope:       Omit<ScopeRow, 'scope_name'>[]
+    created_by:  string | null
+    row_count:   number
+  }
+  const [templates,   setTemplates]   = useState<Template[]>([])
+  const [tplOpen,     setTplOpen]     = useState<'load' | 'save' | null>(null)
+  const [tplSaveName, setTplSaveName] = useState('')
+  const [tplSaveDesc, setTplSaveDesc] = useState('')
+  const [tplBusy,     setTplBusy]     = useState(false)
+  const [tplErr,      setTplErr]      = useState<string | null>(null)
+
+  const loadTemplates = useCallback(async () => {
+    try {
+      const data = await api.get('/users/scope-templates/list') as Template[]
+      setTemplates(data || [])
+    } catch (e: any) {
+      setTplErr(e?.message || 'Failed to load templates')
+    }
+  }, [api])
+  useEffect(() => { loadTemplates() }, [loadTemplates])
+
+  // Apply a template — replaces the current scope. We re-resolve scope_name
+  // from the live bps/countries lists so freshly-loaded rows have proper labels.
+  function applyTemplate(t: Template) {
+    const enriched: ScopeRow[] = t.scope.map(r => ({
+      ...r,
+      scope_name: r.scope_type === 'brand_partner'
+        ? (bps.find(b => b.id === r.scope_id)?.name || null)
+        : (countries.find(c => c.id === r.scope_id)?.name || null),
+    }))
+    setScope(enriched)
+    setTplOpen(null)
+  }
+
+  async function saveTemplate() {
+    const name = tplSaveName.trim()
+    if (!name) { setTplErr('Name required'); return }
+    setTplBusy(true); setTplErr(null)
+    try {
+      await api.post('/users/scope-templates', {
+        name,
+        description: tplSaveDesc.trim() || null,
+        // Only persist the structural fields — names get re-resolved on load
+        scope: scope.map(s => ({
+          scope_type:  s.scope_type,
+          scope_id:    s.scope_id,
+          access_mode: s.access_mode,
+          role_id:     s.role_id ?? null,
+        })),
+      })
+      setTplSaveName(''); setTplSaveDesc('')
+      setTplOpen(null)
+      await loadTemplates()
+    } catch (e: any) {
+      setTplErr(e?.message || 'Save failed')
+    } finally {
+      setTplBusy(false)
+    }
+  }
+
+  async function deleteTemplate(id: number) {
+    if (!confirm('Delete this template? Users already created from it are not affected.')) return
+    try {
+      await api.delete(`/users/scope-templates/${id}`)
+      await loadTemplates()
+    } catch (e: any) {
+      setTplErr(e?.message || 'Delete failed')
+    }
+  }
+
+  const usedBpIds  = useMemo(() => new Set(scope.filter(s => s.scope_type === 'brand_partner').map(s => s.scope_id)), [scope])
+  const usedCtyIds = useMemo(() => new Set(scope.filter(s => s.scope_type === 'country').map(s => s.scope_id)), [scope])
+
+  const availableBps      = bps.filter(b => !usedBpIds.has(b.id))
+  const availableCountries = countries.filter(c => !usedCtyIds.has(c.id))
+
+  // BP → linked country count, used to surface the "this BP covers N markets"
+  // hint on each BP row + to detect "0 markets" misconfigurations.
+  const bpMarketCount = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const c of countries) {
+      if (c.brand_partner_id) m.set(c.brand_partner_id, (m.get(c.brand_partner_id) || 0) + 1)
+    }
+    return m
+  }, [countries])
+
+  const totalGrantedBps        = scope.filter(s => s.scope_type === 'brand_partner' && s.access_mode === 'grant').length
+  const grantedBpsWithNoMarket = scope.filter(s => s.scope_type === 'brand_partner' && s.access_mode === 'grant' && (bpMarketCount.get(s.scope_id) || 0) === 0).length
+
+  function addPickedBps() {
+    const adds: ScopeRow[] = Array.from(bpPicked).map(id => ({
+      scope_type: 'brand_partner', scope_id: id, access_mode: 'grant', role_id: null,
+      scope_name: bps.find(b => b.id === id)?.name || null,
+    }))
+    setScope(prev => [...prev, ...adds])
+    setBpPicked(new Set())
+    setBpAddOpen(false)
+  }
+  function addPickedCountries() {
+    const adds: ScopeRow[] = Array.from(ctyPicked).map(id => ({
+      scope_type: 'country', scope_id: id, access_mode: 'grant', role_id: null,
+      scope_name: countries.find(c => c.id === id)?.name || null,
+    }))
+    setScope(prev => [...prev, ...adds])
+    setCtyPicked(new Set())
+    setCtyAddOpen(false)
+  }
+
+  function updateRow(idx: number, patch: Partial<ScopeRow>) {
+    setScope(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
+  }
+  function removeRow(idx: number) {
+    setScope(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const bpRows  = scope.map((s, i) => ({ s, i })).filter(({ s }) => s.scope_type === 'brand_partner')
+  const ctyRows = scope.map((s, i) => ({ s, i })).filter(({ s }) => s.scope_type === 'country')
+
+  return (
+    <div className="space-y-5">
+
+      {/* Templates toolbar */}
+      <div className="flex items-center justify-between gap-2 -mt-1">
+        <div className="text-xs text-text-3">
+          📋 Templates {templates.length > 0 && <span className="font-mono text-text-3">({templates.length})</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-outline text-xs px-2.5 py-1 disabled:opacity-50"
+            onClick={() => setTplOpen('load')}
+            disabled={templates.length === 0}
+            title={templates.length === 0 ? 'No templates saved yet' : 'Apply a saved scope template'}
+          >Load template</button>
+          <button
+            type="button"
+            className="btn-outline text-xs px-2.5 py-1 disabled:opacity-50"
+            onClick={() => { setTplSaveName(''); setTplSaveDesc(''); setTplErr(null); setTplOpen('save') }}
+            disabled={scope.length === 0}
+            title={scope.length === 0 ? 'Add at least one BP or market first' : 'Save the current scope as a reusable template'}
+          >Save as template</button>
+        </div>
+      </div>
+
+      {/* Default role */}
+      <Field label="Default role" hint="Used for any scope row that doesn't override the role.">
+        <select
+          className="input w-full"
+          value={defaultRoleId ?? ''}
+          onChange={e => setDefaultRoleId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">No role</option>
+          {roles.map(r => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
+      </Field>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Brand Partner scope */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-text-1">Brand Partners</h4>
+            <button className="btn-outline text-xs" onClick={() => setBpAddOpen(true)} disabled={availableBps.length === 0}>
+              + Add BP
+            </button>
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            {bpRows.length === 0 ? (
+              <p className="text-xs text-text-3 px-3 py-3 italic">No BP-level scope rows</p>
+            ) : bpRows.map(({ s, i }) => {
+              const cnt = bpMarketCount.get(s.scope_id) || 0
+              const hint = cnt === 0
+                ? '⚠ No markets linked to this BP — link them in Configuration → Location Structure'
+                : `Covers ${cnt} market${cnt !== 1 ? 's' : ''}`
+              return (
+                <ScopeRowEditor
+                  key={`bp-${s.scope_id}`}
+                  row={s}
+                  roles={roles}
+                  onChange={patch => updateRow(i, patch)}
+                  onRemove={() => removeRow(i)}
+                  hint={hint}
+                />
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Direct market scope */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-text-1">Direct markets</h4>
+            <button className="btn-outline text-xs" onClick={() => setCtyAddOpen(true)} disabled={availableCountries.length === 0}>
+              + Add market
+            </button>
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            {ctyRows.length === 0 ? (
+              <p className="text-xs text-text-3 px-3 py-3 italic">No market-level overrides</p>
+            ) : ctyRows.map(({ s, i }) => (
+              <ScopeRowEditor
+                key={`cty-${s.scope_id}`}
+                row={s}
+                roles={roles}
+                onChange={patch => updateRow(i, patch)}
+                onRemove={() => removeRow(i)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Live preview */}
+      <div>
+        <h4 className="text-sm font-semibold text-text-1 mb-2">Effective access ({previewRows.length} market{previewRows.length !== 1 ? 's' : ''})</h4>
+        <div className="border border-border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+          {scope.length === 0 ? (
+            <p className="text-xs text-text-3 px-3 py-3">No scope rows — user is unrestricted (access to all markets with default role).</p>
+          ) : previewRows.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-text-3 space-y-1">
+              <p className="italic">No markets resolve from the current scope rows.</p>
+              {grantedBpsWithNoMarket > 0 && totalGrantedBps === grantedBpsWithNoMarket && (
+                <p className="text-amber-700">
+                  ⚠ The granted BP{totalGrantedBps !== 1 ? 's are' : ' is'} not linked to any markets yet.
+                  Open <strong>Configuration → Location Structure → Markets</strong>,
+                  pick a market, and assign it to a Brand Partner. Then this scope will start resolving.
+                </p>
+              )}
+            </div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-surface-2 sticky top-0">
+                <tr className="text-left text-text-3">
+                  <th className="px-3 py-1.5">Market</th>
+                  <th className="px-3 py-1.5">Role</th>
+                  <th className="px-3 py-1.5">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRows.map(p => (
+                  <tr key={p.country_id} className="border-t border-border">
+                    <td className="px-3 py-1.5 text-text-1">{p.country_name}</td>
+                    <td className="px-3 py-1.5 text-text-2">{p.role_name}</td>
+                    <td className="px-3 py-1.5 text-text-3">{p.via}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1 border-t border-border">
+        <button className="btn-outline px-4 py-2 text-sm" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="btn-primary px-4 py-2 text-sm" onClick={onSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+
+      {/* Bulk-add BP picker */}
+      {bpAddOpen && (
+        <Modal title="Add brand partners" onClose={() => setBpAddOpen(false)} width="max-w-md">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">Select one or more to add as scope rows.</p>
+            <div className="border border-border rounded-lg max-h-72 overflow-y-auto">
+              {availableBps.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">All BPs already in scope.</p>
+              ) : availableBps.map(bp => (
+                <label key={bp.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-0 cursor-pointer hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    checked={bpPicked.has(bp.id)}
+                    onChange={() => setBpPicked(s => { const n = new Set(s); n.has(bp.id) ? n.delete(bp.id) : n.add(bp.id); return n })}
+                  />
+                  <span className="text-sm text-text-1">{bp.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setBpAddOpen(false)}>Cancel</button>
+              <button className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50" onClick={addPickedBps} disabled={bpPicked.size === 0}>
+                Add {bpPicked.size}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk-add market picker */}
+      {ctyAddOpen && (
+        <Modal title="Add markets" onClose={() => setCtyAddOpen(false)} width="max-w-md">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">Select one or more markets to add. Use market grants to add markets that aren't covered by any of the user's BPs, or market denies to punch holes in BP coverage.</p>
+            <div className="border border-border rounded-lg max-h-72 overflow-y-auto">
+              {availableCountries.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">All markets already in scope.</p>
+              ) : availableCountries.map(c => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 border-b border-border last:border-0 cursor-pointer hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    checked={ctyPicked.has(c.id)}
+                    onChange={() => setCtyPicked(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })}
+                  />
+                  <span className="text-sm text-text-1 flex-1">{c.name}</span>
+                  {c.brand_partner_id && (
+                    <span className="text-[10px] text-text-3">via BP</span>
+                  )}
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setCtyAddOpen(false)}>Cancel</button>
+              <button className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50" onClick={addPickedCountries} disabled={ctyPicked.size === 0}>
+                Add {ctyPicked.size}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Load template picker */}
+      {tplOpen === 'load' && (
+        <Modal title="Load scope template" onClose={() => setTplOpen(null)} width="max-w-lg">
+          <div className="space-y-2">
+            <p className="text-xs text-text-3">
+              Applying a template <strong>replaces</strong> the current scope rows. The default role is unchanged.
+            </p>
+            {tplErr && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{tplErr}</div>}
+            <div className="border border-border rounded-lg max-h-80 overflow-y-auto">
+              {templates.length === 0 ? (
+                <p className="text-xs text-text-3 px-3 py-3 italic">No templates saved yet — save the current scope first.</p>
+              ) : templates.map(t => (
+                <div key={t.id} className="flex items-center gap-3 px-3 py-2 border-b border-border last:border-0 hover:bg-surface-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-text-1 truncate">{t.name}</div>
+                    {t.description && <div className="text-xs text-text-3 truncate">{t.description}</div>}
+                    <div className="text-[11px] text-text-3">
+                      {t.row_count} scope row{t.row_count !== 1 ? 's' : ''}
+                      {t.created_by && ` · by ${t.created_by}`}
+                    </div>
+                  </div>
+                  <button
+                    className="btn-primary text-xs px-2.5 py-1"
+                    onClick={() => applyTemplate(t)}
+                    title="Apply this template (replaces current scope)"
+                  >Apply</button>
+                  <button
+                    className="text-text-3 hover:text-red-500 transition-colors text-base leading-none"
+                    onClick={() => deleteTemplate(t.id)}
+                    title="Delete this template"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setTplOpen(null)}>Close</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Save template */}
+      {tplOpen === 'save' && (
+        <Modal title="Save scope as template" onClose={() => !tplBusy && setTplOpen(null)} width="max-w-md">
+          <div className="space-y-3">
+            <p className="text-xs text-text-3">
+              Captures all {scope.length} scope row{scope.length !== 1 ? 's' : ''} (BPs + markets + access modes + role overrides). Apply to other users from any user's edit modal.
+            </p>
+            <Field label="Template name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={tplSaveName}
+                onChange={e => { setTplSaveName(e.target.value); setTplErr(null) }}
+                onKeyDown={e => { if (e.key === 'Enter' && tplSaveName.trim() && !tplBusy) saveTemplate() }}
+                placeholder="e.g. UK Operator, India Admin, Read-only Reviewer"
+                disabled={tplBusy}
+              />
+            </Field>
+            <Field label="Description" hint="Optional — shown in the picker.">
+              <input
+                className="input w-full"
+                value={tplSaveDesc}
+                onChange={e => setTplSaveDesc(e.target.value)}
+                placeholder="What's this template for?"
+                disabled={tplBusy}
+              />
+            </Field>
+            {tplErr && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{tplErr}</div>}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setTplOpen(null)} disabled={tplBusy}>Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                onClick={saveTemplate}
+                disabled={tplBusy || !tplSaveName.trim()}
+              >{tplBusy ? 'Saving…' : 'Save template'}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function ScopeRowEditor({ row, roles, onChange, onRemove, hint }: {
+  row: ScopeRow
+  roles: Role[]
+  onChange: (patch: Partial<ScopeRow>) => void
+  onRemove: () => void
+  hint?: string | null
+}) {
+  // Stacked layout — the name takes the full width on its own line so it's
+  // impossible to miss. Controls go on a second row underneath. Previous
+  // single-line layout squeezed the name into ~60px next to the dropdowns
+  // and made it look invisible.
+  const displayName = row.scope_name || `${row.scope_type}:${row.scope_id}`
+  return (
+    <div className="px-3 py-2.5 border-b border-border last:border-0">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-text-1 break-words leading-snug">
+            {displayName}
+          </div>
+          {hint && (
+            <div className="text-[11px] text-text-3 mt-0.5 break-words">{hint}</div>
+          )}
+        </div>
+        <button
+          className="text-text-3 hover:text-red-500 transition-colors shrink-0 text-base leading-none"
+          onClick={onRemove}
+          title="Remove this scope row"
+        >✕</button>
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          className="input text-xs py-0.5 px-1 flex-1"
+          value={row.access_mode}
+          onChange={e => onChange({ access_mode: e.target.value as 'grant' | 'deny' })}
+          title="Allow or block access"
+        >
+          <option value="grant">Allow</option>
+          <option value="deny">Block</option>
+        </select>
+        <select
+          className="input text-xs py-0.5 px-1 flex-1"
+          value={row.role_id ?? ''}
+          onChange={e => onChange({ role_id: e.target.value ? Number(e.target.value) : null })}
+          title="Override role for this scope (blank = inherit default)"
+          disabled={row.access_mode === 'deny'}
+        >
+          <option value="">— inherit role —</option>
+          {roles.map(r => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  )
+}
+
+// ── Scope Templates Tab ──────────────────────────────────────────────────────
+//
+// Manages the reusable scope bundles that admins save from a user's edit
+// modal. Lists every template with its scope contents (expandable), allows
+// rename / description edit / delete. Templates are applied via the user
+// edit modal's "Load template" button — this tab is purely management.
+
+interface TemplateRow {
+  id:          number
+  name:        string
+  description: string | null
+  scope:       Omit<ScopeRow, 'scope_name'>[]
+  created_by:  string | null
+  created_at:  string
+  updated_at:  string
+  row_count:   number
+}
+
+function ScopeTemplatesTab() {
+  const api = useApi()
+  const { can } = usePermissions()
+  const canWrite = can('users', 'write')
+
+  const [templates, setTemplates] = useState<TemplateRow[]>([])
+  const [bps,       setBps]       = useState<BrandPartner[]>([])
+  const [countries, setCountries] = useState<CountryRef[]>([])
+  const [roles,     setRoles]     = useState<Role[]>([])
+  const [loading,   setLoading]   = useState(true)
+  const [search,    setSearch]    = useState('')
+  const [expanded,  setExpanded]  = useState<Set<number>>(new Set())
+  const [editing,   setEditing]   = useState<TemplateRow | null>(null)
+  const [editName,  setEditName]  = useState('')
+  const [editDesc,  setEditDesc]  = useState('')
+  const [saving,    setSaving]    = useState(false)
+  const [toast,     setToast]     = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [t, b, c, r] = await Promise.all([
+        api.get('/users/scope-templates/list'),
+        api.get('/brand-partners'),
+        api.get('/countries'),
+        api.get('/roles'),
+      ])
+      setTemplates(t || [])
+      setBps(b || [])
+      setCountries(c || [])
+      setRoles(r || [])
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Failed to load templates', type: 'error' })
+    } finally { setLoading(false) }
+  }, [api])
+  useEffect(() => { load() }, [load])
+
+  if (!can('users', 'read')) return <EmptyState message="You don't have permission to view templates." />
+  if (loading) return <Spinner />
+
+  const bpById   = new Map(bps.map(b => [b.id, b]))
+  const ctyById  = new Map(countries.map(c => [c.id, c]))
+  const roleById = new Map(roles.map(r => [r.id, r]))
+
+  function labelFor(s: Omit<ScopeRow, 'scope_name'>): string {
+    if (s.scope_type === 'brand_partner') return bpById.get(s.scope_id)?.name || `BP #${s.scope_id}`
+    if (s.scope_type === 'country')       return ctyById.get(s.scope_id)?.name || `Market #${s.scope_id}`
+    return `${s.scope_type}:${s.scope_id}`
+  }
+
+  const searchLc = search.trim().toLowerCase()
+  const filtered = !searchLc ? templates : templates.filter(t => {
+    const haystack = [
+      t.name, t.description, t.created_by,
+      ...(t.scope || []).map(labelFor),
+    ].filter(Boolean).join(' ').toLowerCase()
+    return haystack.includes(searchLc)
+  })
+
+  function toggleExpand(id: number) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function openEdit(t: TemplateRow) {
+    setEditing(t); setEditName(t.name); setEditDesc(t.description || '')
+  }
+
+  async function saveEdit() {
+    if (!editing) return
+    const name = editName.trim()
+    if (!name) { setToast({ message: 'Name required', type: 'error' }); return }
+    setSaving(true)
+    try {
+      await api.put(`/users/scope-templates/${editing.id}`, {
+        name, description: editDesc.trim() || null,
+      })
+      setEditing(null)
+      await load()
+      setToast({ message: 'Template updated', type: 'success' })
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Save failed', type: 'error' })
+    } finally { setSaving(false) }
+  }
+
+  async function deleteTemplate(t: TemplateRow) {
+    if (!confirm(`Delete template "${t.name}"? Users created from it are not affected.`)) return
+    try {
+      await api.delete(`/users/scope-templates/${t.id}`)
+      await load()
+      setToast({ message: 'Template deleted', type: 'success' })
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Delete failed', type: 'error' })
+    }
+  }
+
+  return (
+    <div>
+      <div className="mb-3">
+        <p className="text-xs text-text-3">
+          Templates store a snapshot of scope rows (BPs + markets + access modes + role overrides). Apply them when
+          editing a user via the <strong>Load template</strong> button on the scope editor.
+        </p>
+      </div>
+
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 4a7 7 0 100 14 7 7 0 000-14z" />
+          </svg>
+          <input
+            className="input pl-8 w-full text-sm"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name, description, or scope contents…"
+          />
+          {search && (
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 text-text-3 hover:text-text-1" onClick={() => setSearch('')} title="Clear">✕</button>
+          )}
+        </div>
+        <span className="text-xs text-text-3">
+          {filtered.length} of {templates.length}
+        </span>
+      </div>
+
+      {templates.length === 0 ? (
+        <div className="bg-surface-2 border border-border rounded-xl px-4 py-8 text-center text-sm text-text-3">
+          No templates saved yet. Open a user's scope editor and click <strong>Save as template</strong> to create one.
+        </div>
+      ) : (
+        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-surface-2 border-b border-border">
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3 w-8"></th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Name</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Description</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Rows</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Created by</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-3">Updated</th>
+                {canWrite && <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-3">Actions</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.length === 0 ? (
+                <tr><td colSpan={canWrite ? 7 : 6} className="px-4 py-8 text-center text-sm text-text-3">
+                  No templates match "{search}"
+                </td></tr>
+              ) : filtered.map(t => {
+                const isOpen = expanded.has(t.id)
+                const bpRows  = (t.scope || []).filter(s => s.scope_type === 'brand_partner')
+                const ctyRows = (t.scope || []).filter(s => s.scope_type === 'country')
+                return (
+                  <Fragment key={t.id}>
+                    <tr className="hover:bg-surface-2/50">
+                      <td className="px-4 py-2.5">
+                        <button
+                          className="text-text-3 hover:text-accent transition-transform"
+                          onClick={() => toggleExpand(t.id)}
+                          style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                          title={isOpen ? 'Collapse' : 'Expand'}
+                        >▶</button>
+                      </td>
+                      <td className="px-4 py-2.5 font-semibold text-text-1">{t.name}</td>
+                      <td className="px-4 py-2.5 text-text-2 text-xs">{t.description || <span className="text-text-3 italic">—</span>}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{t.row_count}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{t.created_by || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-text-3">{new Date(t.updated_at).toLocaleDateString()}</td>
+                      {canWrite && (
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-accent transition-colors"
+                              title="Rename / edit description"
+                              onClick={() => openEdit(t)}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                            <button
+                              className="p-1.5 rounded hover:bg-surface-2 text-text-3 hover:text-red-600 transition-colors"
+                              title="Delete template"
+                              onClick={() => deleteTemplate(t)}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={canWrite ? 7 : 6} className="bg-surface-2/30 px-4 py-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                            <div>
+                              <div className="font-semibold text-text-2 mb-1">Brand Partners ({bpRows.length})</div>
+                              {bpRows.length === 0 ? <div className="text-text-3 italic">none</div> : bpRows.map((s, i) => (
+                                <div key={`bp-${s.scope_id}-${i}`} className="flex items-center justify-between gap-2 px-2 py-1 border-b border-border last:border-0">
+                                  <span className="text-text-1 truncate">{labelFor(s)}</span>
+                                  <span className={`shrink-0 ${s.access_mode === 'deny' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    {s.access_mode === 'deny' ? 'Block' : 'Allow'}
+                                    {s.role_id && ` · ${roleById.get(s.role_id)?.name || `role:${s.role_id}`}`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-text-2 mb-1">Direct markets ({ctyRows.length})</div>
+                              {ctyRows.length === 0 ? <div className="text-text-3 italic">none</div> : ctyRows.map((s, i) => (
+                                <div key={`cty-${s.scope_id}-${i}`} className="flex items-center justify-between gap-2 px-2 py-1 border-b border-border last:border-0">
+                                  <span className="text-text-1 truncate">{labelFor(s)}</span>
+                                  <span className={`shrink-0 ${s.access_mode === 'deny' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    {s.access_mode === 'deny' ? 'Block' : 'Allow'}
+                                    {s.role_id && ` · ${roleById.get(s.role_id)?.name || `role:${s.role_id}`}`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {editing && (
+        <Modal title={`Edit template — ${editing.name}`} onClose={() => !saving && setEditing(null)}>
+          <div className="space-y-3">
+            <Field label="Name" required>
+              <input
+                autoFocus
+                className="input w-full"
+                value={editName}
+                onChange={e => setEditName(e.target.value)}
+                disabled={saving}
+              />
+            </Field>
+            <Field label="Description" hint="Optional — shown in the picker.">
+              <input
+                className="input w-full"
+                value={editDesc}
+                onChange={e => setEditDesc(e.target.value)}
+                disabled={saving}
+              />
+            </Field>
+            <p className="text-xs text-text-3 italic">
+              To change the scope contents (BPs / markets / role overrides), open a user's edit modal,
+              load this template, edit the rows, and save it back as a new template (or delete this one and re-save).
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button className="btn-outline px-3 py-1.5 text-sm" onClick={() => setEditing(null)} disabled={saving}>Cancel</button>
+              <button
+                className="btn-primary px-3 py-1.5 text-sm disabled:opacity-50"
+                onClick={saveEdit}
+                disabled={saving || !editName.trim()}
+              >{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  )
+}
+
 // ── Roles Tab ─────────────────────────────────────────────────────────────────
 
-const FEATURES_LIST: { key: Feature; label: string }[] = [
-  { key: 'dashboard',  label: 'Dashboard'  },
-  { key: 'inventory',  label: 'Inventory'  },
-  { key: 'recipes',    label: 'Recipes'    },
-  { key: 'menus',      label: 'Menus'      },
-  { key: 'allergens',  label: 'Allergens'  },
-  { key: 'haccp',      label: 'HACCP'      },
-  { key: 'markets',    label: 'Markets'    },
-  { key: 'categories', label: 'Categories' },
-  { key: 'settings',   label: 'Settings'   },
-  { key: 'import',     label: 'Import'     },
-  { key: 'ai_chat',    label: 'AI Chat'    },
-  { key: 'users',      label: 'Users'      },
+const FEATURES_LIST: { key: Feature | null; label: string; group?: boolean }[] = [
+  { key: 'dashboard',              label: 'Dashboard'        },
+  { key: 'inventory',              label: 'Inventory'        },
+  { key: 'recipes',                label: 'Recipes'          },
+  { key: 'menus',                  label: 'Menus'            },
+  { key: 'allergens',              label: 'Allergens'        },
+  { key: 'haccp',                  label: 'HACCP'            },
+  { key: 'markets',                label: 'Markets'          },
+  { key: 'categories',             label: 'Categories'       },
+  { key: 'settings',               label: 'Settings'         },
+  { key: 'import',                 label: 'Import'           },
+  { key: 'ai_chat',                label: 'AI Chat'          },
+  { key: 'users',                  label: 'Users'            },
+  { key: null,                     label: 'Stock Manager', group: true },
+  { key: 'stock_overview',         label: 'Overview & Centres'},
+  { key: 'stock_purchase_orders',  label: 'Purchase Orders'  },
+  { key: 'stock_goods_in',         label: 'Goods In'         },
+  { key: 'stock_invoices',         label: 'Invoices'         },
+  { key: 'stock_waste',            label: 'Waste'            },
+  { key: 'stock_transfers',        label: 'Transfers'        },
+  { key: 'stock_stocktake',        label: 'Stocktake'        },
 ]
 
 const ACCESS_CYCLE: AccessLevel[] = ['none', 'read', 'write']
@@ -3044,10 +4895,23 @@ function RolesTab() {
               </tr>
             </thead>
             <tbody>
-              {FEATURES_LIST.map(({ key, label }, rowIdx) => (
+              {FEATURES_LIST.map(({ key, label, group }, rowIdx) => {
+                // Group header row (visual separator)
+                if (group) return (
+                  <tr key={`group-${label}`} className="bg-gray-100">
+                    <td className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider text-text-3 border-r border-border sticky left-0 z-10 bg-gray-100" colSpan={1}>
+                      {label}
+                    </td>
+                    {roles.map(role => (
+                      <td key={role.id} className="border-r border-border last:border-r-0" />
+                    ))}
+                  </tr>
+                )
+                if (!key) return null
+                return (
                 <tr key={key} className={rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}>
                   {/* Feature label — sticky */}
-                  <td className={`px-4 py-2 font-medium text-text-1 text-xs border-r border-border sticky left-0 z-10 ${rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}`}>
+                  <td className={`px-4 py-2 font-medium text-text-1 text-xs border-r border-border sticky left-0 z-10 ${key.startsWith('stock_') ? 'pl-7' : ''} ${rowIdx % 2 === 0 ? 'bg-surface' : 'bg-surface-2/40'}`}>
                     {label}
                   </td>
                   {/* Permission cell per role */}
@@ -3080,7 +4944,8 @@ function RolesTab() {
                     )
                   })}
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

@@ -3,8 +3,10 @@ import ImageUpload from '../components/ImageUpload'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
+import { useCurrency } from '../contexts/CurrencyContext'
 import { useCogsThresholds, type CogsThresholds } from '../hooks/useCogsThresholds'
 import { PageHeader, Modal, Field, Spinner, ConfirmDialog, Toast, PepperHelpButton } from '../components/ui'
+import TranslationEditor from '../components/TranslationEditor'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,11 @@ interface CogsItem {
   qty:                  number
   base_unit_abbr:       string
   cost_per_portion:     number
+  // Cost to ADD when the "Include modifier cost" toggle is on. In market
+  // currency, qty already applied. Frontend multiplies by dispRate before
+  // displaying. Server-computed: full required modifier cost for non-combo
+  // items, delta-beyond-current for combo items.
+  modifier_cost_adder?: number
   sell_price_gross:     number
   sell_price_net:       number
   tax_rate:             number
@@ -52,11 +59,14 @@ interface CogsItem {
 }
 
 // Sub-price structures for combo step options + modifier options (menu-level pricing)
+// `cost` is in market currency (USD base × menu country's exchange_rate); the
+// frontend then multiplies by dispRate to land in the user's display currency.
+// `avg_cost` / `min_cost` / `max_cost` on a group/step summarise its options.
 interface SubOptPrices { [price_level_id: number]: number }
-interface SubModOption { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices }
-interface SubModGroup  { modifier_group_id: number; name: string; display_name?: string | null; min_select: number; max_select: number; options: SubModOption[] }
-interface SubComboOpt  { id: number; name: string; display_name?: string | null; item_type: string; prices: SubOptPrices; modifier_groups: SubModGroup[] }
-interface SubComboStep { id: number; name: string; display_name?: string | null; min_select: number; max_select: number; auto_select?: boolean; options: SubComboOpt[] }
+interface SubModOption { id: number; name: string; display_name?: string | null; item_type: string; qty?: number; cost?: number; prices: SubOptPrices }
+interface SubModGroup  { modifier_group_id: number; name: string; display_name?: string | null; min_select: number; max_select: number; avg_cost?: number; min_cost?: number; max_cost?: number; options: SubModOption[] }
+interface SubComboOpt  { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; prices: SubOptPrices; modifier_groups: SubModGroup[] }
+interface SubComboStep { id: number; name: string; display_name?: string | null; min_select: number; max_select: number; auto_select?: boolean; avg_cost?: number; min_cost?: number; max_cost?: number; options: SubComboOpt[] }
 interface SubPriceData { item_type: string; combo_steps: SubComboStep[]; modifier_groups: SubModGroup[] }
 
 interface CogsSummary {
@@ -193,7 +203,6 @@ const cogsColourClass = (pct: number, thr: CogsThresholds) => {
 
 export default function MenusPage() {
   const api = useApi()
-  const cogsThresholds = useCogsThresholds()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // shared data
@@ -289,6 +298,30 @@ export default function MenusPage() {
   }, [api])
 
   useEffect(() => { load() }, [load])
+
+  // Refetch price levels filtered to the selected menu's country whenever the
+  // selection changes. Admins can disable specific price levels per country
+  // (Configuration → Price Levels → per-country matrix); this pulls only the
+  // enabled set so downstream render + save paths never see hidden levels.
+  const selectedMenuCountryId = menus.find(m => m.id === selectedMenuId)?.country_id ?? null
+
+  // COGS colour thresholds follow the selected menu's market. Falls back to
+  // global when no menu is selected or the market hasn't set overrides.
+  const cogsThresholds = useCogsThresholds(selectedMenuCountryId)
+  useEffect(() => {
+    if (selectedMenuCountryId == null) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const scoped = await api.get(`/price-levels?country_id=${selectedMenuCountryId}`) as PriceLevel[] | null
+        if (cancelled) return
+        setPriceLevels(scoped || [])
+      } catch {
+        // non-fatal — fall back to whatever is currently loaded
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selectedMenuCountryId, api])
 
   // ── Auto-open menu from ?menu=<id> URL param (e.g. linked from Recipes page) ─
   useEffect(() => {
@@ -608,9 +641,9 @@ export default function MenusPage() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title="Menu Builder"
-        subtitle="Build menus, set sell prices and see live COGS% per dish."
-        tutorialPrompt="Give me an overview of the Menu Builder section. What are the three tabs — Menus, Menu Engineer, and Shared Links — and what is each one for?"
+        title="Menu Engineer"
+        subtitle="Run scenarios, share menus for review, and analyse COGS% across markets and price levels."
+        tutorialPrompt="Give me an overview of the Menu Engineer section. What are the three tabs — Menus, Menu Engineer, and Shared Links — and what is each one for?"
         action={
           activeTab === 'builder'
             ? <button className="btn btn-primary" onClick={() => setMenuModal('new')}>+ New Menu</button>
@@ -981,14 +1014,19 @@ export default function MenusPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── SubPriceRow — inline editable price row for combo options / modifier options
-function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSave }: {
+function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, borderClass, marginLeft, dispRate, onSave }: {
   msiId: number
   kind: 'combo' | 'modifier'
-  option: { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
+  option: { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; qty?: number; prices: Record<number, number> }
   levelId: number | null
   sym: string
   colCount: number
   indent: number
+  borderClass?: string
+  marginLeft?: string
+  // dispRate = display→market conversion. option.cost is in market currency
+  // (USD × exchange_rate); multiply by dispRate to land in display currency.
+  dispRate?: number
   onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
 }) {
   const existing = levelId && option.prices[levelId] != null ? option.prices[levelId] : null
@@ -1008,17 +1046,32 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
 
   const ITEM_BADGE: Record<string, string> = { recipe: 'bg-blue-50 text-blue-700', ingredient: 'bg-green-50 text-green-700', manual: 'bg-gray-100 text-gray-600', sales_item: 'bg-purple-50 text-purple-700' }
 
+  // Convert market-currency cost into display currency for the cell.
+  const dispCost = option.cost != null ? option.cost * (dispRate || 1) : null
+
   return (
     <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
-        <div className="flex items-center gap-1.5">
+        <div className={`flex items-center gap-1.5 ${borderClass ? `${borderClass} pl-2` : ''}`} style={marginLeft ? { marginLeft } : undefined}>
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
           <span className="text-xs text-text-2">{option.display_name || option.name}</span>
+          {option.qty != null && option.qty !== 1 && (
+            <span className="text-[10px] text-text-3" title="Quantity per selection">×{option.qty}</span>
+          )}
         </div>
       </td>
-      {/* empty cells for category, type, qty, cost cols */}
-      {Array.from({ length: colCount - 6 }).map((_, i) => <td key={i} />)}
-      {/* price cell */}
+      {/* Padding cells before Cost — leaves Type, Qty empty (and any extra
+          padding columns that the parent table has between Item and Cost/ptn).
+          The full 10-col ME single-level table has 2 such gap cells; the Menu
+          Builder's 11/12-col table has more. Total cells after Item =
+          padding + Cost(1) + Price(1) + trailing(5) = colCount, so padding
+          is colCount - 7. */}
+      {Array.from({ length: Math.max(0, colCount - 7) }).map((_, i) => <td key={`pad-${i}`} />)}
+      {/* Cost/ptn (col 3) — show option cost in display currency */}
+      <td className="px-3 py-1.5 text-right text-xs font-mono text-text-2">
+        {dispCost != null && dispCost > 0 ? `${sym}${dispCost.toFixed(2)}` : <span className="text-text-3">—</span>}
+      </td>
+      {/* Price (col 4) — editable extra charge */}
       <td className="px-3 py-1.5 text-right text-xs" colSpan={1}>
         {editing ? (
           <div className="flex items-center justify-end gap-1">
@@ -1037,27 +1090,29 @@ function SubPriceRow({ msiId, kind, option, levelId, sym, colCount, indent, onSa
           <span
             className={`${levelId ? 'cursor-pointer hover:text-accent' : ''} ${existing != null ? 'text-text-1' : 'text-text-3 italic'}`}
             onClick={startEdit}
-            title={levelId ? `Click to set price (${sym})` : 'Select a price level first'}
+            title={levelId ? `Click to set extra charge (${sym})` : 'Select a price level first'}
           >
-            {existing != null ? `${sym}${existing.toFixed(2)}` : levelId ? 'set price' : '—'}
+            {existing != null ? `${sym}${existing.toFixed(2)}` : levelId ? 'extra charge' : '—'}
           </span>
         )}
       </td>
-      {/* remaining cells */}
+      {/* remaining 5 cells: Sales Mix, Revenue, Rev Mix, Cost, COGS% */}
       <td colSpan={5} />
     </tr>
   )
 }
 
 // ── SubPriceRowME — inline editable price row for ALL LEVELS (Menu Engineer) view
-function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, onSave }: {
+function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, indent, dispRate, onSave }: {
   msiId:           number
   kind:            'combo' | 'modifier'
-  option:          { id: number; name: string; display_name?: string | null; item_type: string; prices: Record<number, number> }
+  option:          { id: number; name: string; display_name?: string | null; item_type: string; cost?: number; qty?: number; prices: Record<number, number> }
   levels:          PriceLevel[]
   sym:             string
   allLevelsCompact: boolean
   indent:          number
+  // dispRate = display→market conversion. option.cost is in market currency.
+  dispRate?:       number
   onSave(msiId: number, kind: 'combo' | 'modifier', optionId: number, levelId: number, price: number): Promise<void>
 }) {
   const [editingLevel, setEditingLevel] = useState<number | null>(null)
@@ -1082,12 +1137,19 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
     setEditingLevel(null)
   }
 
+  // Per-level cost is the same value (option cost doesn't change with price level).
+  // Convert from market currency to display currency for the cell.
+  const dispCost = option.cost != null ? option.cost * (dispRate || 1) : null
+
   return (
     <tr className="border-b border-border hover:bg-surface-2/30 bg-white">
       <td className="py-1.5 pr-2" style={{ paddingLeft: `${indent * 4}px` }}>
         <div className="flex items-center gap-1.5">
           <span className={`text-[10px] px-1 py-0.5 rounded ${ITEM_BADGE[option.item_type] ?? 'bg-gray-100 text-gray-600'}`}>{option.item_type}</span>
           <span className="text-xs text-text-2">{option.display_name || option.name}</span>
+          {option.qty != null && option.qty !== 1 && (
+            <span className="text-[10px] text-text-3" title="Quantity per selection">×{option.qty}</span>
+          )}
         </div>
       </td>
       {levels.map(level => {
@@ -1097,8 +1159,10 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
           <Fragment key={level.id}>
             {/* Qty — empty */}
             <td className="border-l border-gray-100" />
-            {/* Cost — empty */}
-            <td />
+            {/* Cost — show option cost (same across levels) */}
+            <td className="px-1 py-1 text-right text-xs font-mono text-text-2">
+              {dispCost != null && dispCost > 0 ? `${sym}${dispCost.toFixed(2)}` : <span className="text-text-3">—</span>}
+            </td>
             {/* Price — editable */}
             <td className="px-1 py-1 text-right text-xs">
               {isEditing ? (
@@ -1118,9 +1182,9 @@ function SubPriceRowME({ msiId, kind, option, levels, sym, allLevelsCompact, ind
                 <span
                   className={`cursor-pointer hover:text-accent ${existing != null ? 'text-text-1 font-mono' : 'text-text-3 italic'}`}
                   onClick={() => startEdit(level.id)}
-                  title={`Click to set ${level.name} price (${sym})`}
+                  title={`Click to set ${level.name} extra charge (${sym})`}
                 >
-                  {existing != null ? `${sym}${existing.toFixed(2)}` : 'set price'}
+                  {existing != null ? `${sym}${existing.toFixed(2)}` : 'extra charge'}
                 </span>
               )}
             </td>
@@ -1182,6 +1246,11 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
   const [expandedSubItems, setExpandedSubItems] = useState<Set<number>>(new Set())
   const [subPriceData, setSubPriceData] = useState<Record<number, SubPriceData>>({})
   const [loadingSubPrices, setLoadingSubPrices] = useState<Set<number>>(new Set())
+  // Track which combo steps and modifier groups are expanded (keyed by "msiId-step-stepId" or "msiId-mg-mgId" or "msiId-cmg-optId-mgId")
+  const [expandedSubSections, setExpandedSubSections] = useState<Set<string>>(new Set())
+  const toggleSubSection = (key: string) => {
+    setExpandedSubSections(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next })
+  }
 
   const toggleSubExpand = async (msiId: number) => {
     setExpandedSubItems(prev => {
@@ -1194,7 +1263,7 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
       try {
         const d: SubPriceData = await api.get(`/menu-sales-items/${msiId}/sub-prices`)
         setSubPriceData(prev => ({ ...prev, [msiId]: d }))
-      } catch { /* ignore */ } finally {
+      } catch (err) { console.error('[sub-prices] Failed to load for msiId', msiId, err) } finally {
         setLoadingSubPrices(prev => { const s = new Set(prev); s.delete(msiId); return s })
       }
     }
@@ -1357,48 +1426,81 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
         ) : subData ? (
           <Fragment key={`${msiId}-sub`}>
             {/* Combo: steps → options */}
-            {subData.combo_steps.map(step => (
-              <Fragment key={`${msiId}-step-${step.id}`}>
+            {subData.combo_steps.map(step => {
+              const stepKey = `${msiId}-step-${step.id}`
+              const stepExpanded = expandedSubSections.has(stepKey)
+              return (
+              <Fragment key={stepKey}>
                 <tr className="bg-surface-2 border-b border-border">
-                  <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
-                    <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
-                    {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                  <td colSpan={colCount + 1} className="py-1.5" style={{ paddingLeft: '1.5rem' }}>
+                    <div className="flex items-center border-l-2 border-gray-200 pl-2" style={{ marginLeft: '0.5rem' }}>
+                      <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(stepKey)}>{stepExpanded ? '▼' : '▶'}</button>
+                      <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
+                      <span className="text-xs text-text-3 ml-2">(choose {step.min_select}{step.min_select !== step.max_select ? `–${step.max_select}` : ''})</span>
+                      {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto</span>}
+                    </div>
                   </td>
                 </tr>
-                {step.options.map(opt => (
+                {stepExpanded && step.options.map(opt => {
+                  const cmgKeys = opt.modifier_groups.map(mg => `${msiId}-cmg-${opt.id}-${mg.modifier_group_id}`)
+                  return (
                   <Fragment key={`${msiId}-copt-${opt.id}`}>
-                    <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
-                    {opt.modifier_groups.map(mg => (
-                      <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
+                    <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={12} borderClass="border-l-2 border-blue-200" marginLeft="2rem" onSave={saveSubOptionPrice} />
+                    {opt.modifier_groups.map((mg, mgIdx) => {
+                      const cmgKey = cmgKeys[mgIdx]
+                      const cmgExpanded = expandedSubSections.has(cmgKey)
+                      return (
+                      <Fragment key={cmgKey}>
+                        {/* Modifier group nested under a combo option — bumped
+                            indent so the visual hierarchy reads "step →
+                            option → modifier" cleanly. Was paddingLeft 3rem +
+                            marginLeft 1.5rem (effective 4.5rem); now
+                            paddingLeft 5rem + marginLeft 2.5rem (effective
+                            7.5rem) to land clearly past the option row. */}
                         <tr className="bg-accent-dim/10 border-b border-border">
-                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '3.5rem' }}>
-                            <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                          <td colSpan={colCount + 1} className="py-1" style={{ paddingLeft: '5rem' }}>
+                            <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '2.5rem' }}>
+                              <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(cmgKey)}>{cmgExpanded ? '▼' : '▶'}</button>
+                              <span className="text-purple-600 text-xs font-medium">Modifier:</span>
+                              <span className="text-xs text-text-2 ml-1">{mg.display_name || mg.name}</span>
+                              <span className="text-xs text-text-3 ml-1">(choose {mg.min_select}{mg.min_select !== mg.max_select ? `–${mg.max_select}` : ''})</span>
+                            </div>
                           </td>
                         </tr>
-                        {mg.options.map(mopt => (
-                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={14} onSave={saveSubOptionPrice} />
+                        {cmgExpanded && mg.options.map(mopt => (
+                          // Modifier option indent — was 3rem, now 5rem so it
+                          // sits beneath its group header without looking
+                          // like a sibling of the combo option.
+                          <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={levelId} sym={sym} colCount={colCount} indent={16} borderClass="border-l-2 border-purple-100" marginLeft="5rem" onSave={saveSubOptionPrice} />
                         ))}
                       </Fragment>
-                    ))}
+                    )})}
                   </Fragment>
-                ))}
+                )})}
               </Fragment>
-            ))}
+            )})}
             {/* Sales item modifiers */}
-            {subData.modifier_groups.map(mg => (
-              <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
+            {subData.modifier_groups.map(mg => {
+              const mgKey = `${msiId}-mg-${mg.modifier_group_id}`
+              const mgExpanded = expandedSubSections.has(mgKey)
+              return (
+              <Fragment key={mgKey}>
                 <tr className="bg-surface-2 border-b border-border">
-                  <td colSpan={colCount + 1} className="px-6 py-1.5">
-                    <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
-                    <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                  <td colSpan={colCount + 1} className="py-1.5" style={{ paddingLeft: '1.5rem' }}>
+                    <div className="flex items-center border-l-2 border-purple-200 pl-2" style={{ marginLeft: '0.5rem' }}>
+                      <button className="text-[10px] text-text-3 hover:text-accent mr-1.5 w-4 flex-shrink-0" onClick={() => toggleSubSection(mgKey)}>{mgExpanded ? '▼' : '▶'}</button>
+                      <span className="text-purple-600 text-xs font-medium">Modifier:</span>
+                      <span className="text-xs font-semibold text-text-2 ml-1">{mg.display_name || mg.name}</span>
+                      <span className="text-xs text-text-3 ml-1">(choose {mg.min_select}{mg.min_select !== mg.max_select ? `–${mg.max_select}` : ''})</span>
+                    </div>
                   </td>
                 </tr>
-                {mg.options.map(opt => (
-                  <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={8} onSave={saveSubOptionPrice} />
+                {mgExpanded && mg.options.map(opt => (
+                  <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={levelId} sym={sym} colCount={colCount} indent={12} borderClass="border-l-2 border-purple-100" marginLeft="2rem" onSave={saveSubOptionPrice} />
                 ))}
               </Fragment>
-            ))}
+            )})}
+
           {/* Empty state — no steps/modifiers configured */}
           {subData.combo_steps.length === 0 && subData.modifier_groups.length === 0 && (
             <tr className="bg-surface-2/50 border-b border-border">
@@ -1476,15 +1578,17 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
         </div>
       )}
 
-      {/* Filter bar */}
-      <div className="flex gap-2 mb-3 items-center min-w-0">
+      {/* Filter bar — selects need explicit widths because the .input class
+          applies w-full; without an override each select tries to take the
+          full row, breaking the layout into one stretched dropdown. */}
+      <div className="flex gap-2 mb-3 items-center min-w-0 flex-wrap">
         <input
-          className="input text-sm flex-1 min-w-0"
+          className="input text-sm flex-1 min-w-[180px]"
           placeholder="Search items…"
           value={itemFilterQ}
           onChange={e => onFilterQ(e.target.value)}
         />
-        <select className="input text-sm shrink-0" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
+        <select className="input text-sm shrink-0 !w-auto" value={itemFilterType} onChange={e => onFilterType(e.target.value)}>
           <option value="">All Types</option>
           <option value="recipe">Recipe</option>
           <option value="ingredient">Ingredient</option>
@@ -1492,12 +1596,12 @@ function MenuDetail({ menu, country, cogsData, sortedItems, filteredItems, price
           <option value="combo">Combo</option>
         </select>
         {categories.length > 0 && (
-          <select className="input text-sm shrink-0" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
+          <select className="input text-sm shrink-0 !w-auto" value={itemFilterCat} onChange={e => onFilterCat(e.target.value)}>
             <option value="">All Categories</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
-        <select className="input text-sm shrink-0" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
+        <select className="input text-sm shrink-0 !w-auto" value={itemFilterStatus} onChange={e => onFilterStatus(e.target.value)}>
           <option value="">All Statuses</option>
           <option value="green">✓ Excellent</option>
           <option value="yellow">~ Acceptable</option>
@@ -1610,6 +1714,17 @@ function MenuFormModal({ menu, countries, onSave, onClose }: {
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={description} onChange={e => setDescription(e.target.value)} />
         </Field>
+
+        {/* Translations — only for existing menus */}
+        {menu && (
+          <TranslationEditor
+            entityType="menu"
+            entityId={menu.id}
+            fields={['name', 'description']}
+            compact
+          />
+        )}
+
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button
@@ -1633,12 +1748,20 @@ interface SalesMixGenProps {
   menuId:         number
   currencySymbol: string
   currentQty:     Record<string, string>
+  // Scenario price overrides (display currency) — overlay on top of the menu's
+  // base prices so items priced only in the scenario are still included in the
+  // mix and contribute to the revenue target.
+  priceOverrides: Record<string, string>
+  // dispRate = display→market conversion factor. priceOverrides are stored in
+  // display currency; levelPriceMap stores values in market currency. Divide
+  // overrides by dispRate before merging.
+  dispRate:       number
   onGenerate(qMap: Record<string, string>): void
   onReset(): void
   onClose(): void
 }
 
-function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, onGenerate, onReset, onClose }: SalesMixGenProps) {
+function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, currentQty, priceOverrides, dispRate, onGenerate, onReset, onClose }: SalesMixGenProps) {
   const api = useApi()
 
   // Derive categories from current menu data
@@ -1671,16 +1794,59 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
     return { cats, totalQty }
   }, [data, currentQty, priceLevels])
 
+  // Helper: effective price for an item at a level — scenario override (display
+  // currency) takes precedence over the base menu price (market currency).
+  // Returns price in MARKET currency to keep parity with sell_price_gross.
+  const getEffectivePrice = (menuItemId: number, levelId: number, basePriceMarket: number): number => {
+    const ov = priceOverrides[`${menuItemId}_l${levelId}`]
+    if (ov !== undefined) {
+      const ovDisplay = parseFloat(ov)
+      if (!isNaN(ovDisplay) && ovDisplay > 0) {
+        return ovDisplay / (dispRate || 1)
+      }
+    }
+    return basePriceMarket
+  }
+
   const existingRevenue = useMemo(() => {
     let total = 0
     for (const item of data.items) {
       const natKey = `si_${item.sales_item_id}`
-      const qPerLevel = priceLevels.reduce((s, l) => s + parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10), 0)
-      const q = qPerLevel > 0 ? qPerLevel : parseInt(currentQty[natKey] || '0', 10)
-      total += q * (item.sell_price_gross || 0)
+      // Per-level qty × per-level effective price
+      let perLevelTotal = 0
+      let perLevelHasQty = false
+      for (const l of priceLevels) {
+        const lQty = parseInt(currentQty[`${natKey}__l${l.id}`] || '0', 10)
+        if (lQty > 0) {
+          perLevelHasQty = true
+          const effPrice = getEffectivePrice(item.menu_item_id, l.id, item.sell_price_gross || 0)
+          perLevelTotal += lQty * effPrice
+        }
+      }
+      if (perLevelHasQty) {
+        total += perLevelTotal
+        continue
+      }
+      // Fallback to aggregate qty — use first non-zero scenario override across
+      // levels, else the menu's base price.
+      const aggQty = parseInt(currentQty[natKey] || '0', 10)
+      if (aggQty <= 0) continue
+      let effPrice = item.sell_price_gross || 0
+      for (const l of priceLevels) {
+        const ov = priceOverrides[`${item.menu_item_id}_l${l.id}`]
+        if (ov !== undefined) {
+          const ovDisplay = parseFloat(ov)
+          if (!isNaN(ovDisplay) && ovDisplay > 0) {
+            effPrice = ovDisplay / (dispRate || 1)
+            break
+          }
+        }
+      }
+      total += aggQty * effPrice
     }
     return total
-  }, [data, currentQty, priceLevels])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, currentQty, priceLevels, priceOverrides, dispRate])
 
   // ── State ────────────────────────────────────────────────────────────────
   const [targetRevenue, setTargetRevenue] = useState(() =>
@@ -1707,7 +1873,6 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
 
   const [generating, setGenerating] = useState(false)
   const [error,      setError]      = useState('')
-  const [preview,    setPreview]    = useState<{ label: string; qty: number; price: string }[] | null>(null)
 
   // Validation
   const catTotal   = categories.reduce((s, [c]) => s + (parseFloat(catPcts[c])    || 0), 0)
@@ -1718,7 +1883,7 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
   const canGo      = catValid && levelValid && revValid
 
   async function generate() {
-    setGenerating(true); setError(''); setPreview(null)
+    setGenerating(true); setError('')
     try {
       const revenue     = parseFloat(targetRevenue)
       const activeLevels = priceLevels.filter(l => (parseFloat(String(levelPcts[l.id])) || 0) > 0)
@@ -1740,6 +1905,29 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         for (const item of data.items) m.set(item.menu_item_id, item.sell_price_gross)
         levelPriceMap[0] = m
         activeLevels.push({ id: 0, name: 'default', is_default: true })
+      }
+
+      // ── Overlay scenario price overrides ────────────────────────────────────
+      // Items priced only in the scenario (no menu price set in the Menu tab)
+      // would otherwise be excluded from the mix because effectivePrice resolves
+      // to 0 → pricedItems.filter(i => effectivePrice > 0) drops them. Merge any
+      // scenario overrides on top of the level→price map BEFORE computing the
+      // weighted effective price. Override values are in display currency, so
+      // divide by dispRate to land them in market currency for parity with the
+      // /cogs response.
+      const safeDisp = dispRate || 1
+      for (const level of activeLevels) {
+        if (level.id === 0) continue   // no-level placeholder bucket
+        const m = levelPriceMap[level.id] ?? new Map<number, number>()
+        for (const item of data.items) {
+          const ov = priceOverrides[`${item.menu_item_id}_l${level.id}`]
+          if (ov === undefined) continue
+          const ovDisplay = parseFloat(ov)
+          if (!isNaN(ovDisplay) && ovDisplay > 0) {
+            m.set(item.menu_item_id, ovDisplay / safeDisp)
+          }
+        }
+        levelPriceMap[level.id] = m
       }
 
       // Compute weighted effective gross price per menu item
@@ -1806,9 +1994,14 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
         }
       }
 
-      setPreview(previewRows)
-      // Store qMap in a ref so Apply can use it
+      // Apply immediately — user explicitly asked for one-step generate-and-apply.
+      // Skip the intermediate preview/Apply step and just push qMap into the
+      // scenario; the modal closes via the parent's onGenerate handler.
+      void previewRows  // unused — kept around as a future affordance if we add a confirmation
       pendingQMap.current = qMap
+      console.log('[mix-gen] Generated qMap', { keys: Object.keys(qMap).length, sample: Object.entries(qMap).slice(0, 5) })
+      onGenerate(qMap)
+      return
     } catch (err: any) {
       setError(err.message || 'Failed to generate mix')
     } finally {
@@ -1821,11 +2014,10 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
   const sym = currencySymbol
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
+    // Backdrop intentionally does NOT close the modal — user must click Cancel
+    // or Generate to dismiss. Prevents accidentally losing inputs.
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-[580px] max-h-[88vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
           <div>
@@ -2000,77 +2192,40 @@ function SalesMixGeneratorModal({ data, priceLevels, menuId, currencySymbol, cur
             </div>
           )}
 
-          {/* Preview results */}
-          {preview && (
-            <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-emerald-700 font-semibold text-sm">✓ Generated quantities</span>
-                <span className="text-xs text-emerald-600">— click Apply to load into scenario</span>
-              </div>
-              <div className="max-h-40 overflow-y-auto space-y-1">
-                {preview.map(row => (
-                  <div key={row.label} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-700 truncate flex-1 min-w-0">{row.label}</span>
-                    <span className="text-gray-400 text-xs mx-3">{row.price}/ptn</span>
-                    <span className="font-semibold tabular-nums text-gray-900 shrink-0">
-                      {row.qty.toLocaleString()} sold
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 pt-2 border-t border-emerald-200 text-xs text-emerald-700">
-                Est. gross revenue: {sym}{preview.reduce((s, r) => {
-                  const price = parseFloat(r.price.replace(/[^0-9.]/g, ''))
-                  return s + r.qty * price
-                }, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                {' '}(target: {sym}{parseFloat(targetRevenue).toLocaleString()})
-              </div>
-            </div>
-          )}
-
           {error && (
             <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">⚠ {error}</p>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            {catMix.totalQty > 0 && (
-              <button
-                className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50"
-                onClick={onReset}
-                title="Clear all quantities in the scenario"
-              >↺ Reset Quantities</button>
-            )}
-            <p className="text-xs text-gray-400 hidden sm:block">
-              Revenue split equally per item within each category
-            </p>
-          </div>
-          <div className="flex gap-2 items-center">
-            <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
-            {!preview ? (
-              <button
-                className="btn btn-sm btn-primary"
-                disabled={!canGo || generating}
-                onClick={generate}
-              >
-                {generating ? (
-                  <><Spinner /> Calculating…</>
-                ) : '⚡ Generate'}
-              </button>
-            ) : (
-              <>
-                <button
-                  className="btn btn-sm btn-outline"
-                  onClick={() => { setPreview(null); pendingQMap.current = {} }}
-                >← Adjust</button>
-                <button
-                  className="btn btn-sm btn-primary"
-                  onClick={() => onGenerate(pendingQMap.current)}
-                >✓ Apply to Scenario</button>
-              </>
-            )}
+        {/* Footer — Reset Quantities | spacer | Cancel + Generate (right-aligned) */}
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center gap-3 shrink-0">
+          {catMix.totalQty > 0 && (
+            <button
+              className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50"
+              onClick={onReset}
+              title="Clear all quantities in the scenario"
+            >↺ Reset Quantities</button>
+          )}
+          <p className="text-xs text-gray-400 hidden md:block flex-1">
+            Revenue split equally per item within each category
+          </p>
+          <div className="flex gap-2 items-center ml-auto">
+            <button className="btn btn-sm btn-outline" onClick={onClose} disabled={generating}>Cancel</button>
+            <button
+              className="btn btn-sm btn-primary min-w-[120px] justify-center inline-flex items-center gap-1.5"
+              disabled={!canGo || generating}
+              onClick={generate}
+            >
+              {generating ? (
+                <>
+                  <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Generating…
+                </>
+              ) : '⚡ Generate'}
+            </button>
           </div>
         </div>
       </div>
@@ -2207,9 +2362,8 @@ function ScenarioTool({
     .finally(() => setAllLevelsLoading(false))
   }, [levelId, menuId, priceLevels, api, refreshKey]) // eslint-disable-line
 
-  // ── Display currency ───────────────────────────────────────────────────────
-  const [dispCurrCode, setDispCurrCode] = useState<string>('')
-  useEffect(() => { setDispCurrCode('') }, [menuId])
+  // ── Display currency (driven by global top-bar switcher) ──────────────────
+  const { currencyCode: dispCurrCode } = useCurrency()
 
   // ── Save / Load state ──────────────────────────────────────────────────────
   const [savedScenarios,   setSavedScenarios]   = useState<SavedScenario[]>([])
@@ -2275,6 +2429,19 @@ function ScenarioTool({
   const [showWhatIf,       setShowWhatIf]       = useState(false)
   const [showScenarioModal, setShowScenarioModal] = useState(false)
 
+  // "Include modifier cost" toggle — sits next to What If. When ON, every
+  // item's displayed cost = base cost + (modifier_cost_adder × dispRate). The
+  // adder is computed server-side using avg × min_select per modifier group.
+  // Defaults to ON — required modifiers are part of true plate cost. Persisted
+  // per-browser so the user's last choice survives a reload (treat any value
+  // other than '0' as on, including the unset state for first-time visitors).
+  const [includeModifierCost, setIncludeModifierCost] = useState<boolean>(() => {
+    try { return localStorage.getItem('me-include-modifier-cost') !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('me-include-modifier-cost', includeModifierCost ? '1' : '0') } catch { /* ignore */ }
+  }, [includeModifierCost])
+
   // ── Reset helpers ──────────────────────────────────────────────────────────
   function resetPrices() {
     setPriceOverrides({})
@@ -2289,25 +2456,59 @@ function ScenarioTool({
   }
 
   // ── What If ────────────────────────────────────────────────────────────────
+  // Bumps every price (and/or every cost) by the given percentage. Works for
+  // both single-level mode (uses `rows`) and ALL-levels mode (uses
+  // `allLevelRows`). Previously only the ALL-levels path was wired up — when
+  // the user was on a specific level the What If button silently did nothing.
   function applyWhatIf(pricePct: number, costPct: number) {
-    if (pricePct !== 0 && allLevelRows.length) {
+    const isAll = levelId === 'ALL'
+    const hasData = isAll ? allLevelRows.length > 0 : rows.length > 0
+    console.log('[whatif] applyWhatIf called', { pricePct, costPct, isAll, levelId, allLevelRowsLen: allLevelRows.length, rowsLen: rows.length, hasData })
+    if (!hasData) {
+      console.warn('[whatif] no data — returning early. levelId=', levelId, 'allLevelsData.length=', allLevelsData.length, 'data?', !!data)
+      showToast('No data to apply changes to. Wait for the menu to finish loading.', 'error')
+      return
+    }
+
+    if (pricePct !== 0) {
       const f = 1 + pricePct / 100
-      const next: Record<string, string> = {}
-      for (const row of allLevelRows) {
-        for (const p of row.perLevel) {
-          const base = p.is_price_overridden ? (parseFloat(priceOverrides[p.price_override_key]) || p.base_price_gross) : p.base_price_gross
-          if (base > 0) next[p.price_override_key] = String(Math.round(base * f * 100) / 100)
+      const next: Record<string, string> = { ...priceOverrides }
+      if (isAll) {
+        for (const row of allLevelRows) {
+          for (const p of row.perLevel) {
+            const cur = priceOverrides[p.price_override_key]
+            const base = cur !== undefined ? (parseFloat(cur) || p.base_price_gross) : p.base_price_gross
+            if (base > 0) next[p.price_override_key] = String(Math.round(base * f * 100) / 100)
+          }
+        }
+      } else {
+        for (const row of rows) {
+          const key = `${row.menu_item_id}_l${levelId}`
+          const cur = priceOverrides[key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_price_gross) : row.base_price_gross
+          if (base > 0) next[key] = String(Math.round(base * f * 100) / 100)
         }
       }
       setPriceOverrides(next)
       addHistoryEntry('whatif', `Prices ${pricePct > 0 ? '+' : ''}${pricePct}%`)
     }
-    if (costPct !== 0 && allLevelRows.length) {
+
+    if (costPct !== 0) {
       const f = 1 + costPct / 100
-      const next: Record<string, string> = {}
-      for (const row of allLevelRows) {
-        const base = row.is_cost_overridden ? (parseFloat(costOverrides[row.cost_override_key]) || row.base_cost_display) : row.base_cost_display
-        if (base > 0) next[row.cost_override_key] = String(Math.round(base * f * 100) / 100)
+      const next: Record<string, string> = { ...costOverrides }
+      if (isAll) {
+        for (const row of allLevelRows) {
+          const cur = costOverrides[row.cost_override_key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_cost_display) : row.base_cost_display
+          if (base > 0) next[row.cost_override_key] = String(Math.round(base * f * 100) / 100)
+        }
+      } else {
+        for (const row of rows) {
+          const key = row.nat_key
+          const cur = costOverrides[key]
+          const base = cur !== undefined ? (parseFloat(cur) || row.base_cost_display) : row.base_cost_display
+          if (base > 0) next[key] = String(Math.round(base * f * 100) / 100)
+        }
       }
       setCostOverrides(next)
       addHistoryEntry('whatif', `Costs ${costPct > 0 ? '+' : ''}${costPct}%`)
@@ -2417,23 +2618,6 @@ function ScenarioTool({
 
   const marketRate = Number(menuCountry?.exchange_rate ?? 1)
 
-  const currencyOptions = useMemo(() => {
-    const seen = new Set<string>()
-    const opts: { value: string; label: string; sym: string }[] = []
-    if (menuCountry) {
-      opts.push({ value: '', label: `${menuCountry.currency_code} ${menuCountry.currency_symbol} (market)`, sym: menuCountry.currency_symbol })
-      seen.add(menuCountry.currency_code)
-    }
-    for (const c of countries) {
-      if (!seen.has(c.currency_code)) {
-        seen.add(c.currency_code)
-        opts.push({ value: c.currency_code, label: `${c.currency_code} ${c.currency_symbol}`, sym: c.currency_symbol })
-      }
-    }
-    if (!seen.has('USD')) opts.push({ value: '__BASE__', label: 'USD $ (base)', sym: '$' })
-    return opts
-  }, [countries, menuCountry])
-
   const { dispRate, dispSym } = useMemo(() => {
     if (!dispCurrCode || !menuCountry) return { dispRate: 1, dispSym: menuCountry?.currency_symbol ?? '' }
     if (dispCurrCode === '__BASE__') return { dispRate: 1 / marketRate, dispSym: '$' }
@@ -2481,6 +2665,11 @@ function ScenarioTool({
     total_cost:         number   // qty × cost
     gp:                 number   // net_revenue - total_cost
     cogs_pct:           number | null  // total_cost / net_revenue × 100
+    // Modifier-cost portion of `cost` in display currency (0 when toggle off
+    // or no required modifiers). Surfaced separately so the cost cell can
+    // show "59.84 (+34.81)" — recipe cost stays editable, modifier add is
+    // read-only.
+    modifier_cost_disp: number
   }
 
   const rows = useMemo((): ScenRow[] => {
@@ -2492,8 +2681,12 @@ function ScenarioTool({
       const perLevelKey  = typeof levelId === 'number' ? `${key}__l${levelId}` : ''
       const q            = Math.max(0, parseFloat(qty[key] || (perLevelKey ? qty[perLevelKey] : '') || '0') || 0)
       const baseCost     = item.cost_per_portion * dispRate
+      // When the toggle is ON, add the server-computed modifier cost adder
+      // (market currency × qty) — kept separate from override so users can
+      // tweak base cost manually and still see the modifier impact.
+      const modAdder     = includeModifierCost ? (item.modifier_cost_adder || 0) * dispRate : 0
       const costOvStr    = costOverrides[key]
-      const cost         = costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost
+      const cost         = (costOvStr !== undefined ? (parseFloat(costOvStr) || 0) : baseCost) + modAdder
 
       const basePriceGross = item.sell_price_gross * dispRate
       const basePriceNet   = item.sell_price_net   * dispRate
@@ -2523,9 +2716,10 @@ function ScenarioTool({
         total_cost:        totalCost,
         gp:                net_rev - totalCost,
         cogs_pct:          net_rev > 0 ? (totalCost / net_rev) * 100 : null,
+        modifier_cost_disp: modAdder,
       }
     })
-  }, [data, qty, dispRate, costOverrides, priceOverrides, levelId])
+  }, [data, qty, dispRate, costOverrides, priceOverrides, levelId, includeModifierCost])
 
   const totalQty     = rows.reduce((s, r) => s + r.qty, 0)
   const totalGross   = rows.reduce((s, r) => s + r.gross_revenue, 0)
@@ -2573,6 +2767,7 @@ function ScenarioTool({
     base_cost_display:    number   // original recipe cost in display currency
     cost_override_key:    string   // = nat_key
     is_cost_overridden:   boolean
+    modifier_cost_disp:   number   // modifier portion of `cost` (display currency)
     total_qty:            number   // sum of per-level qtys
     total_cost:           number   // total_qty × cost
     perLevel: {
@@ -2595,9 +2790,10 @@ function ScenarioTool({
     return baseItems.map(item => {
       const natKey         = `si_${item.sales_item_id}`
       const baseCostDisp   = item.cost_per_portion * dispRate
+      const modAdder       = includeModifierCost ? (item.modifier_cost_adder || 0) * dispRate : 0
       const costOvKey      = natKey
       const costOvVal      = costOverrides[costOvKey]
-      const cost           = costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp
+      const cost           = (costOvVal !== undefined ? (parseFloat(costOvVal) || 0) : baseCostDisp) + modAdder
       const isCostOv       = costOvKey in costOverrides
       // Per-level qty — each level has its own qty key e.g. "r_1__l2"
       const perLevel = allLevelsData.map(({ level, data }) => {
@@ -2632,11 +2828,12 @@ function ScenarioTool({
         modifier_group_count: item.modifier_group_count ?? 0,
         cost, base_cost_display: baseCostDisp,
         cost_override_key: costOvKey, is_cost_overridden: isCostOv,
+        modifier_cost_disp: modAdder,
         total_qty, total_cost,
         perLevel,
       }
     })
-  }, [levelId, allLevelsData, qty, dispRate, priceOverrides, costOverrides])
+  }, [levelId, allLevelsData, qty, dispRate, priceOverrides, costOverrides, includeModifierCost])
 
   const allLevelCategorised = useMemo(() => {
     const map: Record<string, AllLevelRow[]> = {}
@@ -2995,18 +3192,6 @@ ${tableHtml}
           </div>
 
           {/* Display currency */}
-          {menuCountry && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Display</span>
-              <select
-                className="select select-sm"
-                value={dispCurrCode}
-                onChange={e => setDispCurrCode(e.target.value)}
-              >
-                {currencyOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-          )}
 
           {/* Compact + Excel / Print / Share — aligned right in the selector row */}
           {(levelId === 'ALL' || !!data) && (
@@ -3033,6 +3218,19 @@ ${tableHtml}
                   onClick={() => onShare(menuId, savedId)}
                 >🔗 Share</button>
               )}
+              {/* Notes, History & Comments — moved next to Share, opens in right panel */}
+              <button
+                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 ${scenarioNotes || history.length > 0 || (comments && comments.length > 0) ? 'text-gray-700' : 'text-gray-400'}`}
+                title="Notes, change history & comments"
+                onClick={() => setShowHistoryNotes(true)}
+              >
+                📋 Notes
+                {(history.length > 0 || (comments && comments.length > 0)) && (
+                  <span className="ml-0.5 text-[10px] text-gray-400">
+                    ({history.length + (comments?.length ?? 0)})
+                  </span>
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -3045,17 +3243,40 @@ ${tableHtml}
             <button className="btn btn-sm btn-primary text-xs" onClick={() => setShowMixGen(true)} title="Auto-generate quantities from a revenue target">⚡ Mix Manager</button>
           )}
 
-          {/* What If */}
+          {/* What If — combined modal: manual % shift + AI-suggested per-item changes */}
+          {menuId && (() => {
+            const hasData = levelId === 'ALL' ? allLevelRows.length > 0 : rows.length > 0
+            return (
+              <button
+                className="btn btn-sm btn-outline text-xs"
+                title={hasData ? 'Model price/cost changes — manual % shift or AI suggestions' : 'Loading menu data — please wait'}
+                disabled={!hasData}
+                onClick={() => setShowWhatIf(true)}
+              >⚡ What If</button>
+            )
+          })()}
+
+          {/* Include modifier cost — toggle that adds avg×min_select for each
+              attached modifier group to the displayed cost/COGS%. Sits next to
+              What If by request. Persisted to localStorage. */}
           {menuId && (
-            <button className="btn btn-sm btn-outline text-xs" title="Model price/cost changes" onClick={() => setShowWhatIf(true)}>⚡ What If</button>
+            <button
+              className={`btn btn-sm text-xs ${includeModifierCost ? 'btn-primary' : 'btn-outline'}`}
+              title={includeModifierCost
+                ? 'Modifier costs included in COGS (avg × min selections required). Click to exclude.'
+                : 'Click to include the cost of required modifiers in COGS (avg × min selections per group).'}
+              onClick={() => setIncludeModifierCost(v => !v)}
+            >
+              {includeModifierCost ? '✓ Modifiers in COGS' : '+ Modifiers in COGS'}
+            </button>
           )}
 
           {/* Override reset buttons */}
           {Object.keys(priceOverrides).length > 0 && (
-            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Prices</button>
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all price overrides to menu prices" onClick={resetPrices}>↺ Reset price changes</button>
           )}
           {Object.keys(costOverrides).length > 0 && (
-            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Costs</button>
+            <button className="btn btn-sm btn-outline text-xs text-amber-600 border-amber-300 hover:bg-amber-50" title="Reset all cost overrides to recipe costs" onClick={resetCosts}>↺ Reset cost changes</button>
           )}
 
           {/* Push prices to live menu — always visible when a menu is loaded */}
@@ -3065,23 +3286,9 @@ ${tableHtml}
               title={Object.keys(priceOverrides).length > 0 ? 'Write scenario price overrides to the live menu' : 'No price differences — scenario matches live menu'}
               onClick={handlePushPrices}
             >
-              → Menu
+              → Push to menu
             </button>
           )}
-
-          {/* Notes, History & Comments */}
-          <button
-            className={`btn btn-sm btn-ghost text-xs ${scenarioNotes || history.length > 0 || (comments && comments.length > 0) ? 'text-gray-600' : 'text-gray-400'}`}
-            title="Notes, change history & comments"
-            onClick={() => setShowHistoryNotes(true)}
-          >
-            📋 Notes
-            {(history.length > 0 || (comments && comments.length > 0)) && (
-              <span className="ml-1 text-[10px] text-gray-400">
-                ({history.length + (comments?.length ?? 0)})
-              </span>
-            )}
-          </button>
 
         </div>
 
@@ -3130,10 +3337,37 @@ ${tableHtml}
           />
         )}
 
-        {/* ── What If Modal ──────────────────────────────────────────────── */}
+        {/* ── What If Modal (combined: manual % + AI suggestions) ────────── */}
         {showWhatIf && (
           <WhatIfModal
-            onApply={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
+            menuId={menuId}
+            scenarioId={savedId}
+            priceLevelId={typeof levelId === 'number' ? levelId : null}
+            currencySymbol={dispSym}
+            api={api}
+            onApplyManual={(pricePct, costPct) => { applyWhatIf(pricePct, costPct); setShowWhatIf(false) }}
+            onApplySmart={(changes, prompt) => {
+              const newPriceOv = { ...priceOverrides }
+              const newCostOv  = { ...costOverrides }
+              for (const c of changes) {
+                if (c.field === 'price' && c.level_id) {
+                  const key = `${c.menu_item_id}_l${c.level_id}`
+                  newPriceOv[key] = String(Math.round(c.new_value * 100) / 100)
+                } else if (c.field === 'cost') {
+                  // Cost overrides use nat_key — find it from allLevelRows or rows
+                  const row = allLevelRows.find(r => r.menu_item_id === c.menu_item_id)
+                              ?? rows.find(r => r.menu_item_id === c.menu_item_id)
+                  if (row?.nat_key) {
+                    newCostOv[row.nat_key] = String(Math.round(c.new_value * 100) / 100)
+                  }
+                }
+              }
+              setPriceOverrides(newPriceOv)
+              setCostOverrides(newCostOv)
+              addHistoryEntry('smart_scenario', `AI: ${prompt} (${changes.length} changes)`)
+              markDirty()
+              setShowWhatIf(false)
+            }}
             onClose={() => setShowWhatIf(false)}
           />
         )}
@@ -3161,7 +3395,10 @@ ${tableHtml}
             menuId={menuId}
             currencySymbol={dispSym || menuCountry?.currency_symbol || ''}
             currentQty={qty}
+            priceOverrides={priceOverrides}
+            dispRate={dispRate}
             onGenerate={qMap => {
+              console.log('[mix-gen] onGenerate received in parent', { keys: Object.keys(qMap).length })
               setManualQtyKeys(new Set())
               onReplaceQty(qMap)
               dirtyRef.current = true
@@ -3339,22 +3576,36 @@ ${tableHtml}
                               <td className="px-3 py-2.5">
                                 <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded capitalize">{row.item_type}</span>
                               </td>
-                              {/* Qty — moved before Cost/ptn */}
+                              {/* Qty — moved before Cost/ptn.
+                                  Read falls back to per-level key when single-level mode is active —
+                                  Mix Manager always stores per-level keys (si_X__lN), so without
+                                  the fallback the input shows empty after a generate. */}
+                              {(() => {
+                                const perLevelKey = typeof levelId === 'number' ? `${row.nat_key}__l${levelId}` : ''
+                                const displayVal = qty[row.nat_key] ?? (perLevelKey ? qty[perLevelKey] : undefined) ?? ''
+                                const writeKey = perLevelKey || row.nat_key
+                                return (
                               <td className="px-1.5 py-1.5 text-right">
                                 <input
                                   type="number"
                                   min="0"
                                   step="1"
-                                  value={qty[row.nat_key] ?? ''}
-                                  onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, row.nat_key])); onQtyChange(row.nat_key, e.target.value) }}
+                                  value={displayVal}
+                                  onChange={e => { setManualQtyKeys((prev: Set<string>) => new Set([...prev, writeKey])); onQtyChange(writeKey, e.target.value) }}
                                   placeholder="0"
                                   className={`w-20 text-right font-mono text-sm rounded px-1.5 py-1 focus:outline-none focus:ring-1
-                                    ${manualQtyKeys.has(row.nat_key)
+                                    ${manualQtyKeys.has(writeKey) || manualQtyKeys.has(row.nat_key)
                                       ? 'border border-amber-400 bg-amber-50 text-amber-800 focus:ring-amber-300'
                                       : 'border border-transparent bg-transparent text-gray-800 hover:border-gray-300 focus:border-gray-400 focus:ring-gray-200'}`}
                                 />
                               </td>
-                              {/* Cost/ptn — editable */}
+                                )
+                              })()}
+                              {/* Cost/ptn — editable. Recipe cost goes in the
+                                  input; the modifier portion (if any) shows
+                                  read-only in brackets next to it so the user
+                                  can still tweak the recipe cost while seeing
+                                  the modifier load against the same row. */}
                               <td className="px-1.5 py-1.5 text-right">
                                 <div className="relative inline-flex items-center">
                                   <input
@@ -3375,6 +3626,12 @@ ${tableHtml}
                                   {row.nat_key in costOverrides && (
                                     <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs leading-none" title="Reset to recipe cost"
                                       onClick={() => { setCostOverrides(prev => (({ [row.nat_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
+                                  )}
+                                  {row.modifier_cost_disp > 0 && (
+                                    <span
+                                      className="ml-1 text-[11px] text-text-3 font-mono whitespace-nowrap"
+                                      title={`Modifier cost (avg × min selections): ${sym}${row.modifier_cost_disp.toFixed(2)}`}
+                                    >(+{sym}{row.modifier_cost_disp.toFixed(2)})</span>
                                   )}
                                 </div>
                               </td>
@@ -3434,47 +3691,81 @@ ${tableHtml}
                               </tr>
                             ) : subDataME ? (
                               <Fragment key={`${msiId}-sub`}>
-                                {subDataME.combo_steps.map(step => (
+                                {subDataME.combo_steps.map(step => {
+                                  const stepAvg = step.avg_cost != null ? step.avg_cost * dispRate : null
+                                  const stepMin = step.min_cost != null ? step.min_cost * dispRate : null
+                                  const stepMax = step.max_cost != null ? step.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
                                         {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                                        {stepAvg != null && stepAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this step's options (this is what flows into the parent COGS)">
+                                            avg {sym}{stepAvg.toFixed(2)}
+                                            {stepMin != null && stepMax != null && stepMin !== stepMax && (
+                                              <span className="ml-1 text-text-3">({sym}{stepMin.toFixed(2)}–{sym}{stepMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
                                       <Fragment key={`${msiId}-copt-${opt.id}`}>
-                                        <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} onSave={saveSubOptionPriceME} />
-                                        {opt.modifier_groups.map(mg => (
+                                        <SubPriceRow msiId={msiId} kind="combo" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
+                                        {opt.modifier_groups.map(mg => {
+                                          const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                          return (
                                           <Fragment key={`${msiId}-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={10} className="py-1" style={{ paddingLeft: '3.5rem' }}>
                                                 <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                {mgAvg != null && mgAvg > 0 && (
+                                                  <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                                    avg {sym}{mgAvg.toFixed(2)}
+                                                  </span>
+                                                )}
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
-                                              <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={singleLevelId} sym={sym} colCount={9} indent={14} onSave={saveSubOptionPriceME} />
+                                              <SubPriceRow key={`${msiId}-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levelId={singleLevelId} sym={sym} colCount={9} indent={14} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                             ))}
                                           </Fragment>
-                                        ))}
+                                          )
+                                        })}
                                       </Fragment>
                                     ))}
                                   </Fragment>
-                                ))}
-                                {subDataME.modifier_groups.map(mg => (
+                                  )
+                                })}
+                                {subDataME.modifier_groups.map(mg => {
+                                  const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                  const mgMin = mg.min_cost != null ? mg.min_cost * dispRate : null
+                                  const mgMax = mg.max_cost != null ? mg.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={10} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                                        {mgAvg != null && mgAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                            avg {sym}{mgAvg.toFixed(2)}
+                                            {mgMin != null && mgMax != null && mgMin !== mgMax && (
+                                              <span className="ml-1 text-text-3">({sym}{mgMin.toFixed(2)}–{sym}{mgMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {mg.options.map(opt => (
-                                      <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} onSave={saveSubOptionPriceME} />
+                                      <SubPriceRow key={`${msiId}-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levelId={singleLevelId} sym={sym} colCount={9} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                                 {subDataME.combo_steps.length === 0 && subDataME.modifier_groups.length === 0 && (
                                   <tr className="bg-surface-2/50 border-b border-border">
                                     <td colSpan={10} className="px-6 py-2 text-xs text-text-3 italic">
@@ -3691,6 +3982,12 @@ ${tableHtml}
                                         <button className="ml-0.5 text-amber-400 hover:text-amber-600 text-xs" title="Reset cost"
                                           onClick={() => { setCostOverrides(prev => (({ [row.cost_override_key]: _, ...rest }) => rest)(prev)); markDirty() }}>↺</button>
                                       )}
+                                      {row.modifier_cost_disp > 0 && (
+                                        <span
+                                          className="ml-1 text-[11px] text-text-3 font-mono whitespace-nowrap"
+                                          title={`Modifier cost (avg × min selections): ${sym}${row.modifier_cost_disp.toFixed(2)}`}
+                                        >(+{sym}{row.modifier_cost_disp.toFixed(2)})</span>
+                                      )}
                                     </div>
                                   </td>
                                   {/* Price — editable */}
@@ -3743,48 +4040,82 @@ ${tableHtml}
                             ) : subDataME ? (
                               <Fragment key={`${msiId}-sub-me`}>
                                 {/* Combo steps → options → modifier groups */}
-                                {subDataME.combo_steps.map(step => (
+                                {subDataME.combo_steps.map(step => {
+                                  const stepAvg = step.avg_cost != null ? step.avg_cost * dispRate : null
+                                  const stepMin = step.min_cost != null ? step.min_cost * dispRate : null
+                                  const stepMax = step.max_cost != null ? step.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-me-step-${step.id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">Step: {step.display_name || step.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {step.min_select}–{step.max_select}</span>
                                         {step.auto_select && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded ml-2" title="Auto-selected">auto ✓</span>}
+                                        {stepAvg != null && stepAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this step's options">
+                                            avg {sym}{stepAvg.toFixed(2)}
+                                            {stepMin != null && stepMax != null && stepMin !== stepMax && (
+                                              <span className="ml-1 text-text-3">({sym}{stepMin.toFixed(2)}–{sym}{stepMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {step.options.map(opt => (
                                       <Fragment key={`${msiId}-me-copt-${opt.id}`}>
-                                        <SubPriceRowME msiId={msiId} kind="combo" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
-                                        {opt.modifier_groups.map(mg => (
+                                        <SubPriceRowME msiId={msiId} kind="combo" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
+                                        {opt.modifier_groups.map(mg => {
+                                          const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                          return (
                                           <Fragment key={`${msiId}-me-cmg-${mg.modifier_group_id}`}>
                                             <tr className="bg-accent-dim/10 border-b border-border">
                                               <td colSpan={meColSpan} className="py-1" style={{ paddingLeft: '3.5rem' }}>
                                                 <span className="text-xs text-text-3 font-medium">↳ {mg.display_name || mg.name} (choose {mg.min_select}–{mg.max_select})</span>
+                                                {mgAvg != null && mgAvg > 0 && (
+                                                  <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                                    avg {sym}{mgAvg.toFixed(2)}
+                                                  </span>
+                                                )}
                                               </td>
                                             </tr>
                                             {mg.options.map(mopt => (
-                                              <SubPriceRowME key={`${msiId}-me-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={14} onSave={saveSubOptionPriceME} />
+                                              <SubPriceRowME key={`${msiId}-me-cmopt-${mopt.id}`} msiId={msiId} kind="modifier" option={mopt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={14} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                             ))}
                                           </Fragment>
-                                        ))}
+                                          )
+                                        })}
                                       </Fragment>
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                                 {/* Sales item modifier groups */}
-                                {subDataME.modifier_groups.map(mg => (
+                                {subDataME.modifier_groups.map(mg => {
+                                  const mgAvg = mg.avg_cost != null ? mg.avg_cost * dispRate : null
+                                  const mgMin = mg.min_cost != null ? mg.min_cost * dispRate : null
+                                  const mgMax = mg.max_cost != null ? mg.max_cost * dispRate : null
+                                  return (
                                   <Fragment key={`${msiId}-me-mg-${mg.modifier_group_id}`}>
                                     <tr className="bg-surface-2 border-b border-border">
                                       <td colSpan={meColSpan} className="px-6 py-1.5">
                                         <span className="text-xs font-semibold text-text-2">{mg.display_name || mg.name}</span>
                                         <span className="text-xs text-text-3 ml-2">choose {mg.min_select}–{mg.max_select}</span>
+                                        {mgAvg != null && mgAvg > 0 && (
+                                          <span className="text-xs text-text-3 ml-3 font-mono" title="Average cost across this modifier group's options">
+                                            avg {sym}{mgAvg.toFixed(2)}
+                                            {mgMin != null && mgMax != null && mgMin !== mgMax && (
+                                              <span className="ml-1 text-text-3">({sym}{mgMin.toFixed(2)}–{sym}{mgMax.toFixed(2)})</span>
+                                            )}
+                                          </span>
+                                        )}
                                       </td>
                                     </tr>
                                     {mg.options.map(opt => (
-                                      <SubPriceRowME key={`${msiId}-me-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} onSave={saveSubOptionPriceME} />
+                                      <SubPriceRowME key={`${msiId}-me-mopt-${opt.id}`} msiId={msiId} kind="modifier" option={opt} levels={levelsForSub} sym={sym} allLevelsCompact={allLevelsCompact} indent={8} dispRate={dispRate} onSave={saveSubOptionPriceME} />
                                     ))}
                                   </Fragment>
-                                ))}
+                                  )
+                                })}
                               {/* Empty state — no steps/modifiers */}
                               {subDataME.combo_steps.length === 0 && subDataME.modifier_groups.length === 0 && (
                                 <tr className="bg-surface-2/50 border-b border-border">
@@ -4056,64 +4387,261 @@ function ScenarioModal({ scenarios, loading, saving, currentId, currentName, onL
 
 // ── WhatIfModal ────────────────────────────────────────────────────────────────
 
-function WhatIfModal({ onApply, onClose }: { onApply(pricePct: number, costPct: number): void; onClose(): void }) {
+// Combined What-If modal — replaces the old separate "What If" + "Smart" buttons.
+// Two tabs in one modal:
+//   1. Manual % — apply a flat percentage shift to all prices and/or costs
+//   2. AI suggest — natural language prompt → Claude proposes per-item changes
+function WhatIfModal({
+  menuId, scenarioId, priceLevelId, currencySymbol, api,
+  onApplyManual, onApplySmart, onClose,
+}: {
+  menuId: number | null
+  scenarioId: number | null
+  priceLevelId: number | null
+  currencySymbol: string
+  api: { post: (path: string, body?: any) => Promise<any> }
+  onApplyManual(pricePct: number, costPct: number): void
+  onApplySmart(changes: SmartChange[], prompt: string): void
+  onClose(): void
+}) {
+  const [tab, setTab] = useState<'manual' | 'ai'>('manual')
+
+  // Manual % state
   const [pricePct, setPricePct] = useState('')
   const [costPct,  setCostPct]  = useState('')
-
   const pN = parseFloat(pricePct) || 0
   const cN = parseFloat(costPct)  || 0
 
+  // AI state
+  const [prompt, setPrompt]   = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState('')
+  const [result, setResult]   = useState<{ summary: string; changes: SmartChange[] } | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+
+  const analyse = async () => {
+    if (!prompt.trim() || !menuId) return
+    setLoading(true); setError(''); setResult(null)
+    try {
+      const data = await api.post('/scenarios/smart', {
+        menu_id: menuId,
+        scenario_id: scenarioId || undefined,
+        price_level_id: priceLevelId || undefined,
+        prompt: prompt.trim(),
+      })
+      if (data.error) { setError(data.error); return }
+      setResult(data)
+      setChecked(new Set(data.changes?.map((_: any, i: number) => i) || []))
+    } catch (err: any) {
+      setError(err.message || 'Failed to analyse scenario')
+    } finally { setLoading(false) }
+  }
+
+  const handleApplyAi = () => {
+    if (!result?.changes?.length) return
+    const selected = result.changes.filter((_: any, i: number) => checked.has(i))
+    onApplySmart(selected, prompt)
+  }
+
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-80" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-800">⚡ What If…</h3>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        {/* Header — tab bar */}
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex gap-1">
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${tab === 'manual' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('manual')}
+            >⚡ Manual %</button>
+            <button
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${tab === 'ai' ? 'bg-accent text-white' : 'text-gray-500 hover:bg-gray-100'}`}
+              onClick={() => setTab('ai')}
+              disabled={!menuId}
+              title={!menuId ? 'Select a menu first' : 'AI-powered per-item suggestions'}
+            >🧠 AI suggest</button>
+          </div>
           <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
         </div>
-        <div className="px-5 py-4 space-y-4">
-          <p className="text-xs text-gray-500">Apply a percentage shift to all prices and/or costs across the scenario.</p>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Price change (%)</label>
-            <div className="flex gap-2 items-center">
-              <input type="number" step="0.5" className="input flex-1 text-sm"
-                placeholder="e.g. +5 or -10"
-                value={pricePct} onChange={e => setPricePct(e.target.value)} autoFocus />
-              <div className="flex gap-1">
-                {[-10, -5, +5, +10].map(v => (
-                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
-                    onClick={() => setPricePct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
-                ))}
+
+        {/* Manual % tab */}
+        {tab === 'manual' && (
+          <>
+            <div className="px-5 py-4 space-y-4 overflow-y-auto">
+              <p className="text-xs text-gray-500">Apply a percentage shift to all prices and/or costs across the scenario. Changes are reversible — use <strong>↺ Reset price changes</strong> in the toolbar to undo.</p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Price change (%)</label>
+                <div className="flex gap-2 items-center">
+                  <input type="number" step="0.5" className="input flex-1 text-sm"
+                    placeholder="e.g. +5 or -10"
+                    value={pricePct} onChange={e => setPricePct(e.target.value)} autoFocus />
+                  <div className="flex gap-1">
+                    {[-10, -5, +5, +10].map(v => (
+                      <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                        onClick={() => setPricePct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Cost change (%)</label>
+                <div className="flex gap-2 items-center">
+                  <input type="number" step="0.5" className="input flex-1 text-sm"
+                    placeholder="e.g. +3 or -5"
+                    value={costPct} onChange={e => setCostPct(e.target.value)} />
+                  <div className="flex gap-1">
+                    {[-10, -5, +5, +10].map(v => (
+                      <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
+                        onClick={() => setCostPct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Cost change (%)</label>
-            <div className="flex gap-2 items-center">
-              <input type="number" step="0.5" className="input flex-1 text-sm"
-                placeholder="e.g. +3 or -5"
-                value={costPct} onChange={e => setCostPct(e.target.value)} />
-              <div className="flex gap-1">
-                {[-10, -5, +5, +10].map(v => (
-                  <button key={v} className="px-2 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50"
-                    onClick={() => setCostPct(String(v))}>{v > 0 ? '+' : ''}{v}%</button>
-                ))}
-              </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
+              <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={pN === 0 && cN === 0}
+                onClick={() => { if (pN !== 0 || cN !== 0) onApplyManual(pN, cN) }}
+              >Apply</button>
             </div>
-          </div>
-        </div>
-        <div className="px-5 py-3 border-t border-gray-100 flex gap-2 justify-end">
-          <button className="btn btn-sm btn-outline" onClick={onClose}>Cancel</button>
-          <button
-            className="btn btn-sm btn-primary"
-            disabled={pN === 0 && cN === 0}
-            onClick={() => { if (pN !== 0 || cN !== 0) onApply(pN, cN) }}
-          >Apply</button>
-        </div>
+          </>
+        )}
+
+        {/* AI suggest tab */}
+        {tab === 'ai' && (
+          <>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-text-2 mb-1.5">What would you like to change?</label>
+                <textarea
+                  className="input w-full text-sm"
+                  rows={3}
+                  placeholder={'e.g. Increase all chicken items by 3%\nSet all wings to 28% COGS target\nRound all prices to nearest .99'}
+                  value={prompt}
+                  onChange={e => setPrompt(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) { e.preventDefault(); analyse() } }}
+                  disabled={loading}
+                  autoFocus
+                />
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-[10px] text-text-3">Only pricing changes are accepted. Pepper cannot modify recipes, ingredients, or other data.</p>
+                  <button
+                    className="btn-primary text-sm py-1.5 px-4 rounded"
+                    disabled={!prompt.trim() || loading}
+                    onClick={analyse}
+                  >
+                    {loading ? (
+                      <span className="flex items-center gap-2">
+                        <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        Analysing...
+                      </span>
+                    ) : 'Analyse'}
+                  </button>
+                </div>
+              </div>
+
+              {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
+
+              {result && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-accent-dim rounded-lg border border-accent/20">
+                    <p className="text-sm font-medium text-accent">{result.summary}</p>
+                  </div>
+                  {result.changes?.length > 0 ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-text-3 font-semibold uppercase tracking-wide">
+                          Proposed changes ({checked.size} of {result.changes.length} selected)
+                        </p>
+                        <div className="flex gap-2">
+                          <button className="text-xs text-accent hover:underline" onClick={() => setChecked(new Set(result.changes.map((_: any, i: number) => i)))}>Select all</button>
+                          <button className="text-xs text-text-3 hover:underline" onClick={() => setChecked(new Set())}>Deselect all</button>
+                        </div>
+                      </div>
+                      <div className="border border-border rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-surface-2 text-xs text-text-3 uppercase tracking-wide">
+                              <th className="px-3 py-2 w-8"></th>
+                              <th className="text-left px-3 py-2">Item</th>
+                              <th className="text-left px-3 py-2">Type</th>
+                              <th className="text-left px-3 py-2">Level</th>
+                              <th className="text-right px-3 py-2">Current</th>
+                              <th className="text-right px-3 py-2">Proposed</th>
+                              <th className="text-right px-3 py-2">Change</th>
+                              <th className="text-left px-3 py-2">Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.changes.map((c: SmartChange, i: number) => {
+                              const pctChange = c.old_value > 0
+                                ? Math.round(((c.new_value - c.old_value) / c.old_value) * 1000) / 10
+                                : null
+                              return (
+                                <tr key={i} className={`border-t border-border ${checked.has(i) ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                                  <td className="px-3 py-2">
+                                    <input type="checkbox" checked={checked.has(i)}
+                                      onChange={() => setChecked(prev => { const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next })} />
+                                  </td>
+                                  <td className="px-3 py-2 font-medium">{c.item_name}</td>
+                                  <td className="px-3 py-2">
+                                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${c.field === 'cost' ? 'bg-orange-50 text-orange-700' : 'bg-blue-50 text-blue-700'}`}>{c.field}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-text-3">{c.level_name || '—'}</td>
+                                  <td className="px-3 py-2 text-right font-mono">{currencySymbol}{Number(c.old_value).toFixed(2)}</td>
+                                  <td className="px-3 py-2 text-right font-mono font-semibold text-accent">{currencySymbol}{Number(c.new_value).toFixed(2)}</td>
+                                  <td className={`px-3 py-2 text-right font-mono text-xs ${pctChange && pctChange > 0 ? 'text-red-600' : pctChange && pctChange < 0 ? 'text-green-600' : 'text-text-3'}`}>
+                                    {pctChange != null ? `${pctChange > 0 ? '+' : ''}${pctChange}%` : '—'}
+                                  </td>
+                                  <td className="px-3 py-2 text-xs text-text-3">{c.reason}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-text-3 text-center py-4">No price changes proposed.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            {result?.changes?.length ? (
+              <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border bg-surface-2">
+                <button className="btn-outline py-1.5 px-4 rounded text-sm" onClick={onClose}>Cancel</button>
+                <button
+                  className="btn-primary py-1.5 px-4 rounded text-sm"
+                  disabled={checked.size === 0}
+                  onClick={handleApplyAi}
+                >Apply {checked.size} change{checked.size !== 1 ? 's' : ''}</button>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </div>,
     document.body
   )
 }
+
+// ── SmartScenarioModal ─────────────────────────────────────────────────────────
+
+interface SmartChange {
+  menu_item_id: number
+  level_id: number | null
+  field: 'price' | 'cost'
+  item_name: string
+  level_name?: string
+  old_value: number
+  new_value: number
+  reason: string
+}
+
+// SmartScenarioModal removed — its UI is now the "AI suggest" tab inside WhatIfModal above.
+
 
 // ── HistoryNotesModal ──────────────────────────────────────────────────────────
 
@@ -4191,8 +4719,8 @@ function HistoryNotesModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[9999] flex justify-end bg-black/30" onClick={onClose}>
+      <div className="bg-white shadow-2xl w-full sm:w-[480px] h-full flex flex-col border-l border-border" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex gap-1">
@@ -5267,7 +5795,7 @@ function SalesItemModal({ mode, initial, recipes, ingredients, onSave, saving, o
         <Field label="Description">
           <textarea className="input w-full" rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         </Field>
-        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} />
+        <ImageUpload label="Image" value={form.image_url} onChange={url => setForm(f => ({ ...f, image_url: url }))} formKey="menu_item" />
       </div>
       <div className="flex justify-end gap-2 mt-4">
         <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -5508,10 +6036,12 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
   onClose(): void
 }) {
   const api = useApi()
-  const [items,   setItems]   = useState<SalesItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [search,  setSearch]  = useState('')
-  const [adding,  setAdding]  = useState<number | null>(null)
+  const [items,    setItems]    = useState<SalesItem[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [search,   setSearch]   = useState('')
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [adding,   setAdding]   = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -5529,10 +6059,66 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
     )
   }, [items, search, alreadyAdded])
 
-  async function pick(si: SalesItem) {
-    setAdding(si.id)
-    try { await onAdd(si.id) }
-    finally { setAdding(null) }
+  // Drop selections for items that vanish from the filtered list (e.g. user
+  // typed a more specific search term). Otherwise they'd "select-all" a
+  // hidden item.
+  const visibleIds = useMemo(() => new Set(filtered.map(si => si.id)), [filtered])
+  useEffect(() => {
+    setSelected(prev => {
+      let changed = false
+      const next = new Set<number>()
+      for (const id of prev) {
+        if (visibleIds.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [visibleIds])
+
+  function toggle(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function selectAllVisible() {
+    setSelected(prev => {
+      const next = new Set(prev)
+      filtered.forEach(si => next.add(si.id))
+      return next
+    })
+  }
+  function clearAll() {
+    setSelected(new Set())
+  }
+
+  async function addSelected() {
+    if (selected.size === 0) return
+    const ids = Array.from(selected)
+    setAdding(true)
+    setProgress({ done: 0, total: ids.length })
+    let done = 0
+    let failed = 0
+    try {
+      // Sequential so the menu's sort_order is preserved in pick order, and
+      // so the backend doesn't see N concurrent inserts.
+      for (const id of ids) {
+        try { await onAdd(id) } catch { failed++ }
+        done++
+        setProgress({ done, total: ids.length })
+      }
+      if (failed === 0) onClose()
+      else {
+        // Leave failed selections checked, drop successful ones.
+        // Backend's onAdd typically refreshes alreadyAdded so successful items
+        // are filtered out of the list naturally.
+        setSelected(new Set(ids.slice(ids.length - failed)))
+      }
+    } finally {
+      setAdding(false)
+      setProgress(null)
+    }
   }
 
   const TYPE_BADGE: Record<string, string> = {
@@ -5542,21 +6128,36 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
     combo: 'bg-orange-50 text-orange-600 border-orange-200',
   }
 
+  const allVisibleSelected = filtered.length > 0 && filtered.every(si => selected.has(si.id))
+
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={e => { if (e.target === e.currentTarget && !adding) onClose() }}>
       <div className="bg-white rounded-xl shadow-xl flex flex-col w-full max-w-lg max-h-[80vh]">
         <div className="px-5 py-4 border-b flex items-center justify-between shrink-0">
-          <h2 className="font-semibold text-gray-900">Add Sales Item to Menu</h2>
-          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
+          <h2 className="font-semibold text-gray-900">Add Sales Items to Menu</h2>
+          <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose} disabled={adding}>×</button>
         </div>
-        <div className="px-4 py-3 border-b shrink-0">
+        <div className="px-4 py-3 border-b shrink-0 space-y-2">
           <input
             className="input w-full"
             placeholder="Search by name or category…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             autoFocus
+            disabled={adding}
           />
+          {filtered.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <button
+                className="hover:text-accent transition-colors"
+                onClick={allVisibleSelected ? clearAll : selectAllVisible}
+                disabled={adding}
+              >
+                {allVisibleSelected ? `Clear ${selected.size}` : `Select all ${filtered.length}${search ? ' matching' : ''}`}
+              </button>
+              <span>{selected.size} selected</span>
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {loading && (
@@ -5569,8 +6170,19 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
           )}
           {!loading && filtered.map(si => {
             const defaultPrices = si.prices ?? []
+            const isSelected = selected.has(si.id)
             return (
-              <div key={si.id} className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 hover:bg-gray-50">
+              <label
+                key={si.id}
+                className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 cursor-pointer transition-colors ${isSelected ? 'bg-accent-dim/40' : 'hover:bg-gray-50'} ${adding ? 'pointer-events-none opacity-60' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  className="shrink-0"
+                  checked={isSelected}
+                  onChange={() => toggle(si.id)}
+                  disabled={adding}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm text-gray-900">{si.name}</span>
@@ -5591,19 +6203,37 @@ function SalesItemPickerModal({ countryId, alreadyAdded, priceLevels, onAdd, onC
                     </div>
                   )}
                 </div>
-                <button
-                  className="btn btn-sm btn-primary shrink-0"
-                  disabled={adding !== null}
-                  onClick={() => pick(si)}
-                >
-                  {adding === si.id ? <Spinner /> : 'Add'}
-                </button>
-              </div>
+              </label>
             )
           })}
         </div>
-        <div className="px-5 py-3 border-t flex justify-end shrink-0">
-          <button className="btn btn-outline" onClick={onClose}>Close</button>
+
+        {/* Progress bar — visible during a bulk add so the user knows it's working */}
+        {progress && (
+          <div className="px-4 py-2 bg-accent-dim/40 border-t border-border flex items-center gap-3 text-xs shrink-0">
+            <div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden">
+              <div className="h-full bg-accent transition-all" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+            </div>
+            <span className="font-mono text-text-3 shrink-0">
+              {progress.done} / {progress.total}
+            </span>
+          </div>
+        )}
+
+        <div className="px-5 py-3 border-t flex items-center justify-between shrink-0">
+          <span className="text-xs text-gray-500">
+            {selected.size === 0 ? 'Tick the items you want to add.' : `${selected.size} item${selected.size !== 1 ? 's' : ''} ready to add.`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-outline" onClick={onClose} disabled={adding}>Close</button>
+            <button
+              className="btn btn-primary disabled:opacity-50"
+              onClick={addSelected}
+              disabled={adding || selected.size === 0}
+            >
+              {adding ? `Adding ${progress?.done ?? 0}/${progress?.total ?? 0}…` : `Add ${selected.size || ''} item${selected.size !== 1 ? 's' : ''}`}
+            </button>
+          </div>
         </div>
       </div>
     </div>,

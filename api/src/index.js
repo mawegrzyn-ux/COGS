@@ -19,16 +19,50 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Language', 'X-Internal-Service'],
+  exposedHeaders: ['Content-Language'],
   credentials: true,
 }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false }));
+// Rate limit — split by auth state. Unauthenticated requests are still
+// throttled tightly (brute-force / scraping), but authenticated users get a
+// much higher cap because dashboards + benchmarks legitimately fire 100s of
+// requests in normal use. Brute-force on auth itself is handled by Auth0.
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: (req) => (req.headers.authorization?.startsWith('Bearer ') ? 10000 : 500),
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Skip rules:
+  //   1. Internal service-to-service calls (Pepper tool executor) — they
+  //      already authenticate via INTERNAL_SERVICE_KEY.
+  //   2. BUG-1173 — /api/media/img is a public image-serving endpoint hit
+  //      by every <img src> tag (no Auth0 token possible from <img>).
+  //      Browsing the Media Library or rendering a menu with many images
+  //      otherwise burns through the 500/15min unauthenticated cap and the
+  //      kiosk + menu builder start showing broken-image placeholders.
+  //      Filenames are random timestamp + nanoid so enumeration is not a
+  //      meaningful threat; the path-traversal guard in media-file.js is
+  //      the actual access control.
+  skip: (req) => (
+    req.headers['x-internal-service'] != null ||
+    req.path.startsWith('/api/media/img') ||
+    req.path.startsWith('/media/img')
+  ),
+}));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve locally-uploaded images (fallback when S3 is not configured)
-app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+// Vary: X-Language on every response — prevents CDN/proxy caches from
+// serving a French response to an English user (and vice versa).
+app.use((_req, res, next) => {
+  res.append('Vary', 'X-Language');
+  next();
+});
+
+// Note: local uploads are served via GET /api/media/file/:filename route
+// (in api/src/routes/media.js) so they flow through the /api Nginx proxy.
+// No separate static file serving or additional Nginx location is needed.
 
 // =============================================================================
 // Startup sequence
@@ -57,6 +91,88 @@ app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
 
     app.listen(PORT, '127.0.0.1', () => {
       console.log(`[api] Menu COGS API running on port ${PORT} (${process.env.NODE_ENV})`);
+
+      // ── Nightly memory consolidation — 02:07 UTC daily ──────────────────────
+      try {
+        const cron = require('node-cron');
+        const { runConsolidation } = require('./jobs/consolidateMemory');
+        cron.schedule('7 2 * * *', async () => {
+          console.log('[cron] Starting memory consolidation...');
+          try {
+            const result = await runConsolidation();
+            console.log('[cron] Memory consolidation complete:', JSON.stringify(result));
+          } catch (err) {
+            console.error('[cron] Memory consolidation failed:', err.message);
+          }
+        }, { timezone: 'UTC' });
+        console.log('[cron] Memory consolidation scheduled at 02:07 UTC daily');
+
+        // ── Nightly translation pre-warm — 02:15 UTC daily ─────────────────
+        try {
+          const { runTranslation } = require('./jobs/translateEntities');
+          cron.schedule('15 2 * * *', async () => {
+            console.log('[cron] Starting entity translation pre-warm...');
+            try {
+              const result = await runTranslation();
+              console.log('[cron] Translation pre-warm complete:', JSON.stringify(result));
+            } catch (err) {
+              console.error('[cron] Translation pre-warm failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Translation pre-warm scheduled at 02:15 UTC daily');
+        } catch (err) {
+          console.warn('[cron] Translation pre-warm disabled:', err.message);
+        }
+
+        // ── Nightly derived-directives — 02:30 UTC daily ───────────────────
+        // Runs after memory consolidation (02:07) + translation pre-warm
+        // (02:15) so the corpus + memory state are fresh. No-op when
+        // ANTHROPIC_API_KEY isn't configured.
+        try {
+          const { runDerivation } = require('./jobs/deriveDirectives');
+          cron.schedule('30 2 * * *', async () => {
+            console.log('[cron] Starting derived-directives job...');
+            try {
+              const result = await runDerivation();
+              console.log('[cron] Derived-directives complete:', JSON.stringify({
+                skipped: result?.skipped || false,
+                kept: result?.stats?.candidates_kept,
+                proposed: result?.stats?.candidates_proposed,
+              }));
+            } catch (err) {
+              console.error('[cron] Derived-directives failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Derived-directives scheduled at 02:30 UTC daily');
+        } catch (err) {
+          console.warn('[cron] Derived-directives disabled:', err.message);
+        }
+
+        // ── Jira pull-sync — every 15 minutes ───────────────────────────────
+        // Fetches status/priority/summary/description/labels for every linked
+        // bug + backlog row. No-op when Jira isn't configured. Logs only on
+        // changes or errors so healthy cycles don't spam the log.
+        try {
+          const { runJiraSync } = require('./jobs/syncJira');
+          cron.schedule('*/15 * * * *', async () => {
+            try {
+              const result = await runJiraSync();
+              if (result?.error) {
+                console.log('[cron] Jira sync skipped:', result.error);
+              } else if (result?.changedCount > 0 || (result?.errors?.length ?? 0) > 0) {
+                console.log(`[cron] Jira sync: pulled ${result.pulled}, changed ${result.changedCount}, errors ${result.errors.length}`);
+              }
+            } catch (err) {
+              console.error('[cron] Jira sync failed:', err.message);
+            }
+          }, { timezone: 'UTC' });
+          console.log('[cron] Jira sync scheduled every 15 minutes');
+        } catch (err) {
+          console.warn('[cron] Jira sync disabled:', err.message);
+        }
+      } catch (err) {
+        console.warn('[cron] node-cron not available — memory consolidation disabled:', err.message);
+      }
     });
   } catch (err) {
     console.error('[startup] Fatal error:', err.message);
