@@ -86,7 +86,7 @@ export default function VotePage() {
   useEffect(() => {
     if (!slug) return
     setMetaLoading(true)
-    fetch(`/api/vote/${slug}`)
+    fetch(`/kanban/api/vote/${slug}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setMetaError(d.error.message || 'Session not found'); return }
@@ -108,8 +108,8 @@ export default function VotePage() {
     if (!slug) return
     try {
       const [cardsRes, votesRes] = await Promise.all([
-        fetch(`/api/vote/${slug}/cards`, { headers: { Authorization: `Bearer ${tok}` } }),
-        fetch(`/api/vote/${slug}/my-votes`, { headers: { Authorization: `Bearer ${tok}` } }),
+        fetch(`/kanban/api/vote/${slug}/cards`, { headers: { Authorization: `Bearer ${tok}` } }),
+        fetch(`/kanban/api/vote/${slug}/my-votes`, { headers: { Authorization: `Bearer ${tok}` } }),
       ])
       if (!cardsRes.ok) {
         if (cardsRes.status === 401) {
@@ -153,7 +153,7 @@ export default function VotePage() {
     setJoining(true)
     setJoinError('')
     try {
-      const res = await fetch(`/api/vote/${slug}/join`, {
+      const res = await fetch(`/kanban/api/vote/${slug}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim() }),
@@ -214,7 +214,7 @@ export default function VotePage() {
           tokens_for: v.for,
           tokens_against: v.against,
         }))
-      const res = await fetch(`/api/vote/${slug}/cast`, {
+      const res = await fetch(`/kanban/api/vote/${slug}/cast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ votes }),
@@ -225,7 +225,7 @@ export default function VotePage() {
       }
       setSavedAllocations(JSON.parse(JSON.stringify(allocations)))
       // Load results
-      const resultsRes = await fetch(`/api/vote/${slug}/results`, {
+      const resultsRes = await fetch(`/kanban/api/vote/${slug}/results`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (resultsRes.ok) {

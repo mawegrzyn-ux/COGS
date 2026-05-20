@@ -1,5 +1,5 @@
 export function useApi() {
-  const base = '/api'
+  const base = '/kanban/api'
 
   async function request(method: string, path: string, body?: unknown) {
     const opts: RequestInit = {

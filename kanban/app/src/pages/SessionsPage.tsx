@@ -152,7 +152,7 @@ export default function SessionsPage() {
   }
 
   function copyLink(slug: string) {
-    const url = `${window.location.origin}/vote/${slug}`
+    const url = `${window.location.origin}/kanban/vote/${slug}`
     navigator.clipboard.writeText(url).then(
       () => showToast('Link copied to clipboard'),
       () => showToast('Failed to copy link', 'error')
