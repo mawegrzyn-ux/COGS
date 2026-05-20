@@ -26,6 +26,26 @@ echo "[deploy] Deploying frontend build..."
 rm -rf "$FRONTEND_DIR"/*
 cp -r "$APP_SRC_DIR/dist/"* "$FRONTEND_DIR/"
 
+echo "[deploy] Installing Kanban API dependencies..."
+cd "$APP_DIR/kanban/api" && npm install --production --silent
+
+echo "[deploy] Running Kanban DB migrations..."
+npm run migrate
+
+echo "[deploy] Restarting Kanban API..."
+pm2 restart kanban-api 2>/dev/null || pm2 start ecosystem.config.js
+
+echo "[deploy] Installing Kanban frontend dependencies..."
+cd "$APP_DIR/kanban/app" && npm install --silent
+
+echo "[deploy] Building Kanban frontend..."
+npm run build
+
+echo "[deploy] Deploying Kanban frontend build..."
+mkdir -p "$APP_DIR/kanban/frontend"
+rm -rf "$APP_DIR/kanban/frontend"/*
+cp -r "$APP_DIR/kanban/app/dist/"* "$APP_DIR/kanban/frontend/"
+
 echo "[deploy] Reloading Nginx..."
 sudo nginx -s reload
 
