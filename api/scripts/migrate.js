@@ -4872,6 +4872,15 @@ const migrations = [
      SELECT 1 FROM mcogs_changelog
      WHERE version = '2026-05-13' AND title = 'Menu Builder tab — same combo improvements applied here too (BUG-1185/1186, BACK-2835/2836 follow-up)'
    )`,
+
+  // ── Settings table (was previously created lazily at runtime) ────────────
+  `CREATE TABLE IF NOT EXISTS mcogs_settings (
+     id         INTEGER PRIMARY KEY DEFAULT 1,
+     data       JSONB NOT NULL DEFAULT '{}',
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+     CONSTRAINT single_row CHECK (id = 1)
+  )`,
+  `INSERT INTO mcogs_settings (id, data) VALUES (1, '{}') ON CONFLICT (id) DO NOTHING`,
 ];
 
 async function runMigrations(pool) {
