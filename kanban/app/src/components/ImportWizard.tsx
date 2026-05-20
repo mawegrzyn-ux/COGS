@@ -50,7 +50,7 @@ export default function ImportWizard({ boardId, columns, onClose, onComplete }: 
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch(`/api/boards/${boardId}/import/preview`, {
+      const res = await fetch(`/kanban/api/boards/${boardId}/import/preview`, {
         method: 'POST',
         body: formData,
       })
@@ -101,7 +101,7 @@ export default function ImportWizard({ boardId, columns, onClose, onComplete }: 
     setImporting(true)
     setError('')
     try {
-      const res = await fetch(`/api/boards/${boardId}/import/execute`, {
+      const res = await fetch(`/kanban/api/boards/${boardId}/import/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
