@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #4F46E5;
+  --accent-dim: #EEF2FF;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;
+  --border: #E2E8F0;
+  --text-1: #0F172A;
+  --text-2: #334155;
+  --text-3: #94A3B8;
+  --shadow-modal: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+}
+
+body {
+  @apply bg-slate-50 text-text-1 font-sans antialiased;
+}
+
+.btn-primary {
+  @apply bg-[var(--accent)] text-white font-semibold rounded-lg hover:opacity-90 transition-opacity;
+}
+.btn-outline {
+  @apply border border-[var(--accent)] text-[var(--accent)] font-semibold rounded-lg hover:bg-[var(--accent-dim)] transition-colors;
+}
+.btn-ghost {
+  @apply text-[var(--text-2)] font-semibold rounded-lg hover:bg-[var(--surface-2)] transition-colors;
+}
+.btn-danger {
+  @apply bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors;
+}
+.card {
+  @apply bg-white border border-[var(--border)] rounded-xl;
+}
