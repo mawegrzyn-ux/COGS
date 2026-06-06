@@ -15,7 +15,9 @@
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:schema": "vitest run test/schema",
-    "validate:seed": "node scripts/validate-seed-import.js"
+    "validate:seed": "node scripts/validate-seed-import.js",
+    "export": "node scripts/export-data.js",
+    "import:full": "node scripts/import-data-full.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
@@ -25,21 +27,21 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.3.1",
     "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
+    "isomorphic-dompurify": "^2.21.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
+    "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
     "pg": "^8.12.0",
     "sharp": "^0.33.4",
-    "isomorphic-dompurify": "^2.21.0",
-    "node-cron": "^3.0.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.0",
     "mysql2": "^3.10.0",
     "nodemon": "^3.1.4",
-    "vitest": "^2.1.0",
-    "@vitest/coverage-v8": "^2.1.0",
-    "supertest": "^7.0.0"
+    "supertest": "^7.0.0",
+    "vitest": "^2.1.0"
   }
 }

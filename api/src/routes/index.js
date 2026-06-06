@@ -153,6 +153,9 @@ router.use('/ai-config',          ...can('settings', 'read'),    write('settings
 // ── DB Config (admin-only — switch between local and standalone PostgreSQL) ───
 router.use('/db-config',          ...can('settings', 'write'),                        require('./db-config'));
 
+// ── Data Transfer (admin-only — full database export / import) ───────────────
+router.use('/data-transfer',      ...can('settings', 'write'),                        require('./data-transfer'));
+
 // ── Nutrition proxy (USDA lookup + ingredient enrichment) ──────────────────────
 router.use('/nutrition',          ...can('inventory', 'read'),   write('inventory'),  require('./nutrition'));
 
