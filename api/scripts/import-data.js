@@ -114,16 +114,20 @@ async function importData() {
   try {
     await client.query('BEGIN');
 
-    // Disable triggers/constraints during import
-    await client.query('SET session_replication_role = replica');
+    // Disable FK triggers on each table (does not require superuser)
+    for (const tableName of IMPORT_ORDER) {
+      await client.query(`ALTER TABLE ${tableName} DISABLE TRIGGER ALL`).catch(() => {});
+    }
 
     for (const tableName of IMPORT_ORDER) {
       const rows = exportData.tables[tableName] || [];
       await importTable(client, tableName, rows);
     }
 
-    // Re-enable constraints
-    await client.query('SET session_replication_role = DEFAULT');
+    // Re-enable FK triggers
+    for (const tableName of IMPORT_ORDER) {
+      await client.query(`ALTER TABLE ${tableName} ENABLE TRIGGER ALL`).catch(() => {});
+    }
 
     await client.query('COMMIT');
     console.log('\n✅ Import complete\n');
