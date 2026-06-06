@@ -1,11 +1,17 @@
 # COGS Data Export Schema
 
 **Version:** 1.0.0
-**Generated:** 2026-06-06
+**Last updated:** 2026-06-06
 
 ## Overview
 
-The COGS export tool (`node scripts/export-data.js`) produces a single JSON file containing all operational data from a COGS instance. This file can be imported into another instance using `node scripts/import-data-full.js`.
+The COGS Data Transfer system exports and imports operational data between COGS instances. Data can be transferred via:
+
+- **Web UI:** Configuration → 🔄 Data Transfer (requires `settings:write` permission)
+- **CLI:** `npm run export` / `npm run import:full` (from the `api/` directory)
+- **API:** `POST /api/data-transfer/export` / `POST /api/data-transfer/import`
+
+For full feature documentation including the UI, API reference, workflows, and safety notes, see [data-transfer-feature.md](data-transfer-feature.md).
 
 **Excluded from export:** User accounts, roles, permissions, AI chat logs, audit logs, import job history, and AI memory tables. These are instance-specific or seeded by the migration script.
 
@@ -207,7 +213,16 @@ These tables are **not exported** because they contain instance-specific or tran
 
 ## Usage
 
-### Export
+### Web UI
+
+Navigate to **Configuration → 🔄 Data Transfer** in the COGS app. The page provides:
+- **Export card** — select data groups, toggle compact mode, download JSON
+- **Import card** — upload JSON file, dry-run validation, per-table results
+- **Table inventory** — live row counts and table existence status
+
+Requires `settings:write` permission (admin only).
+
+### CLI
 
 ```bash
 cd api
@@ -226,8 +241,6 @@ npm run export -- --compact
 npm run export -- --compact my-backup.json
 ```
 
-### Import
-
 ```bash
 cd api
 
@@ -244,6 +257,16 @@ npm run import:full -- mcogs-export.json --tables=mcogs_units,mcogs_vendors,mcog
 npm run import:full -- mcogs-export.json --skip=mcogs_stock_movements,mcogs_equipment_temp_logs
 ```
 
+### API
+
+```
+GET  /api/data-transfer/tables   — live table inventory with row counts
+POST /api/data-transfer/export   — download export JSON (body: { tables?, compact? })
+POST /api/data-transfer/import   — upload + import (multipart, query: ?dry_run=true&tables=...&skip=...)
+```
+
+All endpoints require Auth0 JWT + `settings:write` permission.
+
 ### Import Notes
 
 - **The import TRUNCATES target tables** before inserting. All existing data in imported tables will be replaced.
@@ -251,6 +274,7 @@ npm run import:full -- mcogs-export.json --skip=mcogs_stock_movements,mcogs_equi
 - Serial sequences are reset to `MAX(id) + 1` after each table is imported.
 - Junction tables (composite primary keys) skip the sequence reset.
 - The import runs in a single transaction — if any table fails, the entire import is rolled back.
+- **Dry run mode** validates the file and reports what would be imported without writing any data.
 
 ---
 

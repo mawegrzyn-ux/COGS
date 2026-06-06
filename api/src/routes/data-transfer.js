@@ -119,7 +119,7 @@ router.get('/tables', async (_req, res) => {
     }
   } catch (err) {
     console.error('GET /data-transfer/tables error:', err);
-    res.status(500).json({ error: { message: 'Failed to fetch table list' } });
+    res.status(500).json({ error: { message: `Failed to fetch table list: ${err.message}` } });
   }
 });
 
@@ -129,6 +129,10 @@ router.get('/tables', async (_req, res) => {
 // Body (optional): { tables: [...], compact: false }
 // ═══════════════════════════════════════════════════════════════════════════
 router.post('/export', async (req, res) => {
+  // Extend timeout — large DBs can take minutes to export all 87 tables
+  req.setTimeout(5 * 60 * 1000);
+  res.setTimeout(5 * 60 * 1000);
+
   try {
     const { tables: onlyTables, compact } = req.body || {};
     const tablesToExport = onlyTables && onlyTables.length
@@ -143,7 +147,13 @@ router.post('/export', async (req, res) => {
       let tableCount = 0;
 
       for (const tableName of tablesToExport) {
-        const rows = await exportTable(client, tableName);
+        let rows;
+        try {
+          rows = await exportTable(client, tableName);
+        } catch (tableErr) {
+          console.error(`  ⚠ Export failed for ${tableName}:`, tableErr.message);
+          rows = null;
+        }
         if (rows !== null) {
           tables[tableName] = rows;
           rowCounts[tableName] = rows.length;
@@ -174,7 +184,9 @@ router.post('/export', async (req, res) => {
     }
   } catch (err) {
     console.error('POST /data-transfer/export error:', err);
-    res.status(500).json({ error: { message: 'Export failed' } });
+    if (!res.headersSent) {
+      res.status(500).json({ error: { message: `Export failed: ${err.message}` } });
+    }
   }
 });
 
