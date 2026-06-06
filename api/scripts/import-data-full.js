@@ -264,8 +264,14 @@ async function importData() {
   try {
     if (!opts.dryRun) {
       await client.query('BEGIN');
-      // Disable triggers / FK constraints during import
-      await client.query('SET session_replication_role = replica');
+      // Disable FK triggers on each table (does not require superuser,
+      // unlike SET session_replication_role which needs it)
+      for (const tableName of IMPORT_ORDER) {
+        if (opts.onlyTables && !opts.onlyTables.has(tableName)) continue;
+        if (opts.skipTables.has(tableName)) continue;
+        const exists = await tableExists(client, tableName);
+        if (exists) await client.query(`ALTER TABLE ${tableName} DISABLE TRIGGER ALL`);
+      }
     }
 
     let totalImported = 0;
@@ -301,8 +307,13 @@ async function importData() {
     }
 
     if (!opts.dryRun) {
-      // Re-enable constraints
-      await client.query('SET session_replication_role = DEFAULT');
+      // Re-enable FK triggers
+      for (const tableName of IMPORT_ORDER) {
+        if (opts.onlyTables && !opts.onlyTables.has(tableName)) continue;
+        if (opts.skipTables.has(tableName)) continue;
+        const exists = await tableExists(client, tableName);
+        if (exists) await client.query(`ALTER TABLE ${tableName} ENABLE TRIGGER ALL`);
+      }
       await client.query('COMMIT');
     }
 

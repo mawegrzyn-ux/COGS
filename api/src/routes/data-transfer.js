@@ -226,7 +226,17 @@ router.post('/import', upload.single('file'), async (req, res) => {
     try {
       if (!dryRun) {
         await client.query('BEGIN');
-        await client.query('SET session_replication_role = replica');
+
+        // Disable FK triggers on all tables we'll import into.
+        // This replaces SET session_replication_role = replica which needs superuser.
+        for (const tableName of IMPORT_ORDER) {
+          if (onlyTables && !onlyTables.has(tableName)) continue;
+          if (skipTables.has(tableName)) continue;
+          const exists = await tableExists(client, tableName);
+          if (exists) {
+            await client.query(`ALTER TABLE ${tableName} DISABLE TRIGGER ALL`);
+          }
+        }
       }
 
       const details = [];
@@ -234,14 +244,11 @@ router.post('/import', upload.single('file'), async (req, res) => {
       let tablesProcessed = 0;
 
       for (const tableName of IMPORT_ORDER) {
-        // Filter: only specific tables
         if (onlyTables && !onlyTables.has(tableName)) continue;
-        // Filter: skip
         if (skipTables.has(tableName)) continue;
 
         const fileRows = exportData.tables[tableName] || [];
 
-        // Check table exists in database
         if (!dryRun) {
           const exists = await tableExists(client, tableName);
           if (!exists) {
@@ -262,7 +269,15 @@ router.post('/import', upload.single('file'), async (req, res) => {
       }
 
       if (!dryRun) {
-        await client.query('SET session_replication_role = DEFAULT');
+        // Re-enable FK triggers
+        for (const tableName of IMPORT_ORDER) {
+          if (onlyTables && !onlyTables.has(tableName)) continue;
+          if (skipTables.has(tableName)) continue;
+          const exists = await tableExists(client, tableName);
+          if (exists) {
+            await client.query(`ALTER TABLE ${tableName} ENABLE TRIGGER ALL`);
+          }
+        }
         await client.query('COMMIT');
       }
 
