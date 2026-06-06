@@ -15,7 +15,9 @@
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
     "test:schema": "vitest run test/schema",
-    "validate:seed": "node scripts/validate-seed-import.js"
+    "validate:seed": "node scripts/validate-seed-import.js",
+    "export": "node scripts/export-data.js",
+    "import:full": "node scripts/import-data-full.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
