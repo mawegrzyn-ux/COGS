@@ -6,14 +6,10 @@
 //        [--tables=mcogs_units,mcogs_vendors] [--skip=mcogs_stock_movements]
 // =============================================================================
 
-require('dotenv').config();
-const { Pool } = require('pg');
 const fs = require('fs');
-const { buildPoolConfig, describeTarget } = require('../src/db/config');
 
-const { mode, config } = buildPoolConfig();
-console.log(`[import] Target: ${describeTarget({ mode, config })}`);
-const pool = new Pool(config);
+// Pool + config are only created when running as a CLI script (see bottom).
+let pool;
 
 // ---------------------------------------------------------------------------
 // Tables in dependency order (parents before children) — must match export
@@ -328,4 +324,18 @@ async function importData() {
   }
 }
 
-importData();
+// ---------------------------------------------------------------------------
+// Exports for reuse by API routes
+// ---------------------------------------------------------------------------
+module.exports = { IMPORT_ORDER, JUNCTION_TABLES, tableExists, importTable };
+
+// Run as CLI script
+if (require.main === module) {
+  require('dotenv').config();
+  const { Pool } = require('pg');
+  const { buildPoolConfig, describeTarget } = require('../src/db/config');
+  const { mode, config } = buildPoolConfig();
+  console.log(`[import] Target: ${describeTarget({ mode, config })}`);
+  pool = new Pool(config);
+  importData();
+}

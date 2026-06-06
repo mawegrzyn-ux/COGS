@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import MarketsPage    from './MarketsPage'
 import CategoriesPage from './CategoriesPage'
 import ImportPage     from './ImportPage'
+import DataTransferPage from './DataTransferPage'
 import SettingsPage   from './SettingsPage'
 
 import MediaLibrary   from '../components/MediaLibrary'
@@ -23,6 +24,7 @@ type Section =
   | 'cogs-thresholds'
   | 'users-roles'
   | 'import'
+  | 'data-transfer'
   | 'media'
   | 'stock-config'
   | 'languages'
@@ -44,6 +46,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'cogs-thresholds',    icon: '🎯', label: 'COGS Calculation',    feature: 'settings'   },
   { id: 'users-roles',        icon: '👥', label: 'Users & Roles',       feature: 'users'      },
   { id: 'import',             icon: '📥', label: 'Import',              feature: 'import'     },
+  { id: 'data-transfer',     icon: '🔄', label: 'Data Transfer',       feature: 'settings'   },
   { id: 'media',              icon: '🖼️', label: 'Media Library',       feature: null         },
   { id: 'stock-config',       icon: '📦', label: 'Stock Config',        feature: 'settings' },
   { id: 'languages',          icon: '🌐', label: 'Languages',           feature: 'settings' },
@@ -857,6 +860,7 @@ export default function ConfigurationPage() {
       case 'cogs-thresholds':    return <SettingsPage embedded initialTab="thresholds" />
       case 'users-roles':        return <UsersRolesSection />
       case 'import':             return <ImportPage />
+      case 'data-transfer':     return <DataTransferPage />
       case 'media':              return (
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           <MediaLibrary open={true} onClose={() => {}} mode="page" />

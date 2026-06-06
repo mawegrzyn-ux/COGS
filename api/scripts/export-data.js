@@ -5,14 +5,10 @@
 // Usage: node scripts/export-data.js [output-file] [--compact]
 // =============================================================================
 
-require('dotenv').config();
-const { Pool } = require('pg');
 const fs = require('fs');
-const { buildPoolConfig, describeTarget } = require('../src/db/config');
 
-const { mode, config } = buildPoolConfig();
-console.log(`[export] Target: ${describeTarget({ mode, config })}`);
-const pool = new Pool(config);
+// Pool + config are only created when running as a CLI script (see bottom).
+let pool, describeTarget, mode, config;
 
 // ---------------------------------------------------------------------------
 // Tables in dependency order (parents before children)
@@ -229,4 +225,21 @@ async function exportData() {
   }
 }
 
-exportData();
+// ---------------------------------------------------------------------------
+// Exports for reuse by API routes
+// ---------------------------------------------------------------------------
+module.exports = { EXPORT_ORDER, JUNCTION_TABLES, tableExists, exportTable };
+
+// Run as CLI script
+if (require.main === module) {
+  require('dotenv').config();
+  const { Pool } = require('pg');
+  const { buildPoolConfig, describeTarget: _describeTarget } = require('../src/db/config');
+  const built = buildPoolConfig();
+  mode = built.mode;
+  config = built.config;
+  describeTarget = _describeTarget;
+  console.log(`[export] Target: ${describeTarget({ mode, config })}`);
+  pool = new Pool(config);
+  exportData();
+}
